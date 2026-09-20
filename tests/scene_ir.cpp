@@ -46,6 +46,30 @@ int main() {
     auto gzip=gzopen(gzpath.string().c_str(),"wb");require(gzip!=nullptr,"gzip fixture 创建失败");
     require(gzwrite(gzip,bytes.data(),unsigned(bytes.size()))==int(bytes.size()),"gzip fixture 写失败");require(gzclose(gzip)==Z_OK,"gzip fixture 关闭失败");
     require(dfv::daz::load(gzpath).scene.meshes[0].triangles.size()==2,"gzip DUF 解析错误");
+    // 合成凹凸输入验证强度覆盖、厘米到米、数据色彩空间，以及无高度范围时的诊断。
+    std::ofstream(directory/"height.png",std::ios::binary)<<"fixture-path-only";
+    auto bump_duf=duf;
+    bump_duf["material_library"][0]["extra"]=Json::parse(R"([{"channels":[
+      {"channel":{"id":"Bump Strength","value":0.5,"current_value":2,"image_file":"height.png"}},
+      {"channel":{"id":"Bump Minimum","value":-0.2}},
+      {"channel":{"id":"Bump Maximum","value":0.3}},
+      {"channel":{"id":"Refraction Index","value":1.33}}
+    ]}])");
+    const auto bump_path=directory/"bump.duf";write(bump_path,bump_duf);
+    auto bumped=dfv::daz::load(bump_path,{{directory},true});const auto &bump=bumped.scene.materials[0];
+    require(bump.bump_strength==2 && std::abs(bump.bump_distance-.005f)<1e-7f,"凹凸强度覆盖或厘米转换错误");
+    require(bump.bump_texture>=0 && bumped.scene.textures.at(bump.bump_texture).colorspace==dfv::ir::ColorSpace::linear,"凹凸贴图必须按数据读取");
+    require(bump.ior==1.5f,"非透射材质错误使用折射 IOR");
+    auto &channels=bump_duf["material_library"][0]["extra"][0]["channels"];
+    channels.erase(channels.begin()+1,channels.begin()+3);write(bump_path,bump_duf);
+    auto approximate=dfv::daz::load(bump_path);
+    require(approximate.report["warnings"][0]["code"]=="bump_distance_approximation","近似凹凸距离缺少诊断");
+    auto bad_bump=bump;bad_bump.bump_texture=999;
+    bool bump_rejected=false;try {dfv::ir::validate(bad_bump,1);} catch(const std::exception &) {bump_rejected=true;}
+    require(bump_rejected,"越界凹凸贴图没有拒绝");
+    bad_bump=bump;bad_bump.bump_distance=std::numeric_limits<float>::quiet_NaN();
+    bump_rejected=false;try {dfv::ir::validate(bad_bump,1);} catch(const std::exception &) {bump_rejected=true;}
+    require(bump_rejected,"非有限凹凸距离没有拒绝");
     auto bad=loaded.scene;bad.meshes[0].triangles[0].vertices[0]=999;
     bool rejected=false;try {bad.validate();} catch(const std::exception &) {rejected=true;}require(rejected,"IR 越界索引没有拒绝");
     auto camera=loaded.scene.camera;camera.transform.value[0]=std::numeric_limits<float>::quiet_NaN();

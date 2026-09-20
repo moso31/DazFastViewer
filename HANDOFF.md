@@ -1,6 +1,6 @@
 # 交接记录
 
-更新：2026-09-20。当前已实现独立 Cycles 视口和两个指定 DUF 的静态预览，不要将项目描述成尚未构建或不支持任何 DAZ 加载。
+更新：2026-09-21。当前已实现独立 Cycles 视口和两个指定 DUF 的静态预览；已获授权进入 Spec 004，完成首批后台材质参考及差异修复，不要将项目描述成尚未构建或不支持任何 DAZ 加载。
 
 用户已于 2026-09-20 明确确认手动验收通过，并要求以中文提交、上传当前工程；验收记录已补充至 Spec 003。归档不需要重跑 demo 或性能测试。
 
@@ -19,6 +19,10 @@
 
 两个真实文件已无窗口 inspect，且在副屏显示。角色 16,556 顶点 / 32,736 三角形 / 17 材质 / 9 贴图；道具 1,794 / 3,536 / 2 / 5。渲染统计另外加一张地板（2 三角形）。兼容性诊断分别 20 / 3 条。
 
+上述为 Spec 003 记录。Spec 004 接入 Bump 后，角色 / 道具贴图为 16 / 7，诊断为 36 / 5（新增凹凸距离近似提示，不能消除提示来伪装完整兼容）。非透射材质 IOR 修正为 1.5。
+
+`tools/reference/run_reference.py` 以本机 Blender 5.2.2 + DAZ Importer 5.2.0 后台导出节点、检查独立基础顶点 / UV / 材质绑定，再共用三角网格渲染。两资产结构 PASS，已有对照在 `artifacts/material-reference/{prop,character}/comparison.html`，无需重跑查看。完整版图像 Golden 尚未通过，角色仍有显著散射 / 高光差异；详见 [Spec 004 报告](specs/004-material-reference/execution-report.md)。
+
 实际角色导航通过：4 次相机设置（初始 + 旋转、平移、缩放），后端网格创建仍只有人物与地板 2 个；静态场景脏事件只在初始 epoch 2，最终输入与显示 epoch 5 一致。没有运行新的性能轨迹。
 
 修复预览灯光过曝与 sRGB 编码重复。当前固定线性 Rec.709，颜色贴图必须使用 `u_colorspace_scene_linear_srgb`，数据贴图用 `u_colorspace_data`；别改回此版本执行 CPU 编码的 `u_colorspace_srgb`。最终人物截图在 `artifacts/dson-character-final`；旧灰色截图及 Shader / Albedo 诊断保留作失败证据。
@@ -31,13 +35,13 @@
 
 当前是静态基础网格 + 基础 PBR，未实现 SubD / HD、Morph、Skinning / Pose、ERC / JCM、完整 Iray Uber、完整 DAZ 变换 / 相机 / 可见性。自动取景和三盏灯是应用预览环境。报告 `fully_supported=false` 不能隐藏或改成完全兼容。
 
-Spec 002 材质 Delta 接口已有，但图像与资源行为尚未单独验收。GPU 字节级上传计数仍未完成；主机网格创建计数不是显存上传证明。
+Spec 002 材质 Delta 已在 Spec 004 道具同一 Session 验证：2 次材质更新、22.233% 像素改变、网格 / 三角形计数与几何指针不变。GPU 字节级上传计数仍未完成；主机网格创建计数不是显存上传证明。
 
 Spec 001 历史 CUDA 提交帧率 21.60–23.00、OptiX 27.42–28.70；严格 Visible FPS 因 PresentMon ETW 权限问题尚未验证。不要为了补结论重复跑分，也不要把提交 FPS 改成 Visible FPS。历史数据须按各自 build-manifest 区分，颜色空间等改动影响可比性。
 
 `SceneIRTest / scene_ir_dson` 已通过，`CameraMailboxTest` 前一阶段已通过。本轮没有重跑 `tests/runtime_checks.py` 的延迟注入 / 最小化流程；相机验证仅复用其窗口定位辅助函数。
 
-下一阶段优先建立材质 Reference 和差异报告，再补皮肤 / 眼睛、法线 / 粗糙度等语义，随后按总体规范推进变形链路。当前无需新增第三方源码。
+下一步继续 Spec 004：独立估计凹凸距离（不可写死样例数值），修正折射粗糙度 / 盘子高光，再对齐皮肤散射与复杂材质；尚不可跳过材质差异直接宣布 Golden 通过。当前无需新增第三方源码。已验收静态预览的基线提交为 `afc7737`；Spec 004 本批改动按用户要求以中文提交到本地 Git，具体版本见提交记录。
 
 ## 构建环境与保护事项
 

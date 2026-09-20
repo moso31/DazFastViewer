@@ -1,6 +1,9 @@
 # DAZ 轻量级 Cycles Runtime —— 实现规范（含模型路由）
 
-## 本地开发环境与版本基线（用户补充，2026-09-20 更新）
+## 本地开发环境与版本基线（用户补充，2026-09-21 更新）
+
+- 用户于 2026-09-20 确认指定角色与道具静态预览验收通过，代码已以中文提交到本地 Git（`afc7737`，无远端）；于 2026-09-21 明确授权进入 **Spec 004 材质参考与完善**，沿用当前模型。
+- 材质参考使用本机 `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`（5.2.2 LTS）与已安装 DAZ Importer 5.2.0；仅作为独立后台参考工具，产品运行时不依赖 Blender 或该插件。无需额外获取源码。
 
 - 后续真实资产验证采用：
   - 角色：`C:\Users\Public\Documents\My DAZ 3D Library\People\Genesis 8 Female\Genesis 8.1 Basic Female.duf`。

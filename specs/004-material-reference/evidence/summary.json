@@ -1,0 +1,161 @@
+{
+  "date": "2026-09-21",
+  "phase_status": "IN_PROGRESS",
+  "golden_status": "NOT_ACCEPTED",
+  "cases": {
+    "prop": {
+      "structure": [
+        {
+          "instance": "FIGURE_food_fries_1794/FIGURE_food_fries",
+          "reference_object": "ARK Modern Cafe - Food Plate Fries Mesh",
+          "vertices": 1794,
+          "max_vertex_error_m": 1.5387973562042134e-08,
+          "max_uv_error": 0.0,
+          "uv_layer": "Default UVs",
+          "material_slots": {
+            "plate_ceramic": "plate_ceramic-1",
+            "fries": "fries-1"
+          },
+          "triangle_material_binding": "PASS"
+        }
+      ],
+      "render": {
+        "adaptive_sampling": false,
+        "denoise": false,
+        "diffuse_bounces": 4,
+        "glossy_bounces": 4,
+        "max_bounces": 8,
+        "samples": 64,
+        "seed": 1337,
+        "transmission_bounces": 8,
+        "transparent_max_bounces": 8,
+        "working_space": "linear-Rec709"
+      },
+      "device": [
+        "NVIDIA GeForce RTX 4070 Ti SUPER"
+      ],
+      "blender": "5.2.2 LTS",
+      "importer": "5.2.0",
+      "linear_rgb": {
+        "mae": 0.0036812019534409046,
+        "rmse": 0.008073568344116211,
+        "p95_absolute_error": 0.015841001644730568,
+        "max_absolute_error": 0.30554166436195374,
+        "fraction_pixels_error_above_0_05": 0.0056640625
+      },
+      "asset_bounding_rectangle": {
+        "pixel_bounds_bottom_origin": [
+          138,
+          85,
+          502,
+          331
+        ],
+        "mae": 0.00907152146100998,
+        "rmse": 0.014516791328787804,
+        "note": "投影包围矩形，包含空隙和背景，不是对象遮罩"
+      },
+      "textures": 7,
+      "warnings": 5,
+      "artifact_sha256": {
+        "runtime\\scene.json": "f5985e725d455ec75d836b0a2277057260ef3aff6168a6176151429303be54ea",
+        "runtime\\smoke.exr": "c17119adf996fcf72e9853b62315f6dd8fea3d8fe1bc499e611b97740dc150a9",
+        "reference\\reference.exr": "769544300a261d8fea03647cb633a5424266fb6dd0f4d031ffda1fd33dbe03cc",
+        "reference\\reference-materials.json": "34cb2ba370490422e9dba85b6fccb7e892256194077a00687bc720ce27903e88"
+      }
+    },
+    "character": {
+      "structure": [
+        {
+          "instance": "Genesis8_1Female/Genesis81FemaleGeom",
+          "reference_object": "Genesis 8.1 Female Mesh",
+          "vertices": 16556,
+          "max_vertex_error_m": 1.3348812899494078e-07,
+          "max_uv_error": 0.0,
+          "uv_layer": "Base 8.1 Female",
+          "material_slots": {
+            "Body": "Body-1",
+            "Face": "Face-1",
+            "Lips": "Lips-1",
+            "Teeth": "Teeth-1",
+            "Ears": "Ears-1",
+            "Legs": "Legs-1",
+            "EyeSocket": "EyeSocket-1",
+            "Mouth": "Mouth-1",
+            "Arms": "Arms-1",
+            "Pupils": "Pupils-1",
+            "EyeMoisture": "EyeMoisture-1",
+            "Fingernails": "Fingernails-1",
+            "Cornea": "Cornea-1",
+            "Irises": "Irises-1",
+            "Sclera": "Sclera-1",
+            "Toenails": "Toenails-1",
+            "Head": "Head-1"
+          },
+          "triangle_material_binding": "PASS"
+        }
+      ],
+      "render": {
+        "adaptive_sampling": false,
+        "denoise": false,
+        "diffuse_bounces": 4,
+        "glossy_bounces": 4,
+        "max_bounces": 8,
+        "samples": 64,
+        "seed": 1337,
+        "transmission_bounces": 8,
+        "transparent_max_bounces": 8,
+        "working_space": "linear-Rec709"
+      },
+      "device": [
+        "NVIDIA GeForce RTX 4070 Ti SUPER"
+      ],
+      "blender": "5.2.2 LTS",
+      "importer": "5.2.0",
+      "linear_rgb": {
+        "mae": 0.006863419432193041,
+        "rmse": 0.02708296850323677,
+        "p95_absolute_error": 0.06091945245862007,
+        "max_absolute_error": 0.309924840927124,
+        "fraction_pixels_error_above_0_05": 0.064013671875
+      },
+      "asset_bounding_rectangle": {
+        "pixel_bounds_bottom_origin": [
+          204,
+          54,
+          448,
+          422
+        ],
+        "mae": 0.022165406495332718,
+        "rmse": 0.050059396773576736,
+        "note": "投影包围矩形，包含空隙和背景，不是对象遮罩"
+      },
+      "textures": 16,
+      "warnings": 36,
+      "artifact_sha256": {
+        "runtime\\scene.json": "c40995ac42c4ea3880d21008cfe69f2bb975bef92d48b9ea845ff8414c66a042",
+        "runtime\\smoke.exr": "4780dd7db543ac5ff56f1b0a6f0daf8299d889042baba00cc31383d8330a84b9",
+        "reference\\reference.exr": "5984d1e97ce6f721bae3a5bf7f356f08f4d887dddb63eb05a520421f9acefdf7",
+        "reference\\reference-materials.json": "43ddef8e253a6024de89da6e8d6654ef2307f7f46c2cd3cd74eb7749b3c07df9"
+      }
+    }
+  },
+  "material_delta": {
+    "changed_pixel_fraction": 0.22233072916666666,
+    "geometry_pointers_unchanged": true,
+    "gpu_upload_bytes": "NOT_MEASURED",
+    "linear_rgb_mae": 0.03086448390324959,
+    "material_updates": 2,
+    "mesh_count": 2,
+    "session_loads": 1,
+    "status": "PASS",
+    "texture_resource_count": 7
+  },
+  "executable_sha256": "b3515bc61764b3e2469fbcb6ff8441d157553a1365643949413339ca91fdce63",
+  "ctest": {
+    "camera_mailbox": "PASS",
+    "scene_ir_dson": "PASS",
+    "total_seconds": 0.12
+  },
+  "gpu_upload_bytes": "NOT_MEASURED",
+  "visible_fps": "NOT_MEASURED"
+}

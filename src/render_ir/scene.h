@@ -29,7 +29,10 @@ struct Material {
   std::string id;
   Vec3 base_color{0.5f,0.5f,0.5f};
   float roughness=.5f,metallic=0,opacity=1,transmission=0,ior=1.5f,normal_strength=1;
+  // 世界空间高度范围，单位为米；与法线贴图叠加。
+  float bump_strength=0,bump_distance=.001f;
   int color_texture=-1,roughness_texture=-1,opacity_texture=-1,normal_texture=-1;
+  int bump_texture=-1;
 };
 struct Triangle {
   std::array<uint32_t,3> vertices{};

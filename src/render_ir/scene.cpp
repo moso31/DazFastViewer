@@ -36,9 +36,10 @@ void validate(const Camera &camera) {
   for(float f:camera.transform.value) if(!std::isfinite(f)) throw std::runtime_error("IR: 相机矩阵包含非有限值");
 }
 void validate(const Material &m,size_t texture_count) {
-  for(float f:{m.base_color.x,m.base_color.y,m.base_color.z,m.roughness,m.metallic,m.opacity,m.transmission,m.ior,m.normal_strength})
+  for(float f:{m.base_color.x,m.base_color.y,m.base_color.z,m.roughness,m.metallic,m.opacity,m.transmission,m.ior,m.normal_strength,m.bump_strength,m.bump_distance})
     if(!std::isfinite(f)) throw std::runtime_error("IR: 无效材质参数");
-  for(int t:{m.color_texture,m.roughness_texture,m.opacity_texture,m.normal_texture})
+  if(m.bump_strength<0 || m.bump_distance<0) throw std::runtime_error("IR: 凹凸强度或距离不能为负");
+  for(int t:{m.color_texture,m.roughness_texture,m.opacity_texture,m.normal_texture,m.bump_texture})
     if(t< -1 || (t>=0 && size_t(t)>=texture_count)) throw std::runtime_error("IR: 贴图索引越界");
 }
 void Scene::validate() const {

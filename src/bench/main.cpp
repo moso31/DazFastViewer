@@ -1,5 +1,6 @@
 #include "viewport/display.h"
 #include "bench/fixtures.h"
+#include "bench/scene_export.h"
 #include "cycles/adapter.h"
 #include "daz/loader.h"
 #include "device/device.h"
@@ -25,7 +26,7 @@
 
 namespace {
 struct Options {
-  bool devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false;
+  bool devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
   double seconds=60,warmup=10,refine=10,preview_seconds=0;
   std::string backend="OPTIX";
@@ -43,6 +44,8 @@ Options parse(int argc,char **argv) {
     else if(arg=="--file") o.file=std::filesystem::u8path(value());
     else if(arg=="--content-root") o.content_roots.push_back(std::filesystem::u8path(value()));
     else if(arg=="--inspect") o.inspect=true;
+    else if(arg=="--export-scene") o.export_scene=true;
+    else if(arg=="--material-delta-check") o.material_delta_check=true;
     else if(arg=="--dump-shaders") o.dump_shaders=true;
     else if(arg=="--strict-dson") o.strict=true;
     else if(arg=="--monitor") o.monitor=std::stoi(value());
@@ -67,7 +70,9 @@ Options parse(int argc,char **argv) {
      !std::isfinite(o.seconds) || o.seconds<=0 || !std::isfinite(o.warmup) || o.warmup<0 ||
      !std::isfinite(o.refine) || o.refine<0 || o.render_delay_ms<0 || o.render_delay_ms>1000 || o.monitor<1 ||
      !std::isfinite(o.preview_seconds) || o.preview_seconds<0) throw std::runtime_error("无效尺寸、样本数或时长");
-  if(o.inspect && o.file.empty()) throw std::runtime_error("--inspect 需要 --file");
+  if((o.inspect || o.export_scene) && o.file.empty()) throw std::runtime_error("--inspect / --export-scene 需要 --file");
+  if(o.material_delta_check && (!o.smoke || o.file.empty() || o.inspect || o.export_scene || o.dump_shaders))
+    throw std::runtime_error("--material-delta-check 需要 --smoke 和 --file，不能与只导出选项组合");
   return o;
 }
 std::string utf8_path(const std::filesystem::path &p) {auto s=p.generic_u8string();return {s.begin(),s.end()};}
@@ -97,6 +102,16 @@ dfv::CameraState trajectory(double seconds,const dfv::CameraState &base) {
   else if(t<40) {state.yaw=base.yaw+2;state.target.x=float(2*std::sin((t-20)*0.2));state.target.z=1+float(0.3*std::sin((t-20)*0.3));}
   else {state.yaw=base.yaw+2;state.distance=base.distance*float(1+0.25*std::sin((t-40)*0.3));}
   return state;
+}
+dfv::CameraState preview_camera(const Options &o,const dfv::ir::Bounds &bounds) {
+  dfv::CameraState initial;
+  if(o.file.empty()) {if(o.medium) initial.distance=19;}
+  else {
+    const auto c=bounds.center();initial.target={c.x,c.y,c.z};
+    initial.distance=std::max(bounds.extent()*1.6f,.35f);initial.yaw=.3f;
+    initial.pitch=bounds.maximum.z-bounds.minimum.z<bounds.extent()*.5f?.7f:.08f;
+  }
+  return initial;
 }
 int run(const Options &o,const ccl::DeviceInfo &device) {
   using namespace dfv;
@@ -136,14 +151,9 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
   scene.integrator->set_transparent_max_bounce(8);
   scene.integrator->set_use_denoise(false);scene.integrator->set_use_adaptive_sampling(false);
   const auto start=now();
-  CameraState initial=window?window->mailbox.latest():CameraState{};
-  if(o.file.empty()) {if(o.medium) initial.distance=19;}
-  else {
-    const auto c=asset_bounds.center();initial.target={c.x,c.y,c.z};
-    initial.distance=std::max(asset_bounds.extent()*1.6f,.35f);initial.yaw=.3f;
-    initial.pitch=asset_bounds.maximum.z-asset_bounds.minimum.z<asset_bounds.extent()*.5f?.7f:.08f;
-  }
+  CameraState initial=preview_camera(o,asset_bounds);
   render_scene.camera=render_camera(initial,o.width,o.height);
+  if(o.smoke || o.dump_shaders) save_json(o.output/"scene.json",scene_json(render_scene,o.samples));
   CyclesAdapter adapter(scene);adapter.load(render_scene);const auto counts=adapter.stats();
   if(o.dump_shaders) {
     nlohmann::json materials=nlohmann::json::array();
@@ -220,6 +230,41 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
     std::vector<float> pixels(size_t(o.width)*o.height*input->spec().nchannels);
     if(!input->read_image(0,0,0,-1,OIIO::TypeDesc::FLOAT,pixels.data())) throw std::runtime_error("烟雾测试图像损坏");
     input->close();
+    if(o.material_delta_check) {
+      const auto before_pixels=output_result->linear_pixels;
+      std::vector<ccl::Geometry *> geometry_before;for(auto *geometry:scene.geometry) geometry_before.push_back(geometry);
+      const auto after_directory=o.output/"material-delta";std::filesystem::create_directories(after_directory);
+      auto after=std::make_unique<Output>(after_directory);auto *after_result=after.get();
+      session->set_output_driver(std::move(after));
+      ir::Delta delta;
+      for(uint32_t i=0;i<render_scene.materials.size();++i) if(render_scene.materials[i].id!="preview-floor") {
+        auto material=render_scene.materials[i];material.base_color={.015f,.05f,.8f};delta.materials.push_back({i,material});
+      }
+      {
+        ccl::thread_scoped_lock lock(scene.mutex);adapter.apply(delta);session->dfv_requested_epoch=initial.epoch+1;
+        session->reset(params,buffers);
+      }
+      session->start();session->wait();
+      if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
+      if(!after_result->written || !after_result->error.empty()) throw std::runtime_error("材质 Delta 输出失败: "+after_result->error);
+      const auto &after_pixels=after_result->linear_pixels;
+      if(before_pixels.size()!=after_pixels.size()) throw std::runtime_error("材质 Delta 前后图像尺寸不一致");
+      double difference=0;size_t changed=0;
+      for(size_t i=0;i<before_pixels.size();i+=4) {
+        double pixel=0;for(size_t k=0;k<3;++k) pixel+=std::abs(before_pixels[i+k]-after_pixels[i+k]);
+        difference+=pixel;if(pixel>.03) ++changed;
+      }
+      const auto &stats=adapter.stats();const auto pixel_count=before_pixels.size()/4;
+      std::vector<ccl::Geometry *> geometry_after;for(auto *geometry:scene.geometry) geometry_after.push_back(geometry);
+      const bool stable=geometry_before==geometry_after && stats.meshes==counts.meshes && stats.textures==counts.textures && stats.unique_triangles==counts.unique_triangles;
+      const bool pass=stable && stats.material_updates==delta.materials.size() && changed>pixel_count/100;
+      save_json(o.output/"material-delta-check.json",{{"status",pass?"PASS":"FAIL"},{"geometry_pointers_unchanged",stable},
+        {"mesh_count",stats.meshes},{"texture_resource_count",stats.textures},{"material_updates",stats.material_updates},
+        {"changed_pixel_fraction",double(changed)/pixel_count},{"linear_rgb_mae",difference/(pixel_count*3)},
+        {"gpu_upload_bytes","NOT_MEASURED"},{"session_loads",1}});
+      if(!pass) throw std::runtime_error("材质 Delta 验证失败，详见 material-delta-check.json");
+      std::cout<<"Material Delta: PASS"<<std::endl;
+    }
     std::cout<<"Render complete: "<<path<<" in "<<now()-start<<" s"<<std::endl;
     return 0;
   }
@@ -361,11 +406,18 @@ int wmain(int argc,wchar_t **wide_argv) {
                <<"  --preview-seconds <seconds>  自动关闭预览；省略则保持交互窗口\n"
                <<"  --smoke  离线 PNG/EXR；--samples <count>；--output <directory>\n"
                <<"  --dump-shaders  导出材质图和绑定诊断，不创建窗口或执行渲染\n"
+               <<"  --export-scene  无需 GPU 导出参考场景、相机、灯光及材质参数\n"
+               <<"  --material-delta-check  与 --smoke --file 合用，检查同一 Session 的材质增量\n"
                <<"  右键旋转 / Shift+右键平移 / 滚轮缩放 / Esc 退出\n";return 0;
     }
-    if(options.inspect) {
+    if(options.inspect || options.export_scene) {
       auto loaded=dfv::daz::load(options.file,{options.content_roots,options.strict});
       std::filesystem::create_directories(options.output);save_json(options.output/"asset-report.json",loaded.report);
+      if(options.export_scene) {
+        const auto camera=preview_camera(options,loaded.scene.bounds());
+        dfv::ir::add_studio(loaded.scene);loaded.scene.camera=dfv::render_camera(camera,options.width,options.height);
+        save_json(options.output/"scene.json",dfv::scene_json(loaded.scene,options.samples));
+      }
       std::cout<<"Loaded "<<loaded.scene.meshes.size()<<" meshes, "<<loaded.scene.materials.size()<<" materials, "<<loaded.scene.textures.size()<<" textures; "
                <<loaded.report["warnings"].size()<<" compatibility diagnostics"<<std::endl;return 0;
     }

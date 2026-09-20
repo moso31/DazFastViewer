@@ -48,11 +48,20 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m) {
     graph->connect(image->output("Color"),multiply->input("Value1"));graph->connect(multiply->output("Value"),bsdf->input(socket));
   };
   scalar_texture(m.roughness_texture,m.roughness,"Roughness");scalar_texture(m.opacity_texture,m.opacity,"Alpha");
+  ShaderOutput *surface_normal=nullptr;
   if(m.normal_texture>=0) {
     auto *image=texture(m.normal_texture);auto *normal=graph->create_node<NormalMapNode>();
     normal->set_strength(m.normal_strength);normal->set_attribute(ustring("UVMap"));
-    graph->connect(image->output("Color"),normal->input("Color"));graph->connect(normal->output("Normal"),bsdf->input("Normal"));
+    graph->connect(image->output("Color"),normal->input("Color"));surface_normal=normal->output("Normal");
   }
+  if(m.bump_texture>=0 && m.bump_strength>0 && m.bump_distance>0) {
+    auto *image=texture(m.bump_texture);auto *bump=graph->create_node<BumpNode>();
+    bump->set_strength(m.bump_strength);bump->set_distance(m.bump_distance);
+    graph->connect(image->output("Color"),bump->input("Height"));
+    if(surface_normal) graph->connect(surface_normal,bump->input("Normal"));
+    surface_normal=bump->output("Normal");
+  }
+  if(surface_normal) graph->connect(surface_normal,bsdf->input("Normal"));
   graph->connect(bsdf->output("BSDF"),graph->output()->input("Surface"));
   shader.name=ustring(m.id);shader.set_graph(std::move(graph));shader.tag_update(&scene_);
 }

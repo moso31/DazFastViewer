@@ -177,16 +177,27 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     material.metallic=std::clamp(number(channel("Metallic Weight"),0),0.0f,1.0f);
     material.opacity=std::clamp(number(channel("Cutout Opacity"),1),0.0f,1.0f);
     material.transmission=std::clamp(number(channel("Refraction Weight"),0),0.0f,1.0f);
-    material.ior=std::max(1.0f,number(channel("Refraction Index"),1.5f));
+    // 非透射 Iray Uber 的 Refraction Index 不控制表面高光；参考的 Principled 保持 1.5。
+    material.ior=material.transmission>0?std::max(1.0f,number(channel("Refraction Index"),1.5f)):1.5f;
     material.normal_strength=number(channel("Normal Map"),1);
+    material.bump_strength=std::max(0.0f,number(channel("Bump Strength"),1));
+    const bool explicit_bump_range=channels.contains("Bump Minimum") && channels.contains("Bump Maximum");
+    if(explicit_bump_range) material.bump_distance=.01f*(number(channel("Bump Maximum"),0)-number(channel("Bump Minimum"),0));
     material.color_texture=texture(diffuse,ir::ColorSpace::srgb,material_file);
     material.roughness_texture=texture(channel("Glossy Roughness"),ir::ColorSpace::linear,material_file);
     material.opacity_texture=texture(channel("Cutout Opacity"),ir::ColorSpace::linear,material_file);
     material.normal_texture=texture(channel("Normal Map"),ir::ColorSpace::linear,material_file);
-    const std::set<std::string> supported={"diffuse","Glossy Roughness","Metallic Weight","Cutout Opacity","Refraction Weight","Refraction Index","Normal Map"};
+    material.bump_texture=texture(channel("Bump Strength"),ir::ColorSpace::linear,material_file);
+    if(material.bump_texture>=0 && !explicit_bump_range)
+      warn("bump_distance_approximation",material.id,"资产未提供凹凸高度范围；暂用 1 毫米。参考 Importer 根据几何和纹理得到不同距离，尚未对齐");
+    const std::set<std::string> supported={"diffuse","Glossy Roughness","Metallic Weight","Cutout Opacity","Refraction Weight","Refraction Index","Normal Map","Bump Strength","Bump Minimum","Bump Maximum"};
+    for(const char *id:{"Metallic Weight","Refraction Weight","Refraction Index"})
+      if(!channel(id).value("image_file","").empty()) warn("unmapped_channel_texture",material.id,std::string(id)+" 目前仅支持常量，贴图尚未映射");
     Json unmapped=Json::array();for(const auto &[id,c]:channels) if(!supported.contains(id)) unmapped.push_back(id);
     if(!unmapped.empty()) warn("material_subset",material.id,"仅映射基础 PBR 参数；未映射通道详见 materials.unmapped_channels");
-    material_reports.push_back({{"id",material.id},{"unmapped_channels",unmapped},{"color_texture",material.color_texture},{"roughness_texture",material.roughness_texture},{"normal_texture",material.normal_texture}});
+    material_reports.push_back({{"id",material.id},{"unmapped_channels",unmapped},{"color_texture",material.color_texture},
+      {"roughness_texture",material.roughness_texture},{"normal_texture",material.normal_texture},{"bump_texture",material.bump_texture},
+      {"bump_distance_m",material.bump_distance},{"bump_distance_source",explicit_bump_range?"explicit-centimeter-range":"preview-approximation"}});
     const uint32_t index=uint32_t(scene.materials.size());scene.materials.push_back(material);
     const auto geometry=decode(instance.value("geometry",""));const auto uv=instance.value("uv_set","");
     for(const auto &group:instance.at("groups")) bindings[{geometry,group.get<std::string>()}]={index,uv};

@@ -30,6 +30,29 @@ powershell -ExecutionPolicy Bypass -File tools/build.ps1
 
 程序保留 `--devices`、`--device CUDA`、`--smoke` 离线渲染、`--dump-shaders` 无窗口材质图导出等诊断入口。`--preview-seconds 4` 可让预览在首帧后自动关闭。
 
+## 材质参考与增量验证
+
+2026-09-21 已进入 Spec 004，完成首批后台参考工具、凹凸与法线叠加、非透射 IOR 修正。完整 Iray 材质兼容仍在进行中，凹凸距离目前可能采用带诊断的近似值。
+
+```powershell
+# 两份指定资产的结构检查、后台渲染与对照页面；只在需要新对照时运行
+python tools/reference/run_reference.py
+
+# 不执行渲染，仅导出场景和 Blender 参考材质、检查顶点 / UV / 材质绑定
+python tools/reference/run_reference.py --export-only
+
+# 如需重新验证材质增量：同一个 Session 内修改道具材质并检查图像变化
+python tools/reference/run_reference.py --sample prop --verify-delta
+```
+
+脚本使用已安装 Blender 5.2.2 与 DAZ Importer 5.2.0，全程后台，不保存用户偏好。默认 640×480、64 samples、OptiX；只作材质对照，不作性能测试。已有结果可直接打开：
+
+- [道具对照页面](artifacts/material-reference/prop/comparison.html)
+- [角色对照页面](artifacts/material-reference/character/comparison.html)
+- [Spec 004 执行报告](specs/004-material-reference/execution-report.md)
+
+原生 `--export-scene --file …` 无需创建 GPU 设备即可导出 `scene.json`。参考检查通过只证明约定的基础几何 / UV / 材质绑定一致；图像和复杂材质差异仍按报告保留，不自动认定 Golden 验收通过。
+
 ## 实际结果与文档
 
 - [角色最终截图](artifacts/dson-character-final/viewport.png)、[道具副屏截图](artifacts/dson-prop/viewport.png)

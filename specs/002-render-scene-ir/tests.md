@@ -1,6 +1,6 @@
 # 验证与证据
 
-更新：2026-09-20。不执行重复性能回放。
+更新：2026-09-21。不执行重复性能回放。
 
 | 项目 | 结果 | 证据 |
 |---|---|---|
@@ -10,7 +10,7 @@
 | 角色相机 Delta | PASS | `artifacts/dson-character/camera-check.json` |
 | 相机更新不重建网格 | PASS | 创建 2 个网格（资产 + 地板），4 次相机设置（初始 + 3 次输入）；静态脏 epoch 只有初始 2 |
 | 停动后的最终相机 | PASS | 最终输入和呈现 epoch 均为 5 |
-| 材质 Delta 图像 | NOT_RUN | 仅完成接口与入参校验 |
+| 材质 Delta 图像 | PASS | Spec 004 道具同一 Session 更新 2 个材质，22.233% 像素变化；网格 / 三角形计数和几何指针不变，见 [报告](../004-material-reference/execution-report.md) |
 | 完整 GPU 资源上传审计 | NOT_RUN | 主机对象创建计数不能替代上传字节计数 |
 | 严格 Visible FPS | 未完成 | 沿用 Spec 001 状态；本轮预览没有 FPS 验收区间 |
 

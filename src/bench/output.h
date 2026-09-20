@@ -12,6 +12,7 @@ class Output final: public ccl::OutputDriver {
   std::filesystem::path directory_;
   bool albedo_=false;
 public:
+  std::vector<float> linear_pixels;
   std::string error;
   bool written=false;
   explicit Output(std::filesystem::path directory,bool albedo=false):directory_(std::move(directory)),albedo_(albedo) {}
@@ -21,6 +22,7 @@ public:
     std::vector<float> linear(size_t(w)*h*4),flipped(linear.size());
     if(!tile.get_pass_pixels("combined",4,linear.data())) {error="读取 Combined 失败";return;}
     for(int y=0;y<h;++y) std::copy_n(linear.data()+size_t(y)*w*4,size_t(w)*4,flipped.data()+size_t(h-1-y)*w*4);
+    linear_pixels=flipped;
     std::vector<unsigned char> srgb(flipped.size());
     for(size_t i=0;i<flipped.size();++i) {
       float v=flipped[i];
