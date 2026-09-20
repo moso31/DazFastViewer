@@ -3,13 +3,16 @@
 #include <cstddef>
 #include <vector>
 
-namespace ccl {class Scene;class Shader;}
+namespace ccl {class Scene;class Shader;class Mesh;class Object;}
 namespace dfv {
-struct AdapterStats {size_t meshes=0,instances=0,materials=0,textures=0,unique_triangles=0,triangles=0,camera_updates=0,material_updates=0;};
+struct AdapterStats {size_t meshes=0,instances=0,materials=0,textures=0,unique_triangles=0,triangles=0,camera_updates=0,material_updates=0,geometry_updates=0,instance_updates=0;};
 class CyclesAdapter {
   ccl::Scene &scene_;
   std::vector<ccl::Shader *> shaders_;
   std::vector<ir::Texture> textures_;
+  std::vector<std::vector<ccl::Mesh *>> meshes_;
+  std::vector<size_t> vertex_counts_;
+  std::vector<ccl::Object *> objects_;
   AdapterStats stats_;
   bool loaded_=false;
   void material(ccl::Shader &shader,const ir::Material &value);

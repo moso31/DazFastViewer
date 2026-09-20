@@ -77,7 +77,14 @@ struct Scene {
   Bounds bounds() const;
 };
 struct MaterialEdit {uint32_t index=0;Material value;};
-struct Delta {std::optional<Camera> camera;std::vector<MaterialEdit> materials;};
+struct MeshEdit {uint32_t index=0;std::vector<Vec3> positions;};
+struct InstanceEdit {uint32_t index=0;Transform transform;};
+struct Delta {
+  std::optional<Camera> camera;
+  std::vector<MaterialEdit> materials;
+  std::vector<MeshEdit> meshes;
+  std::vector<InstanceEdit> instances;
+};
 void validate(const Camera &camera);
 void validate(const Material &material,size_t texture_count);
 // 用于无自带灯光的资产预览；不是原 DUF 的灯光语义。

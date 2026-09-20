@@ -2,11 +2,37 @@
 
 独立 DAZ Runtime，使用 Cycles 提供交互式路径追踪视口。当前已经能够直接加载用户指定的 Genesis 8.1 Basic Female 与 ARK Food Plate with Fries DUF；无需启动 Blender、DAZ Studio 或 Iray。
 
-**当前阶段已于 2026-09-20 通过用户手动验收。** 验收范围为现有角色与道具预览，详细结果见执行报告。
+**Spec 003 角色与道具静态预览已于 2026-09-20 通过用户手动验收。** Spec 005 中文编辑器与直接 Morph 已通过工程验证，尚待用户手动验收；详细结果见各阶段执行报告。
 
-已实现独立 Render Scene IR、Cycles Adapter、原生 DUF / DSF 静态加载、Mesh / UV / 基础材质、OptiX 视口以及相机旋转、平移、缩放。当前是基础网格预览，尚未实现 SubD / HD、Morph、蒙皮 / Pose 或完整 Iray Uber 材质。
+已实现独立 Render Scene IR、Cycles Adapter、原生 DUF / DSF 加载、Mesh / UV / 基础材质、OptiX 视口、直接稀疏 Morph 及相机操作。当前仍基于基础网格，尚未实现 SubD / HD、完整 ERC / JCM、蒙皮 / Pose 或完整 Iray Uber 材质。
 
-## 打开真实样例
+## 中文编辑器与 Morph（Spec 005）
+
+**005 当前阶段实施范围已完成并通过工程验证。** 核查依据与后续边界见[阶段完成核查](specs/005-morph-runtime/completion-review.md)；不代表整个产品的 Golden / 性能验收已经完成。
+
+新增 Qt Widgets 编辑器，支持菜单、多个内容库、后台加载 DUF、场景对象选择、参数分组 / 搜索与滑块、变换参数及重置。参数目录同时发现直接 Morph、纯公式控制器、子节点别名与 HD 项；可编辑数量由当前内容库和目标角色决定。公式 / HD / 骨骼相关项显示原因，完整蒙皮与服装绑定仍在后续阶段。
+
+在工程目录运行：
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sample Character
+```
+
+道具使用 `-Sample Prop`，Genesis 8 Female 使用 `-Sample Genesis8`；默认 `Character` 仍是 Genesis 8.1 Female。也可直接打开 `out\DazFastViewer.exe`，通过“文件 → 打开 DUF…”加载资产。编辑器初始窗口只在第二屏打开，缺少第二屏会在输出目录记录错误并退出。
+
+先在左侧场景树选择对象，再在右侧搜索 `Bodybuilder`，选中具体参数后拖动下方滑块。参数按资产的 `group` 展开，子节点别名归入“子节点”；可以显示隐藏参数，悬停名称 / 详情查看来源和限制。变换为相对载入状态的 DAZ 坐标偏移；“重置选中对象”恢复载入参数。视口右键旋转、Shift＋右键平移、滚轮缩放。当前编辑不保存回原 DUF。
+
+“项目 → 项目设置…”支持添加、移除、上移和下移内容库，并保存至工程根目录的 `DazFastViewer.project.json`。本机已写入用户指定的四个根目录；靠前的库优先解析相同资源路径。保存后重新扫描当前场景，并按稳定 ID 保留仍然兼容的 Morph 值与变换。内容浏览器顶部可以切换各个库。
+
+项目配置不提交 Git；新检出可复制 [配置示例](configs/project.example.json)，或通过菜单建立配置。`--project <文件>` 可指定另一份配置，`--content-root` 临时追加到最高优先级；缺失目录会保留并标注。首次多库扫描可能耗时约一分钟，期间 UI 保持响应。G8.1 对部分旧 G8 表情使用空文件屏蔽，因此两代的参数清单不完全相同。具体核查见[多库与参数发现修复报告](specs/005-morph-runtime/content-libraries-report.md)。
+
+- [实际编辑器截图](artifacts/editor-check/editor-morph.png)
+- [Spec 005 执行报告](specs/005-morph-runtime/execution-report.md)
+- [UI / Genesis 8 / FitTo 长期规划](Docs/editor_and_genesis8_roadmap_cn.md)
+
+构建需要本机 Qt MSVC 套件（当前 `C:\Qt\6.10.3\msvc2022_64`，可用 CMake `DFV_QT_ROOT` 指定）。`tools/build.ps1` 同时构建编辑器和原基准工具，运行五项轻量 CTest；`stage_runtime.py` 调用 Qt 官方部署工具复制 DLL、插件、中文翻译及许可证记录。
+
+## 原视口预览与后台工具
 
 在工程根目录执行以下任一命令。程序默认只在第二块屏幕显示，1600×900；缺少第二屏时明确失败，不自动回到主屏。
 

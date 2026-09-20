@@ -39,6 +39,12 @@ Json read_document(const fs::path &path) {
       stream.next_out=reinterpret_cast<Bytef *>(chunk.data());stream.avail_out=uInt(chunk.size());
       code=inflate(&stream,Z_NO_FLUSH);unpacked.append(chunk.data(),chunk.size()-stream.avail_out);
       if(unpacked.size()>limit) {inflateEnd(&stream);fail("gzip 解压结果超过限制");}
+      // RFC 1952 允许连续 gzip member；部分 DAZ 资源附带第二个空 member。
+      if(code==Z_STREAM_END && stream.avail_in) {
+        if(stream.avail_in<2 || stream.next_in[0]!=0x1f || stream.next_in[1]!=0x8b) break;
+        auto *next=stream.next_in;const auto remaining=stream.avail_in;
+        code=inflateReset2(&stream,15+32);stream.next_in=next;stream.avail_in=remaining;
+      }
     }
     const auto trailing=stream.avail_in;inflateEnd(&stream);
     if(code!=Z_STREAM_END || trailing) fail("损坏或不支持的 gzip 文档: "+utf8(path));
@@ -143,6 +149,8 @@ void add_channels(Channels &channels,const Json &material) {
 }
 }
 
+Json read_document_file(const fs::path &file) {return read_document(file);}
+std::string decode_uri(const std::string &uri) {return decode(uri);}
 LoadedScene load(const fs::path &input,const LoadOptions &options) {
   const auto file=fs::weakly_canonical(input);
   if(!fs::is_regular_file(file)) fail("输入文件不存在: "+utf8(file));
@@ -282,7 +290,9 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
         geometry_reports.push_back({{"id",geometry_id},{"vertices",mesh.positions.size()},{"polygons",polygons.size()},{"triangles",mesh.triangles.size()},{"material_groups",mesh.material_slots}});
         mesh_index=uint32_t(scene.meshes.size());mesh_cache.emplace(key,mesh_index);scene.meshes.push_back(std::move(mesh));
       }
-      ir::Instance render_instance;render_instance.id=id+"/"+geometry_id;render_instance.mesh=mesh_index;render_instance.materials=std::move(material_indices);render_instance.transform=render_transform(world(id));scene.instances.push_back(std::move(render_instance));
+      ir::Instance render_instance;render_instance.id=id+"/"+geometry_id;render_instance.mesh=mesh_index;render_instance.materials=std::move(material_indices);render_instance.transform=render_transform(world(id));
+      out.objects.push_back({uint32_t(scene.instances.size()),id,node.value("label",node.value("name",id)),node.value("parent",""),g.at("id").get<std::string>(),geometry_file,node.value("type","")=="figure",geometry_id});
+      scene.instances.push_back(std::move(render_instance));
       if(geometry_instance.value("type",g.value("type",""))=="subdivision_surface") warn("subdivision",geometry_id,"当前显示基础笼形网格；未应用 SubD/HD 细分");
     }
   }

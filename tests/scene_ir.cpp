@@ -46,6 +46,16 @@ int main() {
     auto gzip=gzopen(gzpath.string().c_str(),"wb");require(gzip!=nullptr,"gzip fixture 创建失败");
     require(gzwrite(gzip,bytes.data(),unsigned(bytes.size()))==int(bytes.size()),"gzip fixture 写失败");require(gzclose(gzip)==Z_OK,"gzip fixture 关闭失败");
     require(dfv::daz::load(gzpath).scene.meshes[0].triangles.size()==2,"gzip DUF 解析错误");
+    const auto multi=directory/"multi-member.duf";const auto half=bytes.size()/2;
+    gzip=gzopen(multi.string().c_str(),"wb");require(gzip!=nullptr,"多段 gzip 创建失败");
+    require(gzwrite(gzip,bytes.data(),unsigned(half))==int(half) && gzclose(gzip)==Z_OK,"第一段 gzip 写失败");
+    gzip=gzopen(multi.string().c_str(),"ab");require(gzip!=nullptr,"第二段 gzip 创建失败");
+    require(gzwrite(gzip,bytes.data()+half,unsigned(bytes.size()-half))==int(bytes.size()-half) && gzclose(gzip)==Z_OK,"第二段 gzip 写失败");
+    gzip=gzopen(multi.string().c_str(),"ab");require(gzip!=nullptr && gzclose(gzip)==Z_OK,"空 gzip 段写失败");
+    require(dfv::daz::load(multi).scene.meshes[0].triangles.size()==2,"多段及空段 gzip 未兼容");
+    {std::ofstream tail(multi,std::ios::binary|std::ios::app);tail<<"invalid-tail";}
+    bool invalid_tail=false;try {dfv::daz::read_document_file(multi);} catch(...) {invalid_tail=true;}
+    require(invalid_tail,"gzip 尾部垃圾未拒绝");
     // 合成凹凸输入验证强度覆盖、厘米到米、数据色彩空间，以及无高度范围时的诊断。
     std::ofstream(directory/"height.png",std::ios::binary)<<"fixture-path-only";
     auto bump_duf=duf;

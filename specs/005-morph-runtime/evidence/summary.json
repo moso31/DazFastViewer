@@ -1,0 +1,154 @@
+{
+  "date": "2026-09-21",
+  "stage": "005-morph-runtime",
+  "delivery": "INITIAL_IMPLEMENTATION_ENGINEERING_VALIDATED",
+  "user_acceptance": "PENDING",
+  "ui": {
+    "framework": "Qt Widgets",
+    "version": "6.10.3",
+    "toolchain": "MSVC x64",
+    "monitor": 2
+  },
+  "build": {
+    "status": "PASS",
+    "log": "build/compile-editor-shell.log",
+    "staged_at": "2026-09-20T17:19:24.213561+00:00",
+    "editor_exe_sha256": "401599a3c33d72560079ecd42a61c3d834f49292c2182bcbb8064f99d9a6b871",
+    "deployed_matches_build": true
+  },
+  "lightweight_regression": {
+    "status": "PASS",
+    "tests": [
+      "camera_mailbox",
+      "scene_ir_dson",
+      "morph_runtime"
+    ],
+    "log": "build/Testing/Temporary/LastTest.log"
+  },
+  "real_morph": {
+    "golden": "DAZ_STUDIO_NOT_RUN",
+    "maximum_coordinate_error_m": 0.0,
+    "morph": "Bodybuilder Size",
+    "offset_count": 10905,
+    "status": "PASS",
+    "weights": [
+      0.5,
+      1,
+      0
+    ]
+  },
+  "catalog": {
+    "files_scanned": 917,
+    "targets": 1,
+    "sparse_morphs": 225,
+    "supported_direct_morphs": 23,
+    "visible_editable_morphs": 16,
+    "visible_unsupported_morphs": 51,
+    "skipped_types": {
+      "alias": 197,
+      "empty_or_hd_only": 8,
+      "empty_override": 279,
+      "non_sparse_control": 208
+    },
+    "diagnostic_count": 0
+  },
+  "gui_checks": {
+    "morph_edit": {
+      "check": {
+        "error": "",
+        "geometry_updates": 2,
+        "instance_updates": 2,
+        "max_displacement_m": 0.0,
+        "mesh_creations": 2,
+        "monitor": "VG279QL1A",
+        "morph_evaluations": 2,
+        "qt_version": "6.10.3",
+        "scope": "selected-object-morph-transform-reset-camera-no-morph-evaluation",
+        "stage": 4,
+        "status": "PASS",
+        "window": [
+          2729,
+          55,
+          1580,
+          920
+        ]
+      },
+      "render": {
+        "applied_revision": 4,
+        "camera_updates": 2,
+        "error": "",
+        "frames": 11,
+        "generation": 1,
+        "geometry_updates": 2,
+        "instance_updates": 2,
+        "interop_readback_bytes": 0,
+        "max_displacement_m": 0.0,
+        "mesh_creations": 2,
+        "morph_evaluations": 2,
+        "offsets_visited": 10905,
+        "presented_epoch": 5,
+        "presented_revision": 4,
+        "requested_epoch": 5,
+        "visible_fps": "NOT_MEASURED"
+      },
+      "source_revision_scope": "BEFORE_SAVED_WEIGHT_AND_RELOAD_ADDITIONS"
+    },
+    "scene_replacement": {
+      "check": {
+        "error": "",
+        "geometry_updates": 0,
+        "instance_updates": 0,
+        "max_displacement_m": 0.0,
+        "mesh_creations": 2,
+        "monitor": "VG279QL1A",
+        "morph_evaluations": 0,
+        "qt_version": "6.10.3",
+        "scope": "background-scene-replacement-generation-isolation",
+        "stage": 5,
+        "status": "PASS",
+        "window": [
+          2729,
+          55,
+          1580,
+          920
+        ]
+      },
+      "render": {
+        "applied_revision": 1,
+        "camera_updates": 1,
+        "error": "",
+        "frames": 6,
+        "generation": 2,
+        "geometry_updates": 0,
+        "instance_updates": 0,
+        "interop_readback_bytes": 0,
+        "max_displacement_m": 0.0,
+        "mesh_creations": 2,
+        "morph_evaluations": 0,
+        "offsets_visited": 0,
+        "presented_epoch": 2,
+        "presented_revision": 1,
+        "requested_epoch": 2,
+        "visible_fps": "NOT_MEASURED"
+      },
+      "source_revision_scope": "BEFORE_FINAL_MENU_AND_ERROR_MESSAGE_CHANGES"
+    }
+  },
+  "verification_limits": {
+    "daz_studio_golden": "NOT_RUN",
+    "strict_visible_fps": "NOT_MEASURED",
+    "gpu_upload_bytes": "NOT_MEASURED",
+    "final_ui_only_changes": "COMPILE_VERIFIED_WITHOUT_REPEATING_GUI"
+  },
+  "sha256": {
+    "artifacts/morph-runtime/real-morph.json": "7512bb51e9005b484184b5a0ae4b87cc0e92bcd778a2fbf0ee3da1bd946edce9",
+    "artifacts/editor-check/editor-check.json": "ede1be151771f41e71cc7e8d3159362d167c6a349f25e9860910407ae5d6c83b",
+    "artifacts/editor-check/editor-render.json": "9a5adcbdc38cb88439508f2e17038e27ce58c78784f326ac6b3a7d619904a661",
+    "artifacts/editor-check/editor-morph.png": "6c5f2a45975156c6ff228cbf395e4c46e010ccacfe8a6fb1e630c4fc814b0215",
+    "artifacts/editor-check/editor-final.png": "ced3976526ed58d0e8a7f229ba2723b458f284f57154c2c50549275fca8b9360",
+    "artifacts/editor-reload/editor-check.json": "129f214487c40f0ea2c35b25388d6854bbdff8eb9a861baf6a3b7c7acd0a2dec",
+    "artifacts/editor-reload/editor-render.json": "7aefbd6656d5e930095b1ad044124e69233c622e9d95b687f5fca233928170d2",
+    "artifacts/editor-reload/editor-reload.png": "d2c70e3d64972979ba29567703c3c3f294e7cf9d508563bd9663bd7a2e032215",
+    "build/Testing/Temporary/LastTest.log": "60f37c258e537a68837e79fafc6700ce5cd1c491f2cb47db14509d913da6b4ef"
+  }
+}

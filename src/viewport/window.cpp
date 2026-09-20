@@ -37,7 +37,7 @@ static BOOL CALLBACK enumerate_monitors(HMONITOR monitor,HDC,LPRECT,LPARAM data)
   if(GetMonitorInfoW(monitor,&row.info)) reinterpret_cast<std::vector<Monitor> *>(data)->push_back(row);
   return TRUE;
 }
-Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor):telemetry_(telemetry),width(w),height(h),monitor_index(monitor) {
+Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor,HWND parent):telemetry_(telemetry),width(w),height(h),monitor_index(monitor),embedded(parent!=nullptr) {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   std::vector<Monitor> monitors;EnumDisplayMonitors(nullptr,nullptr,enumerate_monitors,reinterpret_cast<LPARAM>(&monitors));
   std::sort(monitors.begin(),monitors.end(),[](const Monitor &a,const Monitor &b) {
@@ -50,20 +50,20 @@ Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor):tel
   WNDCLASSW cls{};cls.style=CS_OWNDC;cls.lpfnWndProc=procedure;
   cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"DfvCyclesBench";
   cls.hCursor=LoadCursor(nullptr,IDC_ARROW);RegisterClassW(&cls);
-  const DWORD style=fullscreen?WS_POPUP:(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX);
+  const DWORD style=parent?(WS_CHILD|WS_CLIPSIBLINGS|WS_CLIPCHILDREN):(fullscreen?WS_POPUP:(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX));
   RECT rect{0,0,w,h};AdjustWindowRect(&rect,style,FALSE);
   const int outer_width=rect.right-rect.left,outer_height=rect.bottom-rect.top;
   if(outer_width>area.right-area.left || outer_height>area.bottom-area.top) throw std::runtime_error("窗口尺寸超出目标显示器，请减小 --width/--height");
   const int left=area.left+(area.right-area.left-outer_width)/2,top=area.top+(area.bottom-area.top-outer_height)/2;
-  hwnd=CreateWindowW(cls.lpszClassName,L"DazFastViewer - Cycles",style,left,top,
-                     rect.right-rect.left,rect.bottom-rect.top,nullptr,nullptr,cls.hInstance,this);
+  hwnd=CreateWindowW(cls.lpszClassName,L"DazFastViewer - Cycles",style,parent?0:left,parent?0:top,
+                     rect.right-rect.left,rect.bottom-rect.top,parent,nullptr,cls.hInstance,this);
   hidden=CreateWindowW(cls.lpszClassName,L"Cycles render context",WS_POPUP,area.left,area.top,1,1,nullptr,nullptr,cls.hInstance,nullptr);
   if(!hwnd || !hidden) throw std::runtime_error("创建窗口失败");
   if(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONULL)!=selected.handle) throw std::runtime_error("窗口未位于指定显示器，拒绝显示");
   dc=GetDC(hwnd);render_dc=GetDC(hidden);pixel_format(dc);pixel_format(render_dc);
   present_context.initialize(dc);render_context.initialize(render_dc,present_context.handle());
   ShowWindow(hwnd,SW_SHOWNOACTIVATE);
-  SetWindowPos(hwnd,HWND_TOP,left,top,outer_width,outer_height,SWP_NOACTIVATE);
+  SetWindowPos(hwnd,HWND_TOP,parent?0:left,parent?0:top,outer_width,outer_height,SWP_NOACTIVATE);
   std::cout<<"Window monitor "<<monitor<<" "<<monitor_device<<" at "<<left<<","<<top<<" client "<<w<<"x"<<h<<std::endl;
   publish();
 }
@@ -90,7 +90,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
   if(!self) return DefWindowProcW(hwnd,msg,w,l);
   switch(msg) {
     case WM_CLOSE:self->close=true;return 0;
-    case WM_KEYDOWN:if(w==VK_ESCAPE) self->close=true;return 0;
+    case WM_KEYDOWN:if(w==VK_ESCAPE && !self->embedded) self->close=true;return 0;
     case WM_RBUTTONDOWN:
       self->dragging_=true;self->last_x_=GET_X_LPARAM(l);self->last_y_=GET_Y_LPARAM(l);SetCapture(hwnd);return 0;
     case WM_RBUTTONUP:self->dragging_=false;ReleaseCapture();return 0;

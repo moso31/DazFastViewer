@@ -1,0 +1,266 @@
+{
+  "date": "2026-09-21",
+  "scope": "multi-content-library-project-settings-and-parameter-discovery",
+  "project_roots": [
+    "H:/g1",
+    "H:/g3",
+    "C:/Users/Public/Documents/My DAZ 3D Library",
+    "C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"
+  ],
+  "build": {
+    "status": "PASS",
+    "log": "build/compile-library-panel.log",
+    "editor_sha256": "50d31ea155b98532c8fb2ccf9e016439e8ed1d7ffca7f7f37099eae810feb796",
+    "staged_at": "2026-09-20T18:00:27.963079+00:00"
+  },
+  "tests": {
+    "initial_suite": {
+      "status": "PASS",
+      "count": 5,
+      "seconds": 0.32
+    },
+    "after_gzip_fix": {
+      "status": "PASS",
+      "tests": [
+        "scene_ir_dson",
+        "morph_runtime",
+        "morph_catalog"
+      ],
+      "seconds": 0.2
+    }
+  },
+  "catalogs": {
+    "g8": {
+      "files_scanned": 6019,
+      "parameter_entries": 6012,
+      "visible_entries": 3470,
+      "editable_direct_morphs": 1001,
+      "visible_editable": 720,
+      "kinds": {
+        "sparse": 3848,
+        "control": 1163,
+        "alias": 610,
+        "unverified_sparse": 387,
+        "bool": 3,
+        "hd_only": 1
+      },
+      "diagnostics": [
+        {
+          "file": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Raiya/Neko/eJCMNekoEyesClosedL.dsf",
+          "reason": "Morph 差值 count 不一致"
+        },
+        {
+          "file": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Raiya/Neko/eJCMNekoEyesClosedR.dsf",
+          "reason": "Morph 差值 count 不一致"
+        }
+      ],
+      "named_parameters": [
+        {
+          "label": "Eyes Closed",
+          "kind": "alias",
+          "group": "/Pose Controls/Head/Eyes",
+          "owner": "head",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/alias_head_eCTRLEyesClosed.dsf",
+          "formula_count": 0,
+          "source_offset_count": 0,
+          "unresolved_dependencies": []
+        },
+        {
+          "label": "Eyes Closed",
+          "kind": "control",
+          "group": "/Pose Controls/Head/Eyes",
+          "owner": "Genesis8Female",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/eCTRLEyesClosed.dsf",
+          "formula_count": 2,
+          "source_offset_count": 0,
+          "unresolved_dependencies": []
+        },
+        {
+          "label": "Chest Scale",
+          "kind": "control",
+          "group": "/Real World",
+          "owner": "Genesis8Female",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base/SCLPropagatingChest.dsf",
+          "formula_count": 18,
+          "source_offset_count": 0,
+          "unresolved_dependencies": []
+        },
+        {
+          "label": "Arms Length",
+          "kind": "control",
+          "group": "/Real World",
+          "owner": "Genesis8Female",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Body/SCLArmsLength.dsf",
+          "formula_count": 4,
+          "source_offset_count": 0,
+          "unresolved_dependencies": []
+        },
+        {
+          "label": "HS Sanny Shy",
+          "kind": "sparse",
+          "group": "/Pose Controls/Head/Expressions/Sanny Expression",
+          "owner": "geometry",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Hamster/Sanny/CRTLHSSannyShy.dsf",
+          "formula_count": 456,
+          "source_offset_count": 4000,
+          "unresolved_dependencies": []
+        }
+      ],
+      "unresolved_references": 598,
+      "empty_overrides": 0
+    },
+    "g81": {
+      "files_scanned": 7085,
+      "parameter_entries": 6799,
+      "visible_entries": 3875,
+      "editable_direct_morphs": 1028,
+      "visible_editable": 745,
+      "kinds": {
+        "sparse": 4368,
+        "control": 1187,
+        "alias": 655,
+        "unverified_sparse": 580,
+        "hd_only": 5,
+        "bool": 4
+      },
+      "diagnostics": [
+        {
+          "file": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Raiya/Neko/eJCMNekoEyesClosedL.dsf",
+          "reason": "Morph 差值 count 不一致"
+        },
+        {
+          "file": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Raiya/Neko/eJCMNekoEyesClosedR.dsf",
+          "reason": "Morph 差值 count 不一致"
+        }
+      ],
+      "named_parameters": [
+        {
+          "label": "Chest Scale",
+          "kind": "control",
+          "group": "/Real World",
+          "owner": "Genesis8Female",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base/SCLPropagatingChest.dsf",
+          "formula_count": 18,
+          "source_offset_count": 0,
+          "unresolved_dependencies": []
+        },
+        {
+          "label": "Arms Length",
+          "kind": "control",
+          "group": "/Real World",
+          "owner": "Genesis8Female",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Body/SCLArmsLength.dsf",
+          "formula_count": 4,
+          "source_offset_count": 0,
+          "unresolved_dependencies": []
+        },
+        {
+          "label": "HS Sanny Shy",
+          "kind": "sparse",
+          "group": "/Pose Controls/Head/Expressions/Sanny Expression",
+          "owner": "geometry",
+          "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Hamster/Sanny/CRTLHSSannyShy.dsf",
+          "formula_count": 456,
+          "source_offset_count": 4000,
+          "unresolved_dependencies": []
+        }
+      ],
+      "unresolved_references": 4922,
+      "empty_overrides": 279,
+      "eyes_closed_empty_override": [
+        "C:/Users/Public/Documents/My DAZ 3D Library/data/DAZ 3D/Genesis 8/Female 8_1/Morphs/Daz 3D/Base Pose Head/eCTRLEyesClosed.dsf"
+      ],
+      "scan_seconds": 52.3387861
+    }
+  },
+  "gui": {
+    "content_roots": [
+      "H:/g1",
+      "H:/g3",
+      "C:/Users/Public/Documents/My DAZ 3D Library",
+      "C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"
+    ],
+    "error": "",
+    "geometry_updates": 2,
+    "instance_updates": 2,
+    "max_displacement_m": 0.0,
+    "mesh_creations": 2,
+    "monitor": "VG279QL1A",
+    "morph_evaluations": 2,
+    "named_parameters": [
+      {
+        "group": "/Pose Controls/Head/Eyes",
+        "kind": "alias",
+        "label": "Eyes Closed",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/alias_head_eCTRLEyesClosed.dsf"
+      },
+      {
+        "group": "/Pose Controls/Head/Eyes",
+        "kind": "control",
+        "label": "Eyes Closed",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/eCTRLEyesClosed.dsf"
+      },
+      {
+        "group": "/Real World",
+        "kind": "control",
+        "label": "Chest Scale",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base/SCLPropagatingChest.dsf"
+      },
+      {
+        "group": "/Real World",
+        "kind": "control",
+        "label": "Arms Length",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Body/SCLArmsLength.dsf"
+      },
+      {
+        "group": "/Pose Controls/Head/Expressions/Sanny Expression",
+        "kind": "sparse",
+        "label": "HS Sanny Shy",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Hamster/Sanny/CRTLHSSannyShy.dsf"
+      }
+    ],
+    "project_file": "D:/Github/DazFastViewer/DazFastViewer.project.json",
+    "qt_version": "6.10.3",
+    "scope": "selected-object-morph-transform-reset-camera-no-morph-evaluation",
+    "stage": 4,
+    "status": "PASS",
+    "window": [
+      2729,
+      55,
+      1580,
+      920
+    ]
+  },
+  "renderer": {
+    "applied_revision": 4,
+    "camera_updates": 2,
+    "error": "",
+    "frames": 12,
+    "generation": 1,
+    "geometry_updates": 2,
+    "instance_updates": 2,
+    "interop_readback_bytes": 0,
+    "max_displacement_m": 0.0,
+    "mesh_creations": 2,
+    "morph_evaluations": 2,
+    "offsets_visited": 10905,
+    "presented_epoch": 5,
+    "presented_revision": 4,
+    "requested_epoch": 5,
+    "visible_fps": "NOT_MEASURED"
+  },
+  "limits": {
+    "formula_and_skinning": "NOT_IMPLEMENTED",
+    "four_named_parameters": "DISCOVERED_BUT_READ_ONLY",
+    "daz_golden": "NOT_RUN",
+    "performance_benchmark": "NOT_RUN",
+    "final_layout_and_search_count_changes": "COMPILE_ONLY_AFTER_GUI_CHECK"
+  },
+  "sha256": {
+    "artifacts/content-libraries/editor-g8/morph-catalog.json": "4e35564babbff67d15c3120fb375508392490ed9d3548a649a1459239a2bb76f",
+    "artifacts/content-libraries/g81-final-catalog.json": "d604b67fa971e6fa7ed4a9c2f6466d9759b74846366e02375905aa421030e544",
+    "artifacts/content-libraries/editor-g8/editor-check.json": "692e098a29228d805f45012d4cc55d28df4d61739541089aa450e59eceda4efe",
+    "artifacts/content-libraries/editor-g8/editor-render.json": "f3c18e22cac4ed3f375a36eb1f77bbb93312e9606e12afbd8d63dcf23e952487",
+    "artifacts/content-libraries/editor-g8/editor-catalog.png": "beaa76727b658903e57deff67329d783f0e72ae871ede639a44ebf704d4cca7d"
+  }
+}

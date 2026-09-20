@@ -13,6 +13,7 @@
 #include "util/transform.h"
 #include <map>
 #include <stdexcept>
+#include <cmath>
 
 namespace dfv {
 static ccl::float3 vector(ir::Vec3 v) {return ccl::make_float3(v.x,v.y,v.z);}
@@ -69,6 +70,7 @@ void CyclesAdapter::load(const ir::Scene &source) {
   using namespace ccl;
   if(loaded_) throw std::runtime_error("同一 CyclesAdapter 只允许一次完整加载，请使用 Delta 更新");
   source.validate();textures_=source.textures;stats_.textures=textures_.size();
+  meshes_.resize(source.meshes.size());for(const auto &m:source.meshes) vertex_counts_.push_back(m.positions.size());
   for(const auto &m:source.materials) {auto *shader=scene_.create_node<Shader>();material(*shader,m);shaders_.push_back(shader);++stats_.materials;}
   std::map<std::pair<uint32_t,std::vector<uint32_t>>,Mesh *> meshes;
   for(const auto &instance:source.instances) {
@@ -85,9 +87,10 @@ void CyclesAdapter::load(const ir::Scene &source) {
         mesh->get_shader()[i]=t.material_slot;mesh->get_smooth()[i]=data.smooth;
       }
       array<Node *> shaders(instance.materials.size());for(size_t i=0;i<shaders.size();++i) shaders[i]=shaders_.at(instance.materials[i]);mesh->set_used_shaders(shaders);
-      meshes.emplace(key,mesh);++stats_.meshes;stats_.unique_triangles+=data.triangles.size();
+      meshes.emplace(key,mesh);meshes_[instance.mesh].push_back(mesh);++stats_.meshes;stats_.unique_triangles+=data.triangles.size();
     } else mesh=found->second;
     auto *object=scene_.create_node<Object>();object->name=ustring(instance.id);object->set_geometry(mesh);object->set_tfm(transform(instance.transform));
+    objects_.push_back(object);
     ++stats_.instances;stats_.triangles+=data.triangles.size();
   }
   auto light_graph=make_unique<ShaderGraph>();auto *emission=light_graph->create_node<EmissionNode>();
@@ -109,6 +112,16 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     if(edit.index>=shaders_.size()) throw std::runtime_error("材质更新索引越界");
     ir::validate(edit.value,textures_.size());
   }
+  for(const auto &edit:delta.meshes) {
+    if(edit.index>=meshes_.size() || edit.positions.size()!=vertex_counts_[edit.index]) throw std::runtime_error("顶点 Delta 不能改变拓扑或越界");
+    for(const auto &p:edit.positions) if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)) throw std::runtime_error("顶点 Delta 含非有限值");
+    for(const auto *mesh:meshes_[edit.index]) if(mesh->transform_applied) throw std::runtime_error("动态编辑要求未烘焙对象变换的动态 BVH 场景");
+  }
+  for(const auto &edit:delta.instances) {
+    if(edit.index>=objects_.size()) throw std::runtime_error("实例 Delta 索引越界");
+    for(float x:edit.transform.value) if(!std::isfinite(x)) throw std::runtime_error("实例变换含非有限值");
+    if(objects_[edit.index]->get_geometry()->transform_applied) throw std::runtime_error("对象变换已烘焙，不能直接动态修改");
+  }
   if(delta.camera) {
     const auto &c=*delta.camera;auto &camera=*scene_.camera;
     camera.set_camera_type(ccl::CAMERA_PERSPECTIVE);camera.set_full_width(c.width);camera.set_full_height(c.height);
@@ -116,5 +129,17 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     camera.need_device_update=true;camera.need_flags_update=true;++stats_.camera_updates;
   }
   for(const auto &edit:delta.materials) {material(*shaders_.at(edit.index),edit.value);++stats_.material_updates;}
+  for(const auto &edit:delta.meshes) {
+    for(auto *mesh:meshes_[edit.index]) {
+      auto *positions=mesh->get_position_for_write();
+      for(size_t i=0;i<edit.positions.size();++i) positions[i]=vector(edit.positions[i]);
+      mesh->attributes.remove(ccl::ATTR_STD_VERTEX_NORMAL);mesh->tag_position_modified();
+      mesh->compute_bounds();mesh->tag_update(&scene_,false);
+    }
+    ++stats_.geometry_updates;
+  }
+  for(const auto &edit:delta.instances) {
+    auto *object=objects_[edit.index];object->set_tfm(transform(edit.transform));object->tag_update(&scene_);++stats_.instance_updates;
+  }
 }
 }

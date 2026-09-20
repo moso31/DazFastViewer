@@ -40,7 +40,8 @@ public:
   int width,height;
   int monitor_index=2;
   std::string monitor_device;
-  Window(int width,int height,bool fullscreen,Telemetry *telemetry=nullptr,int monitor=2);
+  bool embedded=false;
+  Window(int width,int height,bool fullscreen,Telemetry *telemetry=nullptr,int monitor=2,HWND parent=nullptr);
   ~Window();
   void poll();
   void publish();

@@ -3,12 +3,31 @@ from pathlib import Path
 import shutil
 import hashlib
 import json
+import subprocess
 from datetime import datetime, timezone
 
 root = Path(__file__).resolve().parents[1]
 out = root / "out"
 out.mkdir(exist_ok=True)
 shutil.copy2(root / "build/bin/Release/CyclesViewportBench.exe", out)
+editor = root / "build/bin/Release/DazFastViewer.exe"
+qt_root = Path("C:/Qt/6.10.3/msvc2022_64")
+cache = (root / "build/CMakeCache.txt").read_text(encoding="utf-8")
+for line in cache.splitlines():
+    if line.startswith("DFV_QT_ROOT:PATH="):
+        qt_root = Path(line.split("=", 1)[1])
+if editor.exists():
+    shutil.copy2(editor, out)
+    subprocess.run([str(qt_root / "bin/windeployqt.exe"), "--release", "--no-compiler-runtime", "--no-opengl-sw",
+                    "--translations", "zh_CN", "--dir", str(out), str(out / editor.name)], check=True)
+    qt_license = out / "licenses/qt"
+    qt_license.mkdir(parents=True, exist_ok=True)
+    for item in (root / "third_party/qt").glob("*"):
+        if item.is_file():
+            shutil.copy2(item, qt_license / item.name)
+    for module in ("qtbase", "qtsvg", "qttranslations"):
+        for item in (qt_root / "sbom").glob(f"{module}-*.spdx*"):
+            shutil.copy2(item, qt_license / item.name)
 libraries = root / ".research/windows-libs-metadata"
 packages = "OpenImageIO tbb epoxy opencolorio openexr imath openjph fmt zlib zstd pugixml aom jpeg png webp openjpeg pystring yamlcpp".split()
 for package in packages:
@@ -36,5 +55,8 @@ manifest = {"staged_at": datetime.now(timezone.utc).isoformat(),
             "cycles_assembly": json.loads((out/"dfv-source-manifest.json").read_text()),
             "environment": json.loads((root/"specs/001-cycles-static-camera/evidence/environment.json").read_text(encoding="utf-8-sig")),
             "cuda": "12.9.41", "optix": "9.1.0"}
+if editor.exists():
+    manifest["editor_exe_sha256"] = hashlib.sha256((out/editor.name).read_bytes()).hexdigest()
+    manifest["qt_root"] = str(qt_root)
 (out/"build-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+"\n",encoding="utf-8")
 print(out)

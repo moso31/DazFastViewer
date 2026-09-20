@@ -1,5 +1,29 @@
 # 交接记录
 
+## 最新状态：Spec 005 / Qt 编辑器
+
+**阶段归档：** 用户本轮要求检查 005 完成后以中文提交。已对照总规范第 36 节确认当前阶段实施范围完成，并复核源码 / 部署 / 证据哈希一致。本次提交归档 005；核查过程没有再次运行 demo、全库扫描或性能回放。后续 Formula / Skinning / FitTo / IK 和整体 Golden 保留未完成，见 [阶段完成核查](specs/005-morph-runtime/completion-review.md)。
+
+**最新修订：多内容库与控制器 / 别名发现。** 用户已提供四个根目录，写入本地（Git 忽略的）`DazFastViewer.project.json`；“项目 → 项目设置”可持久修改顺序。内容库配置用于场景依赖和 Morph 发现，脚本不再把样例限制为单库。`-Sample Genesis8` 新增 G8 基础角色入口，`Character` 仍是 G8.1。
+
+参数发现补齐纯控制器、子节点 Alias、外部引用、原始分组，修复多段 gzip 的 57 个资源读取失败。G8 发现 6,012 个参数条目（720 个默认可见且可直接编辑），G8.1 为 6,799 / 745；均有 2 份 Neko count 不一致诊断。四个指定参数在 G8 已找到，但因公式 / 骨骼求值未实现仍只读；旧 Eyes Closed 控制器在 G8.1 被空覆盖屏蔽。新参数树仅为选中项创建编辑控件，支持分组与显示隐藏项。
+
+五项轻量回归、新目录真实核对、新面板副屏编辑验证通过；最后布局 / 搜索计数小改只编译。最新证据见 [多库修复报告](specs/005-morph-runtime/content-libraries-report.md)。以下 225 / 23 / 16 和三项 CTest 是早期单库记录，不再代表当前全库清单。全库首次扫描可能约一分钟，后续应实现目录索引缓存；不要为了计时重复扫描或跑性能测试。
+
+用户已授权进入 005，并补充长期 Explorer、菜单、加载角色、SceneHierarchy、Morph、FitTo 需求；最终 UI 采用 **Qt Widgets**，不再采用 Windows 原生控件作为应用框架。现有 WGL 视口嵌入 Qt，仍独立渲染与 GPU 互操作。Qt 套件为 `C:\Qt\6.10.3\msvc2022_64`；6.11.2 安装是 MinGW，不能与现有 MSVC Cycles 混链。
+
+新增 `out/DazFastViewer.exe` 和 `tools/edit_sample.ps1 -Sample Character|Prop`。中文菜单、内容浏览、选择对象、直接 Morph、变换 / 重置、后台场景切换可用。UI 不直接改网格，带文档世代号的快照交给工作线程求值。当前场景树仅包含可渲染对象，视口固定 960×720。
+
+Morph 发现位于 `src/daz/morphs.*`，纯 C++ 求值位于 `src/runtime/morph.*`；Render IR Delta 增加顶点和实例变换。G8.1 使用经过逐三角形编号验证的 G8 同性别兼容桥，空覆盖文件不会被忽略。当前角色发现 225 个稀疏 Morph，23 个可直接求值、16 个默认可见；其余 Formula / HD 项不可用。支持载入保存的直接 Morph 权重，目标 URI 不匹配不能仅凭顶点数套用。
+
+三项 CTest、真实 Bodybuilder Size 0.5 / 1 / 0 数值（10,905 偏移、误差 0）、副屏 Morph / 变换 / 重置 / 相机及角色换道具均 PASS。相机不求值 Morph，几何始终 2 个；验证未重跑性能基准。证据见 [Spec 005 报告](specs/005-morph-runtime/execution-report.md)。
+
+FitTo / 蒙皮 / ERC / JCM / IK、HD、保存 DUF、完整 Undo、动态视口尺寸和完整骨骼层次尚未实现。[长期规划](Docs/editor_and_genesis8_roadmap_cn.md)定义绑定关系、额外骨骼、体型跟随、菜单与验证顺序。服装样例在进入 006 / FitTo 时再向用户收集，005 不因此阻塞。Spec 004 材质 Golden 和严格 VisibleFPS 仍保留未完成。
+
+Spec 004 中文提交基线为 `be0dbd1`。005 本次按用户新授权归档为中文本地提交，具体提交号见 `git log`；仓库未配置远端。
+
+以下为已验收预览及 Spec 004 的历史记录，若与上述阶段进展不同，以最新状态为准。
+
 更新：2026-09-21。当前已实现独立 Cycles 视口和两个指定 DUF 的静态预览；已获授权进入 Spec 004，完成首批后台材质参考及差异修复，不要将项目描述成尚未构建或不支持任何 DAZ 加载。
 
 用户已于 2026-09-20 明确确认手动验收通过，并要求以中文提交、上传当前工程；验收记录已补充至 Spec 003。归档不需要重跑 demo 或性能测试。

@@ -2,6 +2,10 @@
 
 ## 本地开发环境与版本基线（用户补充，2026-09-21 更新）
 
+- 内容库必须支持多个可自定义根目录，并作为“项目 → 项目设置”持久保存。用户提供的查找顺序为 `H:\g1`、`H:\g3`、`C:\Users\Public\Documents\My DAZ 3D Library`、`C:\Users\xatia\Documents\DAZ 3D\Studio\My Library`。参数发现需包含目录子级、纯公式控制器及子节点别名，保留 DAZ 的 `group` 路径；发现完整度与求值支持程度分别报告，不仅统计带顶点差值的 Morph。相同资源按根目录优先级处理，G8.1 的空覆盖语义不能被依赖扫描绕过。
+
+- 用户已授权进入 **Spec 005 Morph Runtime**，补充长期中文 UI（Explorer、菜单、加载角色、SceneHierarchy、Morph / 变换编辑）与 Genesis 8 服装 FitTo / IK 跟随需求。采用 Qt Widgets 应用外壳与独立 Runtime；FitTo 按蒙皮 / ERC / IK 顺序集成，DBZ 保留为兼容与参考选项。详细设计见 [长期规划](editor_and_genesis8_roadmap_cn.md)。Spec 004 材质 Golden 尚未通过，继续作为独立剩余项。
+
 - 用户于 2026-09-20 确认指定角色与道具静态预览验收通过，代码已以中文提交到本地 Git（`afc7737`，无远端）；于 2026-09-21 明确授权进入 **Spec 004 材质参考与完善**，沿用当前模型。
 - 材质参考使用本机 `C:\Program Files\Blender Foundation\Blender 5.2\blender.exe`（5.2.2 LTS）与已安装 DAZ Importer 5.2.0；仅作为独立后台参考工具，产品运行时不依赖 Blender 或该插件。无需额外获取源码。
 
