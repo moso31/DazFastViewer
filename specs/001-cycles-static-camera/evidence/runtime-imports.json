@@ -1,0 +1,264 @@
+{
+  "scope": "PE imports reachable from CyclesViewportBench.exe; excludes static and dynamically loaded dependencies",
+  "files": {
+    "cyclesviewportbench.exe": {
+      "sha256": "a6da24809a5091c218783f2b97b2c4410ff3600a5f80b61dcfa21db3733e4e6f",
+      "bytes": 7191552,
+      "imports": [
+        "OPENGL32.dll",
+        "GDI32.dll",
+        "USER32.dll",
+        "WINMM.dll",
+        "OpenImageIO.dll",
+        "OpenImageIO_Util.dll",
+        "OpenColorIO_2_5.dll",
+        "tbb12.dll",
+        "epoxy-0.dll",
+        "KERNEL32.dll",
+        "ADVAPI32.dll",
+        "MSVCP140.dll",
+        "MSVCP140_ATOMIC_WAIT.dll",
+        "CFGMGR32.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-time-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll"
+      ]
+    },
+    "epoxy-0.dll": {
+      "sha256": "7917b1b9356afc4341aaa7d29fc8f3114a82c379729c235e94c7b532816f5831",
+      "bytes": 698880,
+      "imports": [
+        "KERNEL32.dll",
+        "VCRUNTIME140.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll"
+      ]
+    },
+    "tbb12.dll": {
+      "sha256": "12d8622ecede4409961b449e77d3ab368dee8d15f6a0b1c8352a657f5848dbb0",
+      "bytes": 346112,
+      "imports": [
+        "KERNEL32.dll",
+        "MSVCP140.dll",
+        "VCRUNTIME140_1.dll",
+        "VCRUNTIME140.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll"
+      ]
+    },
+    "opencolorio_2_5.dll": {
+      "sha256": "55e9907d952e2596ff3d6e4cae5db29aa232e8b9b369183cc7036b796d8bcb05",
+      "bytes": 5098496,
+      "imports": [
+        "Imath.dll",
+        "KERNEL32.dll",
+        "USER32.dll",
+        "GDI32.dll",
+        "MSVCP140.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-time-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll"
+      ]
+    },
+    "imath.dll": {
+      "sha256": "6cf45ca38441f40cbcef85bf40096712a872e248f772f283aefae1214afebaac",
+      "bytes": 338432,
+      "imports": [
+        "MSVCP140.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "KERNEL32.dll"
+      ]
+    },
+    "openimageio_util.dll": {
+      "sha256": "ee1ea0e25cd0ac2a929f4c9c7487ce8b9df46bf4bb00f29875861b326d681355",
+      "bytes": 768512,
+      "imports": [
+        "Imath.dll",
+        "tbb12.dll",
+        "KERNEL32.dll",
+        "SHELL32.dll",
+        "MSVCP140.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-time-l1-1-0.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll"
+      ]
+    },
+    "openimageio.dll": {
+      "sha256": "04546bd62390f739bcc6d998445c1806b7b0831cc93bca9f87bb4ee258495041",
+      "bytes": 8503808,
+      "imports": [
+        "OpenImageIO_Util.dll",
+        "OpenEXR.dll",
+        "openjph.0.25.dll",
+        "OpenEXRCore.dll",
+        "OpenColorIO_2_5.dll",
+        "Iex.dll",
+        "aom.dll",
+        "KERNEL32.dll",
+        "MSVCP140.dll",
+        "MSVCP140_ATOMIC_WAIT.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-locale-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-time-l1-1-0.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll"
+      ]
+    },
+    "aom.dll": {
+      "sha256": "5c07ff59e2bb66ee3b6ed75f6ca86d68210aa4f303648936c53d0e8c89dde177",
+      "bytes": 9915392,
+      "imports": [
+        "KERNEL32.dll",
+        "VCRUNTIME140.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-utility-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-convert-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll"
+      ]
+    },
+    "iex.dll": {
+      "sha256": "6522d2fb12d7b742195b753a27551b808641f6b19bdcea99a19694630e310f30",
+      "bytes": 290304,
+      "imports": [
+        "KERNEL32.dll",
+        "MSVCP140.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-environment-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll"
+      ]
+    },
+    "openexrcore.dll": {
+      "sha256": "94e85305ef736c71948dd4bee06d3b006aafec1a685b8964d6a2a3138b863d10",
+      "bytes": 361472,
+      "imports": [
+        "openjph.0.25.dll",
+        "KERNEL32.dll",
+        "MSVCP140.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll"
+      ]
+    },
+    "openjph.0.25.dll": {
+      "sha256": "623df9eb17550bb57dc43f8390ce913ab3a98079f8664021e37ea757cad0ecbb",
+      "bytes": 342528,
+      "imports": [
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "KERNEL32.dll"
+      ]
+    },
+    "openexr.dll": {
+      "sha256": "b47ec4e30ce690fe08136ac6f66f245a13962cd0cd5c96384adc7cc007c9573c",
+      "bytes": 850432,
+      "imports": [
+        "IlmThread.dll",
+        "OpenEXRCore.dll",
+        "Iex.dll",
+        "Imath.dll",
+        "MSVCP140.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-math-l1-1-0.dll",
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "api-ms-win-crt-filesystem-l1-1-0.dll",
+        "KERNEL32.dll"
+      ]
+    },
+    "ilmthread.dll": {
+      "sha256": "88b2349016da8c30b224d8e33f01c0920e36042ba5f767f2c2775515f91dc44a",
+      "bytes": 46080,
+      "imports": [
+        "Iex.dll",
+        "KERNEL32.dll",
+        "MSVCP140.dll",
+        "MSVCP140_ATOMIC_WAIT.dll",
+        "VCRUNTIME140.dll",
+        "VCRUNTIME140_1.dll",
+        "api-ms-win-crt-runtime-l1-1-0.dll",
+        "api-ms-win-crt-string-l1-1-0.dll",
+        "api-ms-win-crt-heap-l1-1-0.dll"
+      ]
+    }
+  },
+  "unneeded_staged_dlls": [
+    "Iex_d.dll",
+    "IlmThread_d.dll",
+    "imath_d.dll",
+    "OpenColorIO_d_2_5.dll",
+    "OpenEXRCore_d.dll",
+    "OpenEXRUtil.dll",
+    "OpenEXRUtil_d.dll",
+    "OpenEXR_d.dll",
+    "OpenImageIO_d.dll",
+    "OpenImageIO_Util_d.dll",
+    "openjph.0.25d.dll",
+    "tbb12_debug.dll",
+    "tbbmalloc.dll",
+    "tbbmalloc_debug.dll",
+    "tbbmalloc_proxy.dll",
+    "tbbmalloc_proxy_debug.dll"
+  ]
+}

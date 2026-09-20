@@ -1,0 +1,48 @@
+﻿{
+    "captured_at":  "2026-09-20T13:38:00.2813566Z",
+    "os":  {
+               "Caption":  "Microsoft Windows 11 专业版",
+               "Version":  "10.0.26200",
+               "BuildNumber":  "26200"
+           },
+    "cpu":  {
+                "Name":  "AMD Ryzen 7 5800X 8-Core Processor             ",
+                "NumberOfCores":  8,
+                "NumberOfLogicalProcessors":  16
+            },
+    "ram_bytes":  68621103104,
+    "displays":  [
+                     {
+                         "Name":  "OrayIddDriver Device",
+                         "CurrentHorizontalResolution":  null,
+                         "CurrentVerticalResolution":  null,
+                         "CurrentRefreshRate":  null
+                     },
+                     {
+                         "Name":  "MuMu Virtual Display Adapter",
+                         "CurrentHorizontalResolution":  null,
+                         "CurrentVerticalResolution":  null,
+                         "CurrentRefreshRate":  null
+                     },
+                     {
+                         "Name":  "Sharing Monitor",
+                         "CurrentHorizontalResolution":  null,
+                         "CurrentVerticalResolution":  null,
+                         "CurrentRefreshRate":  null
+                     },
+                     {
+                         "Name":  "NVIDIA GeForce RTX 4070 Ti SUPER",
+                         "CurrentHorizontalResolution":  2560,
+                         "CurrentVerticalResolution":  1440,
+                         "CurrentRefreshRate":  180
+                     }
+                 ],
+    "gpu":  "NVIDIA GeForce RTX 4070 Ti SUPER, 591.86, 16376 MiB",
+    "cmake":  "C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe",
+    "cmake_version":  "3.31.6-msvc6",
+    "ninja_version":  "1.12.1",
+    "cuda_nvcc_in_path":  false,
+    "cuda_default_directory_present":  false,
+    "optix_default_sdk_found":  0,
+    "windows_dependencies_present":  false
+}

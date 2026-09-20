@@ -1,0 +1,22 @@
+{
+  "captured_at": "2026-09-20T14:00:25.236037+00:00",
+  "blender": {
+    "source_path": "D:/Github/blender",
+    "active_worktree": "D:/Github/blender-5.2.2",
+    "branch": "dazfastviewer-blender-5.2.2",
+    "commit": "d13f752e3b9c4f8c261cda552b1021f8bcc0382c",
+    "tag": "v5.2.2",
+    "clean": true,
+    "lfs_assets_materialized": false
+  },
+  "cuda": {
+    "root": "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9",
+    "nvcc_output": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Wed_Apr__9_19:29:17_Pacific_Daylight_Time_2025\nCuda compilation tools, release 12.9, V12.9.41\nBuild cuda_12.9.r12.9/compiler.35813241_0"
+  },
+  "optix": {
+    "root": "D:/Github/optix-dev",
+    "tag": "v9.1.0",
+    "commit": "f1f6dd803f3159992d248178f6e09421c6eb8b6d"
+  },
+  "kernel_build": "NOT_RUN"
+}

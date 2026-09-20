@@ -1,0 +1,379 @@
+{
+  "method": "Three-way Git blob comparison: Blender v5.2.0, Blender v5.2.2, standalone Cycles v5.2.0; classification is not a compiled compatibility test.",
+  "blender_v5_2_0_commit": "fbe6228777e7d9afefcd61a413844e790ae75db7",
+  "counts": {
+    "blender_patch_change": 34,
+    "standalone_adaptation": 11,
+    "requires_merge_review": 1
+  },
+  "files": [
+    {
+      "path": "CMakeLists.txt",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "77cad24679756d1ac10959a6bf7dbc3c0df60dc3",
+      "blender_v5_2_2_blob": "77cad24679756d1ac10959a6bf7dbc3c0df60dc3",
+      "standalone_v5_2_0_blob": "1d258cbce82f68a19c6fe58b0a444b833427c648",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "app/CMakeLists.txt",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "4c6d733e1be26e39dac7727bb77eb334f5ca46bc",
+      "blender_v5_2_2_blob": "4c6d733e1be26e39dac7727bb77eb334f5ca46bc",
+      "standalone_v5_2_0_blob": "a04fd600941a4a5e89258f6e9e5419ceb359eb9d",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "bvh/embree.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "05860971ab734cc32e30cf1d19aee017c0643708",
+      "blender_v5_2_2_blob": "b1e14ed08c87219ac6f3118e07ca620481807bc3",
+      "standalone_v5_2_0_blob": "05860971ab734cc32e30cf1d19aee017c0643708",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "cmake/external_libs.cmake",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "cc0e4bbc6aa93d6b356316a7e09ab2297a556817",
+      "blender_v5_2_2_blob": "cc0e4bbc6aa93d6b356316a7e09ab2297a556817",
+      "standalone_v5_2_0_blob": "684cbf5e83d851f9bcc1710c680ce3e216b910ac",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "cmake/macros.cmake",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "b74e4dab523c3e676998801160a63eaf08fc9c62",
+      "blender_v5_2_2_blob": "b74e4dab523c3e676998801160a63eaf08fc9c62",
+      "standalone_v5_2_0_blob": "1b81b360ea4683e85d48c07d525dcf131ba1a230",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/cpu/device_impl.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "5e9598acf304c05dd9a47f26c162f832c7633f65",
+      "blender_v5_2_2_blob": "339da0f4d889fcffdff6c6b567c73383ce732f8c",
+      "standalone_v5_2_0_blob": "5e9598acf304c05dd9a47f26c162f832c7633f65",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/cpu/device_impl.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "008aa425ba8c3f24cf6fdc50738beee28f27d340",
+      "blender_v5_2_2_blob": "c9aa1b83a5cca3da34dbea5e507c0d4353b7b883",
+      "standalone_v5_2_0_blob": "008aa425ba8c3f24cf6fdc50738beee28f27d340",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/device.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "2a9cb5abf4593ebdd4c40a8c2444559a7992171b",
+      "blender_v5_2_2_blob": "cd9c32fb1494864b071d74bb0e7c64daf735ec09",
+      "standalone_v5_2_0_blob": "2a9cb5abf4593ebdd4c40a8c2444559a7992171b",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/metal/bvh.mm",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "5852b46363d781835f703717bc595f6f0a5b4c7d",
+      "blender_v5_2_2_blob": "97018dbeab34d2b95d3864f62604ed709a473962",
+      "standalone_v5_2_0_blob": "5852b46363d781835f703717bc595f6f0a5b4c7d",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/metal/device_impl.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "7f675d4e3e9ea64575eae4a113041737d1e5583f",
+      "blender_v5_2_2_blob": "d713e07da3b6f7a9137281d33617249bbdac686c",
+      "standalone_v5_2_0_blob": "7f675d4e3e9ea64575eae4a113041737d1e5583f",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/metal/device_impl.mm",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "d1723f98ce8327ab789cbdb87419d70fafd61327",
+      "blender_v5_2_2_blob": "43fc61e0f1e1eb83c0f2a286141f26cc4b4790fe",
+      "standalone_v5_2_0_blob": "d1723f98ce8327ab789cbdb87419d70fafd61327",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/multi/device.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "20cd2b9f9c7a8d8a1bae84ea02c8fb8503551075",
+      "blender_v5_2_2_blob": "7f02d243e016dbd3b7ea68d5e0c18355e1df2179",
+      "standalone_v5_2_0_blob": "20cd2b9f9c7a8d8a1bae84ea02c8fb8503551075",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "device/oneapi/device.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "75a860b3787d4be9af207f7f6538bcfd657b8ac7",
+      "blender_v5_2_2_blob": "f0a1e2096f69928719a72843d381fb5314a4f462",
+      "standalone_v5_2_0_blob": "75a860b3787d4be9af207f7f6538bcfd657b8ac7",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "hydra/CMakeLists.txt",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "a964ec0f247089bbd231f88ec765a1fd2878baac",
+      "blender_v5_2_2_blob": "a964ec0f247089bbd231f88ec765a1fd2878baac",
+      "standalone_v5_2_0_blob": "f1af78c92c473ffb2a4c2e18000c2b70b18fce5a",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "hydra/geometry.inl",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "93c77fae6d078f8f9f44aac8456c72813847feae",
+      "blender_v5_2_2_blob": "9c1f3e4541f94c959ec2e792eda0788bf520e0bf",
+      "standalone_v5_2_0_blob": "93c77fae6d078f8f9f44aac8456c72813847feae",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "hydra/light.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "57b8066431975a1c0f917d424d8c7c9473d60025",
+      "blender_v5_2_2_blob": "1457e7752ca60abe7927d77fcd6ca7202bd6839f",
+      "standalone_v5_2_0_blob": "57b8066431975a1c0f917d424d8c7c9473d60025",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "hydra/render_delegate.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "c3169c0539d005910850c901cdcef49a4aa70a5f",
+      "blender_v5_2_2_blob": "3cda4a5731227beb86d0e428ce71bf2f8d7ea294",
+      "standalone_v5_2_0_blob": "c3169c0539d005910850c901cdcef49a4aa70a5f",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "integrator/path_trace_work_gpu.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "c1f6248109061bb8fc1ffae7f6ba49f035748511",
+      "blender_v5_2_2_blob": "26634cd6ec291789d53c77e823fe06ddaa01acfd",
+      "standalone_v5_2_0_blob": "c1f6248109061bb8fc1ffae7f6ba49f035748511",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "integrator/path_trace_work_gpu.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "569daccce99778ce920e39a0280cc58728418b2f",
+      "blender_v5_2_2_blob": "2a7770c493f795ea0c73ffdefba200afa7dcbe9b",
+      "standalone_v5_2_0_blob": "569daccce99778ce920e39a0280cc58728418b2f",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/closure/bsdf.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "6be40035c7aa84d7881b938208a359f395b53cfc",
+      "blender_v5_2_2_blob": "8bb0f67fc36901b3dbe03daa5af41501d1045cd5",
+      "standalone_v5_2_0_blob": "6be40035c7aa84d7881b938208a359f395b53cfc",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/closure/bsdf_microfacet.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "c8512b17c06223803e140e76db5458c323c9ab43",
+      "blender_v5_2_2_blob": "4fa21d9f3eb886b73811f2159bcd78faf5be86b5",
+      "standalone_v5_2_0_blob": "c8512b17c06223803e140e76db5458c323c9ab43",
+      "blender_v5_2_2_spdx": "BSD-3-Clause"
+    },
+    {
+      "path": "kernel/closure/volume.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "ee010f5daba01943a939eec48352f73dfed45ade",
+      "blender_v5_2_2_blob": "f64d4b1a061b4df23cbca30f0a653076ed369441",
+      "standalone_v5_2_0_blob": "ee010f5daba01943a939eec48352f73dfed45ade",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/data_template.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "b1333a8a8b0855af5293646818aaa25c6500b840",
+      "blender_v5_2_2_blob": "24e094df38b87ea2ea6126070ad9ad5e10c146fa",
+      "standalone_v5_2_0_blob": "b1333a8a8b0855af5293646818aaa25c6500b840",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/device/cpu/image.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "7076941cb39b3c0de7eaae360b5e0ebbc491c15e",
+      "blender_v5_2_2_blob": "46b4f3daa4b7d1e765d6d3e157893071de0164d2",
+      "standalone_v5_2_0_blob": "7076941cb39b3c0de7eaae360b5e0ebbc491c15e",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/device/gpu/image.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "8fb95ea4dc584dd46fdd5ecffa546ecc6a57d0f7",
+      "blender_v5_2_2_blob": "d45742ef597093b37e084f52cdc513b5f16967b0",
+      "standalone_v5_2_0_blob": "8fb95ea4dc584dd46fdd5ecffa546ecc6a57d0f7",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/integrator/shade_surface.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "477dfb6f873007abc31b8214784921f0b3b4b203",
+      "blender_v5_2_2_blob": "8857cb63fca942e5bcdd88b3332ce7d463e856f8",
+      "standalone_v5_2_0_blob": "477dfb6f873007abc31b8214784921f0b3b4b203",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/integrator/shade_volume.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "297b76958edf8c4632d410f879c005324bc83128",
+      "blender_v5_2_2_blob": "55abab7d8cd16eb0fa742dc959e29e5ef83dacc6",
+      "standalone_v5_2_0_blob": "297b76958edf8c4632d410f879c005324bc83128",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "kernel/util/image_2d.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "f746f5cbbd4322f7ab244c03a208b73ed7aa99f1",
+      "blender_v5_2_2_blob": "63d57c9ef67be965f3195cd758f91ac46a13f700",
+      "standalone_v5_2_0_blob": "f746f5cbbd4322f7ab244c03a208b73ed7aa99f1",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "scene/image.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "54216d707452e4c579966ea80c389ec1b2443764",
+      "blender_v5_2_2_blob": "b779c3fc51dc5a91c9cb33d1bacd596cbb45c89d",
+      "standalone_v5_2_0_blob": "54216d707452e4c579966ea80c389ec1b2443764",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "scene/image.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "0b4e9a0f504c496ca47bc311d03e210b5b81445a",
+      "blender_v5_2_2_blob": "0b2e8fb149fa12cf28e83484c1a97af13b936518",
+      "standalone_v5_2_0_blob": "0b4e9a0f504c496ca47bc311d03e210b5b81445a",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "scene/image_cache.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "f57a68e5c5a2c216b66559c96e702fa9d708bcac",
+      "blender_v5_2_2_blob": "2244f9cdd6ea8a73b8cc0eeeab85d7a6b543b052",
+      "standalone_v5_2_0_blob": "f57a68e5c5a2c216b66559c96e702fa9d708bcac",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "scene/image_cache.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "d230729985a4181b67634892798948e44c788cfa",
+      "blender_v5_2_2_blob": "9386e17ef8abda0d04bc9a7134b05219132970cc",
+      "standalone_v5_2_0_blob": "d230729985a4181b67634892798948e44c788cfa",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "scene/image_oiio.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "661e21dfd131842afb0feac42858b1bfb9a46066",
+      "blender_v5_2_2_blob": "9f5f5e76d35730b8786f1fa5c0374daa4fd68cff",
+      "standalone_v5_2_0_blob": "661e21dfd131842afb0feac42858b1bfb9a46066",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "scene/integrator.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "77ca236cbd40426b806ef70f30923c5d61be537d",
+      "blender_v5_2_2_blob": "f5bc6391b5706a5e01e5e6aecf5277d8ea029849",
+      "standalone_v5_2_0_blob": "77ca236cbd40426b806ef70f30923c5d61be537d",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "scene/mesh.cpp",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "243a597101cf6de63a0a7ba0b5a9298a88db80a0",
+      "blender_v5_2_2_blob": "243a597101cf6de63a0a7ba0b5a9298a88db80a0",
+      "standalone_v5_2_0_blob": "089ce24ff0898f6ccb0c15af4f05e48471afcc3d",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "session/buffers.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "372a33dd9fa2dd485017d05d156ff260c2cc1ea3",
+      "blender_v5_2_2_blob": "f0e26584e4062cedeb5efa01a6f7ea0ca7c53a76",
+      "standalone_v5_2_0_blob": "372a33dd9fa2dd485017d05d156ff260c2cc1ea3",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/CMakeLists.txt",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "32d7802abe05df91b52abd30b58f752f8a070527",
+      "blender_v5_2_2_blob": "32d7802abe05df91b52abd30b58f752f8a070527",
+      "standalone_v5_2_0_blob": "c6ea215cb8ec160cfb3ccf6be2b64286175a2088",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/atomic.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "1a41f0d92374033d98a325679af7f2c7912405c6",
+      "blender_v5_2_2_blob": "66a9c99d18ea1f1a2152847334d80fb660dc2061",
+      "standalone_v5_2_0_blob": "1a41f0d92374033d98a325679af7f2c7912405c6",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/colorspace.cpp",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "8f91abcb11a1f88e17c6f44ea3ec1a01ddd3e8c9",
+      "blender_v5_2_2_blob": "8f91abcb11a1f88e17c6f44ea3ec1a01ddd3e8c9",
+      "standalone_v5_2_0_blob": "792c02e989afa8fb20ecd794c0e8331dcc403a66",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/debug.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "81f80bd28f8dfaefdbed8d9a35d041cd8b152ad3",
+      "blender_v5_2_2_blob": "8bdcb8df2e01d8352ac7b707624faf3c90ec1529",
+      "standalone_v5_2_0_blob": "81f80bd28f8dfaefdbed8d9a35d041cd8b152ad3",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/debug.h",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "e5fda1945398ffa4629bf0ff6111cffe0fff101b",
+      "blender_v5_2_2_blob": "e8a4820e0d7020f6f8e1ead9be5f64374696ac54",
+      "standalone_v5_2_0_blob": "e5fda1945398ffa4629bf0ff6111cffe0fff101b",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/guarded_allocator.h",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "61c3549282e9526c9f10548f54727998d07072cb",
+      "blender_v5_2_2_blob": "61c3549282e9526c9f10548f54727998d07072cb",
+      "standalone_v5_2_0_blob": "93d52521d19b9e0eb62a0b77f023a4b568747814",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/image_maketx.cpp",
+      "category": "requires_merge_review",
+      "blender_v5_2_0_blob": "9f1a4c6cc98d9fa278ddfb9a56a1fe493fcfe736",
+      "blender_v5_2_2_blob": "31681c192d5526abc083e3594061f25381cc8aad",
+      "standalone_v5_2_0_blob": "87d192d785c742ae2e95ebcced5d3e236193de65",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/image_metadata.cpp",
+      "category": "blender_patch_change",
+      "blender_v5_2_0_blob": "d49a8c05063233c5e5e169fa0819af68494a0ec3",
+      "blender_v5_2_2_blob": "63a317cb87d201d5452df2acac221c6b22c42d45",
+      "standalone_v5_2_0_blob": "d49a8c05063233c5e5e169fa0819af68494a0ec3",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/nanovdb.h",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "7a31df4b90748addba8acdb8ec16dcdbf2860fc6",
+      "blender_v5_2_2_blob": "7a31df4b90748addba8acdb8ec16dcdbf2860fc6",
+      "standalone_v5_2_0_blob": "9df2bfcd108b89177e9da07dc5b3275a2bb34660",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    },
+    {
+      "path": "util/version.h",
+      "category": "standalone_adaptation",
+      "blender_v5_2_0_blob": "a8a0b0c5931e8bb6d3e6d680f6652732a95aa8a4",
+      "blender_v5_2_2_blob": "a8a0b0c5931e8bb6d3e6d680f6652732a95aa8a4",
+      "standalone_v5_2_0_blob": "dcfe44e7c69880890cdace0358abdce2f2b40f3e",
+      "blender_v5_2_2_spdx": "Apache-2.0"
+    }
+  ]
+}

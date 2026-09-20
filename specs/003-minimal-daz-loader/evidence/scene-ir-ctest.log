@@ -1,0 +1,19 @@
+Start testing: Sep 20 23:27 中国标准时间
+----------------------------------------------------------
+2/3 Testing: scene_ir_dson
+2/3 Test: scene_ir_dson
+Command: "D:/Github/DazFastViewer/build/Release/SceneIRTest.exe"
+Directory: D:/Github/DazFastViewer/build
+"scene_ir_dson" start time: Sep 20 23:27 中国标准时间
+Output:
+----------------------------------------------------------
+IR references / UTF-8 URI / gzip / material binding / UV seams / transforms: PASS
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"scene_ir_dson" end time: Sep 20 23:27 中国标准时间
+"scene_ir_dson" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Sep 20 23:27 中国标准时间

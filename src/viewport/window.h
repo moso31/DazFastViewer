@@ -1,0 +1,48 @@
+#pragma once
+#ifndef WIN32_LEAN_AND_MEAN
+#  define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#  define NOMINMAX
+#endif
+#include <windows.h>
+#include <atomic>
+#include <mutex>
+#include <string>
+#include "bench/camera.h"
+
+namespace dfv {
+class Telemetry;
+class GLContext {
+  HDC dc_{};
+  HGLRC context_{};
+  std::recursive_mutex mutex_;
+  unsigned depth_=0;
+public:
+  void initialize(HDC dc,HGLRC share=nullptr);
+  void activate();
+  void deactivate();
+  void destroy();
+  HGLRC handle() const {return context_;}
+};
+class Window {
+  static LRESULT CALLBACK procedure(HWND,UINT,WPARAM,LPARAM);
+  int last_x_=0,last_y_=0;
+  bool dragging_=false;
+  Telemetry *telemetry_=nullptr;
+public:
+  HWND hwnd{},hidden{};
+  HDC dc{},render_dc{};
+  GLContext present_context,render_context;
+  std::atomic<bool> close{false},minimized{false},size_changed{false};
+  CameraState camera;
+  CameraMailbox mailbox;
+  int width,height;
+  int monitor_index=2;
+  std::string monitor_device;
+  Window(int width,int height,bool fullscreen,Telemetry *telemetry=nullptr,int monitor=2);
+  ~Window();
+  void poll();
+  void publish();
+};
+}

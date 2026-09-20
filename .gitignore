@@ -1,0 +1,9 @@
+/.research/
+/.deps/
+/artifacts/
+/artifacts-*.log
+/build/
+/out/
+/.vs/
+__pycache__/
+*.user
