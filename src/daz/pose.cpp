@@ -1,4 +1,5 @@
 #include "daz/pose.h"
+#include "runtime/deformation.h"
 #include <algorithm>
 #include <cmath>
 #include <set>
@@ -40,7 +41,7 @@ AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const 
         if(name==c.modifier&&owner) {found=i;++matches;}
       }
       if(matches>1) {skip(c,"同一节点下有多个同名参数，无法唯一确定目标");continue;}
-      if(c.property=="value/value"&&found<target.morphs.size()&&target.morphs[found].unsupported.empty()) {const auto &m=target.morphs[found];result.properties.morphs[found]=m.clamped?std::clamp(c.value,m.minimum,m.maximum):c.value;result.report["applied_morph_channels"]=result.report["applied_morph_channels"].get<int>()+1;}
+      if(c.property=="value/value"&&found<target.morphs.size()&&target.morphs[found].unsupported.empty()) {runtime::set_parameter(target,result.properties,found,c.value);result.report["applied_morph_channels"]=result.report["applied_morph_channels"].get<int>()+1;}
       else if(c.value==0) result.report["ignored_zero_controls"]=result.report["ignored_zero_controls"].get<int>()+1;
       else skip(c,"控制器或 Morph 尚不可求值；ERC / JCM 归属 007");
       continue;

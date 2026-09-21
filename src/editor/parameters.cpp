@@ -26,7 +26,7 @@ ParameterPanel::ParameterPanel(QWidget *parent):QWidget(parent) {
   connect(slider_,&QSlider::valueChanged,this,[this](int v) {if(current_>=0 && changed) {const auto &m=target_->morphs[size_t(current_)];changed(size_t(current_),m.minimum+(m.maximum-m.minimum)*v/1000.0);}});
   connect(spin_,&QDoubleSpinBox::valueChanged,this,[this](double v) {if(current_>=0 && changed) changed(size_t(current_),v);});
 }
-void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values) {target_=target;values_=values;rebuild();}
+void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values) {target_=target;values_=values;effective_.clear();rebuild();}
 void ParameterPanel::rebuild() {
   QSignalBlocker block(tree_);tree_->clear();items_.clear();current_=-1;slider_->setEnabled(false);spin_->setEnabled(false);details_->setText(QStringLiteral("选择参数查看来源和支持状态"));
   if(!target_) {count_->clear();return;}
@@ -65,7 +65,9 @@ void ParameterPanel::select(QTreeWidgetItem *item) {
   current_=item?item->data(0,Qt::UserRole).toInt():-1;slider_->setEnabled(false);spin_->setEnabled(false);
   if(current_<0 || !target_) return;
   const auto &m=target_->morphs[size_t(current_)];QSignalBlocker a(slider_),b(spin_);
-  const QString detail=text(m.label+"\n"+m.group+"\n"+(m.unsupported.empty()?"直接 Morph":m.unsupported));
+  const auto support=m.unsupported.empty()?(m.kind=="alias"?"别名：与原参数共享编辑值":m.formula_count||m.offsets.empty()?"Formula / ERC 驱动":"直接 Morph"):m.unsupported;
+  QString detail=text(m.label+"\n"+m.group+"\n"+support);
+  if(m.unsupported.empty()&&size_t(current_)<effective_.size()) detail+=QStringLiteral(" · 最终值 %1").arg(effective_[size_t(current_)],0,'f',4);
   details_->setText(detail);details_->setToolTip(detail+QStringLiteral("\n来源：")+text(m.source)+QStringLiteral("\n所属节点：")+text(m.owner)+QStringLiteral("\n未解析引用：%1").arg(m.missing_dependencies));
   spin_->setRange(m.clamped?m.minimum:std::min(-100.0f,m.minimum),m.clamped?m.maximum:std::max(100.0f,m.maximum));spin_->setSingleStep(std::max(.001,double(m.step)));
   slider_->setEnabled(m.unsupported.empty() && m.maximum>m.minimum);spin_->setEnabled(m.unsupported.empty());refresh(size_t(current_));
@@ -78,4 +80,5 @@ void ParameterPanel::refresh(size_t index) {
 void ParameterPanel::query(const QString &text) {search_->setText(text);}
 void ParameterPanel::select_parameter(size_t index) {if(index<items_.size() && items_[index]) {tree_->setCurrentItem(items_[index]);tree_->scrollToItem(items_[index]);}}
 void ParameterPanel::set_slider(int value) {slider_->setValue(value);}
+void ParameterPanel::evaluated(const std::vector<float> &values) {if(effective_==values) return;effective_=values;if(current_>=0) select(tree_->currentItem());}
 }

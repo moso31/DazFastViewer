@@ -77,7 +77,10 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     for(const auto &weights:skin.weights) {double sum=0;for(const auto &w:weights) sum+=w.weight;if(weights.empty()) ++unweighted;else error=std::max(error,std::abs(sum-1));}
     catalog.report["skins"].push_back({{"object",object.id},{"source",path_string(object.geometry_file)},{"method",mode},{"joints",skin.joints.size()},
       {"vertices",vertex_count},{"weights",weight_count},{"unweighted_vertices",unweighted},{"max_source_weight_sum_error",error},{"normalization","per_vertex"},{"status","READY"}});
-    catalog.skins.push_back(std::move(skin));
+    Json formulas=Json::array();
+    for(const auto &joint:skin.joints) for(const auto &formula:nodes.at(joint.id).value("formulas",Json::array())) formulas.push_back(formula);
+    catalog.report["skins"].back()["node_formulas"]=formulas.size();
+    catalog.node_formulas.push_back(std::move(formulas));catalog.skins.push_back(std::move(skin));
   }
   return catalog;
 }

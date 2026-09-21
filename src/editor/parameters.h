@@ -20,6 +20,7 @@ class ParameterPanel final:public QWidget {
   QSlider *slider_;
   QDoubleSpinBox *spin_;
   int current_=-1;
+  std::vector<float> effective_;
   std::vector<QTreeWidgetItem *> items_;
   void rebuild();
   void filter();
@@ -32,5 +33,6 @@ public:
   void query(const QString &text);
   void select_parameter(size_t index);
   void set_slider(int value);
+  void evaluated(const std::vector<float> &values);
 };
 }

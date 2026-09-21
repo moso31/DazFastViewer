@@ -2,6 +2,10 @@
 
 ## 本地开发环境与版本基线（用户补充，2026-09-21 更新）
 
+- 用户要求先以中文提交 006，再启动 **007 Formula / ERC / JCM**。006 已提交到本地 Git：`aa8fbc7`。007 完成后必须专项复测 005 Morph 模块，核对此前禁用的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad 等参数是否实际生效；不得仅去掉界面禁用状态。测试仍只在副屏进行，不重复性能回放。
+
+- **007 本阶段实施与工程复测已完成并部署**：G8 上述五项参数已启用；G8.1 使用新版 Eye Blink，保留旧控制器空覆盖。七项工程检查、两代各 40 姿势、独立数学与副屏验证通过，DAZ Studio Golden 仍待完成。详情见 [007 执行报告](../specs/007-erc-jcm/execution-report.md)。下列 005 / 006 授权与能力描述按各自阶段理解。
+
 - 用户已授权启动 **006 Skeleton / Skinning**，并要求同时支持用于摆姿势的 DUF。真实验证目录：`H:\G1\People\Genesis 8 Female\Poses\Bed Hogs II for Genesis 8 Female`，共 40 个单帧 `preset_pose`。对选中 Genesis 8 角色应用姿势，验证骨骼层级、权重、蒙皮、恢复与 Morph → Skinning 顺序；继续检查现有 Genesis 8.1 样例的兼容性。详细边界见 [006 规范](../specs/006-skeleton-skinning/proposal.md)。Formula / ERC / JCM 在 007 实现，当前未应用的控制器必须在界面和报告中列明。
 
 - 内容库必须支持多个可自定义根目录，并作为“项目 → 项目设置”持久保存。用户提供的查找顺序为 `H:\g1`、`H:\g3`、`C:\Users\Public\Documents\My DAZ 3D Library`、`C:\Users\xatia\Documents\DAZ 3D\Studio\My Library`。参数发现需包含目录子级、纯公式控制器及子节点别名，保留 DAZ 的 `group` 路径；发现完整度与求值支持程度分别报告，不仅统计带顶点差值的 Morph。相同资源按根目录优先级处理，G8.1 的空覆盖语义不能被依赖扫描绕过。

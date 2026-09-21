@@ -1,0 +1,657 @@
+{
+  "status": "PASS",
+  "scope": "007 Formula / ERC / JCM and 005 regression; engineering validation",
+  "date": "2026-09-21",
+  "spec006_commit": "aa8fbc7",
+  "spec007_git_status": "UNCOMMITTED",
+  "golden": "DAZ_STUDIO_NOT_RUN",
+  "ctest": {
+    "passed": 7,
+    "failed": 0,
+    "log": "artifacts/spec007/ctest-final.log"
+  },
+  "targets": {
+    "g8": {
+      "status": "PASS",
+      "catalog_entries": 6012,
+      "formula_catalog": {
+        "channels": 9261,
+        "cyclic_channels": 0,
+        "editable_parameters": 4781,
+        "enabled_formulas": 384985,
+        "formulas": 538811,
+        "id": "Genesis8Female/geometry",
+        "node_formula_failures": [],
+        "node_formulas": 150,
+        "resolved_aliases": 491,
+        "unresolved_formulas": 490,
+        "visible_editable_parameters": 2687
+      },
+      "parameters": [
+        {
+          "name": "Arms Length",
+          "samples": [
+            {
+              "displacement_m": 0.1595116563510022,
+              "effective": 0.5,
+              "evaluated_formulas": 8,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.3412037392925751,
+              "effective": 1.0,
+              "evaluated_formulas": 8,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 8,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Chest Scale",
+          "samples": [
+            {
+              "displacement_m": 0.0821401179237149,
+              "effective": 0.5,
+              "evaluated_formulas": 18,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.1642802344347989,
+              "effective": 1.0,
+              "evaluated_formulas": 18,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 18,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Eyes Closed",
+          "samples": [
+            {
+              "displacement_m": 0.009710866701144771,
+              "effective": 0.5,
+              "evaluated_formulas": 156,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.019421733399992983,
+              "effective": 1.0,
+              "evaluated_formulas": 156,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 156,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "HS Sanny Shy",
+          "samples": [
+            {
+              "displacement_m": 0.004700864457511003,
+              "effective": 0.5,
+              "evaluated_formulas": 456,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.009401728891218484,
+              "effective": 1.0,
+              "evaluated_formulas": 456,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 456,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Flex Quad Left",
+          "samples": [
+            {
+              "displacement_m": 0.002345444912417126,
+              "effective": 0.5,
+              "evaluated_formulas": 0,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.004690885359997972,
+              "effective": 1.0,
+              "evaluated_formulas": 0,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 0,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        }
+      ],
+      "alias": "PASS",
+      "jcm_flex": "PASS",
+      "pose_count": 40,
+      "jcm_count_range": [
+        51,
+        72
+      ],
+      "max_restore_error_m": 0.0,
+      "unapplied_nonzero_controls": {},
+      "unsupported_reasons": {
+        "公式引用缺失、被本代覆盖或不支持的属性": 200,
+        "Morph 目标顶点数不匹配": 379,
+        "包含 HD 数据，尚未支持完整形态": 288,
+        "没有顶点差值或可求值的依赖输出": 54,
+        "资产将此参数标为锁定": 193,
+        "当前参数面板尚未支持指向骨骼属性的别名": 16,
+        "Morph 绑定到节点，几何目标尚未验证": 1,
+        "别名目标缺失、被本代覆盖或不能唯一解析": 100
+      }
+    },
+    "g81": {
+      "status": "PASS",
+      "catalog_entries": 6799,
+      "formula_catalog": {
+        "channels": 10048,
+        "cyclic_channels": 0,
+        "editable_parameters": 4220,
+        "enabled_formulas": 417205,
+        "formulas": 639473,
+        "id": "Genesis8_1Female/Genesis81FemaleGeom",
+        "node_formula_failures": [],
+        "node_formulas": 118,
+        "resolved_aliases": 231,
+        "unresolved_formulas": 4823,
+        "visible_editable_parameters": 2260
+      },
+      "parameters": [
+        {
+          "name": "Arms Length",
+          "samples": [
+            {
+              "displacement_m": 0.1595116563510022,
+              "effective": 0.5,
+              "evaluated_formulas": 8,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.3412037392925751,
+              "effective": 1.0,
+              "evaluated_formulas": 8,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 8,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Chest Scale",
+          "samples": [
+            {
+              "displacement_m": 0.0821401179237149,
+              "effective": 0.5,
+              "evaluated_formulas": 18,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.1642802344347989,
+              "effective": 1.0,
+              "evaluated_formulas": 18,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 18,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Eyes Closed",
+          "reason": "not_present",
+          "status": "UNSUPPORTED"
+        },
+        {
+          "name": "HS Sanny Shy",
+          "samples": [
+            {
+              "displacement_m": 0.004700864457511003,
+              "effective": 0.5,
+              "evaluated_formulas": 456,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.009401728891218484,
+              "effective": 1.0,
+              "evaluated_formulas": 456,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 456,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Flex Quad Left",
+          "samples": [
+            {
+              "displacement_m": 0.002345444912417126,
+              "effective": 0.5,
+              "evaluated_formulas": 0,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.004690885359997972,
+              "effective": 1.0,
+              "evaluated_formulas": 0,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 0,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Eye Blink",
+          "samples": [
+            {
+              "displacement_m": 0.0065800476450457125,
+              "effective": 0.5,
+              "evaluated_formulas": 109,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.012963375247296292,
+              "effective": 1.0,
+              "evaluated_formulas": 109,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 109,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        }
+      ],
+      "alias": "PASS",
+      "jcm_flex": "PASS",
+      "pose_count": 40,
+      "jcm_count_range": [
+        51,
+        72
+      ],
+      "max_restore_error_m": 0.0,
+      "unapplied_nonzero_controls": {
+        "eCTRLEyesUpDown": 33,
+        "eCTRLEyesSideSide": 33
+      },
+      "unsupported_reasons": {
+        "公式引用缺失、被本代覆盖或不支持的属性": 1283,
+        "包含 HD 数据，尚未支持完整形态": 377,
+        "Morph 目标顶点数不匹配": 524,
+        "没有顶点差值或可求值的依赖输出": 85,
+        "资产将此参数标为锁定": 193,
+        "当前参数面板尚未支持指向骨骼属性的别名": 16,
+        "Morph 绑定到节点，几何目标尚未验证": 1,
+        "别名目标缺失、被本代覆盖或不能唯一解析": 100
+      }
+    }
+  },
+  "reference": {
+    "blender": "5.2.2 LTS",
+    "threshold_m": 2e-05,
+    "results": [
+      {
+        "case": "artifacts\\spec007\\validated\\g8\\CRTLHSSannyShy.deformation.json",
+        "max_vertex_error_m": 2.986175418827944e-07,
+        "rms_vertex_error_m": 1.3793760726068443e-07,
+        "morphs": 1,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 456,
+          "max_error": 7.324218759263701e-09
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g8\\ECTRLEyesClosed.deformation.json",
+        "max_vertex_error_m": 3.0392960353918707e-07,
+        "rms_vertex_error_m": 1.3773335750339812e-07,
+        "morphs": 4,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 0,
+          "max_error": 0
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g8\\pJCMFlexQuad_L.deformation.json",
+        "max_vertex_error_m": 2.988776638357386e-07,
+        "rms_vertex_error_m": 1.3792936367477033e-07,
+        "morphs": 1,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 0,
+          "max_error": 0
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g8\\scaled-pose.deformation.json",
+        "max_vertex_error_m": 4.6317538041288877e-07,
+        "rms_vertex_error_m": 2.405069390124823e-07,
+        "morphs": 62,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 8,
+          "max_error": 2.3841857821338408e-08
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g8\\SCLArmsLength.deformation.json",
+        "max_vertex_error_m": 2.988776638357386e-07,
+        "rms_vertex_error_m": 1.3648250458830818e-07,
+        "morphs": 0,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 8,
+          "max_error": 2.3841857821338408e-08
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g8\\SCLPropagatingChest.deformation.json",
+        "max_vertex_error_m": 3.2173451481151153e-07,
+        "rms_vertex_error_m": 1.3669339699885773e-07,
+        "morphs": 0,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 18,
+          "max_error": 0.0
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g81\\CRTLHSSannyShy.deformation.json",
+        "max_vertex_error_m": 2.986175418827944e-07,
+        "rms_vertex_error_m": 1.3793760726068443e-07,
+        "morphs": 1,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 456,
+          "max_error": 7.324218759263701e-09
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g81\\facs_ctrl_EyesBlink.deformation.json",
+        "max_vertex_error_m": 3.283333294947997e-07,
+        "rms_vertex_error_m": 1.3755774678940125e-07,
+        "morphs": 0,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 0,
+          "max_error": 0
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g81\\pJCMFlexQuad_L.deformation.json",
+        "max_vertex_error_m": 2.988776638357386e-07,
+        "rms_vertex_error_m": 1.3792936367477033e-07,
+        "morphs": 1,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 0,
+          "max_error": 0
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g81\\scaled-pose.deformation.json",
+        "max_vertex_error_m": 4.6317538041288877e-07,
+        "rms_vertex_error_m": 2.405069390124823e-07,
+        "morphs": 62,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 8,
+          "max_error": 2.3841857821338408e-08
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g81\\SCLArmsLength.deformation.json",
+        "max_vertex_error_m": 2.988776638357386e-07,
+        "rms_vertex_error_m": 1.3648250458830818e-07,
+        "morphs": 0,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 8,
+          "max_error": 2.3841857821338408e-08
+        },
+        "status": "PASS"
+      },
+      {
+        "case": "artifacts\\spec007\\validated\\g81\\SCLPropagatingChest.deformation.json",
+        "max_vertex_error_m": 3.2173451481151153e-07,
+        "rms_vertex_error_m": 1.3669339699885773e-07,
+        "morphs": 0,
+        "vertices": 16556,
+        "formula_channels": {
+          "checked": 18,
+          "max_error": 0.0
+        },
+        "status": "PASS"
+      }
+    ],
+    "scope": "independent direct-controller and node-scale formulas; DSF morph accumulation and two-phase DQS with evaluated channels; not DAZ Studio Golden",
+    "status": "PASS"
+  },
+  "editor": {
+    "content_roots": [
+      "H:/g1",
+      "H:/g3",
+      "C:/Users/Public/Documents/My DAZ 3D Library",
+      "C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"
+    ],
+    "error": "",
+    "formula_channels": 10547,
+    "formula_evaluations": 386261,
+    "geometry_updates": 10,
+    "instance_updates": 0,
+    "max_displacement_m": 0.0,
+    "mesh_creations": 2,
+    "monitor": "VG279QL1A",
+    "morph_evaluations": 6,
+    "named_parameters": [
+      {
+        "group": "/Pose Controls/Head/Eyes",
+        "kind": "alias",
+        "label": "Eyes Closed",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/alias_head_eCTRLEyesClosed.dsf"
+      },
+      {
+        "group": "/Pose Controls/Head/Eyes",
+        "kind": "control",
+        "label": "Eyes Closed",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/eCTRLEyesClosed.dsf"
+      },
+      {
+        "group": "/Real World",
+        "kind": "control",
+        "label": "Chest Scale",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base/SCLPropagatingChest.dsf"
+      },
+      {
+        "group": "/Real World",
+        "kind": "control",
+        "label": "Arms Length",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Body/SCLArmsLength.dsf"
+      },
+      {
+        "group": "/Pose Controls/Head/Expressions/Sanny Expression",
+        "kind": "sparse",
+        "label": "HS Sanny Shy",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Hamster/Sanny/CRTLHSSannyShy.dsf"
+      }
+    ],
+    "parameter_checks": [
+      {
+        "displacement_m": 0.1595116563510022,
+        "effective": 0.5,
+        "name": "Arms Length",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.0821401179237149,
+        "effective": 0.5,
+        "name": "Chest Scale",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.009710866701144771,
+        "effective": 0.5,
+        "name": "Eyes Closed",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.004700864457511003,
+        "effective": 0.5,
+        "name": "HS Sanny Shy",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.002345444912417126,
+        "effective": 0.5,
+        "name": "Flex Quad Left",
+        "status": "PASS"
+      }
+    ],
+    "project_file": "D:/Github/DazFastViewer/DazFastViewer.project.json",
+    "qt_version": "6.10.3",
+    "scope": "005-parameter-slider-regression-with-ERC-JCM",
+    "skin_evaluations": 11,
+    "skin_vertices": 182116,
+    "stage": 3,
+    "status": "PASS",
+    "window": [
+      2729,
+      55,
+      1580,
+      920
+    ]
+  },
+  "renderer": {
+    "applied_revision": 11,
+    "camera_updates": 9,
+    "edit_error": "",
+    "error": "",
+    "formula_channels": 10547,
+    "formula_evaluations": 386261,
+    "frames": 43,
+    "generation": 1,
+    "geometry_updates": 10,
+    "instance_updates": 0,
+    "interop_readback_bytes": 0,
+    "max_displacement_m": 0.0,
+    "mesh_creations": 2,
+    "morph_evaluations": 6,
+    "offsets_visited": 5511,
+    "presented_epoch": 17,
+    "presented_revision": 11,
+    "requested_epoch": 17,
+    "skin_evaluations": 11,
+    "skin_vertices": 182116,
+    "visible_fps": "NOT_MEASURED"
+  },
+  "deployment": {
+    "editor_exe_sha256": "30145b3d306de3ff0017f06c00124fadf66214f9cc02cc192f4b9f9ee49c38f9",
+    "bench_exe_sha256": "a03d68caf9e2499a4798db8443e147e724b51e847766a6cf8ca4c7fa4c900638",
+    "manifest_sha256": "17fc170fa4e881f68fa392f4fea2fe515f3914aeef4fd4a976783ec0ead33267"
+  },
+  "source_hashes": {
+    "CMakeLists.txt": "e18f8fc5844836025f1729392d2628a54d5aba057e4b9b597e32116f4791d99b",
+    "src/daz/morphs.cpp": "dd5ae0c02fd051bce6694348ca443b5e6e776264d34185b28e4d707b3d3458d9",
+    "src/daz/morphs.h": "547cc73a7270d17616cabc8139a7be7ae5e0052446510851b3ae8722a1954d0a",
+    "src/daz/pose.cpp": "a9990801ba93708fff427e5bd11da8fe95fe5db23610f427c7e6e81c21cc2167",
+    "src/daz/skeleton.cpp": "16c1414df74a0b267d5bbdd02a66683710f4e504f6f28130160d4bab679bc338",
+    "src/daz/skeleton.h": "5aad2bed580e1ba412ee3e1ef28e8cd0d21b6936b2ec3ece619e081f4c5f4bd3",
+    "src/editor/main.cpp": "1a79a142857ade422609948d01614e84558f6504a1d685e9586a2f200cb6381b",
+    "src/editor/parameters.cpp": "1adddf17623b78763949b93910ee74d1bf2a16e2720b558a6dba907d364d7568",
+    "src/editor/parameters.h": "02d1ab4803c6f10f66615aa0b2b5f64b1755fc3f37be1080b9030e514b8a9055",
+    "src/editor/renderer.cpp": "bda4a7809ac39b13b5c72951b841d1dc5b43142fda6e9ad0a01364eb318376d6",
+    "src/editor/renderer.h": "61cfa6d435d342337af9542ffcfb9084de7609deebd3292b832d62c380d650e0",
+    "src/runtime/morph.cpp": "e462881f5f14692b0e4d2caaf42a5bdc2ed3dbc4446cf9b2cd2c30eb3b1467af",
+    "src/runtime/morph.h": "3f17a70d5ac756e24857a3ab1ee401eaa29a05cd084dce9455a5060bda8592c6",
+    "src/runtime/skeleton.cpp": "6cb98bdfff902b93ad64578b20b7d70fea621865e02b8cf799184d8066c3e9af",
+    "src/runtime/skeleton.h": "e772ffbc6e92dc0fcbad986eedefefcebdb88f03c62b44e0d5ce95c81be084d0",
+    "tests/skeleton_pose.cpp": "d72f7f4ed71f0a85808f571b33d0c1909c5453674cf52114c2037daad5196792",
+    "tools/build.ps1": "32301d8179e4005686cc612b38ed64e0d58a35c91898b06db8c7e49416786d36",
+    "src/daz/formulas.cpp": "3af68a97db8307bab72d4bf149bfcac4f88fa148c6760b911fea38353da0c5b0",
+    "src/daz/formulas.h": "73aa6c2c23fcbc2ba3aa58826f71588f2a021e57a0ecb548b99b28274582eacc",
+    "src/runtime/deformation.cpp": "9e0a1602516f52d6a71d85313d185656443c68e80fd62ae21f6a31aeca6d6301",
+    "src/runtime/deformation.h": "271e19476fb6c6c50093dd4820e20e15293bfbbefb9d3b38529c91c380a0df7d",
+    "src/runtime/formula.cpp": "1442590d164a5a99cfac7b4101ed339ec375f0edcc6ceedbdad28f3da77248c7",
+    "src/runtime/formula.h": "bf28109818e166c0e6e1b88f598a32ce52a6762ad05a78d6274aaf6bd25a31b0",
+    "tests/formula_runtime.cpp": "914a8ab16c07ed26922adf31e0ca56c6794d1fb6d960c0387dba913f6023b68d",
+    "tools/reference/formula_reference.py": "f0238e063cda828e7070074523470f9ed3070ca9e7f59513c3080bfdd3e00ee2"
+  },
+  "evidence_hashes": {
+    "artifacts/spec007/ctest-final.log": "5c74660bb9a4e32c6ba3db206cb539d72d584d99211c2208772fa1e3c86bc71f",
+    "artifacts/spec007/validated/reference-report.json": "a94cffc0517e3c52584c145d33f98b3e1ae3b505bc7a031385536699bedf0f98",
+    "artifacts/spec007/validated/editor/editor-check.json": "bceb632504b4b8e3a7717def6bbf918eaf635542446206a22fe45216a7c84024",
+    "artifacts/spec007/validated/editor/editor-render.json": "110249b7b9935e56aa705e6c03829f9ac2e2db6a492b4943be95c4326713bc6c",
+    "artifacts/spec007/validated/g8/regression-report.json": "988e3407baf2c7c0998020cc113fa1593ca13d689e1124054c71273e3fa4b78c",
+    "artifacts/spec007/validated/g8/formula-report.json": "b31068215858b61ee7d953dca711e1c60f859e221fb321d11c0613d0ea84c522",
+    "artifacts/spec007/validated/g8/morph-catalog.json": "571ae3856b18d30ee43256828b8cdeda6de1726430f5e319eb423b27ff37b158",
+    "artifacts/spec007/validated/g81/regression-report.json": "0fd6d8d35c1eaa2909d895c44c91b1df8c2992736ca1588881c80fce254b7eb0",
+    "artifacts/spec007/validated/g81/formula-report.json": "35c14d7cf18c501e98039b8c4cc3df9e986a092c3c0e9d286ae2aaa54b9d7068",
+    "artifacts/spec007/validated/g81/morph-catalog.json": "43d670f75b315198ab5f4f070b024cd05c9e3aa314d59d6e43d8e3f7f6adad44",
+    "artifacts/spec007/validated/editor/editor-parameter-0.png": "2e8cac833e30f67a03d5094d0a8ad0482b759cc1cb3a946c36f67c7129b006a5",
+    "artifacts/spec007/validated/editor/editor-parameter-1.png": "427d25c70ebfb240dd7236ad5d7f717155e2d3cdfc05e8a8a83c9aba2b482edb",
+    "artifacts/spec007/validated/editor/editor-parameter-2.png": "279a479fdf404de60178cb6875c588059c4bc20ad23d9fe74d55f08702a0cb49",
+    "artifacts/spec007/validated/editor/editor-parameter-3.png": "82ee598ffbb0f7fc95d33921a70e388ce3c4f4b77003d8dd0691f9422a71c51a",
+    "artifacts/spec007/validated/editor/editor-parameter-4.png": "cea1b64a3a1d12d7edb1cfcbc990aeeaaf99619e272c7d4042346ec9d8d85221"
+  }
+}

@@ -28,22 +28,25 @@ MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):
     }
     values_.push_back(std::move(property));
     const auto index=values_.size()-1;
-    for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].unsupported.empty()) set_morph(index,m,target.morphs[m].initial);
+    for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].unsupported.empty()||target.morphs[m].evaluable) set_morph(index,m,target.morphs[m].initial);
   }
 }
 bool MorphRuntime::set_morph(size_t target,size_t index,float value) {
   const auto &m=targets_.at(target).morphs.at(index);auto &current=values_.at(target).morphs.at(index);
-  if(!m.unsupported.empty()) throw std::runtime_error(m.unsupported);
+  if(!m.unsupported.empty()&&!m.evaluable) throw std::runtime_error(m.unsupported);
   if(!std::isfinite(value)) throw std::runtime_error("Morph 权重必须为有限数值");
   if(m.clamped) value=std::clamp(value,m.minimum,m.maximum);
   if(current==value) return false;
   current=value;
   if(value==0) active_[target].erase(index);else active_[target].insert(index);
-  dirty_meshes_.insert(target);return true;
+  if(!m.offsets.empty()) dirty_meshes_.insert(target);return true;
 }
-bool MorphRuntime::set_transform(size_t target,const TransformValues &v) {
+void validate_transform(const TransformValues &v) {
   finite(v.translation_cm);finite(v.rotation_degrees);finite(v.scale);
   if(v.scale.x<=0 || v.scale.y<=0 || v.scale.z<=0) throw std::runtime_error("缩放必须大于零");
+}
+bool MorphRuntime::set_transform(size_t target,const TransformValues &v) {
+  validate_transform(v);
   auto &old=values_.at(target).transform;
   if(same(old.translation_cm,v.translation_cm)&&same(old.rotation_degrees,v.rotation_degrees)&&same(old.scale,v.scale)) return false;
   old=v;dirty_transforms_.insert(target);return true;

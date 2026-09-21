@@ -1,6 +1,18 @@
 # 交接记录
 
-## 最新状态：Spec 006 / 骨架、蒙皮与姿势 DUF
+## 最新状态：Spec 007 / Formula、ERC、JCM 与 005 复测
+
+用户要求先提交 006 再执行 007，并复测此前不能启用的 Morph。006 已中文提交为 `aa8fbc7`。007 当前实施范围已完成、部署并通过工程验证；用户已自行确认大量参数启用、姿势 DUF 工作正常，本次按新授权中文归档。后续修复 Ren Yao 的计数 / 目标绑定及 BGM 的旧文件名引用，不能把此前工程检查视为所有商业参数或 DAZ Studio Golden 已通过。
+
+新增 `src/runtime/formula.*`、`deformation.*`、`src/daz/formulas.*`，统一 Formula → Morph / JCM → Skinning。支持 sum / mult、RPN / 样条、bool 默认值、Alias、循环与脏传播；基础骨架的节点公式也必须读入。两阶段 DQS 接入缩放及绑定中心变化。面板显示最终值，非法编辑保留上一有效状态。
+
+G8 的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad Left 通过非零 / 归零检查与副屏滑块操作；默认可见可编辑从 720 增至 2,687。G8.1 从 745 增至 2,260，使用 FACS Eye Blink；旧 Eyes Closed / 眼睛方向的空覆盖继续保留。不可为了点亮旧项修改资产或绕过覆盖。别名、JCM 开关以及 G8 / G8.1 各 40 个姿势均通过。
+
+最终七项 CTest、12 组独立数值对照、副屏流程通过。独立最大顶点差 `4.631754e-7 m`。源文件 / 程序哈希与结果见 [007 证据摘要](specs/007-erc-jcm/evidence/summary.json)，原始证据只认 `artifacts/spec007/validated`；早期目录是开发中的中间结果。当前无需继续扫描、demo 或性能回放。
+
+剩余边界：DAZ Studio Golden、完整 TCB 资源对照、HD / SubD、TriAx / Blend、指向骨骼属性的面板 Alias、缺失 / 覆盖依赖、FitTo、FK / IK。下一规划为 008 FK / IK，FitTo 实测前再收集 G8 同代服装。详见 [007 报告](specs/007-erc-jcm/execution-report.md)与[预览命令](specs/007-erc-jcm/tests.md)。以下各阶段文字为历史记录，状态以本节为准。
+
+## Spec 006 / 骨架、蒙皮与姿势 DUF 历史记录
 
 用户授权启动 006，并提供 `H:\G1\People\Genesis 8 Female\Poses\Bed Hogs II for Genesis 8 Female` 的姿势用于蒙皮检查。当前实施范围已完成并部署；用户已明确要求将 006 以中文归档到本地 Git。此归档不代替完整 DAZ Golden。005 已提交为 `ee2ba05`。
 

@@ -8,6 +8,9 @@ struct Morph {
   std::string id,label,group,source,unsupported;
   // 参数目录包含控制器和子节点别名；发现能力与求值能力分开记录。
   std::string kind="sparse",owner,channel_id,alias_target,channel_name;
+  std::string value_type="float",intrinsic_error;
+  bool evaluable=false,locked=false;
+  int alias_morph=-1;
   size_t formula_count=0,missing_dependencies=0;
   size_t source_vertex_count=0,source_offset_count=0;
   float minimum=0,maximum=1,initial=0,step=.01f;
@@ -23,6 +26,7 @@ struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
 };
 struct Properties {std::vector<float> morphs;TransformValues transform;};
+void validate_transform(const TransformValues &value);
 struct EvaluationStats {uint64_t morph_evaluations=0,offsets_visited=0,transform_evaluations=0;};
 // 单工作线程拥有；Qt 只发送属性快照，不访问求值中的网格。
 class MorphRuntime {

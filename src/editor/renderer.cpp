@@ -44,10 +44,9 @@ void Renderer::run(std::stop_token stop) {
     if(device.type!=DEVICE_OPTIX) throw std::runtime_error("找不到 OptiX 设备；编辑器不会自动回退 CPU");
     std::shared_ptr<const Document> current;
     ir::Scene render_scene;
-    std::unique_ptr<runtime::MorphRuntime> runtime;
-    std::unique_ptr<runtime::SkinningRuntime> skinning;
+    std::unique_ptr<runtime::DeformationRuntime> runtime;
     std::unique_ptr<CyclesAdapter> adapter;
-    uint64_t epoch=0,camera_epoch=0,applied_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
+    uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
     SessionParams params;params.device=device;params.samples=64;params.pixel_size=1;params.background=false;
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
@@ -57,14 +56,8 @@ void Renderer::run(std::stop_token stop) {
       if(!document) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
       if(current!=document) {
         cleanup();current=document;render_scene=current->loaded.scene;ir::add_studio(render_scene);
-        runtime=std::make_unique<runtime::MorphRuntime>(render_scene,current->catalog.targets);
-        skinning=std::make_unique<runtime::SkinningRuntime>(render_scene,current->skeletons.skins);
-        for(size_t t=0;t<desired.values.size();++t) {
-          for(size_t m=0;m<desired.values[t].morphs.size();++m) if(current->catalog.targets[t].morphs[m].unsupported.empty()) runtime->set_morph(t,m,desired.values[t].morphs[m]);
-          runtime->set_transform(t,desired.values[t].transform);
-        }
-        for(size_t i=0;i<desired.poses.size();++i) skinning->set_pose(i,desired.poses[i]);
-        skinning->evaluate(runtime->evaluate());
+        runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
+        runtime->evaluate(desired.values,desired.poses);
         SceneParams scene_params;scene_params.background=false;scene_params.bvh_type=BVH_TYPE_DYNAMIC;
         scene_params.use_texture_cache=false;scene_params.auto_texture_cache=false;
         session=std::make_unique<Session>(params,scene_params);
@@ -77,21 +70,18 @@ void Renderer::run(std::stop_token stop) {
         adapter=std::make_unique<CyclesAdapter>(scene);adapter->load(render_scene);
         auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
         display=driver.get();session->set_display_driver(std::move(driver));session->dfv_requested_epoch=++epoch;
-        applied_revision=desired.revision;session->reset(params,buffers);session->start();
+        applied_revision=attempted_revision=desired.revision;session->reset(params,buffers);session->start();
         state={};state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
       if(display->failed()) throw std::runtime_error(display->error());
       auto camera=window_->mailbox.latest();
-      if((camera.epoch!=camera_epoch || desired.revision!=applied_revision) && telemetry_.displayed_epoch.load()>=epoch && session->ready_to_reset()) {
+      if((camera.epoch!=camera_epoch || desired.revision!=attempted_revision) && telemetry_.displayed_epoch.load()>=epoch && session->ready_to_reset()) {
         ir::Delta delta;
-        if(desired.generation==current->generation && desired.revision!=applied_revision) {
-          for(size_t t=0;t<desired.values.size();++t) {
-            for(size_t m=0;m<desired.values[t].morphs.size();++m) if(current->catalog.targets[t].morphs[m].unsupported.empty()) runtime->set_morph(t,m,desired.values[t].morphs[m]);
-            runtime->set_transform(t,desired.values[t].transform);
-          }
-          for(size_t i=0;i<desired.poses.size();++i) skinning->set_pose(i,desired.poses[i]);
-          delta=skinning->evaluate(runtime->evaluate());applied_revision=desired.revision;
+        if(desired.generation==current->generation && desired.revision!=attempted_revision) {
+          attempted_revision=desired.revision;
+          try {delta=runtime->evaluate(desired.values,desired.poses);applied_revision=desired.revision;state.edit_error.clear();}
+          catch(const std::exception &e) {state.edit_error=e.what();}
         }
         if(camera.epoch!=camera_epoch) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;}
         {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
@@ -104,8 +94,8 @@ void Renderer::run(std::stop_token stop) {
       display->after_swap();window_->present_context.deactivate();
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
-      state.frames=telemetry_.submitted.load();state.samples=session->dfv_render_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->stats();
-      state.skinning=skinning->stats();
+      state.frames=telemetry_.submitted.load();state.samples=session->dfv_render_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
+      state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();
       if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform) {
         measured_evaluation=state.evaluation.morph_evaluations;measured_skinning=state.skinning.evaluations;measured_transform=state.evaluation.transform_evaluations;state.max_displacement=0;state.bounds.clear();
         for(const auto &target:current->catalog.targets) {
@@ -130,6 +120,7 @@ void Renderer::run(std::stop_token stop) {
     {"mesh_creations",state.adapter.meshes},{"geometry_updates",state.adapter.geometry_updates},{"instance_updates",state.adapter.instance_updates},
     {"camera_updates",state.adapter.camera_updates},{"morph_evaluations",state.evaluation.morph_evaluations},{"offsets_visited",state.evaluation.offsets_visited},
     {"skin_evaluations",state.skinning.evaluations},{"skin_vertices",state.skinning.vertices},
+    {"formula_evaluations",state.formulas.expressions},{"formula_channels",state.formulas.channels},{"edit_error",state.edit_error},
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
     {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"}};
   std::ofstream(output_/"editor-render.json")<<report.dump(2);

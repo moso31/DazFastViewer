@@ -39,7 +39,7 @@ static void unit_tests() {
   skin.method=runtime::SkinMethod::linear;require(near(runtime::deform(skin,pose,{{1,0,0}})[0],{0,0,0}),"LBS 权重归一化错误");
   skin.method=runtime::SkinMethod::dual_quaternion;pose[0].rotation_degrees.z=170;pose[1].rotation_degrees.z=-170;
   require(near(runtime::deform(skin,pose,{{1,0,0}})[0],{-1,0,0}),"DQS 未对齐四元数半球");
-  auto invalid=pose;invalid[0].scale.x=2;rejects([&] {runtime::validate_pose(skin,invalid);},"DQS 非刚性缩放不应静默应用");
+  auto invalid=pose;invalid[0].scale.x=0;rejects([&] {runtime::validate_pose(skin,invalid);},"零缩放不应应用");
   invalid=pose;invalid[0].rotation_degrees.x=std::numeric_limits<float>::quiet_NaN();rejects([&] {runtime::validate_pose(skin,invalid);},"NaN 姿势未拒绝");
   auto bad=skin;bad.joints[0].parent=1;rejects([&] {runtime::validate_pose(bad,pose);},"循环或乱序骨架未拒绝");
   bad=skin;bad.weights[0][0].joint=999;rejects([&] {runtime::deform(bad,pose,{{1,0,0}});},"越界权重未拒绝");
@@ -68,7 +68,7 @@ static void unit_tests() {
   require(!daz::apply_pose(daz::parse_pose(doc),skin,skin.initial,target,values).report["fully_applied"].get<bool>(),"未知骨骼必须报告");
   doc["scene"]["animations"][0]["keys"].push_back({1,20});rejects([&] {daz::parse_pose(doc);},"多帧动画未拒绝");
   doc["scene"]["animations"][0]["keys"]={{0,1}};doc["scene"]["animations"][0]["url"]="name://@selection:?scale/x/value";
-  doc["scene"]["animations"][0]["keys"]={{0,2}};rejects([&] {daz::apply_pose(daz::parse_pose(doc),skin,skin.initial,target,values);},"非法缩放姿势未整次拒绝");
+  doc["scene"]["animations"][0]["keys"]={{0,0}};rejects([&] {daz::apply_pose(daz::parse_pose(doc),skin,skin.initial,target,values);},"非法缩放姿势未整次拒绝");
   const auto folder=std::filesystem::temp_directory_path()/"dfv-skeleton-tests"/std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());std::filesystem::create_directories(folder);
   const auto dsf=folder/L"骨架.dsf",duf=folder/L"双角色.duf";
   Json asset={{"node_library",Json::array({{{"id","oldId"},{"name","Bend"},{"parent","#root"}},{{"id","root"},{"name","Figure"}}})},

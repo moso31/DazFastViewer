@@ -62,6 +62,11 @@ class Editor final:public QMainWindow {
   std::filesystem::path reload_file_;
   std::filesystem::path pose_file_;
   bool pose_test_=false,frame_pending_=false;
+  bool formula_test_=false;
+  uint64_t formula_ui_revision_=0;
+  size_t formula_case_=0;
+  uint64_t test_formula_evaluations_=0;
+  nlohmann::json parameter_checks_=nlohmann::json::array();
   bool loading_=false,self_test_=false;
   QString load_error_;
   int selected_=-1,test_stage_=0;
@@ -120,7 +125,7 @@ class Editor final:public QMainWindow {
   void set_morph(size_t morph,double value) {
     if(selected_<0) return;
     auto &current=snapshot_.values[size_t(selected_)].morphs[morph];const float next=float(value);
-    if(current==next) return;current=next;
+    if(current==next) return;runtime::set_parameter(document_->catalog.targets[size_t(selected_)],snapshot_.values[size_t(selected_)],morph,next);
     parameters_->refresh(morph);
     send();
   }
@@ -138,7 +143,8 @@ class Editor final:public QMainWindow {
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};
     const auto &target=document_->catalog.targets[size_t(selected_)];
-    for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
+    for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].evaluable||target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
+    runtime::sync_aliases(target,value);
     const auto skin=selected_skin();if(skin>=0) {snapshot_.poses[size_t(skin)]=document_->skeletons.skins[size_t(skin)].initial;frame_pending_=true;pose_status_->setText(QStringLiteral("已重置选中角色的姿势与形态。"));pose_report_=nullptr;}
     select(selected_);send();
   }
@@ -148,10 +154,12 @@ class Editor final:public QMainWindow {
       {"mesh_creations",status.adapter.meshes},{"geometry_updates",status.adapter.geometry_updates},{"instance_updates",status.adapter.instance_updates},
       {"morph_evaluations",status.evaluation.morph_evaluations},{"max_displacement_m",status.max_displacement},
       {"skin_evaluations",status.skinning.evaluations},{"skin_vertices",status.skinning.vertices},
+      {"formula_evaluations",status.formulas.expressions},{"formula_channels",status.formulas.channels},
       {"qt_version",QT_VERSION_STR},{"monitor",screen()->name().toStdString()},{"window",{x(),y(),width(),height()}},
       {"scope","selected-object-morph-transform-reset-camera-no-morph-evaluation"}};
     if(!reload_file_.empty()) report["scope"]="background-scene-replacement-generation-isolation";
     if(pose_test_) report["scope"]="pose-apply-reset-camera-no-skin-evaluation";
+    if(formula_test_) {report["scope"]="005-parameter-slider-regression-with-ERC-JCM";report["parameter_checks"]=parameter_checks_;}
     report["project_file"]=project_.file.toUtf8().toStdString();report["content_roots"]=nlohmann::json::array();
     for(const auto &root:project_.content_roots) report["content_roots"].push_back(root.toUtf8().toStdString());
     report["named_parameters"]=nlohmann::json::array();
@@ -163,12 +171,45 @@ class Editor final:public QMainWindow {
   void tick() {
     const auto state=renderer_->status();
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
+    if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
+    if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);
     if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
     else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
-    if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000) {finish_test(false,"等待编辑器验证超过 180 秒");return;}
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>(formula_test_?360000:180000)) {finish_test(false,"等待编辑器验证超时");return;}
     if(!document_ || state.generation!=document_->generation || state.presented_revision!=snapshot_.revision || state.presented_epoch!=state.requested_epoch || state.frames==0 || state.samples<8) return;
+    if(formula_test_) {
+      const std::vector<std::string> names={"Arms Length","Chest Scale","Eyes Closed","HS Sanny Shy","Flex Quad Left"};
+      if(test_stage_==0) {
+        test_initial_displacement_=state.max_displacement;const auto &morphs=document_->catalog.targets[0].morphs;
+        auto found=std::find_if(morphs.begin(),morphs.end(),[&](const auto &m) {return m.label==names[formula_case_]&&m.kind!="alias"&&m.unsupported.empty();});
+        if(found==morphs.end()) {finish_test(false,"指定参数未启用："+names[formula_case_]);return;}
+        test_morph_=size_t(found-morphs.begin());parameters_->query(text(found->label));parameters_->select_parameter(test_morph_);
+        if(formula_case_==2||formula_case_==3) {
+          for(const auto &skin:document_->skeletons.skins) if(skin.instance==document_->catalog.targets[0].instance) for(const auto &joint:skin.joints) if(joint.id=="head") {
+            const auto p=joint.center_cm;const auto c=document_->loaded.scene.instances[skin.instance].transform.point({p.x*.01f,-p.z*.01f,p.y*.01f+.08f});
+            ir::Bounds face;face.add({c.x-.18f,c.y-.18f,c.z-.22f});face.add({c.x+.18f,c.y+.18f,c.z+.22f});renderer_->frame(face);
+          }
+        }
+        parameters_->set_slider(qRound((.5-found->minimum)/(found->maximum-found->minimum)*1000));test_stage_=1;
+      } else if(test_stage_==1) {
+        // 等待一次 Qt 绘制，确保最终 ERC 值已显示再截图。
+        if(formula_ui_revision_!=state.applied_revision) {formula_ui_revision_=state.applied_revision;return;}
+        if(state.max_displacement<1e-5||state.adapter.geometry_updates<1) {finish_test(false,"参数未产生可见几何更新");return;}
+        parameter_checks_.push_back({{"name",names[formula_case_]},{"displacement_m",state.max_displacement},{"effective",state.effective[0][test_morph_]},{"status","PASS"}});
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/("editor-parameter-"+std::to_string(formula_case_)+".png")).wstring()));
+        reset_selected();test_stage_=2;
+      } else if(test_stage_==2) {
+        if(state.max_displacement!=test_initial_displacement_) {finish_test(false,"参数恢复出现漂移");return;}
+        if(++formula_case_<names.size()) {test_stage_=0;return;}
+        test_evaluations_=state.evaluation.morph_evaluations;test_skin_evaluations_=state.skinning.evaluations;test_formula_evaluations_=state.formulas.expressions;renderer_->orbit(20,0);test_stage_=3;
+      } else if(test_stage_==3) {
+        if(state.skinning.evaluations!=test_skin_evaluations_||state.evaluation.morph_evaluations!=test_evaluations_||state.formulas.expressions!=test_formula_evaluations_) {finish_test(false,"相机操作触发变形求值");return;}
+        finish_test(true);
+      }
+      return;
+    }
     if(pose_test_) {
       if(test_stage_==0) {test_initial_displacement_=state.max_displacement;test_stage_=1;apply_pose_file(pose_file_);}
       else if(test_stage_==1) {
@@ -216,7 +257,7 @@ class Editor final:public QMainWindow {
     }
   }
 public:
-  Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),self_test_(self_test||pose_test) {
+  Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
     setWindowTitle(QStringLiteral("DazFastViewer · 场景与形态编辑器"));setAttribute(Qt::WA_ShowWithoutActivating);
     setDockOptions(AnimatedDocks|AllowNestedDocks|AllowTabbedDocks);
     auto *central=new QWidget;auto *layout=new QVBoxLayout(central);layout->setContentsMargins(4,4,4,4);
@@ -290,9 +331,11 @@ public:
         std::vector<std::filesystem::path> resolved;for(const auto &p:document->loaded.report["content_roots"]) resolved.push_back(std::filesystem::u8path(p.get<std::string>()));
         document->catalog=daz::discover_morphs(document->loaded,resolved);
         document->skeletons=daz::load_skeletons(document->loaded);
+        document->formulas=daz::enable_formulas(document->catalog,document->skeletons);
         std::ofstream(output_/"asset-report.json")<<document->loaded.report.dump(2);
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
         std::ofstream(output_/"skeleton-report.json")<<document->skeletons.report.dump(2);
+        std::ofstream(output_/"formula-report.json")<<document->formulas.report.dump(2);
         QMetaObject::invokeMethod(this,[this,document,preserve] {
           const auto old=document_;const auto previous=snapshot_;parameters_->bind(nullptr,nullptr);
           document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.generation=document->generation;snapshot_.revision=1;
@@ -306,13 +349,13 @@ public:
             snapshot_.poses.push_back(std::move(pose));
           }
           for(const auto &target:document_->catalog.targets) {
-            runtime::Properties values;for(const auto &m:target.morphs) values.morphs.push_back(m.unsupported.empty()?m.initial:0);
+            runtime::Properties values;for(const auto &m:target.morphs) values.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
             if(preserve && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
               values.transform=previous.values[t].transform;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].unsupported.empty() && weights.contains(target.morphs[m].id)) values.morphs[m]=target.morphs[m].clamped?std::clamp(weights[target.morphs[m].id],target.morphs[m].minimum,target.morphs[m].maximum):weights[target.morphs[m].id];
             }
-            snapshot_.values.push_back(std::move(values));
+            runtime::sync_aliases(target,values);snapshot_.values.push_back(std::move(values));
           }
           {QSignalBlocker block(hierarchy_);hierarchy_->clear();
             for(size_t i=0;i<document_->catalog.targets.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{text(document_->catalog.targets[i].label)});item->setData(0,Qt::UserRole,int(i));item->setToolTip(0,text(document_->catalog.targets[i].id));
@@ -339,6 +382,7 @@ int main(int argc,char **argv) {
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
+  parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
   parser.addOption({"reload-test",QStringLiteral("验证后台场景替换后退出"),"file"});parser.process(app);
   const auto output=parser.isSet("output")?file_path(parser.value("output")):std::filesystem::path("artifacts")/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
   std::filesystem::create_directories(output);
@@ -348,7 +392,7 @@ int main(int argc,char **argv) {
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
     Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
-      parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"));
+      parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"));
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

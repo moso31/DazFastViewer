@@ -1,5 +1,7 @@
 # Spec 005 阶段完成核查
 
+后续复测：007 已接入 Formula / ERC / JCM，并复测此前禁用的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad 等参数。实际结果与 G8 / G8.1 差异见 [007 执行报告](../007-erc-jcm/execution-report.md)。以下保留 005 当时的完成范围与历史证据。
+
 日期：2026-09-21。结论：**005 当前约定的实施范围已完成，可以归档到本地 Git。** 此结论是阶段实施完成，不等同于整个产品达到 Version 0.1 Definition of Done，也不将工程验证代替用户手动验收。
 
 ## 范围与证据

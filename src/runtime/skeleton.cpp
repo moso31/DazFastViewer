@@ -36,41 +36,44 @@ Q quaternion(const M &m) {
   return q*(1/std::sqrt(dot(q,q)));
 }
 bool same(ir::Vec3 a,ir::Vec3 b) {return a.x==b.x&&a.y==b.y&&a.z==b.z;}
-bool same(const JointPose &a,const JointPose &b) {return same(a.translation_cm,b.translation_cm)&&same(a.rotation_degrees,b.rotation_degrees)&&same(a.scale,b.scale)&&a.general_scale==b.general_scale;}
+bool same(const JointPose &a,const JointPose &b) {return same(a.translation_cm,b.translation_cm)&&same(a.rotation_degrees,b.rotation_degrees)&&same(a.scale,b.scale)&&a.general_scale==b.general_scale&&same(a.center_offset_cm,b.center_offset_cm)&&same(a.end_offset_cm,b.end_offset_cm)&&same(a.orientation_offset_degrees,b.orientation_offset_degrees);}
 bool finite(ir::Vec3 a) {return std::isfinite(a.x)&&std::isfinite(a.y)&&std::isfinite(a.z);}
-struct Palette {M rotation,scale,matrix;V origin,translation;Q real,dual;};
+struct Palette {M rotation,scale,matrix;V origin,translation,rest_origin,stretch_translation;Q real,dual;};
+ir::Vec3 add(ir::Vec3 a,ir::Vec3 b) {return {a.x+b.x,a.y+b.y,a.z+b.z};}
 }
 void validate_pose(const Skin &skin,const std::vector<JointPose> &pose) {
   if(pose.size()!=skin.joints.size()) throw std::runtime_error("骨骼姿势数量与骨架不一致");
   for(size_t i=0;i<pose.size();++i) {
     const auto &j=skin.joints[i];const auto &p=pose[i];
     if(j.parent>=int(i)||j.parent<-1) throw std::runtime_error("骨架必须按父节点在先排序，且不能成环");
-    if(!finite(j.center_cm)||!finite(j.orientation_degrees)||!finite(p.translation_cm)||!finite(p.rotation_degrees)||!finite(p.scale)||!std::isfinite(p.general_scale)) throw std::runtime_error("骨骼参数包含非有限数值");
+    if(!finite(j.center_cm)||!finite(j.orientation_degrees)||!finite(p.translation_cm)||!finite(p.rotation_degrees)||!finite(p.scale)||!std::isfinite(p.general_scale)||!finite(p.center_offset_cm)||!finite(p.end_offset_cm)||!finite(p.orientation_offset_degrees)) throw std::runtime_error("骨骼参数包含非有限数值");
     auto order=j.rotation_order;std::sort(order.begin(),order.end());if(order!="XYZ") throw std::runtime_error("未知骨骼旋转顺序："+j.rotation_order);
     if(p.scale.x<=0||p.scale.y<=0||p.scale.z<=0||p.general_scale<=0) throw std::runtime_error("骨骼缩放必须大于零");
-    if(skin.method==SkinMethod::dual_quaternion && (!same(p.scale,{1,1,1})||p.general_scale!=1)) throw std::runtime_error("当前双四元数蒙皮尚不支持骨骼缩放；可使用对象缩放，骨骼缩放预设暂不应用");
   }
 }
 std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose,const std::vector<ir::Vec3> &source) {
   validate_pose(skin,pose);
   if(source.size()!=skin.weights.size()) throw std::runtime_error("蒙皮权重与网格顶点数不一致");
-  bool neutral=true;for(const auto &p:pose) neutral=neutral&&same(p,JointPose{});
+  bool neutral=true;for(const auto &p:pose) neutral=neutral&&same(p.translation_cm,{})&&same(p.rotation_degrees,{})&&same(p.scale,{1,1,1})&&p.general_scale==1;
   std::vector<Palette> palettes(pose.size());
   for(size_t i=0;i<pose.size();++i) {
     const auto &j=skin.joints[i];const auto &p=pose[i];auto &out=palettes[i];
-    const auto orient=rotation(j.orientation_degrees,"XYZ");const auto inv=transpose(orient);
+    const auto center=v(add(j.center_cm,p.center_offset_cm));const auto orient=rotation(add(j.orientation_degrees,p.orientation_offset_degrees),"XYZ");const auto inv=transpose(orient);
     out.rotation=orient*rotation(p.rotation_degrees,j.rotation_order)*inv;out.scale=orient*scaling(p)*inv;
-    out.origin=v(j.center_cm)+v(p.translation_cm);
+    out.origin=center+v(p.translation_cm);out.rest_origin=center;
     if(j.parent>=0) {
       const auto &parent=palettes[j.parent];const auto &pj=skin.joints[j.parent];
-      out.origin=parent.matrix*(v(j.center_cm)-v(pj.center_cm)+v(p.translation_cm))+parent.origin;
+      const auto offset=center-v(add(pj.center_cm,pose[j.parent].center_offset_cm));
+      out.origin=parent.matrix*(offset+v(p.translation_cm))+parent.origin;out.rest_origin=parent.scale*offset+parent.rest_origin;
       out.rotation=parent.rotation*out.rotation;
       auto inherited=parent.scale;
       if(!j.inherits_scale) inherited=inherited*scaling(pose[j.parent],true);
       out.scale=inherited*out.scale;
     }
-    out.matrix=out.rotation*out.scale;out.translation=out.origin-out.matrix*v(j.center_cm);
-    out.real=quaternion(out.rotation);out.dual=(Q{0,out.translation.x,out.translation.y,out.translation.z}*out.real)*.5;
+    out.matrix=out.rotation*out.scale;out.translation=out.origin-out.matrix*center;
+    // 两阶段：先在绑定姿势中按权重伸缩，再绕伸缩后的关节位置做刚性 DQS。
+    out.stretch_translation=out.rest_origin-out.scale*center;const auto rigid_translation=out.origin-out.rotation*out.rest_origin;
+    out.real=quaternion(out.rotation);out.dual=(Q{0,rigid_translation.x,rigid_translation.y,rigid_translation.z}*out.real)*.5;
   }
   auto result=source;
   for(size_t i=0;i<source.size();++i) {
@@ -82,10 +85,10 @@ std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose
     if(skin.method==SkinMethod::linear) {
       for(const auto &w:weights) {const auto &m=palettes[w.joint];out=out+(m.matrix*original+m.translation)*(w.weight/sum);}
     } else {
-      Q real,dual;const auto ref=palettes[weights[reference].joint].real;
-      for(const auto &w:weights) {const auto &m=palettes[w.joint];const double weight=(dot(ref,m.real)<0?-1:1)*w.weight/sum;real=real+m.real*weight;dual=dual+m.dual*weight;}
+      Q real,dual;V stretched;const auto ref=palettes[weights[reference].joint].real;
+      for(const auto &w:weights) {const auto &m=palettes[w.joint];const double weight=(dot(ref,m.real)<0?-1:1)*w.weight/sum;real=real+m.real*weight;dual=dual+m.dual*weight;stretched=stretched+(m.scale*original+m.stretch_translation)*(w.weight/sum);}
       const double norm=std::sqrt(dot(real,real));if(norm<1e-12) throw std::runtime_error("双四元数混合退化");real=real*(1/norm);dual=dual*(1/norm);dual=dual+real*(-dot(real,dual));
-      const auto q=real*Q{0,original.x,original.y,original.z}*conjugate(real)+(dual*conjugate(real))*2;out={q.x,q.y,q.z};
+      const auto q=real*Q{0,stretched.x,stretched.y,stretched.z}*conjugate(real)+(dual*conjugate(real))*2;out={q.x,q.y,q.z};
     }
     result[i]={float(out.x*.01),float(-out.z*.01),float(out.y*.01)};
     if(!finite(result[i])) throw std::runtime_error("蒙皮结果包含非有限顶点");

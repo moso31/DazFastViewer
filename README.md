@@ -4,7 +4,13 @@
 
 **Spec 003 角色与道具静态预览已于 2026-09-20 通过用户手动验收。** Spec 005 中文编辑器与直接 Morph 已通过工程验证，尚待用户手动验收；详细结果见各阶段执行报告。
 
-已实现独立 Render Scene IR、Cycles Adapter、原生 DUF / DSF 加载、Mesh / UV / 基础材质、OptiX 视口、直接稀疏 Morph、Genesis 8 骨架 / 双四元数蒙皮、单帧姿势 DUF 及相机操作。当前仍基于基础网格，尚未实现 SubD / HD、完整 ERC / JCM 或完整 Iray Uber 材质。
+已实现独立 Render Scene IR、Cycles Adapter、原生 DUF / DSF 加载、Mesh / UV / 基础材质、OptiX 视口、稀疏 Morph、Genesis 8 骨架 / 双四元数蒙皮、Formula / ERC / JCM、单帧姿势 DUF 及相机操作。当前仍基于基础网格，尚未实现 SubD / HD 或完整 Iray Uber 材质，公式与变形的完整 DAZ Studio Golden 仍待验收。
+
+## Formula、ERC、JCM 与参数复测（Spec 007）
+
+006 已中文提交为 `aa8fbc7`。007 当前实施范围已完成并部署，通过七项工程检查、G8 / G8.1 各 40 个姿势、独立数值对照与副屏滑块验证。G8 的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad Left 已启用且产生实际变形；默认可见可编辑条目从 720 增至 2,687。G8.1 使用新版 **Eye Blink** 闭眼，旧控制器空覆盖继续保留。
+
+在工程目录运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sample Genesis8`，选中角色后在右侧搜索参数并拖动滑块。面板区分手动输入与最终 ERC 值；JCM 随姿势变化自动求值。详情见 [007 执行报告](specs/007-erc-jcm/execution-report.md)与[预览说明](specs/007-erc-jcm/tests.md)。HD、未解析依赖及其他限制仍显示具体禁用原因。
 
 ## 骨架、蒙皮与姿势（Spec 006）
 
@@ -14,13 +20,13 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sample Genesis8 -Pose "H:\G1\People\Genesis 8 Female\Poses\Bed Hogs II for Genesis 8 Female\BH2 Basking.duf"
 ```
 
-选中角色后，通过“姿势 → 应用姿势 DUF…”或内容浏览器双击切换姿势；“恢复载入姿势”只恢复骨骼，保留 Morph。“姿势应用详情”列出未应用参数；骨骼层级可在左侧展开。当前眼睛 ERC 控制器与 JCM 尚未求值，大幅弯曲外形仍可能与 DAZ 不同；完整 DAZ Golden、骨骼缩放的 DQS、多帧动画及 FitTo / IK 保留为后续工作。
+选中角色后，通过“姿势 → 应用姿势 DUF…”或内容浏览器双击切换姿势；“恢复载入姿势”只恢复骨骼，保留 Morph。“姿势应用详情”列出未应用参数；骨骼层级可在左侧展开。007 已接入 ERC / JCM 和带缩放的 DQS；G8.1 不适用的旧眼睛控制器仍报告未应用。完整 DAZ Golden、多帧动画及 FitTo / IK 保留为后续工作。
 
 ## 中文编辑器与 Morph（Spec 005）
 
 **005 当前阶段实施范围已完成并通过工程验证。** 核查依据与后续边界见[阶段完成核查](specs/005-morph-runtime/completion-review.md)；不代表整个产品的 Golden / 性能验收已经完成。
 
-新增 Qt Widgets 编辑器，支持菜单、多个内容库、后台加载 DUF、场景对象选择、参数分组 / 搜索与滑块、变换参数及重置。参数目录同时发现直接 Morph、纯公式控制器、子节点别名与 HD 项；可编辑数量由当前内容库和目标角色决定。公式 / HD 相关项显示原因，006 已接入基础蒙皮；Formula 骨骼控制器与服装绑定仍在后续阶段。
+新增 Qt Widgets 编辑器，支持菜单、多个内容库、后台加载 DUF、场景对象选择、参数分组 / 搜索与滑块、变换参数及重置。参数目录同时发现直接 Morph、纯公式控制器、子节点别名与 HD 项；可编辑数量由当前内容库和目标角色决定。006 接入蒙皮，007 接入 Formula 骨骼控制器与 JCM；HD 和不满足求值条件的项显示原因，服装绑定仍在后续阶段。
 
 在工程目录运行：
 
@@ -40,7 +46,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sampl
 - [Spec 005 执行报告](specs/005-morph-runtime/execution-report.md)
 - [UI / Genesis 8 / FitTo 长期规划](Docs/editor_and_genesis8_roadmap_cn.md)
 
-构建需要本机 Qt MSVC 套件（当前 `C:\Qt\6.10.3\msvc2022_64`，可用 CMake `DFV_QT_ROOT` 指定）。`tools/build.ps1` 同时构建编辑器和原基准工具，运行六项轻量 CTest；`stage_runtime.py` 调用 Qt 官方部署工具复制 DLL、插件、中文翻译及许可证记录。
+构建需要本机 Qt MSVC 套件（当前 `C:\Qt\6.10.3\msvc2022_64`，可用 CMake `DFV_QT_ROOT` 指定）。`tools/build.ps1` 同时构建编辑器和原基准工具，运行七项轻量 CTest；`stage_runtime.py` 调用 Qt 官方部署工具复制 DLL、插件、中文翻译及许可证记录。
 
 ## 原视口预览与后台工具
 
