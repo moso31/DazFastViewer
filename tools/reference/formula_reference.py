@@ -14,8 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pose_reference import read, vector, multiply
 
 
-def formula_channels(contract, raw):
-    """单独从资源计算直接控制器输出及节点缩放传递，不使用 Runtime 的公式结果作输入。"""
+def formula_channels(contract, raw, catalog=None):
+    """从资源重算直接输出；其他激活形态使用导出权重，默认控制器使用资源初值。"""
     edited = contract.get("edited_parameter")
     if not edited:
         return dict(checked=0, max_error=0)
@@ -55,6 +55,30 @@ def formula_channels(contract, raw):
         value = expression(formula, {(edited["id"], "value"): edited["value"]})
         if value is not None:
             expected[key] = expected.get(key, 1.0 if key[1].startswith("scale/") else 0.0) + value
+    direct_checked = len(expected)
+    # 同一骨骼属性可以同时接收多个形态的贡献。旧检查只计算当前滑块，
+    # 遗漏了 Yuki 的 Body / Head / Youth 链及 G8.1 默认开启的 CTRL Vo Xiao Mei。
+    additional = {(m["source"], m["id"]): m["weight"] for m in contract["morphs"]}
+    if catalog:
+        for target in catalog["targets"]:
+            for m in target["morphs"]:
+                if m.get("evaluable") and m["kind"] != "alias" and not m["offsets"] and m["initial"]:
+                    additional.setdefault((m["source"], m["channel_id"]), m["initial"])
+    additional.pop((edited["source"], edited["id"]), None)
+    contributors = []
+    for (source, ident), weight in additional.items():
+        asset = next(m for m in read(source)["modifier_library"] if m["id"] == ident)
+        count = 0
+        for formula in asset.get("formulas", []):
+            key = address(formula["output"])
+            if key not in expected or formula.get("stage", "sum") != "sum":
+                continue
+            value = expression(formula, {(ident, "value"): weight})
+            if value is not None:
+                expected[key] += value
+                count += 1
+        if count:
+            contributors.append(dict(id=ident, weight=weight, channels=count))
     # 从已知缩放输入拓展依赖，每个节点 mult 只合并一次。
     pending = [f for n in raw["node_library"] for f in n.get("formulas", []) if f.get("stage") == "mult"]
     while pending:
@@ -77,13 +101,15 @@ def formula_channels(contract, raw):
         errors.append(abs(value-actual))
     if edited["id"] in ("SCLArmsLength", "SCLPropagatingChest", "CRTLHSSannyShy") and not errors:
         raise RuntimeError("直接控制器缺少独立公式检查")
-    return dict(checked=len(errors), max_error=max(errors, default=0))
+    return dict(checked=len(errors), direct_checked=direct_checked, additional_contributors=contributors,
+                max_error=max(errors, default=0))
 
 
 def check(path):
     contract = read(path)
     raw = read(contract["dsf"])
-    channels = formula_channels(contract, raw)
+    catalog_path = path.parent/"morph-catalog.json"
+    channels = formula_channels(contract, raw, read(catalog_path) if catalog_path.exists() else None)
     skin = next(m["skin"] for m in raw["modifier_library"] if "skin" in m)
     geometry = next(g for g in raw["geometry_library"] if g["id"] == skin["geometry"].split("#")[-1])
     daz = np.asarray(geometry["vertices"]["values"], dtype=np.float32)
@@ -178,7 +204,7 @@ def main():
         raise RuntimeError("没有变形对照数据")
     results = [check(p) for p in files]
     report = dict(blender=bpy.app.version_string, threshold_m=2e-5, results=results,
-                  scope="independent direct-controller and node-scale formulas; DSF morph accumulation and two-phase DQS with evaluated channels; not DAZ Studio Golden",
+                  scope="raw direct-controller formulas plus active-morph weights and default-controller contributions; node-scale propagation; DSF morph accumulation and two-phase DQS with evaluated channels; not a full independent ERC graph or DAZ Studio Golden",
                   status="PASS" if all(r["status"] == "PASS" for r in results) else "FAIL")
     (args.directory/"reference-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=True, indent=2))

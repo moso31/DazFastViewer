@@ -1,0 +1,880 @@
+{
+  "baseline_commit": "da5d4f8",
+  "status": "PASS",
+  "artifacts": "artifacts/spec007-compatibility/final",
+  "ctest_passed": 8,
+  "source_hashes_match_deployment": true,
+  "editor_exe_sha256": "43710474c9e74d976813428718cff82d7487720cb7c9d1b29aa9b258596a0091",
+  "targets": {
+    "g8": {
+      "total": 6012,
+      "baseline_editable": 4781,
+      "first_pass_editable": 5135,
+      "editable": 5257,
+      "visible_editable": 3092,
+      "new_editable": 476,
+      "regressed_editable": 0,
+      "missing_previous_entries": 0,
+      "no_displacement_in_individual_samples": 71,
+      "rejected_samples": 0,
+      "pose_count": 40,
+      "parameters": [
+        {
+          "name": "Arms Length",
+          "samples": [
+            {
+              "displacement_m": 0.1595116563510022,
+              "effective": 0.5,
+              "evaluated_formulas": 8,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.3412037392925751,
+              "effective": 1.0,
+              "evaluated_formulas": 8,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 8,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Chest Scale",
+          "samples": [
+            {
+              "displacement_m": 0.0821401179237149,
+              "effective": 0.5,
+              "evaluated_formulas": 18,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.1642802344347989,
+              "effective": 1.0,
+              "evaluated_formulas": 18,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 18,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Eyes Closed",
+          "samples": [
+            {
+              "displacement_m": 0.009710866701144771,
+              "effective": 0.5,
+              "evaluated_formulas": 168,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.019421733399992983,
+              "effective": 1.0,
+              "evaluated_formulas": 168,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 168,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "HS Sanny Shy",
+          "samples": [
+            {
+              "displacement_m": 0.004700864457511003,
+              "effective": 0.5,
+              "evaluated_formulas": 456,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.009401728891218484,
+              "effective": 1.0,
+              "evaluated_formulas": 456,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 456,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Flex Quad Left",
+          "samples": [
+            {
+              "displacement_m": 0.002345444912417126,
+              "effective": 0.5,
+              "evaluated_formulas": 0,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.004690885359997972,
+              "effective": 1.0,
+              "evaluated_formulas": 0,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 0,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Ren Yao",
+          "samples": [
+            {
+              "displacement_m": 0.017237239857253246,
+              "effective": 0.5,
+              "evaluated_formulas": 974,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.034474480900839134,
+              "effective": 1.0,
+              "evaluated_formulas": 974,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 974,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "BGM Ava",
+          "samples": [
+            {
+              "displacement_m": 0.11467039228727302,
+              "effective": 0.5,
+              "evaluated_formulas": 1352,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.22934085883978503,
+              "effective": 1.0,
+              "evaluated_formulas": 1352,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 1352,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "BGM Big Girl Base",
+          "samples": [
+            {
+              "displacement_m": 0.06364693577399881,
+              "effective": 0.5,
+              "evaluated_formulas": 540,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.1272938704667935,
+              "effective": 1.0,
+              "evaluated_formulas": 540,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 540,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "AW - Yuki Teen FBM",
+          "samples": [
+            {
+              "displacement_m": 0.021731419332273287,
+              "effective": 0.5,
+              "evaluated_formulas": 4130,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.04329803331438679,
+              "effective": 1.0,
+              "evaluated_formulas": 4130,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 4130,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Mariko",
+          "samples": [
+            {
+              "displacement_m": 0.027787348680479315,
+              "effective": 0.5,
+              "evaluated_formulas": 2041,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.05557467362873553,
+              "effective": 1.0,
+              "evaluated_formulas": 2041,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 2041,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "L All Nails Length",
+          "samples": [
+            {
+              "displacement_m": 0.004193275858235696,
+              "effective": 0.5,
+              "evaluated_formulas": 5,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.008386551743771942,
+              "effective": 1.0,
+              "evaluated_formulas": 5,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 5,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        }
+      ],
+      "repair_methods": {
+        "declared_asset_uri": 192,
+        "same_directory_unique_id": 39
+      },
+      "remaining_reasons": {
+        "公式引用缺失、被本代覆盖或不支持的属性": 160,
+        "Morph 目标顶点数不匹配": 14,
+        "包含 HD 数据，尚未支持完整形态": 310,
+        "没有顶点差值或可求值的依赖输出": 47,
+        "资产将此参数标为锁定": 193,
+        "当前参数面板尚未支持指向骨骼属性的别名": 16,
+        "依赖参数不可用": 9,
+        "别名目标缺失、被本代覆盖或不能唯一解析": 6
+      },
+      "reason_transitions": [
+        {
+          "from": "公式引用缺失、被本代覆盖或不支持的属性",
+          "to": "公式引用缺失、被本代覆盖或不支持的属性",
+          "count": 160
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "Morph 目标顶点数不匹配",
+          "count": 14
+        },
+        {
+          "from": "包含 HD 数据，尚未支持完整形态",
+          "to": "包含 HD 数据，尚未支持完整形态",
+          "count": 288
+        },
+        {
+          "from": "公式引用缺失、被本代覆盖或不支持的属性",
+          "to": "EDITABLE",
+          "count": 40
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "EDITABLE",
+          "count": 302
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "没有顶点差值或可求值的依赖输出",
+          "count": 41
+        },
+        {
+          "from": "没有顶点差值或可求值的依赖输出",
+          "to": "EDITABLE",
+          "count": 39
+        },
+        {
+          "from": "资产将此参数标为锁定",
+          "to": "资产将此参数标为锁定",
+          "count": 193
+        },
+        {
+          "from": "当前参数面板尚未支持指向骨骼属性的别名",
+          "to": "当前参数面板尚未支持指向骨骼属性的别名",
+          "count": 16
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "包含 HD 数据，尚未支持完整形态",
+          "count": 22
+        },
+        {
+          "from": "Morph 绑定到节点，几何目标尚未验证",
+          "to": "EDITABLE",
+          "count": 1
+        },
+        {
+          "from": "没有顶点差值或可求值的依赖输出",
+          "to": "依赖参数不可用",
+          "count": 9
+        },
+        {
+          "from": "没有顶点差值或可求值的依赖输出",
+          "to": "没有顶点差值或可求值的依赖输出",
+          "count": 6
+        },
+        {
+          "from": "别名目标缺失、被本代覆盖或不能唯一解析",
+          "to": "别名目标缺失、被本代覆盖或不能唯一解析",
+          "count": 6
+        },
+        {
+          "from": "别名目标缺失、被本代覆盖或不能唯一解析",
+          "to": "EDITABLE",
+          "count": 94
+        }
+      ]
+    },
+    "g81": {
+      "total": 6799,
+      "baseline_editable": 4220,
+      "first_pass_editable": 4712,
+      "editable": 4834,
+      "visible_editable": 2822,
+      "new_editable": 614,
+      "regressed_editable": 0,
+      "missing_previous_entries": 0,
+      "no_displacement_in_individual_samples": 63,
+      "rejected_samples": 0,
+      "pose_count": 40,
+      "parameters": [
+        {
+          "name": "Arms Length",
+          "samples": [
+            {
+              "displacement_m": 0.15791653631345945,
+              "effective": 0.5,
+              "evaluated_formulas": 8,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.3377917048070775,
+              "effective": 1.0,
+              "evaluated_formulas": 8,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 8,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Chest Scale",
+          "samples": [
+            {
+              "displacement_m": 0.08116836949218802,
+              "effective": 0.5,
+              "evaluated_formulas": 18,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.16233662244357444,
+              "effective": 1.0,
+              "evaluated_formulas": 18,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 18,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Eyes Closed",
+          "reason": "not_present",
+          "status": "UNSUPPORTED"
+        },
+        {
+          "name": "HS Sanny Shy",
+          "samples": [
+            {
+              "displacement_m": 0.00462758462190884,
+              "effective": 0.5,
+              "evaluated_formulas": 456,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.009255175222781558,
+              "effective": 1.0,
+              "evaluated_formulas": 456,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 456,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Flex Quad Left",
+          "samples": [
+            {
+              "displacement_m": 0.0023220003080970547,
+              "effective": 0.5,
+              "evaluated_formulas": 0,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.004643981651425735,
+              "effective": 1.0,
+              "evaluated_formulas": 0,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 0,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Ren Yao",
+          "samples": [
+            {
+              "displacement_m": 0.01706486693932176,
+              "effective": 0.5,
+              "evaluated_formulas": 974,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.03412973943620084,
+              "effective": 1.0,
+              "evaluated_formulas": 974,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 974,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "BGM Ava",
+          "samples": [
+            {
+              "displacement_m": 0.11352370648695174,
+              "effective": 0.5,
+              "evaluated_formulas": 1381,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.22704737570637015,
+              "effective": 1.0,
+              "evaluated_formulas": 1381,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 1381,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "BGM Big Girl Base",
+          "samples": [
+            {
+              "displacement_m": 0.06301046460909217,
+              "effective": 0.5,
+              "evaluated_formulas": 540,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.1260209341797647,
+              "effective": 1.0,
+              "evaluated_formulas": 540,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 540,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "AW - Yuki Teen FBM",
+          "samples": [
+            {
+              "displacement_m": 0.021703704844119407,
+              "effective": 0.5,
+              "evaluated_formulas": 4130,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.043241117838152834,
+              "effective": 1.0,
+              "evaluated_formulas": 4130,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 4130,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Mariko",
+          "samples": [
+            {
+              "displacement_m": 0.02750951093664765,
+              "effective": 0.5,
+              "evaluated_formulas": 2041,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.05501894583835409,
+              "effective": 1.0,
+              "evaluated_formulas": 2041,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 2041,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "L All Nails Length",
+          "samples": [
+            {
+              "displacement_m": 0.004151346671363156,
+              "effective": 0.5,
+              "evaluated_formulas": 5,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.008302680811282086,
+              "effective": 1.0,
+              "evaluated_formulas": 5,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 5,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        },
+        {
+          "name": "Eye Blink",
+          "samples": [
+            {
+              "displacement_m": 0.006913516620466611,
+              "effective": 0.5,
+              "evaluated_formulas": 123,
+              "weight": 0.5
+            },
+            {
+              "displacement_m": 0.013631681711113307,
+              "effective": 1.0,
+              "evaluated_formulas": 123,
+              "weight": 1.0
+            },
+            {
+              "displacement_m": 0.0,
+              "effective": 0.0,
+              "evaluated_formulas": 123,
+              "weight": 0.0
+            }
+          ],
+          "status": "PASS"
+        }
+      ],
+      "repair_methods": {
+        "declared_asset_uri": 192,
+        "same_directory_unique_id": 39
+      },
+      "remaining_reasons": {
+        "公式引用缺失、被本代覆盖或不支持的属性": 1247,
+        "包含 HD 数据，尚未支持完整形态": 414,
+        "没有顶点差值或可求值的依赖输出": 69,
+        "资产将此参数标为锁定": 193,
+        "当前参数面板尚未支持指向骨骼属性的别名": 16,
+        "依赖参数不可用": 12,
+        "Morph 目标顶点数不匹配": 8,
+        "别名目标缺失、被本代覆盖或不能唯一解析": 6
+      },
+      "reason_transitions": [
+        {
+          "from": "公式引用缺失、被本代覆盖或不支持的属性",
+          "to": "公式引用缺失、被本代覆盖或不支持的属性",
+          "count": 1247
+        },
+        {
+          "from": "包含 HD 数据，尚未支持完整形态",
+          "to": "包含 HD 数据，尚未支持完整形态",
+          "count": 377
+        },
+        {
+          "from": "公式引用缺失、被本代覆盖或不支持的属性",
+          "to": "EDITABLE",
+          "count": 36
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "EDITABLE",
+          "count": 419
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "没有顶点差值或可求值的依赖输出",
+          "count": 60
+        },
+        {
+          "from": "没有顶点差值或可求值的依赖输出",
+          "to": "EDITABLE",
+          "count": 64
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "包含 HD 数据，尚未支持完整形态",
+          "count": 37
+        },
+        {
+          "from": "资产将此参数标为锁定",
+          "to": "资产将此参数标为锁定",
+          "count": 193
+        },
+        {
+          "from": "当前参数面板尚未支持指向骨骼属性的别名",
+          "to": "当前参数面板尚未支持指向骨骼属性的别名",
+          "count": 16
+        },
+        {
+          "from": "Morph 绑定到节点，几何目标尚未验证",
+          "to": "EDITABLE",
+          "count": 1
+        },
+        {
+          "from": "没有顶点差值或可求值的依赖输出",
+          "to": "没有顶点差值或可求值的依赖输出",
+          "count": 9
+        },
+        {
+          "from": "没有顶点差值或可求值的依赖输出",
+          "to": "依赖参数不可用",
+          "count": 12
+        },
+        {
+          "from": "Morph 目标顶点数不匹配",
+          "to": "Morph 目标顶点数不匹配",
+          "count": 8
+        },
+        {
+          "from": "别名目标缺失、被本代覆盖或不能唯一解析",
+          "to": "别名目标缺失、被本代覆盖或不能唯一解析",
+          "count": 6
+        },
+        {
+          "from": "别名目标缺失、被本代覆盖或不能唯一解析",
+          "to": "EDITABLE",
+          "count": 94
+        }
+      ]
+    }
+  },
+  "reference": {
+    "status": "PASS",
+    "cases": 30,
+    "max_vertex_error_m": 6.193751184600006e-07,
+    "max_formula_channel_error": 8.358099146121845e-08,
+    "scope": "raw direct-controller formulas plus active-morph weights and default-controller contributions; node-scale propagation; DSF morph accumulation and two-phase DQS with evaluated channels; not a full independent ERC graph or DAZ Studio Golden",
+    "sensitivity_checks": [
+      {
+        "case": "g8/AW - Yuki Teen FBM",
+        "correct_error": 7.53088995608664e-08,
+        "perturbed_error": 0.010000018516767017,
+        "status": "PASS"
+      },
+      {
+        "case": "g81/CRTLHSSannyShy",
+        "correct_error": 4.285485832866698e-08,
+        "perturbed_error": 0.010000015429687537,
+        "status": "PASS"
+      }
+    ]
+  },
+  "editor": {
+    "status": "PASS",
+    "monitor": "VG279QL1A",
+    "window": [
+      2729,
+      55,
+      1580,
+      920
+    ],
+    "parameter_checks": [
+      {
+        "displacement_m": 0.017237239857253246,
+        "effective": 0.5,
+        "name": "Ren Yao",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.11467039228727302,
+        "effective": 0.5,
+        "name": "BGM Ava",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.06364693577399881,
+        "effective": 0.5,
+        "name": "BGM Big Girl Base",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.021731419332273287,
+        "effective": 0.5,
+        "name": "AW - Yuki Teen FBM",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.027787348680479315,
+        "effective": 0.5,
+        "name": "Mariko",
+        "status": "PASS"
+      },
+      {
+        "displacement_m": 0.004193275858235696,
+        "effective": 0.5,
+        "name": "L All Nails Length",
+        "status": "PASS"
+      }
+    ],
+    "geometry_updates": 12,
+    "mesh_creations": 2
+  },
+  "golden": "DAZ_STUDIO_NOT_RUN",
+  "source_hashes": {
+    "src\\daz\\formulas.cpp": "67aa8de1835e9370d84f14971c2261e7d91323609bed88c4e199eb460cb17a4b",
+    "src\\daz\\formulas.h": "73aa6c2c23fcbc2ba3aa58826f71588f2a021e57a0ecb548b99b28274582eacc",
+    "src\\daz\\loader.cpp": "c4be74f80e91ba54afb3adf2e672298fdfe4c7906c2b40e777c7a66d5ceb103e",
+    "src\\daz\\loader.h": "3df090b852e505c032dfe1d25de3f58af48f61f0daf477ff2e7b7c949faf153d",
+    "src\\daz\\morphs.cpp": "9cac7939a4f57fa0fe4efe462e905b3892fd72213492f7744a7c96b991564914",
+    "src\\daz\\morphs.h": "547cc73a7270d17616cabc8139a7be7ae5e0052446510851b3ae8722a1954d0a",
+    "src\\daz\\pose.cpp": "a9990801ba93708fff427e5bd11da8fe95fe5db23610f427c7e6e81c21cc2167",
+    "src\\daz\\pose.h": "acb7c6f67eea1b0113371c949a79fb1fd1ec74a98eeacb1d4ce41c53fece585e",
+    "src\\daz\\skeleton.cpp": "16c1414df74a0b267d5bbdd02a66683710f4e504f6f28130160d4bab679bc338",
+    "src\\daz\\skeleton.h": "5aad2bed580e1ba412ee3e1ef28e8cd0d21b6936b2ec3ece619e081f4c5f4bd3",
+    "src\\editor\\main.cpp": "53b4dc2440bfecbd035a6e74c3bd4f262c52db9c32f03ea4d269bcba5b0e700f",
+    "src\\editor\\parameters.cpp": "33a814e5f81024ffe51ba4947dc3e792382fc336e32b2cc9d6ed9cb6aed6e309",
+    "src\\editor\\parameters.h": "02d1ab4803c6f10f66615aa0b2b5f64b1755fc3f37be1080b9030e514b8a9055",
+    "src\\editor\\project.cpp": "8ae3973b4d2087597c42b7512f052208a42f89762108ced7ada030fa75c2362f",
+    "src\\editor\\project.h": "b4435e745cff4d492a884b6b93c19d1012a1b9232a345b6e81ce3bafa40aaca6",
+    "src\\editor\\renderer.cpp": "bda4a7809ac39b13b5c72951b841d1dc5b43142fda6e9ad0a01364eb318376d6",
+    "src\\editor\\renderer.h": "61cfa6d435d342337af9542ffcfb9084de7609deebd3292b832d62c380d650e0",
+    "src\\runtime\\deformation.cpp": "9e0a1602516f52d6a71d85313d185656443c68e80fd62ae21f6a31aeca6d6301",
+    "src\\runtime\\deformation.h": "271e19476fb6c6c50093dd4820e20e15293bfbbefb9d3b38529c91c380a0df7d",
+    "src\\runtime\\formula.cpp": "1442590d164a5a99cfac7b4101ed339ec375f0edcc6ceedbdad28f3da77248c7",
+    "src\\runtime\\formula.h": "bf28109818e166c0e6e1b88f598a32ce52a6762ad05a78d6274aaf6bd25a31b0",
+    "src\\runtime\\morph.cpp": "e462881f5f14692b0e4d2caaf42a5bdc2ed3dbc4446cf9b2cd2c30eb3b1467af",
+    "src\\runtime\\morph.h": "63331fddf403b4e30e4c2affb0309f67cfdae70daf06a33f7329f9ffbf1a5678",
+    "src\\runtime\\skeleton.cpp": "6cb98bdfff902b93ad64578b20b7d70fea621865e02b8cf799184d8066c3e9af",
+    "src\\runtime\\skeleton.h": "e772ffbc6e92dc0fcbad986eedefefcebdb88f03c62b44e0d5ce95c81be084d0",
+    "tools\\reference\\formula_reference.py": "90f17027b996054cdb76745a92f9fc7346ef9e9a9a2a68e862105026176b8e8c",
+    "tests\\camera_mailbox.cpp": "574beceafba3fd6e113d46352f289d80decaa4f5900f1efc151913d7ffed271d",
+    "tests\\formula_runtime.cpp": "618edcd1ed9d01698605a58e3e336b7ebbb0145adf61a1ff1c4e1b9550fb19ba",
+    "tests\\morph_catalog.cpp": "5fc1d6061f8e0cdb60fec07c93eda7bdbb13fc508b3601caf08b20dab3945cb3",
+    "tests\\morph_compatibility.cpp": "1d84a87014312358c30a13686fb59f2273b7e1862ba56d28b36ca81d5abc162a",
+    "tests\\morph_runtime.cpp": "9d02de64ea10180ace92082526dab11118820680178323cf139ff3ae52a68ba2",
+    "tests\\project_settings.cpp": "2d436e59df481dbe4eaadd8a2417dbd45432ca8df6ee8248b20a66a17a422b05",
+    "tests\\runtime_checks.py": "a747f46372adf5b90c462f41b2cc4fb593722073d312e1a86d4ad64fd3f4a2f8",
+    "tests\\scene_ir.cpp": "750d18d38e551fe4c13266a246389fd4c24d09b2a4684b5f8941b9cea73fad36",
+    "tests\\skeleton_pose.cpp": "d72f7f4ed71f0a85808f571b33d0c1909c5453674cf52114c2037daad5196792"
+  },
+  "artifact_hashes": {
+    "artifacts\\spec007-compatibility\\final\\ctest.log": "9a3d3fca8562c2f93b56221e2a3182c6a44ad01de7971c40028c1bc44d46633f",
+    "artifacts\\spec007-compatibility\\final\\reference-report.initial.json": "b93c2a160affa236359edb183db891ceac8f83f99af9c79fe991ff80f4bee591",
+    "artifacts\\spec007-compatibility\\final\\reference-report.json": "a3298db28883eb891c9ccf5ee9fa3f171b7b24ebc38c5c7b63a8be510298e83a",
+    "artifacts\\spec007-compatibility\\final\\editor\\editor-check.json": "53846cb1fff6f583be776772b502d5736336a5e7ade05353d4b16273a870344a",
+    "artifacts\\spec007-compatibility\\final\\editor\\formula-report.json": "5ed79a04fc3a90a14fc490a7dbbf7a515eb4e1294d7fd63761d4648f14eececc",
+    "artifacts\\spec007-compatibility\\final\\editor\\morph-catalog.json": "8758fc8476fac87ce69d750f659dc33b2bf2e4011daac0db755d3cd15fa8dfeb",
+    "artifacts\\spec007-compatibility\\final\\g8\\formula-report.json": "5ed79a04fc3a90a14fc490a7dbbf7a515eb4e1294d7fd63761d4648f14eececc",
+    "artifacts\\spec007-compatibility\\final\\g8\\morph-catalog.json": "e75e1fb89b27ecd8546acf46c8f5461a3efbe092eb2043a78640a62055dd3ad7",
+    "artifacts\\spec007-compatibility\\final\\g8\\regression-report.json": "40e6e4202184f6887ab10e4298f718ae5d07faaec23bd29defa370c478859a36",
+    "artifacts\\spec007-compatibility\\final\\g8\\remaining-parameters.json": "8a6b607d0bd2fd3f0721018d0c0c835c198d9e7db9634b5cab8a52bb0854d6f4",
+    "artifacts\\spec007-compatibility\\final\\g81\\formula-report.json": "a01ab2246bec4fcd908101eba55b8666f480eff5ba9215259ce745db92c87371",
+    "artifacts\\spec007-compatibility\\final\\g81\\morph-catalog.json": "6601538744a9ba2386b93778aeec52526c996147475d166510857f062446c240",
+    "artifacts\\spec007-compatibility\\final\\g81\\regression-report.json": "50992294c02bcfdf824b14ec70a8e8f5272ebaeef11a51fe4d84b4991ef509d6",
+    "artifacts\\spec007-compatibility\\final\\g81\\remaining-parameters.json": "8be531a1363ad3faeb35dafbf9e0102538d70d9730eb4d849b2b979a668b86f6"
+  }
+}

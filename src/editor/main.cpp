@@ -63,6 +63,7 @@ class Editor final:public QMainWindow {
   std::filesystem::path pose_file_;
   bool pose_test_=false,frame_pending_=false;
   bool formula_test_=false;
+  std::vector<std::string> formula_names_={"Arms Length","Chest Scale","Eyes Closed","HS Sanny Shy","Flex Quad Left"};
   uint64_t formula_ui_revision_=0;
   size_t formula_case_=0;
   uint64_t test_formula_evaluations_=0;
@@ -159,7 +160,7 @@ class Editor final:public QMainWindow {
       {"scope","selected-object-morph-transform-reset-camera-no-morph-evaluation"}};
     if(!reload_file_.empty()) report["scope"]="background-scene-replacement-generation-isolation";
     if(pose_test_) report["scope"]="pose-apply-reset-camera-no-skin-evaluation";
-    if(formula_test_) {report["scope"]="005-parameter-slider-regression-with-ERC-JCM";report["parameter_checks"]=parameter_checks_;}
+    if(formula_test_) {report["scope"]="parameter-slider-regression-with-ERC-JCM";report["parameter_checks"]=parameter_checks_;}
     report["project_file"]=project_.file.toUtf8().toStdString();report["content_roots"]=nlohmann::json::array();
     for(const auto &root:project_.content_roots) report["content_roots"].push_back(root.toUtf8().toStdString());
     report["named_parameters"]=nlohmann::json::array();
@@ -180,13 +181,13 @@ class Editor final:public QMainWindow {
     if(QDateTime::currentMSecsSinceEpoch()-test_started_>(formula_test_?360000:180000)) {finish_test(false,"等待编辑器验证超时");return;}
     if(!document_ || state.generation!=document_->generation || state.presented_revision!=snapshot_.revision || state.presented_epoch!=state.requested_epoch || state.frames==0 || state.samples<8) return;
     if(formula_test_) {
-      const std::vector<std::string> names={"Arms Length","Chest Scale","Eyes Closed","HS Sanny Shy","Flex Quad Left"};
+      const auto &names=formula_names_;
       if(test_stage_==0) {
         test_initial_displacement_=state.max_displacement;const auto &morphs=document_->catalog.targets[0].morphs;
         auto found=std::find_if(morphs.begin(),morphs.end(),[&](const auto &m) {return m.label==names[formula_case_]&&m.kind!="alias"&&m.unsupported.empty();});
         if(found==morphs.end()) {finish_test(false,"指定参数未启用："+names[formula_case_]);return;}
         test_morph_=size_t(found-morphs.begin());parameters_->query(text(found->label));parameters_->select_parameter(test_morph_);
-        if(formula_case_==2||formula_case_==3) {
+        if(names[formula_case_]=="Eyes Closed"||names[formula_case_]=="HS Sanny Shy") {
           for(const auto &skin:document_->skeletons.skins) if(skin.instance==document_->catalog.targets[0].instance) for(const auto &joint:skin.joints) if(joint.id=="head") {
             const auto p=joint.center_cm;const auto c=document_->loaded.scene.instances[skin.instance].transform.point({p.x*.01f,-p.z*.01f,p.y*.01f+.08f});
             ir::Bounds face;face.add({c.x-.18f,c.y-.18f,c.z-.22f});face.add({c.x+.18f,c.y+.18f,c.z+.22f});renderer_->frame(face);
@@ -257,6 +258,7 @@ class Editor final:public QMainWindow {
     }
   }
 public:
+  void test_parameters(const QStringList &names) {if(names.empty()) return;formula_names_.clear();for(const auto &name:names) formula_names_.push_back(name.toUtf8().toStdString());}
   Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
     setWindowTitle(QStringLiteral("DazFastViewer · 场景与形态编辑器"));setAttribute(Qt::WA_ShowWithoutActivating);
     setDockOptions(AnimatedDocks|AllowNestedDocks|AllowTabbedDocks);
@@ -383,6 +385,7 @@ int main(int argc,char **argv) {
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
+  parser.addOption({"test-parameter",QStringLiteral("指定滑块验证参数，可重复，与 --formula-test 配合"),"name"});
   parser.addOption({"reload-test",QStringLiteral("验证后台场景替换后退出"),"file"});parser.process(app);
   const auto output=parser.isSet("output")?file_path(parser.value("output")):std::filesystem::path("artifacts")/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
   std::filesystem::create_directories(output);
@@ -393,6 +396,7 @@ int main(int argc,char **argv) {
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
     Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"));
+    editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

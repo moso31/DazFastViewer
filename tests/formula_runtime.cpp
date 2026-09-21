@@ -6,6 +6,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <map>
 
 using namespace dfv;
 using namespace dfv::runtime;
@@ -68,7 +69,7 @@ static void export_reference(const std::filesystem::path &path,const daz::Loaded
     {"general_scale",p.general_scale},{"center_offset",vec(p.center_offset_cm)},{"end_offset",vec(p.end_offset_cm)},{"orientation_offset",vec(p.orientation_offset_degrees)}});}
   const auto mesh=loaded.scene.instances[target.instance].mesh;for(const auto p:loaded.scene.meshes[mesh].positions) out["positions"].push_back(vec(p));std::ofstream(path)<<out.dump();
 }
-static void actual(const std::filesystem::path &file,const std::filesystem::path &output,const std::filesystem::path &pose_folder,const std::vector<std::filesystem::path> &roots) {
+static void actual(const std::filesystem::path &file,const std::filesystem::path &output,const std::filesystem::path &pose_folder,const std::vector<std::filesystem::path> &roots,const std::filesystem::path &baseline) {
   std::filesystem::create_directories(output);auto loaded=daz::load(file,{roots,false});auto catalog=daz::discover_morphs(loaded,roots);auto skins=daz::load_skeletons(loaded);auto formulas=daz::enable_formulas(catalog,skins);
   std::ofstream(output/"formula-report.json")<<formulas.report.dump(2);std::ofstream(output/"morph-catalog.json")<<catalog.report.dump(2);
   const auto &target=catalog.targets.at(0);const auto &skin=skins.skins.at(0);std::vector<Properties> values;
@@ -79,7 +80,7 @@ static void actual(const std::filesystem::path &file,const std::filesystem::path
   const auto mesh=loaded.scene.instances[target.instance].mesh;const auto base=loaded.scene.meshes[mesh].positions;
   Json report={{"formula_catalog",formulas.report},{"parameters",Json::array()},{"poses",Json::array()},{"golden","DAZ_STUDIO_NOT_RUN"}};
   bool legacy=file.filename().wstring().find(L"8.1")==std::wstring::npos;
-  std::vector<std::string> names={"Arms Length","Chest Scale","Eyes Closed","HS Sanny Shy","Flex Quad Left"};if(!legacy) names.push_back("Eye Blink");
+  std::vector<std::string> names={"Arms Length","Chest Scale","Eyes Closed","HS Sanny Shy","Flex Quad Left","Ren Yao","BGM Ava","BGM Big Girl Base","AW - Yuki Teen FBM","Mariko","L All Nails Length"};if(!legacy) names.push_back("Eye Blink");
   for(const auto &name:names) {
     const auto m=parameter(target,name);if(m==target.morphs.size()||!target.morphs[m].unsupported.empty()) {
       report["parameters"].push_back({{"name",name},{"status","UNSUPPORTED"},{"reason",m==target.morphs.size()?"not_present":target.morphs[m].unsupported}});
@@ -114,12 +115,38 @@ static void actual(const std::filesystem::path &file,const std::filesystem::path
     auto applied=daz::apply_pose(daz::read_pose(files[0]),skin,original_pose[0],target,original[0]);values=original;values[0]=applied.properties;poses=original_pose;poses[0]=applied.joints;
     const auto arm=parameter(target,"Arms Length");set_parameter(target,values[0],arm,.5f);runtime.evaluate(values,poses);export_reference(output/"scaled-pose.deformation.json",loaded,target,skin,runtime,&target.morphs[arm],.5f);
     values=original;poses=original_pose;runtime.evaluate(values,poses);
+    for(const auto &name:{"Ren Yao","BGM Ava","BGM Big Girl Base"}) {
+      const auto index=parameter(target,name);values[0]=applied.properties;poses[0]=applied.joints;set_parameter(target,values[0],index,.5f);runtime.evaluate(values,poses);
+      export_reference(output/(target.morphs[index].channel_id+"-pose.deformation.json"),loaded,target,skin,runtime,&target.morphs[index],.5f);
+      values=original;poses=original_pose;runtime.evaluate(values,poses);require(difference(base,loaded.scene.meshes[mesh].positions)<1e-6,"体型与姿势组合恢复漂移");
+    }
   }
-  report["status"]="PASS";report["pose_count"]=files.size();report["formula_evaluations"]=runtime.formula_stats().expressions;
-  std::ofstream(output/"regression-report.json")<<report.dump(2);std::cout<<"Formula / 005 parameter regression / alias / JCM / poses: PASS\n";
+  size_t rejected=0;
+  if(!baseline.empty()) {
+    const auto previous=Json::parse(std::ifstream(baseline));std::map<std::string,std::string> disabled;
+    for(const auto &m:previous.at("targets").at(0).at("morphs")) if(!m.at("unsupported").get<std::string>().empty()) disabled[m.at("id")]=m.at("unsupported");
+    report["new_parameters"]=Json::array();
+    for(size_t m=0;m<target.morphs.size();++m) {
+      const auto &p=target.morphs[m];if(!p.unsupported.empty()||!disabled.contains(p.id)) continue;
+      Json item={{"id",p.id},{"name",p.label},{"previous_reason",disabled[p.id]},{"samples",Json::array()},{"status","PASS"}};
+      for(const float candidate:{.5f,1.f}) {
+        const float input=std::clamp(candidate,p.minimum,p.maximum);
+        try {set_parameter(target,values[0],m,input);runtime.evaluate(values,poses);
+          const auto distance=difference(base,loaded.scene.meshes[mesh].positions);require(std::isfinite(distance),"参数产生非有限位移");
+          item["samples"].push_back({{"input",input},{"effective",runtime.effective()[0][m]},{"displacement_m",distance}});
+        } catch(const std::exception &e) {item["status"]="REJECTED";item["error"]=e.what();++rejected;}
+        values=original;poses=original_pose;runtime.evaluate(values,poses);require(difference(base,loaded.scene.meshes[mesh].positions)<1e-6,"新增参数恢复漂移");
+      }
+      report["new_parameters"].push_back(item);
+    }
+    report["new_parameter_count"]=report["new_parameters"].size();report["rejected_samples"]=rejected;
+  }
+  report["status"]=rejected?"FAIL":"PASS";report["pose_count"]=files.size();report["formula_evaluations"]=runtime.formula_stats().expressions;
+  std::ofstream(output/"regression-report.json")<<report.dump(2);require(rejected==0,"部分新增参数求值被拒绝，见批量报告");std::cout<<"Formula / parameter compatibility / alias / JCM / poses: PASS\n";
 }
 int wmain(int argc,wchar_t **argv) {
   try {if(argc==1) {unit();std::cout<<"Formula graph / operations / splines / dirty propagation / cycles / scaled DQS: PASS\n";}
-    else {if(argc<4) throw std::runtime_error("用法：FormulaRuntimeTest <角色.duf> <输出目录> <姿势目录> [内容库...]");std::vector<std::filesystem::path> roots;for(int i=4;i<argc;++i) roots.emplace_back(argv[i]);actual(argv[1],argv[2],argv[3],roots);}return 0;
+    else {if(argc<4) throw std::runtime_error("用法：FormulaRuntimeTest <角色.duf> <输出目录> <姿势目录> [内容库...] [--baseline 原参数目录.json]");std::vector<std::filesystem::path> roots;std::filesystem::path baseline;
+      for(int i=4;i<argc;++i) {if(std::wstring(argv[i])==L"--baseline") {if(++i>=argc) throw std::runtime_error("缺少基线目录文件");baseline=argv[i];}else roots.emplace_back(argv[i]);}actual(argv[1],argv[2],argv[3],roots,baseline);}return 0;
   } catch(const std::exception &e) {std::cerr<<e.what()<<'\n';return 1;}
 }

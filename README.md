@@ -8,7 +8,9 @@
 
 ## Formula、ERC、JCM 与参数复测（Spec 007）
 
-006 已中文提交为 `aa8fbc7`。007 当前实施范围已完成并部署，通过七项工程检查、G8 / G8.1 各 40 个姿势、独立数值对照与副屏滑块验证。G8 的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad Left 已启用且产生实际变形；默认可见可编辑条目从 720 增至 2,687。G8.1 使用新版 **Eye Blink** 闭眼，旧控制器空覆盖继续保留。
+**最新兼容性修复已部署。** 007 基线已中文提交为 `da5d4f8`，随后两批修复使 G8 新增 476 个可编辑条目、G8.1 新增 614 个；本轮追加恢复各 122 个。Ren Yao、BGM Ava、BGM Big Girl Base、Yuki、Mariko 和 EasyFeet 代表项通过实际变形与副屏操作。完整计数、条件型参数和仍受阻原因见 [兼容性报告](specs/007-erc-jcm/compatibility-report.md)。本次按用户授权，将修复与未生效参数清单以中文归档到本地 Git。
+
+006 已中文提交为 `aa8fbc7`。007 归档时通过七项工程检查、G8 / G8.1 各 40 个姿势、独立数值对照与副屏滑块验证。G8 的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad Left 已启用且产生实际变形；当时默认可见可编辑条目从 720 增至 2,687，后续兼容性计数以上述最新报告为准。G8.1 使用新版 **Eye Blink** 闭眼，旧控制器空覆盖继续保留。
 
 在工程目录运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sample Genesis8`，选中角色后在右侧搜索参数并拖动滑块。面板区分手动输入与最终 ERC 值；JCM 随姿势变化自动求值。详情见 [007 执行报告](specs/007-erc-jcm/execution-report.md)与[预览说明](specs/007-erc-jcm/tests.md)。HD、未解析依赖及其他限制仍显示具体禁用原因。
 

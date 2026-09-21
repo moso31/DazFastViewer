@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <limits>
 #include <set>
 
 namespace dfv::daz {
@@ -40,10 +41,25 @@ static fs::path relative_to_roots(const fs::path &path,const std::vector<fs::pat
   for(const auto &root:roots) {const auto rel=path.lexically_relative(root);if(!rel.empty() && *rel.begin()!="..") return rel;}
   return {};
 }
-struct Asset {fs::path file;std::string geometry;std::set<std::string> nodes;std::vector<std::string> roots;};
+// 逻辑资产地址只在已验证属于当前角色的目录中建立索引，不作为磁盘绝对路径使用。
+static std::string asset_uri(std::string uri) {
+  uri=decode_uri(uri);
+  if(!uri.starts_with('/')||uri.find_first_of(":#?\\")!=std::string::npos) return {};
+  const auto path=fs::u8path(uri.substr(1)).lexically_normal();
+  if(path.empty()||path.is_absolute()||path.has_root_name()||*path.begin()=="..") return {};
+  return "/"+lower(path_string(path));
+}
+struct Asset {fs::path file;std::string geometry;std::set<std::string> nodes;std::vector<std::string> roots;std::set<std::string> geometry_nodes;};
 static Asset asset(const fs::path &file,const std::string &geometry) {
   Asset out{file,geometry,{}};const auto doc=read_document_file(file);
   for(const auto &n:doc.value("node_library",J::array())) {out.nodes.insert(n.at("id").get<std::string>());if(n.value("type","")=="figure"||!n.contains("parent")) out.roots.push_back(n.at("id").get<std::string>());}
+  // SkinBinding 同时给出角色和几何身份；只接受所属资产内明确关联的节点。
+  std::map<std::string,std::set<std::string>> node_geometries;
+  for(const auto &m:doc.value("modifier_library",J::array())) if(m.contains("skin")) {
+    const auto g=reference(m.at("skin").value("geometry","")),n=reference(m.at("skin").value("node",""));
+    if(n.file.empty()&&out.nodes.contains(n.id)) node_geometries[n.id].insert(g.file+"#"+g.id);
+  }
+  for(const auto &[node,geometries]:node_geometries) if(geometries.size()==1&&geometries.contains("#"+geometry)) out.geometry_nodes.insert(node);
   return out;
 }
 MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots) {
@@ -67,6 +83,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
     runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;
     FormulaSource formula_source;
+    std::map<std::string,std::pair<std::string,fs::path>> missing_addresses;
     std::vector<Asset> allowed{asset(object.geometry_file,object.geometry_id)};
     const auto family=lower(object.geometry_file.parent_path().filename().string());
     if(family=="female 8_1" || family=="male 8_1") {
@@ -118,10 +135,12 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     std::vector<fs::path> queue;std::set<std::string> queued,empty_files,ids;
     for(const auto &[relative,path]:files) if(queued.insert(key(path)).second) queue.push_back(path);
     std::vector<std::set<std::string>> dependencies;
+    std::map<std::string,std::string> declared_assets;
     for(size_t file_index=0;file_index<queue.size();++file_index) {
       const auto path=queue[file_index];
       try {
         const auto doc=read_document_file(path);out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+1;
+        declared_assets[key(path)]=asset_uri(doc.value("asset_info",J::object()).value("id",""));
         if(!doc.contains("modifier_library") || doc["modifier_library"].empty()) {
           skipped("empty_override");empty_files.insert(key(path));out.report["empty_overrides"].push_back(path_string(path));
         }
@@ -129,21 +148,29 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           const auto &channel=modifier.value("channel",J::object());const auto type=channel.value("type","");
           if(type.empty() || modifier.contains("skin")) {skipped("non_parameter");continue;}
           const auto parent=reference(modifier.value("parent",""));const auto parent_file=resolve(parent.file,path,roots);
-          bool geometry_parent=false,node_parent=false;
+          bool geometry_parent=false,node_parent=false,verified_node=false;
           for(const auto &a:allowed) if(!parent_file.empty() && key(parent_file)==key(a.file)) {
-            geometry_parent|=parent.id==a.geometry;node_parent|=a.nodes.contains(parent.id);
+            geometry_parent|=parent.id==a.geometry;node_parent|=a.nodes.contains(parent.id);verified_node|=a.geometry_nodes.contains(parent.id);
           }
           if(!geometry_parent && !node_parent) {skipped("other_target");continue;}
           const auto source=modifier.value("morph",J::object());
           std::string geometry_reason;
-          if(source.contains("vertex_count") && source.at("vertex_count").get<size_t>()!=mesh.positions.size()) geometry_reason="Morph 目标顶点数不匹配";
-          else if(source.contains("deltas") && !geometry_parent) geometry_reason="Morph 绑定到节点，几何目标尚未验证";
+          int64_t vertex_count=0;
+          if(source.contains("vertex_count")) {
+            const auto &count=source.at("vertex_count");
+            if(!count.is_number_integer()||(count.is_number_unsigned()&&count.get<uint64_t>()>uint64_t(std::numeric_limits<int64_t>::max()))) throw std::runtime_error("Morph 顶点总数必须为有效整数");
+            vertex_count=count.get<int64_t>();
+            if(vertex_count < -1) geometry_reason="Morph 顶点总数为不支持的负值";
+            else if(vertex_count>=0&&uint64_t(vertex_count)!=mesh.positions.size()) geometry_reason="Morph 目标顶点数不匹配";
+          }
+          if(geometry_reason.empty()&&source.contains("deltas")&&!geometry_parent&&!verified_node) geometry_reason="Morph 绑定到节点，几何目标尚未验证";
           runtime::Morph morph;const auto id=modifier.at("id").get<std::string>();
           morph.id=key(path)+"#"+id;if(!ids.insert(morph.id).second) throw std::runtime_error("同一文件存在重复参数 ID: "+id);
           morph.source=path_string(path);morph.label=channel.value("label",modifier.value("label",id));morph.channel_id=id;morph.owner=parent.id;
           morph.channel_name=modifier.value("name",channel.value("name",id));
           morph.value_type=type;morph.locked=channel.value("locked",false);
-          morph.source_vertex_count=source.value("vertex_count",size_t(0));
+          morph.source_vertex_count=vertex_count;
+          morph.geometry_validation=geometry_parent?"geometry_uri":verified_node?"skin_binding_node":"unverified_node";
           if(source.contains("deltas")) morph.source_offset_count=source["deltas"].value("count",size_t(0));
           morph.group=modifier.value("group","");morph.minimum=number(channel,"min",0);morph.maximum=number(channel,"max",1);
           morph.initial=number(channel,"current_value",number(channel,"value",0));morph.step=number(channel,"step_size",.01f);
@@ -171,6 +198,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
             std::set<uint32_t> seen;
             for(const auto &row:deltas.at("values")) {
               if(row.size()!=4) throw std::runtime_error("Morph 差值必须为顶点索引与 XYZ");
+              if(!row[0].is_number_integer()||row[0].get<uint64_t>()>=mesh.positions.size()) throw std::runtime_error("Morph 差值顶点索引越界或不是整数");
               const auto vertex=row[0].get<uint32_t>();const float x=row[1].get<float>(),y=row[2].get<float>(),z=row[3].get<float>();
               if(vertex>=mesh.positions.size()||!seen.insert(vertex).second||!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)) throw std::runtime_error("Morph 差值无效");
               morph.offsets.push_back({vertex,{x*.01f,-z*.01f,y*.01f}});
@@ -186,7 +214,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           if(!geometry_reason.empty()) {morph.kind="unverified_sparse";morph.intrinsic_error=morph.unsupported=geometry_reason;}
           auto formula_address=[&](const std::string &uri) {
             const auto ref=reference(uri);const auto file=resolve(ref.file,path,roots);
-            if(file.empty()) return std::string("$missing/")+decode_uri(uri);
+            if(file.empty()) {const auto marker="$missing/"+key(path)+"|"+decode_uri(uri);missing_addresses[marker]={uri,path};return marker;}
             if(shadowed.contains(key(file))) return std::string("$overridden/")+decode_uri(uri);
             for(const auto &a:allowed) if((ref.file.empty()||key(file)==key(a.file))&&a.nodes.contains(ref.id)) return "$node/"+ref.id+"?"+ref.property;
             return (ref.file.empty()?"$local/":"")+key(file)+"#"+ref.id+"?"+ref.property;
@@ -206,16 +234,57 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       } catch(const std::exception &e) {out.report["diagnostics"].push_back({{"file",path_string(path)},{"reason",e.what()}});}
     }
     std::map<std::string,size_t> by_asset;std::map<std::string,std::vector<size_t>> by_id;
-    for(size_t i=0;i<target.morphs.size();++i) {by_asset[target.morphs[i].id]=i;by_id[target.morphs[i].channel_id].push_back(i);}
+    std::map<std::pair<std::string,std::string>,std::vector<size_t>> by_directory;
+    std::map<std::pair<std::string,std::string>,std::vector<size_t>> by_declared_asset;
+    for(size_t i=0;i<target.morphs.size();++i) {
+      const auto &m=target.morphs[i];by_asset[m.id]=i;by_id[m.channel_id].push_back(i);
+      by_directory[{key(fs::u8path(m.source).parent_path()),m.channel_id}].push_back(i);
+      const auto &declared=declared_assets.at(key(fs::u8path(m.source)));
+      if(!declared.empty()) by_declared_asset[{declared,m.channel_id}].push_back(i);
+    }
+    struct Recovered {fs::path file;std::string reason="missing_file";bool repaired=false;std::string method;};
+    std::map<std::pair<fs::path,std::string>,Recovered> recovered;
+    auto recover=[&](const std::string &uri,const fs::path &owner) {
+      const auto cache_key=std::make_pair(owner,uri);if(recovered.contains(cache_key)) return recovered.at(cache_key);
+      const auto ref=reference(uri);Recovered result;result.file=resolve(ref.file,owner,roots);
+      if(!result.file.empty()) {result.reason.clear();if(shadowed.contains(key(result.file))) result.reason="generation_override";else if(empty_files.contains(key(result.file))) result.reason="empty_override";}
+      else if(!ref.file.empty()) {
+        const auto declared=by_declared_asset.find({asset_uri(ref.file),ref.id});
+        if(declared!=by_declared_asset.end()) {
+          if(declared->second.size()!=1) result.reason="ambiguous_asset_uri";
+          else {result.file=fs::u8path(target.morphs[declared->second[0]].source);result.reason.clear();result.repaired=true;result.method="declared_asset_uri";}
+          recovered[cache_key]=result;return result;
+        }
+        const auto relative=fs::u8path(ref.file.starts_with('/')?ref.file.substr(1):ref.file).lexically_normal();
+        if(!relative.is_absolute()&&!relative.has_root_name()&&!relative.empty()&&*relative.begin()!="..") {
+          std::vector<fs::path> directories;if(!ref.file.starts_with('/')) directories.push_back((owner.parent_path()/relative).parent_path());
+          for(const auto &root:roots) directories.push_back((root/relative).parent_path());
+          for(const auto &directory:directories) {
+            const auto found=by_directory.find({key(directory),ref.id});if(found==by_directory.end()) continue;
+            if(found->second.size()!=1) {result.reason="ambiguous_directory_id";break;}
+            result.file=fs::u8path(target.morphs[found->second[0]].source);result.reason.clear();result.repaired=true;result.method="same_directory_unique_id";break;
+          }
+        }
+      }
+      recovered[cache_key]=result;return result;
+    };
+    // 等完整目录建立后才恢复引用，避免目录枚举顺序决定结果；保留空覆盖和同目录歧义。
+    auto repair_symbol=[&](std::string &symbol) {
+      const auto found=missing_addresses.find(symbol);if(found==missing_addresses.end()) return;
+      const auto &[uri,owner]=found->second;const auto ref=reference(uri);const auto match=recover(uri,owner);
+      if(match.repaired) symbol=key(match.file)+"#"+ref.id+"?"+ref.property;
+      else symbol="$"+match.reason+"/"+decode_uri(uri);
+    };
+    for(auto &symbol:formula_source.symbols) repair_symbol(symbol);
+    for(auto &symbol:formula_source.alias_symbols) repair_symbol(symbol);
+    J repairs=J::array();
     J items=J::array();
     for(size_t i=0;i<target.morphs.size();++i) {
       auto &m=target.morphs[i];J unresolved=J::array();size_t nodes=0,parameters=0;
       for(const auto &uri:dependencies[i]) {
-        const auto ref=reference(uri);const auto file=resolve(ref.file,fs::u8path(m.source),roots);std::string reason;
-        if(file.empty()) reason="missing_file";
-        else if(shadowed.contains(key(file))) reason="generation_override";
-        else if(empty_files.contains(key(file))) reason="empty_override";
-        else {
+        const auto ref=reference(uri);const auto match=recover(uri,fs::u8path(m.source));const auto &file=match.file;std::string reason=match.reason;
+        if(match.repaired) {++m.repaired_references;repairs.push_back({{"owner",m.id},{"uri",uri},{"resolved",path_string(file)},{"channel",ref.id},{"method",match.method}});}
+        if(reason.empty()) {
           bool node=false;for(const auto &a:allowed) if((ref.file.empty() || key(file)==key(a.file)) && a.nodes.contains(ref.id)) node=true;
           if(node) {++nodes;continue;}
           if(by_asset.contains(key(file)+"#"+ref.id)) {++parameters;continue;}
@@ -227,12 +296,12 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       m.missing_dependencies=unresolved.size();
       if(!unresolved.empty() && m.unsupported.empty()) m.unsupported="存在未解析的参数依赖";
       items.push_back({{"id",m.id},{"label",m.label},{"group",m.group},{"source",m.source},{"owner",m.owner},{"kind",m.kind},
-        {"channel_id",m.channel_id},{"channel_name",m.channel_name},{"alias_target",m.alias_target},{"formula_count",m.formula_count},{"offsets",m.offsets.size()},
-        {"source_vertex_count",m.source_vertex_count},{"source_offset_count",m.source_offset_count},
+        {"channel_id",m.channel_id},{"channel_name",m.channel_name},{"asset_uri",declared_assets.at(key(fs::u8path(m.source)))},{"alias_target",m.alias_target},{"formula_count",m.formula_count},{"offsets",m.offsets.size()},
+        {"source_vertex_count",m.source_vertex_count},{"source_offset_count",m.source_offset_count},{"geometry_validation",m.geometry_validation},{"repaired_references",m.repaired_references},
         {"unsupported",m.unsupported},{"visible",m.visible},{"auto_follow",m.auto_follow},{"initial",m.initial},{"min",m.minimum},{"max",m.maximum},
         {"dependency_count",dependencies[i].size()},{"node_dependencies",nodes},{"parameter_dependencies",parameters},{"unresolved_dependencies",unresolved}});
     }
-    out.report["targets"].push_back({{"id",target.id},{"label",target.label},{"morphs",items},{"compatible_assets",allowed.size()}});
+    out.report["targets"].push_back({{"id",target.id},{"label",target.label},{"morphs",items},{"compatible_assets",allowed.size()},{"reference_repairs",repairs}});
     out.targets.push_back(std::move(target));
     formula_source.interned.clear();formula_source.interned.rehash(0);out.formulas.push_back(std::move(formula_source));
   }

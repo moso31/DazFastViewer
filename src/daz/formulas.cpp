@@ -125,13 +125,19 @@ FormulaCatalog enable_formulas(MorphCatalog &catalog,const SkinCatalog &skins) {
     for(size_t m=0;m<target.morphs.size();++m) graph.channels[m].error=failures[m];
     for(auto &e:graph.expressions) if(e.owner<failures.size()&&!failures[e.owner].empty()) e.enabled=false;
     graph.prepare();size_t editable=0,visible=0,aliases=0,cycles=0;
+    std::vector<std::string> blocked_outputs(target.morphs.size());
+    for(const auto &e:graph.expressions) if(!e.enabled&&!graph.channels[e.output].error.empty()) {
+      const auto &output=graph.channels[e.output];
+      const auto label=output.binding.property==Property::morph?target.morphs[output.binding.index].label:"骨骼属性";
+      for(const auto input:e.inputs()) if(input<target.morphs.size()&&blocked_outputs[input].empty()) blocked_outputs[input]="依赖参数不可用："+label+"（"+output.error+"）";
+    }
     for(const auto &c:graph.channels) if(c.error=="公式依赖形成循环") ++cycles;
     for(size_t m=0;m<target.morphs.size();++m) {
       auto &p=target.morphs[m];const auto index=graph.morph_channels[m];std::string error=failures[m];
       if(index<0) {if(error.empty()) error="参数没有可求值的目标";}
       else {const auto &c=graph.channels[size_t(index)];if(error.empty()) error=c.error;
         if(p.kind=="alias"&&error.empty()) {p.minimum=float(c.minimum);p.maximum=float(c.maximum);p.clamped=c.clamped;p.initial=float(c.initial);if(c.binding.property==Property::morph) {p.alias_morph=int(c.binding.index);p.step=target.morphs[c.binding.index].step;p.locked=target.morphs[c.binding.index].locked;p.value_type=target.morphs[c.binding.index].value_type;}else error="当前参数面板尚未支持指向骨骼属性的别名";++aliases;}
-        if(error.empty()&&p.kind!="alias"&&p.offsets.empty()&&graph.incoming[m].empty()&&graph.outgoing[m].empty()) error="没有顶点差值或可求值的依赖输出";
+        if(error.empty()&&p.kind!="alias"&&p.offsets.empty()&&graph.incoming[m].empty()&&graph.outgoing[m].empty()) error=blocked_outputs[m].empty()?"没有顶点差值或可求值的依赖输出":blocked_outputs[m];
       }
       p.evaluable=error.empty();p.unsupported=error.empty()&&p.locked?"资产将此参数标为锁定":error;
       if(p.unsupported.empty()) {++editable;if(p.visible) ++visible;}

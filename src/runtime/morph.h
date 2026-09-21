@@ -12,7 +12,10 @@ struct Morph {
   bool evaluable=false,locked=false;
   int alias_morph=-1;
   size_t formula_count=0,missing_dependencies=0;
-  size_t source_vertex_count=0,source_offset_count=0;
+  // 部分商业资源用 -1 表示没有声明目标总数，不能转换成 size_t。
+  int64_t source_vertex_count=0;
+  size_t source_offset_count=0,repaired_references=0;
+  std::string geometry_validation;
   float minimum=0,maximum=1,initial=0,step=.01f;
   bool clamped=true,visible=true,auto_follow=false;
   std::vector<SparseOffset> offsets;
