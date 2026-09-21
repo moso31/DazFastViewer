@@ -1,5 +1,7 @@
 #include "editor/renderer.h"
 #include "viewport/display.h"
+#include "viewport/overlay.h"
+#include "runtime/picking.h"
 #include "bench/fixtures.h"
 #include "device/device.h"
 #include "scene/scene.h"
@@ -15,9 +17,19 @@ Renderer::Renderer(HWND host,int width,int height,const std::filesystem::path &o
   thread_=std::jthread([this](std::stop_token stop) {run(stop);});
 }
 Renderer::~Renderer() {thread_.request_stop();if(thread_.joinable()) thread_.join();}
-void Renderer::set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot) {
-  frame(document->loaded.scene.bounds());
+void Renderer::set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene) {
+  if(frame_scene) {ir::Bounds bounds;for(const auto &target:document->catalog.targets) {const auto &i=document->loaded.scene.instances[target.instance];for(auto p:document->loaded.scene.meshes[i.mesh].positions) bounds.add(i.transform.point(p));}frame(bounds);}
   std::lock_guard lock(mutex_);document_=std::move(document);snapshot_=snapshot;
+}
+void Renderer::resize(int width,int height) {
+  if(width<1||height<1) return;
+  SetWindowPos(window_->hwnd,nullptr,0,0,width,height,SWP_NOZORDER|SWP_NOACTIVATE);
+  std::lock_guard lock(mutex_);requested_width_=width;requested_height_=height;
+}
+void Renderer::pointer(int x,int y,bool click) {
+  POINT point{x,y};ClientToScreen(window_->hwnd,&point);SetCursorPos(point.x,point.y);
+  PostMessageW(window_->hwnd,WM_MOUSEMOVE,0,MAKELPARAM(x,y));
+  if(click) PostMessageW(window_->hwnd,WM_LBUTTONUP,0,MAKELPARAM(x,y));
 }
 void Renderer::frame(const ir::Bounds &bounds) {
   if(bounds.empty) return;const auto c=bounds.center();
@@ -25,15 +37,17 @@ void Renderer::frame(const ir::Bounds &bounds) {
   window_->camera.pitch=bounds.maximum.z-bounds.minimum.z<bounds.extent()*.5f?.7f:.08f;window_->publish();
 }
 void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) snapshot_=snapshot;}
+void Renderer::select(uint64_t generation,int target,int joint) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
 void Renderer::orbit(float x,float y) {window_->camera.orbit(x,y);window_->publish();}
 void Renderer::run(std::stop_token stop) {
   using namespace ccl;
   std::unique_ptr<Session> session;Display *display=nullptr;
+  HoverOverlay overlay;runtime::PickingScene picking;std::vector<runtime::JointRegions> regions;std::vector<uint8_t> pickable;bool geometry_dirty=true;uint64_t clicks=0;
   auto cleanup=[&] {
     if(session) {
       session->cancel(true);
-      window_->present_context.activate();if(display) display->release_present_resources();window_->present_context.deactivate();
+      window_->present_context.activate();overlay.release();if(display) display->release_present_resources();window_->present_context.deactivate();
       session.reset();display=nullptr;
     }
   };
@@ -52,12 +66,24 @@ void Renderer::run(std::stop_token stop) {
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;Snapshot desired;
-      {std::lock_guard lock(mutex_);document=document_;if(document) desired=snapshot_;}
+      int width,height,selected_target,selected_joint;uint64_t selection_generation;
+      {std::lock_guard lock(mutex_);document=document_;if(document) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;}
+      if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
+        cleanup();window_->width=width;window_->height=height;
+        buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;
+      }
       if(!document) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
-      if(current!=document) {
-        cleanup();current=document;render_scene=current->loaded.scene;ir::add_studio(render_scene);
-        runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
-        runtime->evaluate(desired.values,desired.poses);
+      if(current!=document||!session) {
+        cleanup();geometry_dirty=true;
+        if(current!=document) {
+          current=document;render_scene=current->loaded.scene;
+          regions.clear();regions.resize(render_scene.instances.size());
+          pickable=runtime::viewport_pick_mask(render_scene.instances.size(),current->catalog.targets);
+          for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene.meshes.at(render_scene.instances.at(skin.instance).mesh),skin);
+          runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
+          runtime->evaluate(desired.values,desired.poses);
+        } else if(desired.revision!=applied_revision) runtime->evaluate(desired.values,desired.poses);
+        render_scene.lights=desired.lights;
         SceneParams scene_params;scene_params.background=false;scene_params.bvh_type=BVH_TYPE_DYNAMIC;
         scene_params.use_texture_cache=false;scene_params.auto_texture_cache=false;
         session=std::make_unique<Session>(params,scene_params);
@@ -71,7 +97,7 @@ void Renderer::run(std::stop_token stop) {
         auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
         display=driver.get();session->set_display_driver(std::move(driver));session->dfv_requested_epoch=++epoch;
         applied_revision=attempted_revision=desired.revision;session->reset(params,buffers);session->start();
-        state={};state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
+        state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
       if(display->failed()) throw std::runtime_error(display->error());
@@ -80,7 +106,9 @@ void Renderer::run(std::stop_token stop) {
         ir::Delta delta;
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
           attempted_revision=desired.revision;
-          try {delta=runtime->evaluate(desired.values,desired.poses);applied_revision=desired.revision;state.edit_error.clear();}
+          try {delta=runtime->evaluate(desired.values,desired.poses);geometry_dirty|=!delta.meshes.empty()||!delta.instances.empty();
+            for(size_t l=0;l<desired.lights.size();++l) delta.lights.push_back({uint32_t(l),desired.lights[l]});
+            applied_revision=desired.revision;state.edit_error.clear();}
           catch(const std::exception &e) {state.edit_error=e.what();}
         }
         if(camera.epoch!=camera_epoch) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;}
@@ -88,14 +116,36 @@ void Renderer::run(std::stop_token stop) {
         state.applied_revision=applied_revision;
       }
       window_->present_context.activate();
+      if(geometry_dirty) {overlay.update(render_scene,regions);picking.update(render_scene,pickable);geometry_dirty=false;}
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
       session->draw();
+      state.camera=camera;state.pointer_x=window_->pointer_x;state.pointer_y=window_->pointer_y;
+      auto hover=picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
+      bool editable=false;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
+      if(!editable) hover={};
+      state.hovered_detail_joint=hover.instance>=0&&hover.triangle>=0&&size_t(hover.triangle)<regions[size_t(hover.instance)].detail.size()?regions[size_t(hover.instance)].detail[size_t(hover.triangle)]:-1;
+      state.selection_generation=selection_generation;state.selected_target=selection_generation==current->generation?selected_target:-1;
+      state.selected_joint=state.selected_target>=0?selected_joint:-1;
+      const int selected_instance=state.selected_target>=0&&size_t(state.selected_target)<current->catalog.targets.size()?int(current->catalog.targets[size_t(state.selected_target)].instance):-1;
+      const auto region=runtime::hover_region(hover,selected_instance,state.selected_joint,regions);
+      state.hovered=region.instance;state.hovered_joint=region.joint;state.hovered_triangles=overlay.triangle_count(region.instance,region.joint);
+      const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;
+      if(presented) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint);
+      if(presented&&window_->clicks.load()!=clicks) {
+        clicks=window_->clicks.load();const auto hit=picking.screen(camera,window_->click_x,window_->click_y,window_->width,window_->height);
+        state.clicks=clicks;state.hit_target=-1;state.hit_joint=-1;
+        for(size_t t=0;t<current->catalog.targets.size();++t) if(int(current->catalog.targets[t].instance)==hit.instance) {
+          const auto selected=runtime::hover_region(hit,selected_instance,state.selected_joint,regions);
+          if(selected.instance>=0) {state.hit_target=int(t);state.hit_joint=selected.joint;}
+        }
+      }
+      state.width=window_->width;state.height=window_->height;
       if(!SwapBuffers(window_->dc)) {window_->present_context.deactivate();throw std::runtime_error("Qt 视口 SwapBuffers 失败");}
       display->after_swap();window_->present_context.deactivate();
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.frames=telemetry_.submitted.load();state.samples=session->dfv_render_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
-      state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();
+      state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();
       if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform) {
         measured_evaluation=state.evaluation.morph_evaluations;measured_skinning=state.skinning.evaluations;measured_transform=state.evaluation.transform_evaluations;state.max_displacement=0;state.bounds.clear();
         for(const auto &target:current->catalog.targets) {
@@ -120,6 +170,7 @@ void Renderer::run(std::stop_token stop) {
     {"mesh_creations",state.adapter.meshes},{"geometry_updates",state.adapter.geometry_updates},{"instance_updates",state.adapter.instance_updates},
     {"camera_updates",state.adapter.camera_updates},{"morph_evaluations",state.evaluation.morph_evaluations},{"offsets_visited",state.evaluation.offsets_visited},
     {"skin_evaluations",state.skinning.evaluations},{"skin_vertices",state.skinning.vertices},
+    {"conform_bound_vertices",state.conform.bindings},{"conform_authored_morphs",state.conform.authored_morphs},{"conform_evaluations",state.conform.evaluations},
     {"formula_evaluations",state.formulas.expressions},{"formula_channels",state.formulas.channels},{"edit_error",state.edit_error},
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
     {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"}};

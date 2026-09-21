@@ -27,7 +27,7 @@ void GLContext::destroy() {if(context_) {wglDeleteContext(context_);context_=nul
 static void pixel_format(HDC dc) {
   PIXELFORMATDESCRIPTOR pfd{};pfd.nSize=sizeof(pfd);pfd.nVersion=1;
   pfd.dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;
-  pfd.iPixelType=PFD_TYPE_RGBA;pfd.cColorBits=32;pfd.cAlphaBits=8;
+  pfd.iPixelType=PFD_TYPE_RGBA;pfd.cColorBits=32;pfd.cAlphaBits=8;pfd.cDepthBits=24;
   const int format=ChoosePixelFormat(dc,&pfd);
   if(!format || !SetPixelFormat(dc,format,&pfd)) throw std::runtime_error("设置 OpenGL pixel format 失败");
 }
@@ -89,12 +89,16 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
   }
   if(!self) return DefWindowProcW(hwnd,msg,w,l);
   switch(msg) {
+    case WM_LBUTTONUP:self->click_x=GET_X_LPARAM(l);self->click_y=GET_Y_LPARAM(l);++self->clicks;return 0;
+    case WM_MOUSELEAVE:self->pointer_x=-1;self->pointer_y=-1;return 0;
     case WM_CLOSE:self->close=true;return 0;
     case WM_KEYDOWN:if(w==VK_ESCAPE && !self->embedded) self->close=true;return 0;
     case WM_RBUTTONDOWN:
       self->dragging_=true;self->last_x_=GET_X_LPARAM(l);self->last_y_=GET_Y_LPARAM(l);SetCapture(hwnd);return 0;
     case WM_RBUTTONUP:self->dragging_=false;ReleaseCapture();return 0;
     case WM_MOUSEMOVE:
+      self->pointer_x=GET_X_LPARAM(l);self->pointer_y=GET_Y_LPARAM(l);
+      {TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT),TME_LEAVE,hwnd,0};TrackMouseEvent(&track);}
       if(self->dragging_) {
         const int x=GET_X_LPARAM(l),y=GET_Y_LPARAM(l);
         if(w&MK_SHIFT) self->camera.pan(float(x-self->last_x_),float(y-self->last_y_));

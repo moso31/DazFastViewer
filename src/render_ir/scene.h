@@ -38,12 +38,14 @@ struct Triangle {
   std::array<uint32_t,3> vertices{};
   std::array<Vec2,3> uv{};
   uint32_t material_slot=0;
+  uint32_t polygon_group=0;
 };
 struct Mesh {
   std::string id;
   std::vector<Vec3> positions;
   std::vector<Triangle> triangles;
   std::vector<std::string> material_slots;
+  std::vector<std::string> polygon_groups;
   bool smooth=true;
 };
 struct Instance {
@@ -52,11 +54,14 @@ struct Instance {
   Transform transform;
   std::vector<uint32_t> materials;
 };
+enum class LightKind {area,point,spot,distant};
 struct AreaLight {
   std::string id;
   Transform transform;
   Vec3 power{500,500,500};
   float width=1,height=1;
+  LightKind kind=LightKind::area;
+  float angle=.785398f;
 };
 struct Camera {
   Transform transform;
@@ -79,11 +84,13 @@ struct Scene {
 struct MaterialEdit {uint32_t index=0;Material value;};
 struct MeshEdit {uint32_t index=0;std::vector<Vec3> positions;};
 struct InstanceEdit {uint32_t index=0;Transform transform;};
+struct LightEdit {uint32_t index=0;AreaLight value;};
 struct Delta {
   std::optional<Camera> camera;
   std::vector<MaterialEdit> materials;
   std::vector<MeshEdit> meshes;
   std::vector<InstanceEdit> instances;
+  std::vector<LightEdit> lights;
 };
 void validate(const Camera &camera);
 void validate(const Material &material,size_t texture_count);

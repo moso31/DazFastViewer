@@ -6,7 +6,8 @@
 
 namespace dfv::daz {
 PosePreset parse_pose(const nlohmann::json &document,const std::string &source) {
-  if(document.value("asset_info",nlohmann::json::object()).value("type","")!="preset_pose") throw std::runtime_error("所选文件不是姿势 DUF（preset_pose）");
+  const auto type=document.value("asset_info",nlohmann::json::object()).value("type","");
+  if(type!="preset_pose"&&type!="preset_shape") throw std::runtime_error("所选文件不是姿势或形态预设 DUF");
   PosePreset preset;preset.source=source;
   const auto &animations=document.at("scene").at("animations");if(!animations.is_array()||animations.empty()) throw std::runtime_error("姿势预设没有通道");
   std::set<std::string> seen;
@@ -43,7 +44,7 @@ AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const 
       if(matches>1) {skip(c,"同一节点下有多个同名参数，无法唯一确定目标");continue;}
       if(c.property=="value/value"&&found<target.morphs.size()&&target.morphs[found].unsupported.empty()) {runtime::set_parameter(target,result.properties,found,c.value);result.report["applied_morph_channels"]=result.report["applied_morph_channels"].get<int>()+1;}
       else if(c.value==0) result.report["ignored_zero_controls"]=result.report["ignored_zero_controls"].get<int>()+1;
-      else skip(c,"控制器或 Morph 尚不可求值；ERC / JCM 归属 007");
+      else skip(c,found<target.morphs.size()?target.morphs[found].unsupported:"目标角色未找到该控制器或 Morph");
       continue;
     }
     // name:// 使用 DSON name，不可直接拿来匹配 skin.joints 内的 DSF id。

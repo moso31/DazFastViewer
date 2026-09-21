@@ -1,4 +1,5 @@
 #include "editor/parameters.h"
+#include "runtime/picking.h"
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QHeaderView>
@@ -26,13 +27,14 @@ ParameterPanel::ParameterPanel(QWidget *parent):QWidget(parent) {
   connect(slider_,&QSlider::valueChanged,this,[this](int v) {if(current_>=0 && changed) {const auto &m=target_->morphs[size_t(current_)];changed(size_t(current_),m.minimum+(m.maximum-m.minimum)*v/1000.0);}});
   connect(spin_,&QDoubleSpinBox::valueChanged,this,[this](double v) {if(current_>=0 && changed) changed(size_t(current_),v);});
 }
-void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values) {target_=target;values_=values;effective_.clear();rebuild();}
+void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node) {target_=target;values_=values;node_=node;effective_.clear();rebuild();}
 void ParameterPanel::rebuild() {
   QSignalBlocker block(tree_);tree_->clear();items_.clear();current_=-1;slider_->setEnabled(false);spin_->setEnabled(false);details_->setText(QStringLiteral("选择参数查看来源和支持状态"));
   if(!target_) {count_->clear();return;}
   items_.resize(target_->morphs.size());std::map<QString,QTreeWidgetItem *> groups;
   for(size_t i=0;i<target_->morphs.size();++i) {
     const auto &m=target_->morphs[i];if(!hidden_->isChecked() && !m.visible) continue;
+    if(!runtime::parameter_on_node(m.owner,m.group,node_)) continue;
     QString group=text(m.group);if(m.kind=="alias") group=QStringLiteral("/子节点/")+text(m.owner)+group;
     QTreeWidgetItem *parent=nullptr;QString path;
     for(const auto &part:group.split('/',Qt::SkipEmptyParts)) {

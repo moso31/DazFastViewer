@@ -24,12 +24,14 @@ struct Target {
   std::string id,label,parent;
   uint32_t instance=0;
   std::vector<Morph> morphs;
+  std::string conform_target;
 };
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
 };
 struct Properties {std::vector<float> morphs;TransformValues transform;};
 void validate_transform(const TransformValues &value);
+ir::Transform make_transform(const TransformValues &value);
 struct EvaluationStats {uint64_t morph_evaluations=0,offsets_visited=0,transform_evaluations=0;};
 // 单工作线程拥有；Qt 只发送属性快照，不访问求值中的网格。
 class MorphRuntime {
@@ -37,7 +39,9 @@ class MorphRuntime {
   const std::vector<Target> &targets_;
   std::vector<Properties> values_;
   std::vector<std::vector<ir::Vec3>> bases_;
+  std::vector<std::vector<ir::Vec3>> follow_offsets_;
   std::vector<ir::Transform> transforms_;
+  std::vector<int> parents_;
   std::vector<std::set<size_t>> active_;
   std::set<size_t> dirty_meshes_,dirty_transforms_;
   EvaluationStats stats_;
@@ -45,6 +49,7 @@ public:
   MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets);
   bool set_morph(size_t target,size_t morph,float value);
   bool set_transform(size_t target,const TransformValues &value);
+  bool set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets);
   ir::Delta evaluate();
   const auto &values() const {return values_;}
   const auto &stats() const {return stats_;}

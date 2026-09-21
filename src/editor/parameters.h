@@ -20,6 +20,7 @@ class ParameterPanel final:public QWidget {
   QSlider *slider_;
   QDoubleSpinBox *spin_;
   int current_=-1;
+  std::string node_;
   std::vector<float> effective_;
   std::vector<QTreeWidgetItem *> items_;
   void rebuild();
@@ -28,7 +29,7 @@ class ParameterPanel final:public QWidget {
 public:
   explicit ParameterPanel(QWidget *parent=nullptr);
   std::function<void(size_t,double)> changed;
-  void bind(const runtime::Target *target,const runtime::Properties *values);
+  void bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node={});
   void refresh(size_t index);
   void query(const QString &text);
   void select_parameter(size_t index);

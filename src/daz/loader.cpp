@@ -203,7 +203,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       if(!channel(id).value("image_file","").empty()) warn("unmapped_channel_texture",material.id,std::string(id)+" 目前仅支持常量，贴图尚未映射");
     Json unmapped=Json::array();for(const auto &[id,c]:channels) if(!supported.contains(id)) unmapped.push_back(id);
     if(!unmapped.empty()) warn("material_subset",material.id,"仅映射基础 PBR 参数；未映射通道详见 materials.unmapped_channels");
-    material_reports.push_back({{"id",material.id},{"unmapped_channels",unmapped},{"color_texture",material.color_texture},
+    material_reports.push_back({{"id",material.id},{"groups",instance.value("groups",Json::array())},{"unmapped_channels",unmapped},{"color_texture",material.color_texture},
       {"roughness_texture",material.roughness_texture},{"normal_texture",material.normal_texture},{"bump_texture",material.bump_texture},
       {"bump_distance_m",material.bump_distance},{"bump_distance_source",explicit_bump_range?"explicit-centimeter-range":"preview-approximation"}});
     const uint32_t index=uint32_t(scene.materials.size());scene.materials.push_back(material);
@@ -236,8 +236,21 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   std::map<std::string,uint32_t> mesh_cache;
   for(const auto &instance:source.value("nodes",Json::array())) {
     const auto id=instance.at("id").get<std::string>();const auto &node=nodes.at(id);
-    if(node.value("type","")=="camera" || node.value("type","")=="light")
-      warn("scene_view_settings",id,"尚未导入 DAZ 相机或灯光，使用自动取景与预览灯光");
+    if(node.value("type","")=="camera") warn("scene_camera",id,"保留编辑器观察相机，未切换到保存的 DAZ 相机");
+    if(node.value("type","")=="light") {
+      const auto color=node.value("color",Json::array({1,1,1}));ir::Vec3 rgb{1,1,1};
+      if(color.is_array()&&color.size()==3) rgb={color[0].get<float>(),color[1].get<float>(),color[2].get<float>()};
+      const char *kind=node.contains("spot")?"spot":node.contains("directional")?"directional":node.contains("point")?"point":"";
+      if(!*kind) scene.environment=rgb;
+      else {
+        const auto &settings=node.at(kind);ir::AreaLight light;light.id=id;light.transform=render_transform(world(id));
+        light.kind=std::string(kind)=="spot"?ir::LightKind::spot:std::string(kind)=="point"?ir::LightKind::point:ir::LightKind::distant;
+        const auto intensity=node.value("on",true)?number(settings.value("intensity",Json(1)),1):0;
+        light.power={rgb.x*intensity,rgb.y*intensity,rgb.z*intensity};light.angle=number(settings.value("falloff_angle",Json(45)),45)*std::numbers::pi_v<float>/180;
+        scene.lights.push_back(light);
+        if(node.contains("extra")) warn("light_extensions",id,"已导入 DSON 基础灯光；Iray 光度与专用扩展尚未等价转换");
+      }
+    }
     if(node.value("type","")=="bone") {
       const auto r=axes(node,"rotation",{}),t=axes(node,"translation",{});
       if(std::abs(r.x)+std::abs(r.y)+std::abs(r.z)+std::abs(t.x)+std::abs(t.y)+std::abs(t.z)>1e-6f) warn("bone_pose",id,"本阶段显示静态基础网格，未应用骨骼变形");
@@ -245,6 +258,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     for(const auto &geometry_instance:instance.value("geometries",Json::array())) {
       const auto uri=geometry_instance.at("url").get<std::string>();const auto [geometry_file,gptr]=repo.asset(uri,file,"geometry_library");const auto &g=*gptr;
       ir::Mesh mesh;mesh.id=uri;
+      if(g.contains("polygon_groups")) for(const auto &name:values(g.at("polygon_groups"))) mesh.polygon_groups.push_back(name.get<std::string>());
       for(const auto &name:values(g.at("polygon_material_groups"))) mesh.material_slots.push_back(name.get<std::string>());
       std::vector<uint32_t> material_indices;std::vector<std::string> uv_refs;
       const auto geometry_id=geometry_instance.at("id").get<std::string>();
@@ -279,6 +293,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
           const auto &uv=uv_cache.at(uv_refs.at(slot));
           for(size_t k=3;k+1<polygon.size();++k) {
             ir::Triangle triangle;triangle.material_slot=slot;
+            triangle.polygon_group=polygon[0].get<uint32_t>();
             triangle.vertices={polygon[2].get<uint32_t>(),polygon[k].get<uint32_t>(),polygon[k+1].get<uint32_t>()};
             for(size_t c=0;c<3;++c) {
               const auto v=triangle.vertices[c];auto seam=uv.seams.find({uint32_t(p),v});const auto ui=seam==uv.seams.end()?v:seam->second;
@@ -291,17 +306,15 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
         mesh_index=uint32_t(scene.meshes.size());mesh_cache.emplace(key,mesh_index);scene.meshes.push_back(std::move(mesh));
       }
       ir::Instance render_instance;render_instance.id=id+"/"+geometry_id;render_instance.mesh=mesh_index;render_instance.materials=std::move(material_indices);render_instance.transform=render_transform(world(id));
-      out.objects.push_back({uint32_t(scene.instances.size()),id,node.value("label",node.value("name",id)),node.value("parent",""),g.at("id").get<std::string>(),geometry_file,node.value("type","")=="figure",geometry_id});
+      out.objects.push_back({uint32_t(scene.instances.size()),id,node.value("label",node.value("name",id)),node.value("parent",""),g.at("id").get<std::string>(),geometry_file,node.value("type","")=="figure",geometry_id,node.contains("conform_target")&&node["conform_target"].is_string()?decode_uri(node["conform_target"].get<std::string>()):""});
       scene.instances.push_back(std::move(render_instance));
       if(geometry_instance.value("type",g.value("type",""))=="subdivision_surface") warn("subdivision",geometry_id,"当前显示基础笼形网格；未应用 SubD/HD 细分");
     }
   }
-  for(const auto &modifier:source.value("modifiers",Json::array())) {
-    const auto [modifier_file,m]=repo.asset(modifier.at("url"),file,"modifier_library");
-    if(m->contains("skin")) warn("skinning",modifier.value("id",""),"保留静态基础形态，尚未实现蒙皮/姿态求值");
-    else warn("modifier",modifier.value("id",""),"未应用该 Modifier/HD Morph，基础网格预览与 DAZ 最终求值结果可能不同");
-  }
-  if(scene.instances.empty()) fail("场景没有可加载的几何实例");
+  if(source.contains("modifiers")&&!source["modifiers"].empty())
+    warn("runtime_modifiers",std::to_string(source["modifiers"].size()),"几何阶段不求值 Modifier；由后续 Morph / Skeleton / Formula 阶段应用并报告支持情况");
+  const auto type=document.value("asset_info",Json::object()).value("type","");
+  if(scene.instances.empty()&&scene.lights.empty()&&type!="preset_material"&&type!="preset_shader") fail("场景没有可加载的几何实例或灯光");
   scene.validate();const auto bounds=scene.bounds();
   out.report={{"input",utf8(file)},{"mode","static-base-mesh-preview"},{"content_roots",Json::array()},
               {"dependencies",repo.dependencies},{"parsed_documents",repo.documents.size()},{"geometries",geometry_reports},{"materials",material_reports},

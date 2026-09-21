@@ -97,8 +97,14 @@ void CyclesAdapter::load(const ir::Scene &source) {
   emission->set_color(one_float3());emission->set_strength(1);light_graph->connect(emission->output("Emission"),light_graph->output()->input("Surface"));
   scene_.default_light->set_graph(std::move(light_graph));scene_.default_light->tag_update(&scene_);
   for(const auto &data:source.lights) {
-    auto *light=scene_.create_node<AreaLight>();light->set_sizeu(data.width);light->set_sizev(data.height);light->set_strength(vector(data.power));light->set_use_mis(true);
+    Light *light=nullptr;
+    if(data.kind==ir::LightKind::point) light=scene_.create_node<PointLight>();
+    else if(data.kind==ir::LightKind::spot) {auto *spot=scene_.create_node<SpotLight>();spot->set_angle(data.angle);light=spot;}
+    else if(data.kind==ir::LightKind::distant) light=scene_.create_node<SunLight>();
+    else {auto *area=scene_.create_node<AreaLight>();area->set_sizeu(data.width);area->set_sizev(data.height);light=area;}
+    light->set_strength(vector(data.power));light->set_use_mis(true);lights_.push_back(light);
     auto *object=scene_.create_node<Object>();object->set_geometry(light);object->set_tfm(transform(data.transform));
+    light_objects_.push_back(object);
   }
   auto graph=make_unique<ShaderGraph>();auto *bg=graph->create_node<BackgroundNode>();bg->set_color(vector(source.environment));bg->set_strength(1);
   graph->connect(bg->output("Background"),graph->output()->input("Surface"));scene_.default_background->set_graph(std::move(graph));scene_.default_background->tag_update(&scene_);
@@ -108,6 +114,10 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
   if(!loaded_) throw std::runtime_error("CyclesAdapter 尚未加载场景");
   // 先校验整个变更，避免索引错误导致只应用一部分。
   if(delta.camera) ir::validate(*delta.camera);
+  for(const auto &edit:delta.lights) {
+    if(edit.index>=lights_.size()) throw std::runtime_error("灯光索引越界");
+    ir::Scene check;check.lights.push_back(edit.value);check.validate();
+  }
   for(const auto &edit:delta.materials) {
     if(edit.index>=shaders_.size()) throw std::runtime_error("材质更新索引越界");
     ir::validate(edit.value,textures_.size());
@@ -129,6 +139,10 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     camera.need_device_update=true;camera.need_flags_update=true;++stats_.camera_updates;
   }
   for(const auto &edit:delta.materials) {material(*shaders_.at(edit.index),edit.value);++stats_.material_updates;}
+  for(const auto &edit:delta.lights) {
+    lights_[edit.index]->set_strength(vector(edit.value.power));lights_[edit.index]->tag_update(&scene_);
+    auto *object=light_objects_[edit.index];object->set_tfm(transform(edit.value.transform));object->tag_update(&scene_);
+  }
   for(const auto &edit:delta.meshes) {
     for(auto *mesh:meshes_[edit.index]) {
       auto *positions=mesh->get_position_for_write();

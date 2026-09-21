@@ -41,40 +41,45 @@ void set_parameter(const Target &target,Properties &values,size_t index,float va
   values.morphs.at(p.alias_morph>=0?size_t(p.alias_morph):index)=value;sync_aliases(target,values);
 }
 DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs)
-  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins) {
+  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("角色和公式图数量不一致");
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
   for(const auto &target:targets) {Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);sync_aliases(target,p);previous_.push_back(p);}
   for(const auto &skin:skins) previous_poses_.push_back(skin.initial);
 }
-void DeformationRuntime::feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
+void DeformationRuntime::feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved) {
   if(values.size()!=targets_.size()||poses.size()!=skins_.size()) throw std::runtime_error("变形快照数量不一致");
-  for(size_t t=0;t<graphs_.size();++t) {
+  weights.resize(targets_.size());resolved=poses;
+  for(size_t s=0;s<skins_.size();++s) validate_pose(skins_[s],poses[s]);
+  for(size_t t:conform_.order()) {
     if(values[t].morphs.size()!=targets_[t].morphs.size()) throw std::runtime_error("Morph 快照数量不一致");const auto &g=graphs_[t];auto &runtime=*formulas_[t];
+    const auto *link=conform_.link(t);std::vector<JointPose> inherited;
+    if(link&&g.skin>=0) {inherited=conform_pose(*link,skins_,resolved,poses.at(size_t(g.skin)));resolved[size_t(g.skin)]=inherited;}
     for(uint32_t c=0;c<g.channels.size();++c) {const auto &binding=g.channels[c].binding;
-      if(binding.property==Property::morph) {if(g.morph_channels[binding.index]!=int(c)) continue;runtime.set(c,values[t].morphs[binding.index]);}
-      else runtime.set(c,bone_input(binding,skins_.at(size_t(g.skin)),poses.at(size_t(g.skin))));}
+      if(binding.property==Property::morph) {if(g.morph_channels[binding.index]!=int(c)) continue;double input=values[t].morphs[binding.index];
+        if(link&&link->morph_sources.at(binding.index)>=0) input+=weights.at(link->source).at(size_t(link->morph_sources[binding.index]));runtime.set(c,input);}
+      else runtime.set(c,bone_input(binding,skins_.at(size_t(g.skin)),resolved.at(size_t(g.skin))));}
     runtime.evaluate();
+    const auto &result=runtime.values();auto &value=weights[t];value.resize(targets_[t].morphs.size());
+    for(size_t m=0;m<value.size();++m) {const int c=g.morph_channels[m];if(c>=0&&targets_[t].morphs[m].evaluable) value[m]=float(result[size_t(c)]);if(!std::isfinite(value[m])) throw std::runtime_error("Morph 求值超出有效数值范围");}
+    for(size_t c=0;c<g.channels.size();++c) if(g.channels[c].binding.property!=Property::morph) bone_output(g.channels[c].binding,skins_.at(size_t(g.skin)),resolved.at(size_t(g.skin)),result[c]);
+    // 目标 ERC 已包含体型骨长 / 中心调整，服装不能再次叠加相同公式。
+    if(link&&g.skin>=0) for(size_t j=0;j<link->joints.size();++j) if(link->joints[j]>=0) resolved[size_t(g.skin)][j]=inherited[j];
   }
 }
 ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
     for(const auto &p:values) validate_transform(p.transform);
-    feed(values,poses);
-    for(size_t t=0;t<graphs_.size();++t) {
-      const auto &g=graphs_[t];const auto &result=formulas_[t]->values();std::vector<float> value(targets_[t].morphs.size());
-      for(size_t m=0;m<value.size();++m) {const int c=g.morph_channels[m];if(c>=0&&targets_[t].morphs[m].evaluable) value[m]=float(result[size_t(c)]);if(!std::isfinite(value[m])) throw std::runtime_error("Morph 求值超出有效数值范围");}
-      for(size_t c=0;c<g.channels.size();++c) if(g.channels[c].binding.property!=Property::morph) bone_output(g.channels[c].binding,skins_.at(size_t(g.skin)),resolved.at(size_t(g.skin)),result[c]);
-      weights.push_back(std::move(value));
-    }
+    feed(values,poses,weights,resolved);
     for(size_t s=0;s<skins_.size();++s) validate_pose(skins_[s],resolved[s]);
-  } catch(...) {feed(previous_,previous_poses_);throw;}
+  } catch(...) {std::vector<std::vector<float>> rollback_weights;std::vector<std::vector<JointPose>> rollback_poses;feed(previous_,previous_poses_,rollback_weights,rollback_poses);throw;}
   for(size_t t=0;t<weights.size();++t) {
     for(size_t m=0;m<weights[t].size();++m) if(targets_[t].morphs[m].evaluable||targets_[t].morphs[m].unsupported.empty()) morph_.set_morph(t,m,weights[t][m]);
     morph_.set_transform(t,values[t].transform);
   }
   for(size_t s=0;s<resolved.size();++s) skin_.set_pose(s,resolved[s]);
+  conform_.project(weights,morph_);
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;return skin_.evaluate(morph_.evaluate());
 }
 FormulaStats DeformationRuntime::formula_stats() const {FormulaStats out;for(const auto &f:formulas_) {out.expressions+=f->stats().expressions;out.channels+=f->stats().channels;}return out;}

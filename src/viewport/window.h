@@ -35,9 +35,11 @@ public:
   HDC dc{},render_dc{};
   GLContext present_context,render_context;
   std::atomic<bool> close{false},minimized{false},size_changed{false};
+  std::atomic<int> pointer_x{-1},pointer_y{-1},click_x{-1},click_y{-1};
+  std::atomic<uint64_t> clicks{0};
   CameraState camera;
   CameraMailbox mailbox;
-  int width,height;
+  std::atomic<int> width,height;
   int monitor_index=2;
   std::string monitor_device;
   bool embedded=false;

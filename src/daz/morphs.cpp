@@ -62,7 +62,7 @@ static Asset asset(const fs::path &file,const std::string &geometry) {
   for(const auto &[node,geometries]:node_geometries) if(geometries.size()==1&&geometries.contains("#"+geometry)) out.geometry_nodes.insert(node);
   return out;
 }
-MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots) {
+MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots,const std::function<void(const std::string &)> &progress) {
   path_keys.clear();resolved_paths.clear();
   MorphCatalog out;out.report={{"targets",J::array()},{"diagnostics",J::array()},{"files_scanned",0},{"skipped_types",J::object()},
     {"content_roots",J::array()},{"file_overrides",J::array()},{"empty_overrides",J::array()},{"root_scans",J::array()}};
@@ -73,15 +73,40 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
   auto skipped=[&](const std::string &type) {out.report["skipped_types"][type]=out.report["skipped_types"].value(type,0)+1;};
   fs::path scene_file;J scene_document=J::object();
   if(loaded.report.contains("input")) {scene_file=fs::u8path(loaded.report.at("input").get<std::string>());scene_document=read_document_file(scene_file);}
+  // 场景覆盖只解析一次；大场景不能为每个 Morph 复制和遍历整个 scene。
+  std::map<std::pair<std::string,std::string>,J> overrides;
+  if(scene_document.contains("scene")&&scene_document["scene"].contains("modifiers"))
+    for(const auto &item:scene_document["scene"]["modifiers"]) {
+      const auto uri=item.value("url","");if(uri.empty()) continue;
+      const auto ref=reference(uri);const auto path=resolve(ref.file,scene_file,roots);if(path.empty()) continue;
+      overrides[{decode_uri(item.value("parent","")),key(path)+"#"+ref.id}]=item.value("channel",J::object());
+    }
   std::set<uint32_t> used_meshes;
+  struct CachedTarget {runtime::Target target;FormulaSource formulas;std::map<std::string,float> defaults;J report;};
+  std::map<std::string,CachedTarget> cached_targets;
   for(const auto &object:loaded.objects) {
+    if(progress) progress("正在发现参数："+object.label);
     auto &instance=loaded.scene.instances.at(object.instance);
     if(!used_meshes.insert(instance.mesh).second) {
       auto copy=loaded.scene.meshes.at(instance.mesh);copy.id+="/"+object.id;
       instance.mesh=uint32_t(loaded.scene.meshes.size());loaded.scene.meshes.push_back(std::move(copy));
     }
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
-    runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;
+    runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;
+    const auto target_key=key(object.geometry_file)+"#"+object.geometry_id;
+    auto apply_override=[&](runtime::Morph &m) {
+      for(const auto &owner:{std::string{},"#"+object.id,"#"+object.geometry_instance_id}) if(auto it=overrides.find({owner,m.id});it!=overrides.end())
+        m.initial=number(it->second,"current_value",number(it->second,"value",m.initial));
+      if(!std::isfinite(m.initial)) throw std::runtime_error("场景参数权重无效");
+      if(m.clamped) m.initial=std::clamp(m.initial,m.minimum,m.maximum);
+    };
+    if(auto cached=cached_targets.find(target_key);cached!=cached_targets.end()) {
+      target.morphs=cached->second.target.morphs;
+      auto report=cached->second.report;report["id"]=target.id;report["label"]=target.label;report["reused_asset_catalog"]=true;
+      for(size_t i=0;i<target.morphs.size();++i) {auto &m=target.morphs[i];m.initial=cached->second.defaults.at(m.id);apply_override(m);report["morphs"][i]["initial"]=m.initial;}
+      out.targets.push_back(std::move(target));out.formulas.push_back(cached->second.formulas);out.report["targets"].push_back(std::move(report));continue;
+    }
+    std::map<std::string,float> default_values;
     FormulaSource formula_source;
     std::map<std::string,std::pair<std::string,fs::path>> missing_addresses;
     std::vector<Asset> allowed{asset(object.geometry_file,object.geometry_id)};
@@ -137,6 +162,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     std::vector<std::set<std::string>> dependencies;
     std::map<std::string,std::string> declared_assets;
     for(size_t file_index=0;file_index<queue.size();++file_index) {
+      if(progress&&file_index%250==0) progress(object.label+" · 参数资源 "+std::to_string(file_index)+" / "+std::to_string(queue.size()));
       const auto path=queue[file_index];
       try {
         const auto doc=read_document_file(path);out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+1;
@@ -177,14 +203,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           if(!std::isfinite(morph.minimum)||!std::isfinite(morph.maximum)||!std::isfinite(morph.initial)||!std::isfinite(morph.step)||morph.minimum>morph.maximum) throw std::runtime_error("参数范围无效");
           morph.clamped=channel.value("clamped",false);morph.visible=channel.value("visible",true);morph.auto_follow=channel.value("auto_follow",false);
           if(type=="bool") {morph.minimum=0;morph.maximum=1;morph.step=1;morph.clamped=true;}
-          for(const auto &override:scene_document.value("scene",J::object()).value("modifiers",J::array())) {
-            const auto parent=decode_uri(override.value("parent",""));
-            if(!parent.empty() && parent!="#"+object.id && parent!="#"+object.geometry_instance_id) continue;
-            const auto uri=override.value("url","");if(uri.empty()) continue;const auto ref=reference(uri);const auto candidate=resolve(ref.file,scene_file,roots);
-            if(ref.id==id && !candidate.empty() && key(candidate)==key(path)) {
-              const auto c=override.value("channel",J::object());morph.initial=number(c,"current_value",number(c,"value",morph.initial));
-            }
-          }
+          default_values[morph.id]=morph.initial;apply_override(morph);
           if(!std::isfinite(morph.initial)) throw std::runtime_error("场景参数权重无效");
           if(morph.clamped) morph.initial=std::clamp(morph.initial,morph.minimum,morph.maximum);
           std::set<std::string> refs;const auto formulas=modifier.value("formulas",J::array());morph.formula_count=formulas.size();
@@ -302,6 +321,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
         {"dependency_count",dependencies[i].size()},{"node_dependencies",nodes},{"parameter_dependencies",parameters},{"unresolved_dependencies",unresolved}});
     }
     out.report["targets"].push_back({{"id",target.id},{"label",target.label},{"morphs",items},{"compatible_assets",allowed.size()},{"reference_repairs",repairs}});
+    cached_targets[target_key]={target,formula_source,std::move(default_values),out.report["targets"].back()};
     out.targets.push_back(std::move(target));
     formula_source.interned.clear();formula_source.interned.rehash(0);out.formulas.push_back(std::move(formula_source));
   }

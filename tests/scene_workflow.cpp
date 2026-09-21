@@ -1,0 +1,119 @@
+#include "editor/document.h"
+#include "daz/pose.h"
+#include "runtime/picking.h"
+#include <iostream>
+#include <fstream>
+#include <chrono>
+
+using namespace dfv;
+static void require(bool v,const char *message) {if(!v) throw std::runtime_error(message);}
+static void unit() {
+  ir::Scene scene;ir::Mesh mesh;mesh.positions={{-1,0,-1},{1,0,-1},{0,0,1}};ir::Triangle triangle;triangle.vertices={0,1,2};mesh.triangles={triangle};mesh.material_slots={"Skin"};mesh.polygon_groups={"head"};scene.meshes={mesh};scene.materials.resize(1);
+  ir::Instance a;a.materials={0};scene.instances={a,a};scene.instances[1].transform=ir::Transform::translate({0,1,0});
+  runtime::PickingScene picking;picking.update(scene);require(picking.ray({0,-2,0},{0,1,0}).instance==0,"射线未选最近对象");require(picking.ray({4,-2,0},{0,1,0}).instance==-1,"射线空白误命中");
+  scene.instances[0].transform=ir::Transform::translate({4,0,0});picking.update(scene);require(picking.ray({0,-2,0},{0,1,0}).instance==1,"变换后命中未更新");
+  runtime::Skin skin;runtime::Joint joint;joint.id="head";skin.joints={joint};require(runtime::hit_joint(mesh,0,skin)==0,"多边形组未映射到头部");
+  auto parts_mesh=mesh;parts_mesh.polygon_groups.push_back("leftHandAlias");auto hand_face=triangle;hand_face.polygon_group=1;auto weighted_face=triangle;weighted_face.polygon_group=99;parts_mesh.triangles={triangle,hand_face,weighted_face};
+  auto parts_skin=skin;runtime::Joint hand;hand.id="lHand";hand.aliases={"leftHandAlias"};parts_skin.joints.push_back(hand);parts_skin.weights={{{0,.3},{1,.7}},{{0,.3},{1,.7}},{{0,.3},{1,.7}}};
+  const auto parts=runtime::joint_regions(parts_mesh,parts_skin);require(parts.detail==std::vector<int>({0,1,1}),"悬停区域未共用组 / 别名 / 蒙皮权重的部位映射");
+  std::vector<runtime::JointRegions> regions={parts,parts,{}};
+  require(runtime::hover_region({0,1},-1,-1,regions).joint==-1,"未选中角色没有整体高亮");
+  require(runtime::hover_region({0,0},0,-1,regions).joint==0&&runtime::hover_region({0,1},0,-1,regions).joint==1,"已选中角色没有按悬停位置切换部位");
+  require(runtime::hover_region({1,1},0,-1,regions).joint==-1&&runtime::hover_region({0,0},1,-1,regions).joint==-1,"切换角色后仍沿用旧角色部位高亮");
+  require(runtime::hover_region({2,0},2,-1,regions).instance==2&&runtime::hover_region({2,0},2,-1,regions).joint==-1,"普通模型错误进入二级悬停");
+  require(runtime::hover_region({},0,-1,regions).instance==-1,"空白仍有悬停高亮");regions[0].detail[0]=regions[0].body[0]=-1;require(runtime::hover_region({0,0},0,-1,regions).instance==-1,"未解析部位错误高亮整个人物");
+  auto head_mesh=mesh;head_mesh.polygon_groups={"Head","lEye","lHand"};head_mesh.positions.resize(9);head_mesh.triangles={triangle,triangle,triangle,triangle};head_mesh.triangles[1].vertices={3,4,5};head_mesh.triangles[1].polygon_group=1;head_mesh.triangles[2].vertices={6,7,8};head_mesh.triangles[3].polygon_group=2;
+  auto head_skin=skin;runtime::Joint eye;eye.id="lEye";eye.parent=0;runtime::Joint lip;lip.id="LipUpperMiddle";lip.parent=0;head_skin.joints.insert(head_skin.joints.end(),{eye,lip,hand});head_skin.weights.resize(9);
+  for(size_t v=0;v<9;++v) head_skin.weights[v]={{uint32_t(v/3),1}};
+  const auto head_parts=runtime::joint_regions(head_mesh,head_skin);require(head_parts.detail==std::vector<int>({0,1,2,3})&&head_parts.body==std::vector<int>({0,0,0,3}),"头部没有聚合眼睛和嘴唇，或忽略明确的区域边界");
+  regions={head_parts,head_parts};require(runtime::hover_region({0,1},-1,-1,regions).joint==-1,"头部首次点击没有选整体");
+  require(runtime::hover_region({0,1},0,-1,regions).joint==0&&runtime::hover_region({0,2},0,-1,regions).joint==0,"二次点击眼睛 / 嘴唇没有先选整个头部");
+  require(runtime::hover_region({0,1},0,0,regions).joint==1&&runtime::hover_region({0,2},0,1,regions).joint==2,"头部选中后不能进入眼睛 / 嘴唇");
+  require(runtime::hover_region({0,1},0,3,regions).joint==0&&runtime::hover_region({1,1},0,1,regions).joint==-1,"头部细选上下文泄漏到手部或其他角色");
+  auto worn_scene=scene;worn_scene.instances[0].transform={};worn_scene.instances[1].transform=ir::Transform::translate({0,1,0});
+  runtime::Target garment;garment.instance=0;garment.id="garment/mesh";garment.conform_target="#person";runtime::Target person;person.instance=1;person.id="person/mesh";
+  picking.update(worn_scene,runtime::viewport_pick_mask(2,{garment,person}));require(picking.ray({0,-2,0},{0,1,0}).instance==1,"绑定服装仍遮挡射线，无法命中身后角色");
+  garment.conform_target.clear();garment.parent="#person";picking.update(worn_scene,runtime::viewport_pick_mask(2,{garment,person}));require(picking.ray({0,-2,0},{0,1,0}).instance==0,"未绑定的服装不可选，或普通 parent 被误当 Fit To");
+  require(runtime::parameter_on_node("head","/Pose Controls","head"),"头部别名不可见");require(!runtime::parameter_on_node("lHand","/Actor/Hands","head"),"头部混入手部控制器");
+  editor::Document first;first.generation=2;first.loaded.scene=scene;editor::Document second=first;
+  runtime::Target target;target.instance=0;target.id="figure";second.catalog.targets={target};second.skeletons.skins={skin};runtime::FormulaGraph graph;graph.skin=0;second.formulas.graphs={graph};
+  editor::append_document(first,std::move(second));require(first.catalog.targets[0].instance==2&&first.loaded.scene.instances[2].mesh==1,"合并资源索引错误");require(first.catalog.targets[0].id!="figure","合并未隔离实例身份");
+  nlohmann::json shape={{"asset_info",{{"type","preset_shape"}}},{"scene",{{"animations",{{{"url","name://@selection#Face:?value/value"},{"keys",{{0,0}}}}}}}}};
+  require(daz::parse_pose(shape).channels[0].value==0,"Shape 显式归零未保留");
+  editor::Document figure;figure.loaded.scene.meshes={mesh};figure.loaded.scene.instances={a};figure.loaded.scene.materials.resize(1);
+  runtime::Morph morph;morph.id="Face";morph.channel_id=morph.channel_name="Face";morph.offsets={{0,{.1f,0,0}}};target.morphs={morph};target.id="figure/geometry";figure.catalog.targets={target};
+  auto duplicate=figure;figure.generation=7;editor::append_document(figure,std::move(duplicate));
+  runtime::MorphRuntime deformation(figure.loaded.scene,figure.catalog.targets);deformation.set_morph(0,0,.5f);deformation.evaluate();
+  require(figure.loaded.scene.meshes[1].positions[0].x==mesh.positions[0].x,"合并后的角色共享了可编辑顶点");
+  runtime::TransformValues transform;transform.translation_cm.x=100;deformation.set_transform(1,transform);deformation.evaluate();require(figure.loaded.scene.instances[0].transform.value[3]==0,"合并后的角色共享了变换");
+  skin.initial.resize(1);runtime::Properties values;values.morphs={1};auto applied=daz::apply_pose(daz::parse_pose(shape),skin,skin.initial,target,values);require(applied.properties.morphs[0]==0,"Shape 未清除显式零值");
+  figure.catalog.targets[1].parent="#figure";runtime::MorphRuntime hierarchy(figure.loaded.scene,figure.catalog.targets);hierarchy.set_transform(0,transform);require(hierarchy.evaluate().instances.size()==2,"父对象移动未更新子对象");
+  const auto temporary=std::filesystem::temp_directory_path()/("dfv-workflow-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));std::filesystem::create_directories(temporary);
+  const auto preset_file=temporary/"material.duf";std::ofstream(preset_file)<<R"({"asset_info":{"type":"preset_material"},"scene":{"materials":[{"id":"Red","geometry":"#selection","groups":["Skin"],"diffuse":{"channel":{"value":[1,0,0]}}}]}})";
+  const auto preset=daz::load(preset_file,{{temporary},false});const auto previous=figure.loaded.scene.instances[1].materials;editor::apply_materials(figure,0,preset);
+  require(figure.loaded.scene.instances[1].materials==previous,"材质预设污染其他实例");require(figure.loaded.scene.materials[figure.loaded.scene.instances[0].materials[0]].base_color.x==1,"材质预设未应用");
+  const auto light_file=temporary/"light.duf";std::ofstream(light_file)<<R"({"asset_info":{"type":"scene"},"scene":{"nodes":[{"id":"Spot","type":"light","color":[0.8,0.5,0.1],"spot":{"intensity":4,"falloff_angle":60}}]}})";
+  const auto lights=daz::load(light_file,{{temporary},false});require(lights.scene.lights.size()==1&&lights.scene.lights[0].kind==ir::LightKind::spot&&lights.scene.lights[0].power.x==3.2f,"DSON 灯光导入错误");
+  std::filesystem::remove(preset_file);std::filesystem::remove(light_file);std::filesystem::remove(temporary);
+  std::cout<<"Scene append / picking / occlusion / groups / shape: PASS\n";
+}
+static void actual_selection(const std::filesystem::path &file,const std::filesystem::path &output) {
+  const std::vector<std::filesystem::path> roots={L"H:/G1",L"H:/G3",L"C:/Users/Public/Documents/My DAZ 3D Library",L"C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"};
+  const auto loaded=daz::load(file,{roots,false});const auto skeletons=daz::load_skeletons(loaded);const auto &scene=loaded.scene;
+  std::vector<runtime::Target> targets;for(const auto &object:loaded.objects) {runtime::Target t;t.instance=object.instance;t.id=scene.instances[t.instance].id;t.conform_target=object.conform_target;targets.push_back(t);}
+  const auto mask=runtime::viewport_pick_mask(scene.instances.size(),targets);runtime::PickingScene all,filtered;all.update(scene);filtered.update(scene,mask);
+  nlohmann::json report={{"status","PASS"},{"head",nlohmann::json::array()},{"garments",nlohmann::json::array()}};
+  for(const auto &skin:skeletons.skins) {if(!mask[skin.instance]) continue;const auto &mesh=scene.meshes[scene.instances[skin.instance].mesh];const auto regions=runtime::joint_regions(mesh,skin);if(regions.head<0) continue;
+    const auto head_count=std::count(regions.body.begin(),regions.body.end(),regions.head);require(head_count>0,"真实角色没有完整头部区域");bool eye=false,lip=false;
+    const std::set<std::string> head_groups={"Head","LowerJaw","UpperJaw","Tongue","lEye","rEye"};size_t grouped=0;
+    for(const auto &triangle:mesh.triangles) if(triangle.polygon_group<mesh.polygon_groups.size()&&head_groups.contains(mesh.polygon_groups[triangle.polygon_group])) ++grouped;
+    require(size_t(head_count)==grouped,"真实头部区域没有遵循 DAZ 的头 / 颈多边形组边界");
+    for(size_t t=0;t<regions.detail.size();++t) if(regions.body[t]==regions.head&&regions.detail[t]!=regions.head) {
+      const int joint=regions.detail[t];const auto &id=skin.joints[size_t(joint)].id;eye|=id=="lEye"||id=="rEye";const auto slot=mesh.triangles[t].material_slot;
+      lip|=slot<mesh.material_slots.size()&&mesh.material_slots[slot]=="Lips"&&(id.find("LipUpper")!=std::string::npos||id.find("LipLower")!=std::string::npos);
+      const std::vector<runtime::JointRegions> one{regions};require(runtime::hover_region({0,int(t)},0,-1,one).joint==regions.head,"真实面部第二次选择没有聚合 Head");require(runtime::hover_region({0,int(t)},0,regions.head,one).joint==joint,"真实面部第三次选择没有细分");}
+    require(eye&&lip,"真实头部缺少眼球或嘴唇细分");report["head"].push_back({{"instance",skin.instance},{"head_triangles",head_count},{"eyes",eye},{"lips",lip}});
+  }
+  bool unbound_checked=false;
+  for(const auto &object:loaded.objects) {
+    if(!object.id.starts_with("Shorts_")&&!object.id.starts_with("SportsBra_")) continue;
+    require(!mask[object.instance],"test2 的绑定服装仍可由视口命中");uint32_t source=uint32_t(-1);for(const auto &o:loaded.objects) if("#"+o.id==object.conform_target) source=o.instance;require(source<scene.instances.size(),"服装目标实例丢失");
+    const auto &host=scene.instances[source];ir::Bounds bounds;for(auto p:scene.meshes[host.mesh].positions) bounds.add(host.transform.point(p));const auto center=bounds.center();
+    const auto &cloth=scene.instances[object.instance];const auto &mesh=scene.meshes[cloth.mesh];size_t checked=0;
+    for(size_t t=0;t<mesh.triangles.size();t+=std::max(size_t(1),mesh.triangles.size()/128)) {
+      ir::Vec3 p;for(auto v:mesh.triangles[t].vertices) {const auto q=cloth.transform.point(mesh.positions[v]);p.x+=q.x/3;p.y+=q.y/3;p.z+=q.z/3;}
+      const auto dir=normalized({center.x-p.x,center.y-p.y,center.z-p.z});const ir::Vec3 direction{dir.x,dir.y,dir.z},origin{p.x-dir.x*.25f,p.y-dir.y*.25f,p.z-dir.z*.25f};
+      if(all.ray(origin,direction).instance!=int(object.instance)||filtered.ray(origin,direction).instance!=int(source)) continue;++checked;
+      if(!unbound_checked) {auto detached=mask;detached[object.instance]=1;runtime::PickingScene unbound;unbound.update(scene,detached);require(unbound.ray(origin,direction).instance==int(object.instance),"解除绑定后的真实服装仍无法被选取");unbound_checked=true;}
+    }
+    require(checked>0,"未验证服装前景射线能穿过并命中所属人物");report["garments"].push_back({{"object",object.id},{"target",source},{"rays",checked}});
+  }
+  require(report["head"].size()==4&&report["garments"].size()==8&&unbound_checked,"test2 头部 / 服装验证数量不足");report["unbound_pickable"]=true;
+  std::filesystem::create_directories(output.parent_path());std::ofstream(output)<<report.dump(2);std::cout<<"Real head hierarchy / 8 bound garments / unbound pick: PASS\n";
+}
+int wmain(int argc,wchar_t **argv) {
+  try {
+    if(argc==1) {unit();return 0;}
+    if(argc==4&&std::wstring(argv[1])==L"--selection") {actual_selection(argv[2],argv[3]);return 0;}
+    std::vector<std::filesystem::path> roots={L"H:/G1",L"H:/G3",L"C:/Users/Public/Documents/My DAZ 3D Library",L"C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"};
+    editor::Document document;const auto start=std::chrono::steady_clock::now();nlohmann::json times;
+    auto phase=[&](const char *name) {times[name]=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();std::cout<<name<<": "<<times[name]<<std::endl;};
+    document.loaded=daz::load(argv[1],{roots,false});phase("geometry");document.catalog=daz::discover_morphs(document.loaded,roots);phase("morphs");
+    document.skeletons=daz::load_skeletons(document.loaded);phase("skeletons");document.formulas=daz::enable_formulas(document.catalog,document.skeletons);phase("formulas");
+    auto snapshot=editor::initial_snapshot(document);auto scene=document.loaded.scene;
+    runtime::DeformationRuntime runtime(scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);phase("evaluation");
+    nlohmann::json report={{"status","PASS"},{"elapsed",times},{"instances",scene.instances.size()},{"skins",document.skeletons.skins.size()},{"asset",document.loaded.report},{"skeleton",document.skeletons.report}};
+    if(argc>3) {const auto &skin=document.skeletons.skins.at(0);size_t target=0;while(document.catalog.targets.at(target).instance!=skin.instance) ++target;
+      const auto applied=daz::apply_pose(daz::read_pose(argv[3]),skin,snapshot.poses[0],document.catalog.targets[target],snapshot.values[target]);
+      std::vector<std::vector<ir::Vec3>> before;for(const auto &mesh:scene.meshes) before.push_back(mesh.positions);
+      snapshot.poses[0]=applied.joints;snapshot.values[target]=applied.properties;runtime.evaluate(snapshot.values,snapshot.poses);report["preset"]=applied.report;
+      const auto edited_mesh=scene.instances[skin.instance].mesh;double displacement=0;std::set<size_t> affected{target};
+      for(size_t pass=0;pass<document.catalog.targets.size();++pass) for(const auto &link:runtime.conform_links()) if(affected.contains(link.source)) affected.insert(link.follower);
+      std::set<uint32_t> affected_meshes;for(auto t:affected) affected_meshes.insert(scene.instances[document.catalog.targets[t].instance].mesh);
+      for(size_t m=0;m<scene.meshes.size();++m) for(size_t v=0;v<before[m].size();++v) {const auto a=before[m][v],b=scene.meshes[m].positions[v];const auto distance=std::abs(a.x-b.x)+std::abs(a.y-b.y)+std::abs(a.z-b.z);
+        if(!affected_meshes.contains(uint32_t(m))) require(distance==0,"预设污染无关角色或穿戴物");if(m==edited_mesh) displacement=std::max(displacement,double(distance));}
+      require(displacement>0,"真实预设未产生形变");report["preset_displacement_l1_m"]=displacement;report["unrelated_meshes_unchanged"]=true;report["affected_targets"]=affected;phase("preset");}
+    if(argc>2) {std::filesystem::create_directories(std::filesystem::path(argv[2]).parent_path());std::ofstream(std::filesystem::path(argv[2]))<<report.dump(2);}
+    std::cout<<"Scene workflow: PASS\n";return 0;
+  } catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}
+}

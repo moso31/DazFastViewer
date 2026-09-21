@@ -10,6 +10,7 @@ struct AssetObject {
   std::filesystem::path geometry_file;
   bool figure=false;
   std::string geometry_instance_id;
+  std::string conform_target;
 };
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;};
 LoadedScene load(const std::filesystem::path &file,const LoadOptions &options={});

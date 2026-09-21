@@ -2,6 +2,10 @@
 
 ## 本地开发环境与版本基线（用户补充，2026-09-21 更新）
 
+- **插入优化追加服装跟随修复**：保留场景实例的 `conform_target`，接入原生服装 Morph、缺项表面形变转移及骨骼跟随；修复人物变化而衣服静止的问题。验证与 AutoFit / 平滑 / 碰撞边界见 [穿戴物跟随报告](conform_follow_execution_cn.md)。主线 008 仍未开始。
+
+- **007 与 008 之间插入场景工作流优化**：用户已授权实施多角色 / 模型 / 灯光、DUF 按内容用途分派、视口两级选取与部位 Morph、悬停覆盖、停靠视口 / 动态尺寸及布局持久化。此项不启动或重编号 008，也不表示总规范所有后续阶段已经完成。范围见 [改造方案](scene_workflow_revision_cn.md)，验证与限制见 [执行报告](scene_workflow_execution_cn.md)。
+
 - **007 参数兼容性追加修复已部署**：原阶段中文提交 `da5d4f8`，其后修复计数、绑定身份、旧文件名和声明资产 URI 引用。G8 / G8.1 相对基线新增可编辑 476 / 614 项，其中本轮各追加 122 项；Ren Yao、BGM Ava、BGM Big Girl Base 等已实际验证。仍需区分条件型控制器、跨对象驱动、缺失依赖与 HD，详见 [兼容性报告](../specs/007-erc-jcm/compatibility-report.md)。本批修复和参数清单按用户授权以中文归档到本地 Git。
 
 - 用户要求先以中文提交 006，再启动 **007 Formula / ERC / JCM**。006 已提交到本地 Git：`aa8fbc7`。007 完成后必须专项复测 005 Morph 模块，核对此前禁用的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad 等参数是否实际生效；不得仅去掉界面禁用状态。测试仍只在副屏进行，不重复性能回放。

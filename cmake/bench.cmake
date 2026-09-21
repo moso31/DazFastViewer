@@ -3,7 +3,7 @@ add_executable(CyclesViewportBench "${DFV_ROOT}/src/bench/main.cpp"
   "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/cycles/adapter.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp"
-  "${DFV_ROOT}/src/viewport/display.cpp")
+  "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(CyclesViewportBench PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(CyclesViewportBench PRIVATE ${LIB} dfv_scene bf::dependencies::epoxy
   opengl32 gdi32 user32 dwmapi psapi winmm)
@@ -19,7 +19,7 @@ qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
   "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/parameters.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/viewport/window.cpp"
-  "${DFV_ROOT}/src/viewport/display.cpp")
+  "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(DazFastViewer PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(DazFastViewer PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_compile_definitions(DazFastViewer PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")

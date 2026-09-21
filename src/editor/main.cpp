@@ -2,6 +2,7 @@
 #include "editor/project.h"
 #include "editor/parameters.h"
 #include "daz/pose.h"
+#include "runtime/picking.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
 #include <QApplication>
@@ -33,7 +34,11 @@
 #include <QComboBox>
 #include <QDir>
 #include <QMessageBox>
+#include <QSettings>
+#include <QCloseEvent>
+#include <QTreeWidgetItemIterator>
 #include <fstream>
+#include <cctype>
 
 namespace {
 using namespace dfv;
@@ -63,6 +68,17 @@ class Editor final:public QMainWindow {
   std::filesystem::path pose_file_;
   bool pose_test_=false,frame_pending_=false;
   bool formula_test_=false;
+  bool workflow_test_=false;
+  bool head_selection_test_=false;
+  int head_test_joint_=-1,eye_test_joint_=-1,lip_test_joint_=-1,head_test_skin_=-1,probe_index_=0;
+  QPoint probe_center_,probe_point_;
+  uint64_t head_test_epoch_=0;
+  size_t head_test_triangles_=0;
+  bool capture_test_=false;
+  uint64_t workflow_click_=0;
+  int workflow_target_=-1,workflow_joint_=-1;
+  nlohmann::json hover_checks_=nlohmann::json::array();
+  POINT workflow_cursor_{};
   std::vector<std::string> formula_names_={"Arms Length","Chest Scale","Eyes Closed","HS Sanny Shy","Flex Quad Left"};
   uint64_t formula_ui_revision_=0;
   size_t formula_case_=0;
@@ -70,7 +86,13 @@ class Editor final:public QMainWindow {
   nlohmann::json parameter_checks_=nlohmann::json::array();
   bool loading_=false,self_test_=false;
   QString load_error_;
-  int selected_=-1,test_stage_=0;
+  int selected_=-1,selected_joint_=-1,selected_light_=-1,test_stage_=0;
+  uint64_t clicks_=0;
+  QSize viewport_size_;qint64 resize_at_=0;
+  QByteArray default_layout_;
+  QByteArray workflow_layout_;
+  QDoubleSpinBox *light_power_=nullptr;
+  ir::Transform light_base_;
   size_t test_morph_=0;
   uint64_t generation_=0,test_evaluations_=0;
   uint64_t test_skin_evaluations_=0;
@@ -81,6 +103,43 @@ class Editor final:public QMainWindow {
     auto *d=new QDockWidget(title,this);d->setObjectName(title);d->setWidget(widget);addDockWidget(area,d);return d;
   }
   void send() {++snapshot_.revision;renderer_->edit(snapshot_);}
+  void progress(const QString &message) {QMetaObject::invokeMethod(this,[this,message] {statusBar()->showMessage(message);},Qt::QueuedConnection);}
+  void choose(int target,int joint=-1) {
+    for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==target&&(*it)->data(0,Qt::UserRole+1).toInt()==joint&&(*it)->data(0,Qt::UserRole+2).toInt()<0) {
+      hierarchy_->setCurrentItem(*it);hierarchy_->scrollToItem(*it);return;
+    }
+    hierarchy_->setCurrentItem(nullptr);select(-1);
+  }
+  void rebuild_hierarchy() {
+    QSignalBlocker block(hierarchy_);hierarchy_->clear();
+    std::map<std::string,QTreeWidgetItem *> objects;
+    auto identify=[](QTreeWidgetItem *item,int target,int joint=-1,int light=-1) {item->setData(0,Qt::UserRole,target);item->setData(0,Qt::UserRole+1,joint);item->setData(0,Qt::UserRole+2,light);};
+    std::vector<QTreeWidgetItem *> items;
+    for(size_t i=0;i<document_->catalog.targets.size();++i) {
+      const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));items.push_back(item);
+      for(const auto &object:document_->loaded.objects) if(object.instance==target.instance) objects[object.id]=item;
+      for(const auto &skin:document_->skeletons.skins) if(skin.instance==target.instance) {
+        std::vector<QTreeWidgetItem *> bones;
+        for(size_t j=0;j<skin.joints.size();++j) {const auto &joint=skin.joints[j];auto *bone=joint.parent<0?item:new QTreeWidgetItem(bones[size_t(joint.parent)],{text(joint.label)});if(joint.parent>=0) identify(bone,int(i),int(j));bones.push_back(bone);}
+      }
+    }
+    for(size_t i=0;i<items.size();++i) {const auto &parent=document_->catalog.targets[i].parent;if(parent.starts_with('#')&&objects.contains(parent.substr(1))&&objects[parent.substr(1)]!=items[i]) {hierarchy_->takeTopLevelItem(hierarchy_->indexOfTopLevelItem(items[i]));objects[parent.substr(1)]->addChild(items[i]);}}
+    for(size_t i=0;i<snapshot_.lights.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{QStringLiteral("灯光 · ")+text(snapshot_.lights[i].id)});identify(item,-1,-1,int(i));}
+  }
+  void add_light() {
+    if(loading_) return;
+    auto next=document_?std::make_shared<Document>(*document_):std::make_shared<Document>();next->generation=++generation_;
+    next->loaded.scene.lights=snapshot_.lights;
+    ir::AreaLight light;light.id="Area "+std::to_string(next->loaded.scene.lights.size()+1);light.transform=ir::Transform::translate({0,-2,3});
+    next->loaded.scene.lights.push_back(light);document_=next;snapshot_.generation=next->generation;snapshot_.lights=next->loaded.scene.lights;++snapshot_.revision;
+    rebuild_hierarchy();renderer_->set_document(document_,snapshot_,false);hierarchy_->setCurrentItem(hierarchy_->topLevelItem(hierarchy_->topLevelItemCount()-1));
+  }
+  void apply_material_file(const std::filesystem::path &file) {
+    if(loading_||selected_<0||!document_) throw std::runtime_error("请先选中材质预设的目标对象");
+    auto preset=daz::load(file,{roots_,false});auto next=std::make_shared<Document>(*document_);next->generation=++generation_;
+    apply_materials(*next,size_t(selected_),preset);
+    next->loaded.scene.lights=snapshot_.lights;document_=next;snapshot_.generation=next->generation;++snapshot_.revision;select(selected_,selected_joint_);renderer_->set_document(document_,snapshot_,false);
+  }
   int selected_skin() const {
     if(selected_<0||!document_) return -1;const auto instance=document_->catalog.targets[size_t(selected_)].instance;
     for(size_t i=0;i<document_->skeletons.skins.size();++i) if(document_->skeletons.skins[i].instance==instance) return int(i);
@@ -95,10 +154,10 @@ class Editor final:public QMainWindow {
       snapshot_.poses[size_t(index)]=std::move(applied.joints);snapshot_.values[size_t(selected_)]=std::move(applied.properties);pose_report_=applied.report;
       std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
       const auto skipped=pose_report_["unapplied"].size();
-      pose_status_->setText(QStringLiteral("姿势：%1\n已应用 %2 个骨骼通道；%3 个参数未应用。%4").arg(QString::fromStdWString(file.stem().wstring())).arg(pose_report_["applied_bone_channels"].get<int>()).arg(skipped).arg(skipped?QStringLiteral("点击下方查看详情。") : QString()));
-      pose_status_->setToolTip(QString::fromStdWString(file.wstring()));select(selected_);send();frame_pending_=true;return true;
+      pose_status_->setText(QStringLiteral("预设：%1\n已应用 %2 个骨骼通道、%3 个 Morph 通道；%4 项未应用。%5").arg(QString::fromStdWString(file.stem().wstring())).arg(pose_report_["applied_bone_channels"].get<int>()).arg(pose_report_["applied_morph_channels"].get<int>()).arg(skipped).arg(skipped?QStringLiteral("点击下方查看详情。") : QString()));
+      pose_status_->setToolTip(QString::fromStdWString(file.wstring()));select(selected_,selected_joint_);send();frame_pending_=self_test_;return true;
     } catch(const std::exception &e) {
-      if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法应用姿势"),text(e.what()));return false;
+      if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法应用预设"),text(e.what()));return false;
     }
   }
   void reset_pose() {
@@ -108,7 +167,11 @@ class Editor final:public QMainWindow {
   }
   void open_asset(const std::filesystem::path &file) {
     try {const auto data=daz::read_document_file(file);
-      if(data.value("asset_info",nlohmann::json::object()).value("type","")=="preset_pose") apply_pose_file(file);else load(file);
+      const auto type=data.value("asset_info",nlohmann::json::object()).value("type","");
+      if(type=="preset_pose"||type=="preset_shape") apply_pose_file(file);
+      else if(type=="preset_material"||type=="preset_shader") apply_material_file(file);
+      else if(type.starts_with("preset_")&&type!="preset_scene"&&type!="preset_light") throw std::runtime_error("尚不支持的 DUF 预设类型："+type);
+      else load(file,false,document_!=nullptr);
     } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
   }
   void update_libraries() {
@@ -120,7 +183,7 @@ class Editor final:public QMainWindow {
   void project_settings() {
     if(loading_) return;
     if(edit_project_settings(this,project_)) {
-      update_libraries();if(document_) load(std::filesystem::u8path(document_->loaded.report.at("input").get<std::string>()),true);
+      update_libraries();statusBar()->showMessage(QStringLiteral("内容库设置已保存，将用于后续资产加载。"));
     }
   }
   void set_morph(size_t morph,double value) {
@@ -130,15 +193,25 @@ class Editor final:public QMainWindow {
     parameters_->refresh(morph);
     send();
   }
-  void select(int index) {
-    selected_=index;
+  void select(int index,int joint=-1,int light=-1) {
+    selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
+    if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint);
+    if(light>=0&&document_) {
+      const auto &l=snapshot_.lights.at(size_t(light));light_base_=l.transform;light_base_.value[3]=light_base_.value[7]=light_base_.value[11]=0;selection_->setText(text(l.id));parameters_->bind(nullptr,nullptr);
+      const float data[]={l.transform.value[3]*100,l.transform.value[11]*100,-l.transform.value[7]*100,0,0,0,100,100,100};
+      for(int i=0;i<9;++i) {QSignalBlocker block(transform_[i]);transform_[i]->setValue(data[i]);transform_[i]->setEnabled(i<6);}
+      QSignalBlocker block(light_power_);light_power_->setValue(std::max({l.power.x,l.power.y,l.power.z}));return;
+    }
     if(index<0 || !document_) {selection_->setText(QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
     const auto &target=document_->catalog.targets[size_t(index)];selection_->setText(text(target.label));
     const auto &values=snapshot_.values[size_t(index)];
     const auto &t=values.transform;
     const float data[]={t.translation_cm.x,t.translation_cm.y,t.translation_cm.z,t.rotation_degrees.x,t.rotation_degrees.y,t.rotation_degrees.z,t.scale.x*100,t.scale.y*100,t.scale.z*100};
     for(int i=0;i<9;++i) {QSignalBlocker block(transform_[i]);transform_[i]->setValue(data[i]);transform_[i]->setEnabled(true);}
-    parameters_->bind(&target,&values);
+    std::string node;
+    if(joint>=0) {const auto skin=selected_skin();if(skin>=0) {const auto &j=document_->skeletons.skins[size_t(skin)].joints.at(size_t(joint));node=j.id;selection_->setText(text(target.label+" / "+j.label));}}
+    if(joint>=0) for(auto *spin:transform_) spin->setEnabled(false);
+    parameters_->bind(&target,&values,node);
   }
   void reset_selected() {
     if(selected_<0) return;
@@ -150,14 +223,19 @@ class Editor final:public QMainWindow {
     select(selected_);send();
   }
   void finish_test(bool pass,const std::string &error={}) {
+    if(workflow_test_) SetCursorPos(workflow_cursor_.x,workflow_cursor_.y);
     const auto status=renderer_->status();
     nlohmann::json report={{"status",pass?"PASS":"FAIL"},{"error",error},{"stage",test_stage_},
       {"mesh_creations",status.adapter.meshes},{"geometry_updates",status.adapter.geometry_updates},{"instance_updates",status.adapter.instance_updates},
       {"morph_evaluations",status.evaluation.morph_evaluations},{"max_displacement_m",status.max_displacement},
       {"skin_evaluations",status.skinning.evaluations},{"skin_vertices",status.skinning.vertices},
+      {"conform_bound_vertices",status.conform.bindings},{"conform_authored_morphs",status.conform.authored_morphs},{"conform_evaluations",status.conform.evaluations},
       {"formula_evaluations",status.formulas.expressions},{"formula_channels",status.formulas.channels},
       {"qt_version",QT_VERSION_STR},{"monitor",screen()->name().toStdString()},{"window",{x(),y(),width(),height()}},
       {"scope","selected-object-morph-transform-reset-camera-no-morph-evaluation"}};
+    if(workflow_test_) {report["scope"]="raycast-body-part-tree-head-morph-hover-resize-layout";report["viewport"]={status.width,status.height};report["hovered_instance"]=status.hovered;report["hovered_joint"]=status.hovered_joint;report["hovered_triangles"]=status.hovered_triangles;report["selected_joint"]=selected_joint_;report["hover_checks"]=hover_checks_;}
+    if(head_selection_test_) report["scope"]="figure-head-detail-and-bound-clothing-picking";
+    if(capture_test_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!reload_file_.empty()) report["scope"]="background-scene-replacement-generation-isolation";
     if(pose_test_) report["scope"]="pose-apply-reset-camera-no-skin-evaluation";
     if(formula_test_) {report["scope"]="parameter-slider-regression-with-ERC-JCM";report["parameter_checks"]=parameter_checks_;}
@@ -169,8 +247,69 @@ class Editor final:public QMainWindow {
         report["named_parameters"].push_back({{"label",m.label},{"group",m.group},{"kind",m.kind},{"source",m.source}});
     std::ofstream(output_/"editor-check.json")<<report.dump(2);QApplication::exit(pass?0:1);
   }
+  void head_selection_tick(const RenderStatus &state) {
+    auto &skin=document_->skeletons.skins.at(size_t(std::max(0,head_test_skin_)));
+    std::ofstream(output_/"selection-progress.json")<<nlohmann::json({{"stage",test_stage_},{"camera_epoch",state.camera.epoch},{"frame_epoch",head_test_epoch_},{"selected_target",state.selected_target},{"selected_joint",state.selected_joint},{"requested_pointer",{probe_point_.x(),probe_point_.y()}},{"actual_pointer",{state.pointer_x,state.pointer_y}},{"detail",state.hovered_detail_joint},{"probe",probe_index_}}).dump();
+    auto position=[&](int joint) {const auto &instance=document_->loaded.scene.instances[skin.instance];const auto &mesh=document_->loaded.scene.meshes[instance.mesh];const auto regions=runtime::joint_regions(mesh,skin);ir::Bounds bounds;
+      for(size_t t=0;t<mesh.triangles.size();++t) {const auto &face=mesh.triangles[t];const bool matches=joint==lip_test_joint_?face.material_slot<mesh.material_slots.size()&&mesh.material_slots[face.material_slot]=="Lips":(joint==regions.head?regions.body[t]:regions.detail[t])==joint;
+        if(matches) for(auto v:face.vertices) bounds.add(instance.transform.point(mesh.positions[v]));}
+      if(bounds.empty) throw std::runtime_error("测试部位没有几何区域");return bounds.center();};
+    auto project=[&](ir::Vec3 p) {const auto m=state.camera.matrix();p={p.x-m[3],p.y-m[7],p.z-m[11]};const float z=m[2]*p.x+m[6]*p.y+m[10]*p.z,e=std::tan(.4f);return QPoint(qRound((1+(m[0]*p.x+m[4]*p.y+m[8]*p.z)/z/e/std::max(1.f,float(state.width)/state.height))*state.width*.5f-.5f),qRound((1-(m[1]*p.x+m[5]*p.y+m[9]*p.z)/z/e/std::max(1.f,float(state.height)/state.width))*state.height*.5f-.5f));};
+    auto move_probe=[&] {const int n=probe_index_++;const int x=n==0?0:((n-1)%21-10)*4,y=n==0?0:((n-1)/21-10)*4;probe_point_=probe_center_+QPoint(x,y);probe_point_.setX(std::clamp(probe_point_.x(),1,state.width-2));probe_point_.setY(std::clamp(probe_point_.y(),1,state.height-2));renderer_->pointer(probe_point_.x(),probe_point_.y());};
+    auto at_probe=[&] {return state.pointer_x==probe_point_.x()&&state.pointer_y==probe_point_.y();};
+    auto click=[&] {workflow_click_=state.clicks;renderer_->pointer(probe_point_.x(),probe_point_.y(),true);};
+    auto record=[&](const char *name) {hover_checks_.push_back({{"mode",name},{"selected_target",selected_},{"selected_joint",selected_joint_},{"hovered_joint",state.hovered_joint},{"highlight_triangles",state.hovered_triangles}});};
+    auto lip=[&](int joint) {if(joint<0||size_t(joint)>=skin.joints.size()) return false;const auto &name=skin.joints[size_t(joint)].id;return name.find("LipUpper")!=std::string::npos||name.find("LipLower")!=std::string::npos;};
+    if(test_stage_==0) {
+      head_test_skin_=0;workflow_target_=0;for(size_t t=0;t<document_->catalog.targets.size();++t) if(document_->catalog.targets[t].instance==skin.instance) workflow_target_=int(t);
+      for(size_t j=0;j<skin.joints.size();++j) {const auto &id=skin.joints[j].id;if(id=="head") head_test_joint_=int(j);if(id=="lEye") eye_test_joint_=int(j);if(id=="LipUpperMiddle") lip_test_joint_=int(j);}
+      if(head_test_joint_<0||eye_test_joint_<0||lip_test_joint_<0) {finish_test(false,"头部分级测试缺少头 / 眼 / 唇节点");return;}
+      choose(-1);auto c=position(head_test_joint_);ir::Bounds face;face.add({c.x-.14f,c.y-.14f,c.z-.19f});face.add({c.x+.14f,c.y+.14f,c.z+.19f});head_test_epoch_=state.camera.epoch;renderer_->frame(face);
+      test_evaluations_=state.evaluation.morph_evaluations;test_skin_evaluations_=state.skinning.evaluations;test_stage_=1;
+    } else if(test_stage_==1) {
+      if(state.camera.epoch==head_test_epoch_||state.selected_target!=-1) return;probe_center_=project(position(eye_test_joint_));probe_index_=0;move_probe();test_stage_=2;
+    } else if(test_stage_==2) {
+      if(!at_probe()) return;if(state.hovered_detail_joint!=eye_test_joint_) {if(probe_index_>441) {finish_test(false,"头部近景没有命中眼球");return;}move_probe();return;}
+      if(state.hovered_joint!=-1) {finish_test(false,"第一次眼球射线没有预选角色整体");return;}record("eye_first_hit_figure");click();test_stage_=3;
+    } else if(test_stage_==3) {
+      if(state.clicks<=workflow_click_||state.selected_target!=workflow_target_) return;
+      if(selected_!=workflow_target_||selected_joint_!=-1||state.hovered_joint!=head_test_joint_) {finish_test(false,"人物选中后眼球悬停没有聚合整个头部");return;}
+      const auto regions=runtime::joint_regions(document_->loaded.scene.meshes[document_->loaded.scene.instances[skin.instance].mesh],skin);
+      head_test_triangles_=size_t(std::count(regions.body.begin(),regions.body.end(),head_test_joint_));
+      if(state.hovered_triangles!=head_test_triangles_) {finish_test(false,"Head 高亮没有覆盖完整头部及子节点");return;}
+      record("second_hit_whole_head");screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"head-whole.png").wstring()));click();test_stage_=4;
+    } else if(test_stage_==4) {
+      if(state.clicks<=workflow_click_||state.selected_joint!=head_test_joint_) return;
+      if(selected_joint_!=head_test_joint_||state.hovered_joint!=eye_test_joint_||state.hovered_triangles>=head_test_triangles_||!state.hovered_triangles) {finish_test(false,"选中 Head 后没有进入眼球细分");return;}
+      record("third_hit_eye");screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"head-eye.png").wstring()));click();test_stage_=5;
+    } else if(test_stage_==5) {
+      if(state.clicks<=workflow_click_||state.selected_joint!=eye_test_joint_) return;if(selected_joint_!=eye_test_joint_) {finish_test(false,"第三次点击未选中眼球");return;}
+      record("eye_selected");choose(workflow_target_,head_test_joint_);probe_center_=project(position(lip_test_joint_));probe_index_=0;move_probe();test_stage_=6;
+    } else if(test_stage_==6) {
+      if(!at_probe()||state.selected_joint!=head_test_joint_) return;
+      if(!lip(state.hovered_joint)) {if(probe_index_>441) {finish_test(false,"Head 选中后不能命中嘴唇");return;}move_probe();return;}
+      lip_test_joint_=state.hovered_joint;record("head_to_lip");screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"head-lip.png").wstring()));click();test_stage_=7;
+    } else if(test_stage_==7) {
+      if(state.clicks<=workflow_click_) return;if(selected_joint_!=lip_test_joint_) {finish_test(false,"嘴唇射线与场景树节点不一致");return;}
+      record("lip_selected");int garment=-1;for(size_t t=0;t<document_->catalog.targets.size();++t) if(!document_->catalog.targets[t].conform_target.empty()) {garment=int(t);break;}
+      if(garment<0) {finish_test(true);return;}choose(garment);if(selected_!=garment) {finish_test(false,"绑定服装无法通过场景树选择");return;}
+      record("bound_clothing_tree_selection");head_test_epoch_=state.camera.epoch;renderer_->frame(state.bounds.at(size_t(workflow_target_)));test_stage_=8;
+    } else if(test_stage_==8) {
+      if(state.camera.epoch==head_test_epoch_) return;probe_point_={state.width/2,state.height/2};renderer_->pointer(probe_point_.x(),probe_point_.y());test_stage_=9;
+    } else if(test_stage_==9) {
+      if(!at_probe()) return;if(state.hovered!=int(skin.instance)) {finish_test(false,"绑定服装阻挡了角色射线");return;}
+      record("ray_through_bound_clothing");click();test_stage_=10;
+    } else if(test_stage_==10) {
+      if(state.clicks<=workflow_click_) return;if(selected_!=workflow_target_||selected_joint_!=-1) {finish_test(false,"点击穿戴区域没有选择角色");return;}
+      if(state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"分级选择触发了变形");return;}record("body_selected_through_clothing");finish_test(true);
+    }
+  }
   void tick() {
+    const QSize size(qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()));
+    if(size!=viewport_size_) {viewport_size_=size;resize_at_=QDateTime::currentMSecsSinceEpoch()+180;}
+    if(resize_at_&&QDateTime::currentMSecsSinceEpoch()>=resize_at_) {resize_at_=0;renderer_->resize(size.width(),size.height());}
     const auto state=renderer_->status();
+    if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint);}
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);
@@ -178,12 +317,92 @@ class Editor final:public QMainWindow {
     else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
+    if(capture_test_) {
+      if(QDateTime::currentMSecsSinceEpoch()-test_started_>360000) {finish_test(false,"场景显示验证超时");return;}
+      if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=16) {
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"scene.png").wstring()));finish_test(true);
+      }return;
+    }
+    if(workflow_test_) {
+      if(QDateTime::currentMSecsSinceEpoch()-test_started_>360000) {finish_test(false,"场景交互验证超时");return;}
+      if(!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<8) return;
+      if(head_selection_test_) {head_selection_tick(state);return;}
+      auto check_hover=[&](const char *mode,bool part) {
+        if(state.hovered<0) return false;
+        const auto total=document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(size_t(state.hovered)).mesh).triangles.size();
+        if(part?(state.hovered_joint<0||state.hovered_triangles==0||state.hovered_triangles>=total):(state.hovered_joint>=0||state.hovered_triangles!=total)) {finish_test(false,"悬停覆盖范围与选取层级不一致");return false;}
+        hover_checks_.push_back({{"mode",mode},{"joint",state.hovered_joint},{"highlight_triangles",state.hovered_triangles},{"object_triangles",total}});return true;
+      };
+      if(test_stage_==0) {choose(-1);workflow_click_=state.clicks;renderer_->pointer(state.width/2,state.height/2);test_stage_=10;}
+      else if(test_stage_==10) {
+        if(state.selection_generation!=document_->generation||state.selected_target!=-1||!check_hover("unselected_whole",false)) return;
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"workflow-hover-whole.png").wstring()));
+        renderer_->pointer(state.width/2,state.height/2,true);test_stage_=1;
+      }
+      else if(test_stage_==1&&state.clicks>workflow_click_) {
+        if(selected_<0||selected_joint_>=0) {finish_test(false,"首次角色射线未选择整体");return;}
+        test_evaluations_=state.evaluation.morph_evaluations;test_skin_evaluations_=state.skinning.evaluations;test_stage_=11;
+      } else if(test_stage_==11) {
+        if(state.selection_generation!=document_->generation||state.selected_target!=selected_||!check_hover("selected_figure_part",true)) return;
+        if(selected_joint_>=0||state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"一级选择后的悬停修改了选择或触发变形");return;}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"workflow-hover-part.png").wstring()));
+        workflow_click_=state.clicks;renderer_->pointer(state.width/2,state.height/2,true);test_stage_=2;
+      } else if(test_stage_==2&&state.clicks>workflow_click_) {
+        if(selected_joint_<0) {finish_test(false,"二次角色射线未选择部位");return;}
+        if(selected_joint_!=state.hovered_joint) {finish_test(false,"二次点击选中的部位与悬停高亮不一致");return;}
+        const auto index=selected_skin();const auto &skin=document_->skeletons.skins[size_t(index)];int head=-1;
+        for(size_t j=0;j<skin.joints.size();++j) if(skin.joints[j].id=="head") head=int(j);
+        if(head<0) {finish_test(false,"角色缺少头部节点");return;}choose(selected_,head);
+        const auto &morphs=document_->catalog.targets[size_t(selected_)].morphs;
+        auto found=std::find_if(morphs.begin(),morphs.end(),[](const auto &m) {return m.label=="Jaw Open"&&m.owner=="head"&&m.unsupported.empty();});
+        if(found==morphs.end()) {finish_test(false,"头部 Jaw Open 别名未启用");return;}
+        test_morph_=size_t(found-morphs.begin());parameters_->query(QStringLiteral("Jaw Open"));parameters_->select_parameter(test_morph_);parameters_->set_slider(500);test_initial_displacement_=state.max_displacement;test_stage_=3;
+      } else if(test_stage_==3) {
+        if(state.max_displacement<=test_initial_displacement_) {finish_test(false,"头部 Morph 未改变网格");return;}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"workflow-head.png").wstring()));
+        test_evaluations_=state.evaluation.morph_evaluations;test_skin_evaluations_=state.skinning.evaluations;
+        resize(width()-160,height()-90);test_stage_=4;
+      } else if(test_stage_==4) {
+        if(resize_at_||state.width!=viewport_size_.width()||state.height!=viewport_size_.height()) return;
+        if(state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"视口缩放重新求值了变形");return;}
+        renderer_->pointer(state.width/2,state.height/2);test_stage_=5;
+      } else if(test_stage_==5) {
+        if(!check_hover("selected_bone_hover_other_part",true)) return;
+        if(selected_joint_<0) {finish_test(false,"缩放视口清除了部位选择");return;}
+        const auto saved=saveState(1);
+        {QSettings settings(QString::fromStdWString((output_/"layout-test.ini").wstring()),QSettings::IniFormat);settings.setValue("docks",saved);settings.sync();}
+        auto *panel=hierarchy_->parentWidget();panel->hide();
+        {QSettings settings(QString::fromStdWString((output_/"layout-test.ini").wstring()),QSettings::IniFormat);if(!restoreState(settings.value("docks").toByteArray(),1)||!panel->isVisible()) {finish_test(false,"布局磁盘保存与恢复失败");return;}}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"workflow-resized.png").wstring()));
+        workflow_layout_=saveState(1);auto *viewport=findChild<QDockWidget *>("Viewport");viewport->setFloating(true);viewport->setGeometry(QRect(screen()->availableGeometry().topLeft()+QPoint(120,100),QSize(800,650)));test_stage_=6;
+      } else if(test_stage_==6) {
+        if(resize_at_||state.width!=viewport_size_.width()||state.height!=viewport_size_.height()) return;
+        auto *viewport=findChild<QDockWidget *>("Viewport");viewport->screen()->grabWindow(viewport->winId()).save(QString::fromStdWString((output_/"workflow-floating.png").wstring()));
+        viewport->setFloating(false);restoreState(workflow_layout_,1);test_stage_=7;
+      } else if(test_stage_==7) {
+        if(resize_at_||state.width!=viewport_size_.width()||state.height!=viewport_size_.height()) return;
+        if(selected_joint_<0||state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"浮动停靠改变了选择或重新求值变形");return;}
+        workflow_target_=selected_;workflow_joint_=selected_joint_;choose(-1);renderer_->pointer(state.width/2,state.height/2);test_stage_=12;
+      } else if(test_stage_==12) {
+        if(state.selected_target!=-1||!check_hover("cleared_selection_whole",false)) return;
+        workflow_click_=state.clicks;renderer_->pointer(2,2,true);test_stage_=13;
+      } else if(test_stage_==13&&state.clicks>workflow_click_) {
+        if(selected_>=0||state.hovered>=0||state.hovered_triangles!=0) {finish_test(false,"空白点击没有清除选择及悬停");return;}
+        choose(workflow_target_,workflow_joint_);renderer_->pointer(state.width/2,state.height/2);test_stage_=14;
+      } else if(test_stage_==14) {
+        if(state.selected_target!=selected_||!check_hover("tree_selection_part",true)) return;
+        if(state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"选择或悬停触发变形求值");return;}
+        finish_test(true);
+      }
+      return;
+    }
     if(QDateTime::currentMSecsSinceEpoch()-test_started_>(formula_test_?360000:180000)) {finish_test(false,"等待编辑器验证超时");return;}
-    if(!document_ || state.generation!=document_->generation || state.presented_revision!=snapshot_.revision || state.presented_epoch!=state.requested_epoch || state.frames==0 || state.samples<8) return;
+    if(!document_ || state.generation!=document_->generation || state.presented_revision!=snapshot_.revision || state.presented_epoch!=state.requested_epoch || state.frames==0 || state.samples<(state.conform.bindings?32:8)) return;
     if(formula_test_) {
       const auto &names=formula_names_;
       if(test_stage_==0) {
         test_initial_displacement_=state.max_displacement;const auto &morphs=document_->catalog.targets[0].morphs;
+        if(formula_case_==0) {screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"editor-before.png").wstring()));if(state.conform.bindings>0&&!state.bounds.empty()) renderer_->frame(state.bounds[0]);}
         auto found=std::find_if(morphs.begin(),morphs.end(),[&](const auto &m) {return m.label==names[formula_case_]&&m.kind!="alias"&&m.unsupported.empty();});
         if(found==morphs.end()) {finish_test(false,"指定参数未启用："+names[formula_case_]);return;}
         test_morph_=size_t(found-morphs.begin());parameters_->query(text(found->label));parameters_->select_parameter(test_morph_);
@@ -203,6 +422,7 @@ class Editor final:public QMainWindow {
         reset_selected();test_stage_=2;
       } else if(test_stage_==2) {
         if(state.max_displacement!=test_initial_displacement_) {finish_test(false,"参数恢复出现漂移");return;}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/("editor-parameter-reset-"+std::to_string(formula_case_)+".png")).wstring()));
         if(++formula_case_<names.size()) {test_stage_=0;return;}
         test_evaluations_=state.evaluation.morph_evaluations;test_skin_evaluations_=state.skinning.evaluations;test_formula_evaluations_=state.formulas.expressions;renderer_->orbit(20,0);test_stage_=3;
       } else if(test_stage_==3) {
@@ -258,13 +478,16 @@ class Editor final:public QMainWindow {
     }
   }
 public:
+  void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
+  void head_selection_test() {workflow_test();head_selection_test_=true;}
+  void capture_test() {capture_test_=true;self_test_=true;}
   void test_parameters(const QStringList &names) {if(names.empty()) return;formula_names_.clear();for(const auto &name:names) formula_names_.push_back(name.toUtf8().toStdString());}
   Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
     setWindowTitle(QStringLiteral("DazFastViewer · 场景与形态编辑器"));setAttribute(Qt::WA_ShowWithoutActivating);
     setDockOptions(AnimatedDocks|AllowNestedDocks|AllowTabbedDocks);
     auto *central=new QWidget;auto *layout=new QVBoxLayout(central);layout->setContentsMargins(4,4,4,4);
-    host_=new QWidget;host_->setAttribute(Qt::WA_NativeWindow);host_->setAttribute(Qt::WA_DontCreateNativeAncestors);host_->setFixedSize(960,720);
-    layout->addWidget(host_,0,Qt::AlignCenter);layout->addWidget(new QLabel(QStringLiteral("右键旋转 · Shift＋右键平移 · 滚轮缩放")),0,Qt::AlignCenter);setCentralWidget(central);
+    host_=new QWidget;host_->setAttribute(Qt::WA_NativeWindow);host_->setAttribute(Qt::WA_DontCreateNativeAncestors);host_->setMinimumSize(160,120);host_->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
+    layout->addWidget(host_,1);layout->addWidget(new QLabel(QStringLiteral("右键旋转 · Shift＋右键平移 · 滚轮缩放")),0,Qt::AlignCenter);auto *viewport_dock=dock(QStringLiteral("视口"),central,Qt::RightDockWidgetArea);viewport_dock->setObjectName("Viewport");
     files_=new QFileSystemModel(this);files_->setNameFilters({"*.duf"});files_->setNameFilterDisables(false);files_->setReadOnly(true);
     explorer_=new QTreeView;explorer_->setModel(files_);
     for(int i=1;i<4;++i) explorer_->hideColumn(i);explorer_->setHeaderHidden(true);explorer_->setMinimumWidth(185);
@@ -283,68 +506,83 @@ public:
       auto *spin=new QDoubleSpinBox;transform_[i]=spin;spin->setDecimals(2);spin->setRange(i>=6?.01:-10000,i>=6?10000:10000);spin->setValue(i>=6?100:0);
       spin->setEnabled(false);spin->setKeyboardTracking(false);form->addRow(names[i],spin);
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this](double) {
-        if(selected_<0) return;auto &t=snapshot_.values[size_t(selected_)].transform;
+        if(selected_light_>=0) {auto &light=snapshot_.lights[size_t(selected_light_)];runtime::TransformValues v;v.translation_cm={float(transform_[0]->value()),float(transform_[1]->value()),float(transform_[2]->value())};v.rotation_degrees={float(transform_[3]->value()),float(transform_[4]->value()),float(transform_[5]->value())};light.transform=runtime::make_transform(v)*light_base_;send();return;}
+        if(selected_<0||selected_joint_>=0) return;auto &t=snapshot_.values[size_t(selected_)].transform;
         t.translation_cm={float(transform_[0]->value()),float(transform_[1]->value()),float(transform_[2]->value())};
         t.rotation_degrees={float(transform_[3]->value()),float(transform_[4]->value()),float(transform_[5]->value())};
         t.scale={float(transform_[6]->value()/100),float(transform_[7]->value()/100),float(transform_[8]->value()/100)};send();
       });
     }
     properties->addLayout(form);
-    pose_status_=new QLabel(QStringLiteral("选中角色后，可从“姿势”菜单加载姿势 DUF。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
-    auto *pose_details=new QPushButton(QStringLiteral("姿势应用详情"));properties->addWidget(pose_details);
+    light_power_=new QDoubleSpinBox;light_power_->setRange(0,10000000);light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
+    connect(light_power_,&QDoubleSpinBox::valueChanged,this,[this](double value) {if(selected_light_<0) return;auto &p=snapshot_.lights[size_t(selected_light_)].power;const auto previous=std::max({p.x,p.y,p.z});const float ratio=previous>0?float(value)/previous:0;p=previous>0?ir::Vec3{p.x*ratio,p.y*ratio,p.z*ratio}:ir::Vec3{float(value),float(value),float(value)};send();});
+    pose_status_=new QLabel(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
+    auto *pose_details=new QPushButton(QStringLiteral("预设应用详情"));properties->addWidget(pose_details);
     connect(pose_details,&QPushButton::clicked,this,[this] {
-      QString details=QStringLiteral("尚未应用姿势。");
-      if(!pose_report_.is_null()) {details=QStringLiteral("未应用的非零控制器或未知骨骼通道：\n");for(const auto &c:pose_report_["unapplied"]) details+=text(c.value("node","")+c.value("modifier","")+" · "+c.value("property","")+" = "+std::to_string(c.at("value").get<float>())+"\n"+c.value("reason","")+"\n");
-        if(pose_report_["unapplied"].empty()) details=QStringLiteral("姿势文件中所有非零参数均已应用。");}
-      QMessageBox::information(this,QStringLiteral("姿势应用详情"),details);
+      QString details=QStringLiteral("尚未应用预设。");
+      if(!pose_report_.is_null()) {details=QStringLiteral("未应用的通道：\n");for(const auto &c:pose_report_["unapplied"]) details+=text(c.value("node","")+c.value("modifier","")+" · "+c.value("property","")+" = "+std::to_string(c.at("value").get<float>())+"\n"+c.value("reason","")+"\n");
+        if(pose_report_["unapplied"].empty()) details=QStringLiteral("预设中所有非零参数均已应用。");}
+      QMessageBox::information(this,QStringLiteral("预设应用详情"),details);
     });
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     parameters_=new ParameterPanel;parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};properties->addWidget(parameters_,1);
-    dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);
-    auto *file_menu=menuBar()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("打开 DUF…"));open_->setShortcut(QKeySequence::Open);
+    auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
+    auto *file_menu=menuBar()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
     connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 文件 (*.duf)"));if(!file.isEmpty()) open_asset(file_path(file));});
     auto *project_menu=menuBar()->addMenu(QStringLiteral("项目"));project_action_=project_menu->addAction(QStringLiteral("项目设置…"));
     connect(project_action_,&QAction::triggered,this,[this] {project_settings();});
     connect(file_menu->addAction(QStringLiteral("退出")),&QAction::triggered,this,&QWidget::close);
     auto *edit=menuBar()->addMenu(QStringLiteral("编辑"));connect(edit->addAction(QStringLiteral("重置选中对象")),&QAction::triggered,this,[this] {reset_selected();});
-    auto *pose_menu=menuBar()->addMenu(QStringLiteral("姿势"));
-    connect(pose_menu->addAction(QStringLiteral("应用姿势 DUF…")),&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("为选中角色应用姿势"),{},QStringLiteral("DAZ 姿势 (*.duf)"));if(!file.isEmpty()) apply_pose_file(file_path(file));});
-    connect(pose_menu->addAction(QStringLiteral("恢复载入姿势")),&QAction::triggered,this,[this] {reset_pose();});
+    connect(file_menu->addAction(QStringLiteral("打开场景（替换）…")),&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("打开场景"),{},QStringLiteral("DAZ 场景 (*.duf)"));if(!file.isEmpty()) load(file_path(file));});
+    auto *create=menuBar()->addMenu(QStringLiteral("创建"));
+    connect(create->addAction(QStringLiteral("面光源")),&QAction::triggered,this,[this] {add_light();});
     auto *view=menuBar()->addMenu(QStringLiteral("视图"));for(auto *d:findChildren<QDockWidget *>()) view->addAction(d->toggleViewAction());
     connect(view->addAction(QStringLiteral("框选当前对象")),&QAction::triggered,this,[this] {frame_pending_=true;});
     connect(explorer_,&QTreeView::doubleClicked,this,[this](const QModelIndex &index) {const auto file=files_->filePath(index);if(QFileInfo(file).suffix().compare("duf",Qt::CaseInsensitive)==0) open_asset(file_path(file));});
-    connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item) {select(item?item->data(0,Qt::UserRole).toInt():-1);});
+    connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item) {select(item?item->data(0,Qt::UserRole).toInt():-1,item?item->data(0,Qt::UserRole+1).toInt():-1,item?item->data(0,Qt::UserRole+2).toInt():-1);});
+    connect(view->addAction(QStringLiteral("恢复默认布局")),&QAction::triggered,this,[this] {restoreState(default_layout_,1);});
     QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens()) if(screen!=QGuiApplication::primaryScreen()) {secondary=screen;break;}
     if(!secondary) throw std::runtime_error("缺少第二屏，编辑器不会在主屏启动");
     resize(1580,920);const QRect available=secondary->availableGeometry();
     if(width()>available.width() || height()>available.height()) throw std::runtime_error("第二屏工作区不足以容纳当前编辑器布局");
-    move(available.center()-QPoint(width()/2,height()/2));show();
+    resizeDocks({viewport_dock,property_dock},{850,330},Qt::Horizontal);default_layout_=saveState(1);
+    if(!self_test_) {QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());restoreState(settings.value("window/docks").toByteArray(),1);}
+    if(!available.contains(frameGeometry())) {resize(std::min(width(),available.width()),std::min(height(),available.height()));move(available.center()-QPoint(width()/2,height()/2));}
+    for(auto *d:findChildren<QDockWidget *>()) if(d->isFloating()&&!available.intersects(d->frameGeometry())) d->move(available.topLeft()+QPoint(30,30));
+    show();
     renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_);
     auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this] {tick();});timer->start(50);
   }
-  ~Editor() override {if(loader_.joinable()) loader_.join();renderer_.reset();}
-  void load(const std::filesystem::path &file,bool preserve=false) {
+  void closeEvent(QCloseEvent *event) override {if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));}QMainWindow::closeEvent(event);}
+  ~Editor() override {loader_.request_stop();if(loader_.joinable()) loader_.join();renderer_.reset();}
+  void load(const std::filesystem::path &file,bool preserve=false,bool append=false) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
     loading_=true;load_error_.clear();open_->setEnabled(false);project_action_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在后台解析场景与参数依赖…"));
-    const auto generation=++generation_;const auto roots=roots_;
-    loader_=std::jthread([this,file,roots,generation,preserve] {
+    const auto generation=++generation_;const auto roots=roots_;const auto previous_document=append?document_:nullptr;
+    loader_=std::jthread([this,file,roots,generation,preserve,previous_document](std::stop_token stop) {
       try {
         auto document=std::make_shared<Document>();document->generation=generation;document->loaded=daz::load(file,{roots,false});
         std::vector<std::filesystem::path> resolved;for(const auto &p:document->loaded.report["content_roots"]) resolved.push_back(std::filesystem::u8path(p.get<std::string>()));
-        document->catalog=daz::discover_morphs(document->loaded,resolved);
+        progress(QStringLiteral("正在发现 Morph 与读取场景参数…"));
+        document->catalog=daz::discover_morphs(document->loaded,resolved,[this,stop](const std::string &message) {if(stop.stop_requested()) throw std::runtime_error("已取消加载");progress(text(message));});
+        progress(QStringLiteral("正在解析骨架与场景姿势…"));
         document->skeletons=daz::load_skeletons(document->loaded);
+        progress(QStringLiteral("正在编译 Formula / ERC…"));
         document->formulas=daz::enable_formulas(document->catalog,document->skeletons);
         std::ofstream(output_/"asset-report.json")<<document->loaded.report.dump(2);
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
         std::ofstream(output_/"skeleton-report.json")<<document->skeletons.report.dump(2);
         std::ofstream(output_/"formula-report.json")<<document->formulas.report.dump(2);
-        QMetaObject::invokeMethod(this,[this,document,preserve] {
+        if(previous_document) {auto merged=std::make_shared<Document>(*previous_document);merged->generation=generation;append_document(*merged,std::move(*document));document=std::move(merged);}
+        else if(document->loaded.scene.lights.empty()) ir::add_studio(document->loaded.scene);
+        QMetaObject::invokeMethod(this,[this,document,preserve,previous_document] {
           const auto old=document_;const auto previous=snapshot_;parameters_->bind(nullptr,nullptr);
-          document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.generation=document->generation;snapshot_.revision=1;
-          frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("选中角色后，可从“姿势”菜单加载姿势 DUF。"));
+          document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.generation=document->generation;snapshot_.revision=1;snapshot_.lights=document->loaded.scene.lights;
+          if(previous_document) for(size_t l=0;l<previous.lights.size();++l) snapshot_.lights[l]=previous.lights[l];
+          frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));
           for(const auto &skin:document_->skeletons.skins) {
             auto pose=skin.initial;
-            if(preserve&&old) for(size_t s=0;s<old->skeletons.skins.size();++s) if(old->skeletons.skins[s].id==skin.id) {
+            if((preserve||previous_document)&&old) for(size_t s=0;s<old->skeletons.skins.size();++s) if(old->skeletons.skins[s].id==skin.id) {
               std::map<std::string,runtime::JointPose> by_id;for(size_t j=0;j<old->skeletons.skins[s].joints.size();++j) by_id[old->skeletons.skins[s].joints[j].id]=previous.poses[s][j];
               for(size_t j=0;j<skin.joints.size();++j) if(by_id.contains(skin.joints[j].id)) pose[j]=by_id.at(skin.joints[j].id);
             }
@@ -352,20 +590,17 @@ public:
           }
           for(const auto &target:document_->catalog.targets) {
             runtime::Properties values;for(const auto &m:target.morphs) values.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
-            if(preserve && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
+            if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
               values.transform=previous.values[t].transform;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].unsupported.empty() && weights.contains(target.morphs[m].id)) values.morphs[m]=target.morphs[m].clamped?std::clamp(weights[target.morphs[m].id],target.morphs[m].minimum,target.morphs[m].maximum):weights[target.morphs[m].id];
             }
             runtime::sync_aliases(target,values);snapshot_.values.push_back(std::move(values));
           }
-          {QSignalBlocker block(hierarchy_);hierarchy_->clear();
-            for(size_t i=0;i<document_->catalog.targets.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{text(document_->catalog.targets[i].label)});item->setData(0,Qt::UserRole,int(i));item->setToolTip(0,text(document_->catalog.targets[i].id));
-              for(const auto &skin:document_->skeletons.skins) if(skin.instance==document_->catalog.targets[i].instance) {
-                std::vector<QTreeWidgetItem *> bones;for(const auto &joint:skin.joints) {auto *bone=joint.parent<0?item:new QTreeWidgetItem(bones[size_t(joint.parent)],{text(joint.label)});bone->setData(0,Qt::UserRole,int(i));bone->setToolTip(0,text(joint.name+" · "+joint.rotation_order));bones.push_back(bone);}
-              }
-            }}
-          renderer_->set_document(document_,snapshot_);select(-1);hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
+          rebuild_hierarchy();
+          renderer_->set_document(document_,snapshot_,!previous_document);select(-1);
+          const auto first=previous_document?previous_document->catalog.targets.size():0;
+          if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
           if(!pose_file_.empty()&&!pose_test_) {const auto file=pose_file_;pose_file_.clear();apply_pose_file(file);}
         },Qt::QueuedConnection);
       } catch(const std::exception &e) {
@@ -382,6 +617,9 @@ int main(int argc,char **argv) {
   parser.addOption({"content-root",QStringLiteral("内容库目录，可重复"),"directory"});parser.addOption({"output",QStringLiteral("输出目录"),"directory"});
   parser.addOption({"project",QStringLiteral("项目设置文件"),"file"});
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
+  parser.addOption({"workflow-test",QStringLiteral("验证射线、部位 Morph 与视口缩放后退出")});
+  parser.addOption({"head-selection-test",QStringLiteral("验证三级头部选择及绑定服装射线后退出")});
+  parser.addOption({"capture-test",QStringLiteral("场景显示验证后截图退出")});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
@@ -397,6 +635,9 @@ int main(int argc,char **argv) {
     Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"));
     editor.test_parameters(parser.values("test-parameter"));
+    if(parser.isSet("workflow-test")) editor.workflow_test();
+    if(parser.isSet("head-selection-test")) editor.head_selection_test();
+    if(parser.isSet("capture-test")) editor.capture_test();
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

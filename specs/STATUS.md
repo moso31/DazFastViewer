@@ -2,7 +2,11 @@
 
 更新：2026-09-21。
 
-最新：007 基线已中文提交 `da5d4f8`，两批参数兼容性修复已部署，本次按用户授权以中文归档到本地 Git。G8 / G8.1 相对基线新增可编辑 476 / 614 项，本轮各追加 122 项；8 项轻量检查、真实参数 / 姿势、30 组数学对照与副屏流程通过。条件型条目及剩余问题见 [兼容性报告](007-erc-jcm/compatibility-report.md)与[完整清单](007-erc-jcm/remaining-morphs.md)。不再重复性能或全库测试。
+当前插入工作：007 结束、008 未开始；按用户授权实施[场景工作流优化](../Docs/scene_workflow_revision_cn.md)。独立记录于[执行报告](../Docs/scene_workflow_execution_cn.md)，不将这次 UI / DUF / 场景优化计为 008 FK / IK。
+
+最新：007 后场景工作流、服装 Morph / 骨骼跟随、头部三级选取及绑定服装射线过滤已实现并部署，按用户授权归档到本地 Git；验证和剩余边界见[场景执行报告](../Docs/scene_workflow_execution_cn.md)及[服装跟随报告](../Docs/conform_follow_execution_cn.md)。008 未开始。
+
+此前：007 基线已中文提交 `da5d4f8`，两批参数兼容性修复已提交为 `9a4d0fa`。G8 / G8.1 相对基线新增可编辑 476 / 614 项，第二批各追加 122 项；8 项轻量检查、真实参数 / 姿势、30 组数学对照与副屏流程通过。条件型条目及剩余问题见 [兼容性报告](007-erc-jcm/compatibility-report.md)与[完整清单](007-erc-jcm/remaining-morphs.md)。不再重复性能或全库测试。
 
 | 项目 | 状态 | 证据 / 剩余项 |
 |---|---|---|
@@ -20,9 +24,10 @@
 | Spec 005 Morph / 中文 UI | **当前阶段实施范围已完成** | [完成核查](005-morph-runtime/completion-review.md)；六项核心要求、Qt 中文 UI 与多库设置齐备，整体 Golden 仍未完成 |
 | Spec 006 Skeleton / Skinning / Pose | **已中文提交 `aa8fbc7`** | [执行报告](006-skeleton-skinning/execution-report.md)；G8 / G8.1 各 40 姿势、独立数学与副屏验证通过 |
 | Spec 007 Formula / ERC / JCM | **基线已中文提交 `da5d4f8`，后续两批兼容性修复已部署并按授权中文归档** | [兼容性报告](007-erc-jcm/compatibility-report.md)；Ren Yao / BGM 已修复；DAZ Studio Golden 待完成 |
-| FitTo / FK / IK | 后续能力，尚未实现 | [长期规划](../Docs/editor_and_genesis8_roadmap_cn.md)；G8.1 旧眼睛空覆盖保留，不强行套用 G8 控制器 |
+| 已穿戴物 FitTo / AutoFollow | 007 后插入修复：原生 Morph、表面转移和骨骼跟随 | [跟随报告](../Docs/conform_follow_execution_cn.md)；跨代 AutoFit、平滑 / 碰撞另行实现 |
+| FK / IK | 008 未开始 | [长期规划](../Docs/editor_and_genesis8_roadmap_cn.md)；G8.1 旧眼睛空覆盖保留，不强行套用 G8 控制器 |
 | License / 发布依赖审计 | 部分完成 | 新增 JSON 为 MIT、已保留许可；整体发布审计仍未完成 |
 
 用户要求停止重复性能测试，demo 只能在第二屏。本轮仅围绕实际资产和具体显示缺陷验证，不重跑整套基准；`tests/runtime_checks.py` 完整流程仍未执行。
 
-现有材质参考与差异报告继续保留未完成项；005 已中文提交为 `ee2ba05`，006 为 `aa8fbc7`，007 基线为 `da5d4f8`。通用参数兼容性修复已完成本批验证并部署于 `out`，无需新增第三方源码。进入 Genesis 8 服装绑定验证前，再收集同代服装 DUF 与内容库依赖。
+现有材质参考与差异报告继续保留未完成项；005 已中文提交为 `ee2ba05`，006 为 `aa8fbc7`，007 基线为 `da5d4f8`。通用参数兼容性修复及插入优化已部署于 `out`，无需新增第三方源码。已使用 `H:/G1/Scenes/test2.duf` 完成四角色、八件服装的跟随与选取验证；服装平滑 / 碰撞等剩余边界见执行报告。
