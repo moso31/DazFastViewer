@@ -1,4 +1,5 @@
 #include "daz/formulas.h"
+#include "diagnostics/load_profile.h"
 #include "daz/morphs.h"
 #include "daz/skeleton.h"
 #include <algorithm>
@@ -13,7 +14,7 @@ uint32_t FormulaSource::symbol(const std::string &address) {
   auto [it,inserted]=interned.emplace(address,uint32_t(symbols.size()));if(inserted) symbols.push_back(address);return it->second;
 }
 void append_formulas(FormulaSource &source,uint32_t owner,const Json &formulas,const std::function<std::string(const std::string &)> &address) {
-  const std::map<std::string,Op> operators={{"add",Op::add},{"sub",Op::sub},{"mult",Op::mult},{"div",Op::div},{"inv",Op::inv},{"neg",Op::neg},
+  static const std::map<std::string,Op> operators={{"add",Op::add},{"sub",Op::sub},{"mult",Op::mult},{"div",Op::div},{"inv",Op::inv},{"neg",Op::neg},
     {"spline_linear",Op::spline_linear},{"spline_constant",Op::spline_constant},{"spline_tcb",Op::spline_tcb}};
   for(const auto &f:formulas) {
     Expression e;e.owner=owner;e.output=source.symbol(address(f.at("output").get<std::string>()));const auto stage=f.value("stage","sum");
@@ -56,6 +57,7 @@ void append_formulas(FormulaSource &source,uint32_t owner,const Json &formulas,c
 FormulaCatalog enable_formulas(MorphCatalog &catalog,const SkinCatalog &skins) {
   FormulaCatalog result;result.report={{"targets",Json::array()}};
   for(size_t t=0;t<catalog.targets.size();++t) {
+    diagnostics::Scope target_scope(diagnostics::active?catalog.targets[t].id:std::string{});
     auto &target=catalog.targets[t];auto &source=catalog.formulas.at(t);FormulaGraph graph;
     std::map<std::string,int> assets,nodes;std::map<std::string,std::vector<int>> ids;
     std::vector<std::string> failures(target.morphs.size());
@@ -145,7 +147,7 @@ FormulaCatalog enable_formulas(MorphCatalog &catalog,const SkinCatalog &skins) {
       if(index<0) {if(error.empty()) error="参数没有可求值的目标";}
       else {const auto &c=graph.channels[size_t(index)];if(error.empty()) error=c.error;
         if(p.kind=="alias"&&error.empty()) {p.minimum=float(c.minimum);p.maximum=float(c.maximum);p.clamped=c.clamped;p.initial=float(c.initial);if(c.binding.property==Property::morph) {p.alias_morph=int(c.binding.index);p.step=target.morphs[c.binding.index].step;p.locked=target.morphs[c.binding.index].locked;p.value_type=target.morphs[c.binding.index].value_type;}else error="当前参数面板尚未支持指向骨骼属性的别名";++aliases;}
-        if(error.empty()&&p.kind!="alias"&&p.offsets.empty()&&graph.incoming[m].empty()&&graph.outgoing[m].empty()) error=blocked_outputs[m].empty()?"没有顶点差值或可求值的依赖输出":blocked_outputs[m];
+        if(error.empty()&&p.kind!="alias"&&!p.has_offsets()&&graph.incoming[m].empty()&&graph.outgoing[m].empty()) error=blocked_outputs[m].empty()?"没有顶点差值或可求值的依赖输出":blocked_outputs[m];
       }
       p.evaluable=error.empty();p.unsupported=error.empty()&&p.locked?"资产将此参数标为锁定":error;
       if(p.unsupported.empty()) {++editable;if(p.visible) ++visible;}

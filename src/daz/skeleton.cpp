@@ -1,4 +1,6 @@
 #include "daz/skeleton.h"
+#include "daz/documents.h"
+#include "diagnostics/load_profile.h"
 #include <functional>
 #include <cmath>
 #include <map>
@@ -22,20 +24,21 @@ void pose_channels(runtime::JointPose &p,const Json &node) {
 }
 SkinCatalog load_skeletons(const LoadedScene &loaded) {
   SkinCatalog catalog;catalog.report={{"skins",Json::array()}};
-  Json saved=Json::object();if(loaded.report.contains("input")) saved=read_document_file(std::filesystem::u8path(loaded.report.at("input").get<std::string>())).value("scene",Json::object());
+  Json saved=Json::object();if(loaded.report.contains("input")) saved=document_view(std::filesystem::u8path(loaded.report.at("input").get<std::string>()))->value("scene",Json::object());
   std::map<std::string,Json> instances;std::set<std::string> figures;
   for(const auto &n:saved.value("nodes",Json::array())) {const auto id=n.value("id","");instances[id]=n;
     if(n.value("type","")=="figure"||n.value("preview",Json::object()).value("type","")=="figure"||n.contains("geometries")) figures.insert(id);}
   for(const auto &o:loaded.objects) if(o.figure) figures.insert(o.id);
   for(const auto &object:loaded.objects) {
     if(!object.figure) continue;
-    auto binding_file=object.geometry_file;auto document=read_document_file(binding_file);const Json *binding=nullptr,*modifier=nullptr;
+    diagnostics::Scope object_scope(diagnostics::active?object.id:std::string{});
+    auto binding_file=object.geometry_file;auto handle=document_view(binding_file,DocumentView::skeleton);const Json *document=handle.get();const Json *binding=nullptr,*modifier=nullptr;
     auto find_binding=[&](const std::string &geometry) {
-      if(document.contains("modifier_library")) for(const auto &m:document.at("modifier_library")) if(m.contains("skin")&&fragment(m.at("skin").value("geometry",""))==geometry) {if(binding) throw std::runtime_error("同一几何包含多个 SkinBinding");binding=&m.at("skin");modifier=&m;}
+      if(document->contains("modifier_library")) for(const auto &m:document->at("modifier_library")) if(m.contains("skin")&&fragment(m.at("skin").value("geometry",""))==geometry) {if(binding) throw std::runtime_error("同一几何包含多个 SkinBinding");binding=&m.at("skin");modifier=&m;}
     };
     find_binding(object.geometry_id);
     for(const auto &source:object.geometry_sources) {
-      if(binding) break;binding_file=source.file;document=read_document_file(binding_file);find_binding(source.id);
+      if(binding) break;binding_file=source.file;handle=document_view(binding_file,DocumentView::skeleton);document=handle.get();find_binding(source.id);
     }
     if(!binding) {catalog.report["skins"].push_back({{"object",object.id},{"status","NO_SKIN_BINDING"}});continue;}
     runtime::Skin skin;skin.id=object.id;skin.instance=object.instance;
@@ -49,7 +52,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     if(mode=="DualQuat") skin.method=runtime::SkinMethod::dual_quaternion;
     else if(mode=="Linear") skin.method=runtime::SkinMethod::linear;
     else throw std::runtime_error("尚未支持的蒙皮方式："+mode);
-    std::map<std::string,Json> nodes;for(const auto &n:document.at("node_library")) {const auto id=n.at("id").get<std::string>();if(!nodes.emplace(id,n).second) throw std::runtime_error("骨架节点 ID 重复");}
+    std::map<std::string,Json> nodes;for(const auto &n:document->at("node_library")) {const auto id=n.at("id").get<std::string>();if(!nodes.emplace(id,n).second) throw std::runtime_error("骨架节点 ID 重复");}
     const auto root=fragment(binding->at("node").get<std::string>());if(!nodes.contains(root)) throw std::runtime_error("缺少骨架根节点");
     std::map<std::string,size_t> indices;std::set<std::string> visiting;
     std::function<size_t(const std::string &)> add=[&](const std::string &id)->size_t {

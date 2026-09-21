@@ -67,7 +67,7 @@ void ParameterPanel::select(QTreeWidgetItem *item) {
   current_=item?item->data(0,Qt::UserRole).toInt():-1;slider_->setEnabled(false);spin_->setEnabled(false);
   if(current_<0 || !target_) return;
   const auto &m=target_->morphs[size_t(current_)];QSignalBlocker a(slider_),b(spin_);
-  const auto support=m.unsupported.empty()?(m.kind=="alias"?"别名：与原参数共享编辑值":m.formula_count||m.offsets.empty()?"Formula / ERC 驱动":"直接 Morph"):m.unsupported;
+  const auto support=m.unsupported.empty()?(m.kind=="alias"?"别名：与原参数共享编辑值":m.formula_count||!m.has_offsets()?"Formula / ERC 驱动":"直接 Morph"):m.unsupported;
   QString detail=text(m.label+"\n"+m.group+"\n"+support);
   if(!m.limitation.empty()) detail+=QStringLiteral("\n")+text(m.limitation);
   if(m.unsupported.empty()&&size_t(current_)<effective_.size()) detail+=QStringLiteral(" · 最终值 %1").arg(effective_[size_t(current_)],0,'f',4);
@@ -85,4 +85,19 @@ void ParameterPanel::query(const QString &text) {search_->setText(text);}
 void ParameterPanel::select_parameter(size_t index) {if(index<items_.size() && items_[index]) {tree_->setCurrentItem(items_[index]);tree_->scrollToItem(items_[index]);}}
 void ParameterPanel::set_slider(int value) {slider_->setValue(value);}
 void ParameterPanel::evaluated(const std::vector<float> &values) {if(effective_==values) return;effective_=values;if(current_>=0) select(tree_->currentItem());}
+void ParameterPanel::resource_states() {
+  if(!target_) return;
+  for(size_t i=0;i<items_.size();++i) if(items_[i]&&target_->morphs[i].payload&&target_->morphs[i].unsupported.empty()) {
+    const auto &p=target_->morphs[i].payload;QString status;
+    switch(p->state()) {
+      case runtime::PayloadState::unloaded:status=QStringLiteral("首用时载入");break;
+      case runtime::PayloadState::loading:status=QStringLiteral("加载中");break;
+      case runtime::PayloadState::ready:status=QStringLiteral("已就绪");break;
+      case runtime::PayloadState::failed:status=QStringLiteral("加载失败");items_[i]->setToolTip(1,text(p->error()));break;
+    }
+    if(p->state()!=runtime::PayloadState::failed) items_[i]->setToolTip(1,{});
+    if(!target_->morphs[i].limitation.empty()) status=QStringLiteral("部分支持 · ")+status;
+    if(items_[i]->text(1)!=status) items_[i]->setText(1,status);
+  }
+}
 }

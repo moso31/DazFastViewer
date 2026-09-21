@@ -6,6 +6,7 @@
 #include <memory>
 
 namespace dfv::runtime {
+struct PayloadProgress {size_t pending=0;std::string error;};
 class DeformationRuntime {
   const std::vector<Target> &targets_;
   const std::vector<Skin> &skins_;
@@ -21,10 +22,12 @@ class DeformationRuntime {
   std::vector<std::vector<JointPose>> effective_poses_;
   struct Attachment {size_t target,skin,joint;ir::Transform figure,inverse_bind;};
   std::vector<Attachment> attachments_;
+  std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
 public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
+  PayloadProgress prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry=false);
   const auto &morph_stats() const {return morph_.stats();}
   const auto &skin_stats() const {return skin_.stats();}
   FormulaStats formula_stats() const;

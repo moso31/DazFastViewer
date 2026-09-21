@@ -1,9 +1,9 @@
 #pragma once
 #include "render_ir/scene.h"
+#include "runtime/morph_data.h"
 #include <set>
 
 namespace dfv::runtime {
-struct SparseOffset {uint32_t vertex=0;ir::Vec3 delta;};
 struct Morph {
   std::string id,label,group,source,unsupported;
   // 参数目录包含控制器和子节点别名；发现能力与求值能力分开记录。
@@ -20,6 +20,10 @@ struct Morph {
   float minimum=0,maximum=1,initial=0,step=.01f;
   bool clamped=true,visible=true,auto_follow=false;
   std::vector<SparseOffset> offsets;
+  std::shared_ptr<MorphPayload> payload;
+  size_t offset_count() const {return payload?payload->count:offsets.size();}
+  bool has_offsets() const {return offset_count()!=0;}
+  OffsetView data() const {return payload?OffsetView(payload->ensure()):OffsetView(offsets);}
 };
 struct Target {
   std::string id,label,parent;

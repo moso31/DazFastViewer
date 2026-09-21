@@ -31,6 +31,9 @@ static void embedded_geometry() {
   require(document.catalog.targets[0].morphs.size()==1&&document.skeletons.skins.size()==2,"内嵌几何丢失继承的 Morph 或骨架");
   auto snapshot=editor::initial_snapshot(document);auto rendered=document.loaded.scene;runtime::DeformationRuntime runtime(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
   require(std::abs(rendered.meshes[rendered.instances[0].mesh].positions[1].z-1.1f)<1e-5f&&std::abs(rendered.meshes[rendered.instances[1].mesh].positions[1].x-1.02f)<1e-5f,"内嵌几何的保存 Morph / 姿势未应用或跨实例污染");
+  auto appended=document;appended.generation=5;editor::append_document(appended,document);
+  auto refreshed=editor::refresh_parameters(appended,2,{folder});
+  require(refreshed->catalog.targets.size()==4&&refreshed->catalog.targets[2].id==appended.catalog.targets[2].id&&refreshed->catalog.targets[2].morphs[0].initial==.5f&&refreshed->formulas.graphs[2].skin==2,"追加角色刷新丢失来源、场景覆盖或蒙皮映射");
   duf["geometry_library"][0]["polylist"]["values"][0][3]=2;duf["geometry_library"][0]["polylist"]["values"][0][4]=1;std::ofstream(file)<<duf.dump();auto incompatible=daz::load(file,{{folder},false});
   require(incompatible.objects[0].geometry_sources.empty()&&!incompatible.report["warnings"].empty(),"不同拓扑错误继承了权重索引");
   duf["geometry_library"][0]["source"]="#embedded";std::ofstream(file)<<duf.dump();bool rejected=false;try {daz::load(file,{{folder},false});} catch(const std::exception &) {rejected=true;}require(rejected,"派生几何循环没有拒绝");

@@ -37,6 +37,7 @@ void Renderer::frame(const ir::Bounds &bounds) {
   window_->camera.pitch=bounds.maximum.z-bounds.minimum.z<bounds.extent()*.5f?.7f:.08f;window_->publish();
 }
 void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) snapshot_=snapshot;}
+void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources_;}
 void Renderer::select(uint64_t generation,int target,int joint) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
 void Renderer::orbit(float x,float y) {window_->camera.orbit(x,y);window_->publish();}
@@ -62,13 +63,16 @@ void Renderer::run(std::stop_token stop) {
     ir::Scene render_scene;
     std::unique_ptr<runtime::DeformationRuntime> runtime;
     uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
+    uint64_t retried=0;
+    std::vector<std::vector<ir::Vec3>> previous_positions;
     SessionParams params;params.device=device;params.samples=64;params.pixel_size=1;params.background=false;
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;Snapshot desired;
-      int width,height,selected_target,selected_joint;uint64_t selection_generation;
-      {std::lock_guard lock(mutex_);document=document_;if(document) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;}
+      int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
+      {std::lock_guard lock(mutex_);document=document_;if(document) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;retry=retry_resources_;}
+      const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
         cleanup();window_->width=width;window_->height=height;
         buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;
@@ -76,18 +80,31 @@ void Renderer::run(std::stop_token stop) {
       if(!document) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
       if(current==document&&!state.error.empty()) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
       try {
+      if(current!=document&&current&&session&&current->generation==document->generation&&document->asset_revision>current->asset_revision) {
+        // 参数目录更新保留 Cycles 会话；从基础几何重建求值状态，避免二次叠加形变。
+        runtime.reset();previous_positions.clear();for(const auto &mesh:render_scene.meshes) previous_positions.push_back(mesh.positions);
+        current=document;render_scene=current->loaded.scene;
+        runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
+        attempted_revision=0;state.edit_error.clear();
+      }
       if(current!=document||!session) {
         cleanup();geometry_dirty=true;
         if(current!=document) {
           // 先销毁持有旧场景引用的求值器，再释放文档、顶点与射线缓存。
           runtime.reset();picking={};regions={};pickable={};render_scene={};
-          current=document;render_scene=current->loaded.scene;
+          current=document;state={};previous_positions.clear();render_scene=current->loaded.scene;
           regions.clear();regions.resize(render_scene.instances.size());
           pickable=runtime::viewport_pick_mask(render_scene.instances.size(),current->catalog.targets);
           for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene.meshes.at(render_scene.instances.at(skin.instance).mesh),skin);
           runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
-          runtime->evaluate(desired.values,desired.poses);
-        } else if(desired.revision!=applied_revision) runtime->evaluate(desired.values,desired.poses);
+        }
+        const auto resources=runtime->prepare(desired.values,desired.poses,retry_payloads);
+        retried=retry;
+        state.generation=current->generation;state.pending_payloads=resources.pending;state.resource_error=resources.error;
+        if(resources.pending||!resources.error.empty()) {
+          {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;
+        }
+        runtime->evaluate(desired.values,desired.poses);
         render_scene.lights=desired.lights;
         SceneParams scene_params;scene_params.background=false;scene_params.bvh_type=BVH_TYPE_DYNAMIC;
         scene_params.use_texture_cache=false;scene_params.auto_texture_cache=false;
@@ -110,14 +127,24 @@ void Renderer::run(std::stop_token stop) {
       if((camera.epoch!=camera_epoch || desired.revision!=attempted_revision) && telemetry_.displayed_epoch.load()>=epoch && session->ready_to_reset()) {
         ir::Delta delta;
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
-          attempted_revision=desired.revision;
-          try {delta=runtime->evaluate(desired.values,desired.poses);geometry_dirty|=!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
+          try {
+            const auto resources=runtime->prepare(desired.values,desired.poses,retry_payloads);
+            retried=retry;
+            state.pending_payloads=resources.pending;state.resource_error=resources.error;
+            if(!resources.pending&&resources.error.empty()) {
+            attempted_revision=desired.revision;delta=runtime->evaluate(desired.values,desired.poses);
+            if(!previous_positions.empty()) {
+              std::erase_if(delta.meshes,[&](const auto &edit) {const auto &old=previous_positions.at(edit.index);return old.size()==edit.positions.size()&&std::equal(old.begin(),old.end(),edit.positions.begin(),[](auto a,auto b){return a.x==b.x&&a.y==b.y&&a.z==b.z;});});previous_positions.clear();
+            }
+            geometry_dirty|=!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
             for(size_t l=0;l<desired.lights.size();++l) delta.lights.push_back({uint32_t(l),desired.lights[l]});
             applied_revision=desired.revision;state.edit_error.clear();}
-          catch(const std::exception &e) {state.edit_error=e.what();}
+          }
+          catch(const std::exception &e) {attempted_revision=desired.revision;state.edit_error=e.what();}
         }
         if(camera.epoch!=camera_epoch) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;}
-        {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
+        if(delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
+          {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
         state.applied_revision=applied_revision;
       }
       window_->present_context.activate();

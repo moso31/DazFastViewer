@@ -1,4 +1,5 @@
 #include "runtime/morph.h"
+#include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -11,6 +12,7 @@ static void finite(ir::Vec3 p) {
 }
 static bool same(ir::Vec3 a,ir::Vec3 b) {return a.x==b.x && a.y==b.y && a.z==b.z;}
 MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):scene_(scene),targets_(targets) {
+  diagnostics::Scope scope("morph_construct");
   parents_.resize(targets.size(),-1);follow_offsets_.resize(targets.size());attachments_.resize(targets.size());
   for(size_t i=0;i<targets.size();++i) if(targets[i].parent.starts_with('#')) for(size_t j=0;j<targets.size();++j) if(i!=j&&targets[j].id.substr(0,targets[j].id.rfind('/'))==targets[i].parent.substr(1)) parents_[i]=int(j);
   for(size_t i=0;i<parents_.size();++i) {std::set<int> seen;for(int p=int(i);p>=0;p=parents_[size_t(p)]) if(!seen.insert(p).second) throw std::runtime_error("编辑对象的父子关系存在循环");}
@@ -24,10 +26,10 @@ MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):
     for(const auto &m:target.morphs) {
       if(!std::isfinite(m.minimum)||!std::isfinite(m.maximum)||!std::isfinite(m.initial)||m.minimum>m.maximum)
         throw std::runtime_error("Morph 范围无效");
-      std::set<uint32_t> vertices;
+      std::vector<uint8_t> vertices(m.offsets.empty()?0:mesh.positions.size());
       for(const auto &offset:m.offsets) {
         finite(offset.delta);
-        if(offset.vertex>=mesh.positions.size() || !vertices.insert(offset.vertex).second) throw std::runtime_error("Morph 顶点索引越界或重复");
+        if(offset.vertex>=mesh.positions.size() || vertices[offset.vertex]) throw std::runtime_error("Morph 顶点索引越界或重复");vertices[offset.vertex]=1;
       }
       property.morphs.push_back(0);
     }
@@ -44,7 +46,7 @@ bool MorphRuntime::set_morph(size_t target,size_t index,float value) {
   if(current==value) return false;
   current=value;
   if(value==0) active_[target].erase(index);else active_[target].insert(index);
-  if(!m.offsets.empty()) dirty_meshes_.insert(target);return true;
+  if(m.has_offsets()) dirty_meshes_.insert(target);return true;
 }
 void validate_transform(const TransformValues &v) {
   finite(v.translation_cm);finite(v.rotation_degrees);finite(v.scale);
@@ -93,6 +95,7 @@ bool MorphRuntime::set_follow_offsets(size_t target,const std::vector<ir::Vec3> 
   old=offsets;if(changed) dirty_meshes_.insert(target);return changed;
 }
 ir::Delta MorphRuntime::evaluate() {
+  diagnostics::Scope scope("morph_evaluate");
   ir::Delta delta;
   for(size_t t=0;t<targets_.size();++t) {
     // DAZ 普通节点的 Visible 独立于 parent / Fit To；递归隐藏属于显式 UI 操作。
@@ -104,7 +107,7 @@ ir::Delta MorphRuntime::evaluate() {
     auto positions=bases_[target];
     for(auto index:active_[target]) {
       const float weight=values_[target].morphs[index];
-      for(const auto &offset:targets_[target].morphs[index].offsets) {
+      for(const auto &offset:targets_[target].morphs[index].data()) {
         auto &p=positions[offset.vertex];p.x+=weight*offset.delta.x;p.y+=weight*offset.delta.y;p.z+=weight*offset.delta.z;
         ++stats_.offsets_visited;
       }

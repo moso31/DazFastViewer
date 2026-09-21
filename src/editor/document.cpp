@@ -1,9 +1,40 @@
 #include "editor/document.h"
+#include "daz/documents.h"
 #include <algorithm>
 #include <map>
 #include <set>
 
 namespace dfv::editor {
+std::shared_ptr<Document> refresh_parameters(const Document &document,size_t selected,const std::vector<std::filesystem::path> &roots,const std::function<void(const std::string &)> &progress) {
+  const auto &target=document.catalog.targets.at(selected);
+  auto loaded=document.loaded;
+  std::set<std::string> selected_nodes{target.id.substr(0,target.id.rfind('/'))};
+  bool changed=true;while(changed) {const auto n=selected_nodes.size();
+    for(const auto &node:loaded.nodes) if(node.parent.starts_with('#')&&selected_nodes.contains(node.parent.substr(1))) selected_nodes.insert(node.id);
+    for(const auto &o:loaded.objects)
+    if((o.parent.starts_with('#')&&selected_nodes.contains(o.parent.substr(1)))||(o.conform_target.starts_with('#')&&selected_nodes.contains(o.conform_target.substr(1)))) selected_nodes.insert(o.id);changed=selected_nodes.size()!=n;}
+  std::erase_if(loaded.objects,[&](const auto &o){return !selected_nodes.contains(o.id);});
+  // 追加的对象仍从各自原始 DUF 获取覆盖与节点公式，不使用主文档的来源。
+  std::map<std::filesystem::path,std::vector<daz::AssetObject>> groups;
+  for(auto object:loaded.objects) {
+    for(const auto &[file,version]:object.geometry_versions) if(daz::file_version(file)!=version) throw std::runtime_error("基础几何资产已变化，请重新打开场景后再刷新参数");
+    const auto source=object.source_file;if(!object.source_node.empty()) object.id=object.source_node;groups[source].push_back(std::move(object));
+  }
+  auto result=std::make_shared<Document>(document);
+  for(const auto &[source,objects]:groups) {
+  loaded.objects=objects;if(!source.empty()) {const auto u8=source.generic_u8string();loaded.report["input"]=std::string(u8.begin(),u8.end());}
+  auto catalog=daz::discover_morphs(loaded,roots,progress,true);
+  auto source_skins=daz::load_skeletons(loaded);auto skins=document.skeletons;skins.node_formulas.resize(skins.skins.size());
+  for(size_t s=0;s<source_skins.skins.size();++s) for(size_t old=0;old<skins.skins.size();++old) if(source_skins.skins[s].instance==skins.skins[old].instance) skins.node_formulas[old]=std::move(source_skins.node_formulas[s]);
+  auto formulas=daz::enable_formulas(catalog,skins);
+  for(size_t t=0;t<catalog.targets.size();++t) {
+    const auto found=std::find_if(result->catalog.targets.begin(),result->catalog.targets.end(),[&](const auto &old){return old.id==catalog.targets[t].id;});
+    if(found==result->catalog.targets.end()) throw std::runtime_error("刷新时对象身份已变化");
+    const size_t index=size_t(found-result->catalog.targets.begin());*found=std::move(catalog.targets[t]);result->formulas.graphs[index]=std::move(formulas.graphs[t]);
+  }
+  }
+  ++result->asset_revision;return result;
+}
 namespace {
 template<class T> std::vector<int> retain(std::vector<T> &items,const std::vector<bool> &keep) {
   std::vector<int> mapping(items.size(),-1);std::vector<T> retained;

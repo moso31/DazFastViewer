@@ -1,4 +1,7 @@
 #include "daz/morphs.h"
+#include "daz/documents.h"
+#include <mutex>
+#include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -51,18 +54,40 @@ static std::string asset_uri(std::string uri) {
 }
 struct Asset {fs::path file;std::string geometry;std::set<std::string> nodes;std::vector<std::string> roots;std::set<std::string> geometry_nodes;};
 static Asset asset(const fs::path &file,const std::string &geometry) {
-  Asset out{file,geometry,{}};const auto doc=read_document_file(file);
-  for(const auto &n:doc.value("node_library",J::array())) {out.nodes.insert(n.at("id").get<std::string>());if(n.value("type","")=="figure"||!n.contains("parent")) out.roots.push_back(n.at("id").get<std::string>());}
+  Asset out{file,geometry,{}};const auto handle=document_view(file);const auto &doc=*handle;
+  for(const auto &n:array_member(doc,"node_library")) {out.nodes.insert(n.at("id").get<std::string>());if(n.value("type","")=="figure"||!n.contains("parent")) out.roots.push_back(n.at("id").get<std::string>());}
   // SkinBinding 同时给出角色和几何身份；只接受所属资产内明确关联的节点。
   std::map<std::string,std::set<std::string>> node_geometries;
-  for(const auto &m:doc.value("modifier_library",J::array())) if(m.contains("skin")) {
+  for(const auto &m:array_member(doc,"modifier_library")) if(m.contains("skin")) {
     const auto g=reference(m.at("skin").value("geometry","")),n=reference(m.at("skin").value("node",""));
     if(n.file.empty()&&out.nodes.contains(n.id)) node_geometries[n.id].insert(g.file+"#"+g.id);
   }
   for(const auto &[node,geometries]:node_geometries) if(geometries.size()==1&&geometries.contains("#"+geometry)) out.geometry_nodes.insert(node);
   return out;
 }
-MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots,const std::function<void(const std::string &)> &progress) {
+static runtime::OffsetBuffer offsets(const J &source,size_t vertices) {
+  const auto &deltas=source.at("deltas");const auto &rows=deltas.at("values");
+  if(deltas.at("count").get<size_t>()!=rows.size()) throw std::runtime_error("Morph 差值 count 不一致");
+  runtime::OffsetBuffer result;result.reserve(rows.size());std::vector<uint8_t> seen(vertices);
+  for(const auto &row:rows) {
+    if(row.size()!=4||!row[0].is_number_integer()||row[0].get<uint64_t>()>=vertices) throw std::runtime_error("Morph 差值索引无效");
+    const auto vertex=row[0].get<uint32_t>();const float x=row[1].get<float>(),y=row[2].get<float>(),z=row[3].get<float>();
+    if(seen[vertex]||!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)) throw std::runtime_error("Morph 差值重复或非有限");seen[vertex]=1;result.push_back({vertex,{x*.01f,-z*.01f,y*.01f}});
+  }return result;
+}
+static std::shared_ptr<runtime::MorphPayload> payload(const fs::path &file,const std::string &id,size_t count,size_t vertices) {
+  static std::mutex mutex;static std::map<std::string,std::weak_ptr<runtime::MorphPayload>> shared;
+  const auto version=file_version(file),identity=key(file)+"#"+id+"|"+version+"|"+std::to_string(vertices);
+  std::lock_guard lock(mutex);if(auto p=shared[identity].lock()) return p;
+  auto p=std::make_shared<runtime::MorphPayload>(identity,count,vertices,[file,id,version,vertices] {
+    if(file_version(file)!=version) throw std::runtime_error("资源已变化，请刷新参数目录："+path_string(file));
+    const auto doc=read_document_file(file);runtime::OffsetBuffer result;bool found=false;
+    for(const auto &m:array_member(doc,"modifier_library")) if(m.value("id","")==id) {if(found) throw std::runtime_error("重复的 Morph ID");result=offsets(m.at("morph"),vertices);found=true;}
+    if(!found||file_version(file)!=version) throw std::runtime_error("Morph 缺失或读取期间资源已变化："+id);return result;
+  });shared[identity]=p;
+  if(shared.size()>16384) std::erase_if(shared,[](const auto &entry){return entry.second.expired();});return p;
+}
+MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots,const std::function<void(const std::string &)> &progress,bool lazy) {
   struct CacheScope {~CacheScope() {path_keys.clear();resolved_paths.clear();}} cache_scope;
   path_keys.clear();resolved_paths.clear();
   MorphCatalog out;out.report={{"targets",J::array()},{"diagnostics",J::array()},{"files_scanned",0},{"skipped_types",J::object()},
@@ -73,7 +98,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
   }
   auto skipped=[&](const std::string &type) {out.report["skipped_types"][type]=out.report["skipped_types"].value(type,0)+1;};
   fs::path scene_file;J scene_document=J::object();
-  if(loaded.report.contains("input")) {scene_file=fs::u8path(loaded.report.at("input").get<std::string>());scene_document=read_document_file(scene_file);}
+  if(loaded.report.contains("input")) {scene_file=fs::u8path(loaded.report.at("input").get<std::string>());scene_document=*document_view(scene_file);}
   // 场景覆盖只解析一次；大场景不能为每个 Morph 复制和遍历整个 scene。
   std::map<std::pair<std::string,std::string>,J> overrides;
   if(scene_document.contains("scene")&&scene_document["scene"].contains("modifiers"))
@@ -86,6 +111,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
   struct CachedTarget {runtime::Target target;FormulaSource formulas;std::map<std::string,float> defaults;J report;};
   std::map<std::string,CachedTarget> cached_targets;
   for(const auto &object:loaded.objects) {
+    diagnostics::Scope object_scope(diagnostics::active?object.id:std::string{});
     if(progress) progress("正在发现参数："+object.label);
     auto &instance=loaded.scene.instances.at(object.instance);
     if(!used_meshes.insert(instance.mesh).second) {
@@ -101,6 +127,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       if(!std::isfinite(m.initial)) throw std::runtime_error("场景参数权重无效");
     };
     if(auto cached=cached_targets.find(target_key);cached!=cached_targets.end()) {
+      diagnostics::Scope reuse_scope("reuse_catalog");
       target.morphs=cached->second.target.morphs;
       auto report=cached->second.report;report["id"]=target.id;report["label"]=target.label;report["reused_asset_catalog"]=true;
       for(size_t i=0;i<target.morphs.size();++i) {auto &m=target.morphs[i];m.initial=cached->second.defaults.at(m.id);apply_override(m);report["morphs"][i]["initial"]=m.initial;}
@@ -109,7 +136,10 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     std::map<std::string,float> default_values;
     FormulaSource formula_source;
     std::map<std::string,std::pair<std::string,fs::path>> missing_addresses;
-    std::vector<Asset> allowed{asset(object.geometry_file,object.geometry_id)};
+    std::vector<Asset> allowed;
+    {
+    diagnostics::Scope assets_scope("asset_metadata");
+    allowed.push_back(asset(object.geometry_file,object.geometry_id));
     for(const auto &source:object.geometry_sources) allowed.insert(allowed.begin(),asset(source.file,source.id));
     const auto family_file=object.geometry_sources.empty()?object.geometry_file:object.geometry_sources.back().file;
     const auto family=lower(family_file.parent_path().filename().string());
@@ -132,9 +162,12 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
         }
       }
     }
+    }
     for(const auto &a:allowed) formula_source.roots.insert(formula_source.roots.end(),a.roots.begin(),a.roots.end());
     // 同一代按根目录顺序 first-wins；8.1 再覆盖 8，空文件也保留屏蔽语义。
     std::map<std::string,fs::path> files;std::map<std::string,std::string> shadowed;
+    {
+    diagnostics::Scope scan_scope("directory_scan");
     for(const auto &a:allowed) {
       std::map<std::string,fs::path> family_files;std::vector<fs::path> folders;
       const auto relative=relative_to_roots(a.file.parent_path(),roots);
@@ -158,22 +191,26 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
         files[relative_key]=path;
       }
     }
+    }
     if(!scene_file.empty() && scene_document.contains("modifier_library")) files["$scene"]=scene_file;
     std::vector<fs::path> queue;std::set<std::string> queued,empty_files,ids;
     for(const auto &[relative,path]:files) if(queued.insert(key(path)).second) queue.push_back(path);
+    if(lazy) prefetch_documents(queue);
     std::vector<std::set<std::string>> dependencies;
     std::map<std::string,std::string> declared_assets;
     for(size_t file_index=0;file_index<queue.size();++file_index) {
+      diagnostics::Scope resource_scope("parameter_resources");
       if(progress&&file_index%(mesh.curves.empty()?250:10)==0) progress(object.label+" · 参数资源 "+std::to_string(file_index)+" / "+std::to_string(queue.size()));
       const auto path=queue[file_index];
       try {
-        const auto doc=read_document_file(path);out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+1;
+        const auto handle=lazy?document_view(path):std::make_shared<const J>(read_document_file(path));const auto &doc=*handle;out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+1;
         declared_assets[key(path)]=asset_uri(doc.value("asset_info",J::object()).value("id",""));
         if(!doc.contains("modifier_library") || doc["modifier_library"].empty()) {
           skipped("empty_override");empty_files.insert(key(path));out.report["empty_overrides"].push_back(path_string(path));
         }
-        for(const auto &modifier:doc.value("modifier_library",J::array())) {
-          const auto &channel=modifier.value("channel",J::object());const auto type=channel.value("type","");
+        std::unordered_map<std::string,std::string> addresses;
+        for(const auto &modifier:array_member(doc,"modifier_library")) {
+          const auto &channel=object_member(modifier,"channel");const auto type=channel.value("type","");
           if(type.empty() || modifier.contains("skin")) {skipped("non_parameter");continue;}
           const auto parent=reference(modifier.value("parent",""));const auto parent_file=resolve(parent.file,path,roots);
           bool geometry_parent=false,node_parent=false,verified_node=false;
@@ -181,7 +218,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
             geometry_parent|=parent.id==a.geometry;node_parent|=a.nodes.contains(parent.id);verified_node|=a.geometry_nodes.contains(parent.id);
           }
           if(!geometry_parent && !node_parent) {skipped("other_target");continue;}
-          const auto source=modifier.value("morph",J::object());
+          const auto &source=object_member(modifier,"morph");
           std::string geometry_reason;
           int64_t vertex_count=0;
           if(source.contains("vertex_count")) {
@@ -200,6 +237,10 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           morph.source_vertex_count=vertex_count;
           morph.geometry_validation=geometry_parent?"geometry_uri":verified_node?"skin_binding_node":"unverified_node";
           if(source.contains("deltas")) morph.source_offset_count=source["deltas"].value("count",size_t(0));
+          if(lazy&&source.contains("deltas")) {
+            const auto &deltas=source["deltas"];
+            if(deltas.value("_dfv_rows",size_t(0))!=morph.source_offset_count) throw std::runtime_error("Morph 差值 count 不一致");
+          }
           morph.group=modifier.value("group","");morph.minimum=number(channel,"min",0);morph.maximum=number(channel,"max",1);
           morph.initial=number(channel,"current_value",number(channel,"value",0));morph.step=number(channel,"step_size",.01f);
           if(!std::isfinite(morph.minimum)||!std::isfinite(morph.maximum)||!std::isfinite(morph.initial)||!std::isfinite(morph.step)||morph.minimum>morph.maximum) throw std::runtime_error("参数范围无效");
@@ -207,37 +248,33 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           if(type=="bool") {morph.minimum=0;morph.maximum=1;morph.step=1;morph.clamped=true;}
           default_values[morph.id]=morph.initial;apply_override(morph);
           if(!std::isfinite(morph.initial)) throw std::runtime_error("场景参数权重无效");
-          std::set<std::string> refs;const auto formulas=modifier.value("formulas",J::array());morph.formula_count=formulas.size();
+          std::set<std::string> refs;const auto &formulas=array_member(modifier,"formulas");morph.formula_count=formulas.size();
           for(const auto &f:formulas) {
             if(f.contains("output")) refs.insert(f["output"].get<std::string>());
-            for(const auto &op:f.value("operations",J::array())) if(op.contains("url")) refs.insert(op["url"].get<std::string>());
+            for(const auto &op:array_member(f,"operations")) if(op.contains("url")) refs.insert(op["url"].get<std::string>());
           }
           morph.kind="control";
           if(source.contains("deltas") && geometry_reason.empty()) {
-            const auto &deltas=source.at("deltas");if(deltas.at("count").get<size_t>()!=deltas.at("values").size()) throw std::runtime_error("Morph 差值 count 不一致");
-            std::set<uint32_t> seen;
-            for(const auto &row:deltas.at("values")) {
-              if(row.size()!=4) throw std::runtime_error("Morph 差值必须为顶点索引与 XYZ");
-              if(!row[0].is_number_integer()||row[0].get<uint64_t>()>=mesh.positions.size()) throw std::runtime_error("Morph 差值顶点索引越界或不是整数");
-              const auto vertex=row[0].get<uint32_t>();const float x=row[1].get<float>(),y=row[2].get<float>(),z=row[3].get<float>();
-              if(vertex>=mesh.positions.size()||!seen.insert(vertex).second||!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(z)) throw std::runtime_error("Morph 差值无效");
-              morph.offsets.push_back({vertex,{x*.01f,-z*.01f,y*.01f}});
-            }
-            if(!morph.offsets.empty()) morph.kind="sparse";
+            if(lazy&&morph.source_offset_count) morph.payload=payload(path,id,morph.source_offset_count,mesh.positions.size());
+            else if(!lazy) morph.offsets=offsets(source,mesh.positions.size());
+            if(morph.has_offsets()) morph.kind="sparse";
           }
-          if(morph.offsets.empty()) morph.unsupported="控制器没有直接顶点差值，尚未实现公式 / 骨骼驱动";
+          if(!morph.has_offsets()) morph.unsupported="控制器没有直接顶点差值，尚未实现公式 / 骨骼驱动";
           if(!formulas.empty()) morph.unsupported="包含 Formula / ERC，尚未支持完整驱动";
-          if(source.contains("hd_url")) {morph.limitation="仅应用基础网格形态；HD 细节尚未支持";if(morph.offsets.empty()) {morph.kind="hd_only";morph.intrinsic_error=morph.unsupported="仅包含 HD 数据，尚未支持";}}
+          if(source.contains("hd_url")) {morph.limitation="仅应用基础网格形态；HD 细节尚未支持";if(!morph.has_offsets()) {morph.kind="hd_only";morph.intrinsic_error=morph.unsupported="仅包含 HD 数据，尚未支持";}}
           if(type=="alias") {morph.kind="alias";morph.alias_target=channel.value("target_channel","");morph.unsupported="子节点参数别名，尚未实现与目标通道的双向编辑";if(!morph.alias_target.empty()) refs.insert(morph.alias_target);}
           else if(type!="float") {morph.kind=type;morph.unsupported="尚未支持该通道类型: "+type;if(type!="bool"&&type!="int") morph.intrinsic_error=morph.unsupported;}
           if(channel.value("locked",false)) morph.unsupported="资产将此参数标为锁定";
           if(!geometry_reason.empty()) {morph.kind="unverified_sparse";morph.intrinsic_error=morph.unsupported=geometry_reason;}
           auto formula_address=[&](const std::string &uri) {
+            if(const auto cached=addresses.find(uri);cached!=addresses.end()) return cached->second;
+            auto compute=[&] {
             const auto ref=reference(uri);const auto file=resolve(ref.file,path,roots);
             if(file.empty()) {const auto marker="$missing/"+key(path)+"|"+decode_uri(uri);missing_addresses[marker]={uri,path};return marker;}
             if(shadowed.contains(key(file))) return std::string("$overridden/")+decode_uri(uri);
             for(const auto &a:allowed) if((ref.file.empty()||key(file)==key(a.file))&&a.nodes.contains(ref.id)) return "$node/"+ref.id+"?"+ref.property;
             return (ref.file.empty()?"$local/":"")+key(file)+"#"+ref.id+"?"+ref.property;
+            };auto address=compute();addresses.emplace(uri,address);return address;
           };
           // 加入目录外的参数依赖，但不能重新引入被 8.1 覆盖的旧参数。
           for(const auto &uri:refs) {
@@ -253,6 +290,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
         }
       } catch(const std::exception &e) {out.report["diagnostics"].push_back({{"file",path_string(path)},{"reason",e.what()}});}
     }
+    diagnostics::Scope finalize_scope("references_reports_cache");
     std::map<std::string,size_t> by_asset;std::map<std::string,std::vector<size_t>> by_id;
     std::map<std::pair<std::string,std::string>,std::vector<size_t>> by_directory;
     std::map<std::pair<std::string,std::string>,std::vector<size_t>> by_declared_asset;
@@ -265,8 +303,9 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     struct Recovered {fs::path file;std::string reason="missing_file";bool repaired=false;std::string method;};
     std::map<std::pair<fs::path,std::string>,Recovered> recovered;
     auto recover=[&](const std::string &uri,const fs::path &owner) {
-      const auto cache_key=std::make_pair(owner,uri);if(recovered.contains(cache_key)) return recovered.at(cache_key);
-      const auto ref=reference(uri);Recovered result;result.file=resolve(ref.file,owner,roots);
+      const auto ref=reference(uri);const auto cache_key=std::make_pair(ref.file.starts_with('/')?fs::path{}:owner,uri);
+      if(const auto found=recovered.find(cache_key);found!=recovered.end()) return found->second;
+      Recovered result;result.file=resolve(ref.file,owner,roots);
       if(!result.file.empty()) {result.reason.clear();if(shadowed.contains(key(result.file))) result.reason="generation_override";else if(empty_files.contains(key(result.file))) result.reason="empty_override";}
       else if(!ref.file.empty()) {
         const auto declared=by_declared_asset.find({asset_uri(ref.file),ref.id});
@@ -316,7 +355,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       m.missing_dependencies=unresolved.size();
       if(!unresolved.empty() && m.unsupported.empty()) m.unsupported="存在未解析的参数依赖";
       items.push_back({{"id",m.id},{"label",m.label},{"group",m.group},{"source",m.source},{"owner",m.owner},{"kind",m.kind},
-        {"channel_id",m.channel_id},{"channel_name",m.channel_name},{"asset_uri",declared_assets.at(key(fs::u8path(m.source)))},{"alias_target",m.alias_target},{"formula_count",m.formula_count},{"offsets",m.offsets.size()},
+        {"channel_id",m.channel_id},{"channel_name",m.channel_name},{"asset_uri",declared_assets.at(key(fs::u8path(m.source)))},{"alias_target",m.alias_target},{"formula_count",m.formula_count},{"offsets",m.offset_count()},
         {"source_vertex_count",m.source_vertex_count},{"source_offset_count",m.source_offset_count},{"geometry_validation",m.geometry_validation},{"repaired_references",m.repaired_references},
         {"unsupported",m.unsupported},{"visible",m.visible},{"auto_follow",m.auto_follow},{"initial",m.initial},{"min",m.minimum},{"max",m.maximum},
         {"dependency_count",dependencies[i].size()},{"node_dependencies",nodes},{"parameter_dependencies",parameters},{"unresolved_dependencies",unresolved}});

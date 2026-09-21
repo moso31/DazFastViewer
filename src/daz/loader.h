@@ -14,6 +14,9 @@ struct AssetObject {
   std::string conform_target;
   std::vector<GeometrySource> geometry_sources;
   ir::MeshSmoothing smoothing;
+  std::filesystem::path source_file;
+  std::string source_node;
+  std::vector<std::pair<std::filesystem::path,std::string>> geometry_versions;
 };
 struct AssetNode {std::string id,parent;};
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;};

@@ -31,6 +31,8 @@ struct RenderStatus {
   int samples=0;
   std::string error;
   std::string edit_error;
+  size_t pending_payloads=0;
+  std::string resource_error;
 };
 class Renderer {
   std::filesystem::path output_;
@@ -43,6 +45,7 @@ class Renderer {
   std::jthread thread_;
   int requested_width_=0,requested_height_=0;
   uint64_t selection_generation_=0;
+  uint64_t retry_resources_=0;
   int selected_target_=-1,selected_joint_=-1;
   void run(std::stop_token stop);
 public:
@@ -53,6 +56,7 @@ public:
   void pointer(int x,int y,bool click=false);
   void select(uint64_t generation,int target,int joint=-1);
   void edit(const Snapshot &snapshot);
+  void retry_resources();
   RenderStatus status();
   void orbit(float x,float y);
   void frame(const ir::Bounds &bounds);

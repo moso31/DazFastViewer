@@ -1,4 +1,5 @@
 #include "runtime/skeleton.h"
+#include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
 #include <numbers>
@@ -114,6 +115,7 @@ std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose
   return result;
 }
 SkinningRuntime::SkinningRuntime(ir::Scene &scene,const std::vector<Skin> &skins):scene_(scene),skins_(skins) {
+  diagnostics::Scope scope("skin_construct");
   std::set<uint32_t> meshes;
   for(const auto &s:skins) {const auto mesh=scene.instances.at(s.instance).mesh;if(!meshes.insert(mesh).second) throw std::runtime_error("蒙皮对象必须拥有独立网格");
     validate_pose(s,s.initial);sources_.push_back(scene.meshes.at(mesh).positions);poses_.push_back(s.initial);dirty_.insert(poses_.size()-1);}
@@ -124,6 +126,7 @@ bool SkinningRuntime::set_pose(size_t skin,const std::vector<JointPose> &pose) {
   old=pose;dirty_.insert(skin);return true;
 }
 ir::Delta SkinningRuntime::evaluate(ir::Delta delta) {
+  diagnostics::Scope scope("skin_evaluate");
   for(size_t i=0;i<skins_.size();++i) {const auto mesh=scene_.instances[skins_[i].instance].mesh;
     for(const auto &edit:delta.meshes) if(edit.index==mesh) {sources_[i]=edit.positions;dirty_.insert(i);}}
   for(auto i:dirty_) {

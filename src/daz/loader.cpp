@@ -1,4 +1,6 @@
 #include "daz/loader.h"
+#include "daz/documents.h"
+#include "diagnostics/load_profile.h"
 #include <zlib.h>
 #include <algorithm>
 #include <cmath>
@@ -27,29 +29,11 @@ std::string decode(const std::string &input) {
   return out;
 }
 Json read_document(const fs::path &path) {
-  std::ifstream input(path,std::ios::binary);if(!input) fail("无法读取 "+utf8(path));
-  std::string bytes((std::istreambuf_iterator<char>(input)),{});
-  constexpr size_t limit=512*1024*1024;
-  if(bytes.size()>limit) fail("文档超过 512 MiB 限制");
-  if(bytes.size()>=2 && static_cast<unsigned char>(bytes[0])==0x1f && static_cast<unsigned char>(bytes[1])==0x8b) {
-    z_stream stream{};stream.next_in=reinterpret_cast<Bytef *>(bytes.data());stream.avail_in=uInt(bytes.size());
-    if(inflateInit2(&stream,15+32)!=Z_OK) fail("gzip 初始化失败");
-    std::string unpacked;std::array<char,65536> chunk{};int code=Z_OK;
-    while(code==Z_OK) {
-      stream.next_out=reinterpret_cast<Bytef *>(chunk.data());stream.avail_out=uInt(chunk.size());
-      code=inflate(&stream,Z_NO_FLUSH);unpacked.append(chunk.data(),chunk.size()-stream.avail_out);
-      if(unpacked.size()>limit) {inflateEnd(&stream);fail("gzip 解压结果超过限制");}
-      // RFC 1952 允许连续 gzip member；部分 DAZ 资源附带第二个空 member。
-      if(code==Z_STREAM_END && stream.avail_in) {
-        if(stream.avail_in<2 || stream.next_in[0]!=0x1f || stream.next_in[1]!=0x8b) break;
-        auto *next=stream.next_in;const auto remaining=stream.avail_in;
-        code=inflateReset2(&stream,15+32);stream.next_in=next;stream.avail_in=remaining;
-      }
-    }
-    const auto trailing=stream.avail_in;inflateEnd(&stream);
-    if(code!=Z_STREAM_END || trailing) fail("损坏或不支持的 gzip 文档: "+utf8(path));
-    bytes=std::move(unpacked);
-  }
+  diagnostics::Scope profile_scope("read_document");
+  diagnostics::FileScope file_scope(diagnostics::active?utf8(path):std::string{});
+  auto bytes=document_bytes(path);
+  file_scope.bytes=fs::file_size(path);file_scope.unpacked_bytes=bytes.size();
+  diagnostics::Scope parse_scope("json_parse");
   try {return Json::parse(bytes);} catch(const Json::exception &e) {fail(utf8(path)+": "+e.what());}
 }
 const Json &values(const Json &object) {
@@ -464,7 +448,13 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   for(const auto &instance:source.value("modifiers",Json::array())) {
     if(instance.contains("channel")||instance.contains("skin")) continue;
     Json modifier=instance;
-    if(instance.contains("url")) modifier=merge_node(*repo.asset(instance.at("url"),file,"modifier_library").second,instance);
+    if(instance.contains("url")) {
+      const auto uri=instance.at("url").get<std::string>();const auto hash=uri.find('#');if(hash==std::string::npos) fail("Modifier 引用缺少 fragment");
+      const auto handle=document_view(repo.path(uri,file));const auto id=decode(uri.substr(hash+1));const Json *base=nullptr;
+      for(const auto &entry:array_member(*handle,"modifier_library")) if(entry.value("id","")==id) {base=&entry;break;}
+      if(!base) fail("Modifier ID 不存在："+uri);
+      Json settings=Json::object();if(base->contains("extra")) settings["extra"]=base->at("extra");modifier=merge_node(std::move(settings),instance);
+    }
     bool smoothing=false;std::map<std::string,Json> channels;
     for(const auto &extra:modifier.value("extra",Json::array())) {
       smoothing|=extra.value("type","")=="studio/modifier/smoothing";
@@ -492,6 +482,11 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
               {"bounds_m",{{"min",{bounds.minimum.x,bounds.minimum.y,bounds.minimum.z}},{"max",{bounds.maximum.x,bounds.maximum.y,bounds.maximum.z}}}},
               {"coordinate_conversion","DAZ centimeters Y-up to meters Z-up: (x,-z,y)/100"}};
   for(const auto &root:repo.roots) out.report["content_roots"].push_back(utf8(root));
+  for(auto &object:out.objects) {
+    object.source_file=file;object.source_node=object.id;
+    object.geometry_versions.push_back({object.geometry_file,file_version(object.geometry_file)});
+    for(const auto &source:object.geometry_sources) object.geometry_versions.push_back({source.file,file_version(source.file)});
+  }
   out.report["geometry_sources"]=Json::array();
   for(const auto &object:out.objects) for(const auto &source:object.geometry_sources)
     out.report["geometry_sources"].push_back({{"object",object.id},{"file",utf8(source.file)},{"geometry",source.id},{"topology_verified",true}});

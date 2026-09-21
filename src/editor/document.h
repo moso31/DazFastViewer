@@ -6,6 +6,7 @@
 namespace dfv::editor {
 struct Document {
   uint64_t generation=0;
+  uint64_t asset_revision=0;
   daz::LoadedScene loaded;
   daz::MorphCatalog catalog;
   daz::SkinCatalog skeletons;
@@ -18,6 +19,7 @@ struct Snapshot {
   std::vector<ir::AreaLight> lights;
 };
 Snapshot initial_snapshot(const Document &document);
+std::shared_ptr<Document> refresh_parameters(const Document &document,size_t selected,const std::vector<std::filesystem::path> &roots,const std::function<void(const std::string &)> &progress={});
 void append_document(Document &destination,Document source);
 size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset);
 void collect_resources(Document &document);

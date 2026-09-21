@@ -35,5 +35,6 @@ public:
   void select_parameter(size_t index);
   void set_slider(int value);
   void evaluated(const std::vector<float> &values);
+  void resource_states();
 };
 }

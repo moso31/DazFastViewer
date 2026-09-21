@@ -70,6 +70,8 @@ int wmain(int argc,wchar_t **argv) {
     loaded.objects[0].geometry_file=family/"Female 8_1/Genesis8_1Female.dsf";
     catalog=daz::discover_morphs(loaded,{first,second});require(catalog.targets[0].morphs.size()==1 && catalog.targets[0].morphs[0].channel_id=="follower","空覆盖被依赖扫描绕过");
     require(catalog.targets[0].morphs[0].missing_dependencies==1,"被屏蔽引用未明确报告");
+    const auto lazy=daz::discover_morphs(loaded,{first,second},{},true);
+    require(lazy.report==catalog.report,"元数据缓存改变了 G8.1 空覆盖或依赖诊断");
     std::cout<<"Multi-library discovery / priority / groups / node alias / external dependency / empty override: PASS\n";
   } catch(const std::exception &e) {std::cerr<<e.what()<<'\n';return 1;}
 }

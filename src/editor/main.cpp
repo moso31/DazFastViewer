@@ -56,6 +56,9 @@ class Editor final:public QMainWindow {
   QFileSystemModel *files_=nullptr;
   QLabel *selection_=nullptr;
   QCheckBox *visible_=nullptr;
+  QCheckBox *manual_morph_=nullptr;
+  QPushButton *refresh_parameters_=nullptr,*apply_parameters_=nullptr,*retry_parameters_=nullptr;
+  std::map<std::pair<std::string,std::string>,float> pending_parameters_;
   QLabel *pose_status_=nullptr;
   QAction *open_=nullptr;
   QAction *delete_=nullptr;
@@ -72,6 +75,7 @@ class Editor final:public QMainWindow {
   std::filesystem::path pose_file_;
   bool pose_test_=false,frame_pending_=false;
   bool formula_test_=false;
+  bool lazy_test_=false;int lazy_wait_ticks_=0;size_t lazy_updates_=0;uint64_t lazy_generation_=0;
   bool workflow_test_=false;
   bool head_selection_test_=false;
   int head_test_joint_=-1,eye_test_joint_=-1,lip_test_joint_=-1,head_test_skin_=-1,probe_index_=0;
@@ -120,7 +124,41 @@ class Editor final:public QMainWindow {
   QDockWidget *dock(const QString &title,QWidget *widget,Qt::DockWidgetArea area) {
     auto *d=new QDockWidget(title,this);d->setObjectName(title);d->setWidget(widget);addDockWidget(area,d);return d;
   }
-  void send() {++snapshot_.revision;renderer_->edit(snapshot_);}
+  Snapshot submitted_snapshot() const {
+    auto submitted=snapshot_;
+    if(document_&&!pending_parameters_.empty()) for(size_t t=0;t<document_->catalog.targets.size();++t) {
+      const auto &target=document_->catalog.targets[t];for(size_t m=0;m<target.morphs.size();++m)
+        if(auto p=pending_parameters_.find({target.id,target.morphs[m].id});p!=pending_parameters_.end()) submitted.values[t].morphs[m]=p->second;
+      runtime::sync_aliases(target,submitted.values[t]);
+    }
+    return submitted;
+  }
+  void send() {++snapshot_.revision;renderer_->edit(submitted_snapshot());}
+  void prune_pending_parameters() {
+    std::erase_if(pending_parameters_,[&](const auto &p) {for(const auto &t:document_->catalog.targets) if(t.id==p.first.first) for(const auto &m:t.morphs) if(m.id==p.first.second&&m.unsupported.empty()) return false;return true;});
+    apply_parameters_->setEnabled(!pending_parameters_.empty());
+  }
+  void apply_parameters() {if(pending_parameters_.empty()) return;pending_parameters_.clear();apply_parameters_->setEnabled(false);send();}
+  void refresh_parameter_catalog() {
+    if(loading_||!document_||selected_<0) return;
+    const auto previous=document_;const auto selected=size_t(selected_);const auto roots=roots_;loading_=true;refresh_parameters_->setEnabled(false);
+    progress(QStringLiteral("正在刷新所选对象及穿戴物的参数目录…"));
+    loader_=std::jthread([this,previous,selected,roots](std::stop_token stop) {
+      try {
+        auto updated=editor::refresh_parameters(*previous,selected,roots,[this,stop](const std::string &message){if(stop.stop_requested()) throw std::runtime_error("已取消刷新");progress(text(message));});
+        QMetaObject::invokeMethod(this,[this,previous,updated] {
+          loading_=false;if(document_!=previous) return;
+          const auto old_values=snapshot_.values;parameters_->bind(nullptr,nullptr);
+          for(size_t t=0;t<updated->catalog.targets.size();++t) {
+            std::map<std::string,float> weights;for(size_t m=0;m<previous->catalog.targets[t].morphs.size();++m) weights[previous->catalog.targets[t].morphs[m].id]=old_values[t].morphs[m];
+            auto &values=snapshot_.values[t];values.morphs.clear();for(const auto &m:updated->catalog.targets[t].morphs) values.morphs.push_back(weights.contains(m.id)?weights.at(m.id):(m.evaluable?m.initial:0));runtime::sync_aliases(updated->catalog.targets[t],values);
+          }
+          document_=updated;prune_pending_parameters();++snapshot_.revision;renderer_->set_document(document_,submitted_snapshot(),false);select(selected_,selected_joint_,selected_light_);
+          statusBar()->showMessage(QStringLiteral("参数目录已刷新，已保留当前输入和姿势"));
+        },Qt::QueuedConnection);
+      } catch(const std::exception &e) {const std::string error=e.what();QMetaObject::invokeMethod(this,[this,error] {loading_=false;load_error_=QStringLiteral("参数刷新失败：")+text(error);},Qt::QueuedConnection);}
+    });
+  }
   void progress(const QString &message) {QMetaObject::invokeMethod(this,[this,message] {statusBar()->showMessage(message);},Qt::QueuedConnection);}
   void choose(int target,int joint=-1) {
     for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==target&&(*it)->data(0,Qt::UserRole+1).toInt()==joint&&(*it)->data(0,Qt::UserRole+2).toInt()<0) {
@@ -157,7 +195,7 @@ class Editor final:public QMainWindow {
     ir::AreaLight light;size_t id=next->generation;auto exists=[&] {return std::any_of(next->loaded.scene.lights.begin(),next->loaded.scene.lights.end(),[&](const auto &old) {return old.id==light.id;});};
     do {light.id="Area "+std::to_string(id++);} while(exists());light.transform=ir::Transform::translate({0,-2,3});
     next->loaded.scene.lights.push_back(light);document_=next;snapshot_.generation=next->generation;snapshot_.lights=next->loaded.scene.lights;++snapshot_.revision;
-    rebuild_hierarchy();renderer_->set_document(document_,snapshot_,false);hierarchy_->setCurrentItem(hierarchy_->topLevelItem(hierarchy_->topLevelItemCount()-1));
+    rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);hierarchy_->setCurrentItem(hierarchy_->topLevelItem(hierarchy_->topLevelItemCount()-1));
   }
   void delete_selection() {
     if(loading_||!document_||(selected_<0&&selected_light_<0)||selected_joint_>=0) return;
@@ -168,12 +206,13 @@ class Editor final:public QMainWindow {
       next->generation=++generation_;snapshot.generation=next->generation;
       parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);
       select(-1);rebuild_hierarchy();frame_pending_=false;pose_report_=nullptr;pose_status_->clear();load_error_.clear();
-      renderer_->set_document(document_,snapshot_,false);
+      prune_pending_parameters();renderer_->set_document(document_,submitted_snapshot(),false);
       statusBar()->showMessage(removed?QStringLiteral("已删除 %1 个对象及其关联资源").arg(removed):QStringLiteral("已删除灯光"));
     } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法删除对象"),text(e.what()));}
   }
   void clear_scene() {
     if(loading_) return;
+    pending_parameters_.clear();apply_parameters_->setEnabled(false);
     parameters_->bind(nullptr,nullptr);document_=std::make_shared<Document>();document_->generation=++generation_;
     snapshot_=initial_snapshot(*document_);select(-1);rebuild_hierarchy();frame_pending_=false;pose_report_=nullptr;pose_status_->clear();load_error_.clear();
     renderer_->set_document(document_,snapshot_,false);
@@ -189,13 +228,13 @@ class Editor final:public QMainWindow {
     parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);pose_report_=std::move(applied.report);
     std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
     pose_status_->setText(QStringLiteral("已应用复合 DUF 的材质与姿势 / 形态；%1 项通道未应用，可查看详情。").arg(pose_report_["unapplied"].size()));
-    select(selected_,selected_joint_);renderer_->set_document(document_,snapshot_,false);
+    select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
   }
   void apply_material_file(const std::filesystem::path &file) {
     if(loading_||selected_<0||!document_) throw std::runtime_error("请先选中材质预设的目标对象");
     auto preset=daz::load(file,{roots_,false});auto next=std::make_shared<Document>(*document_);next->generation=++generation_;
     apply_materials(*next,size_t(selected_),preset);
-    next->loaded.scene.lights=snapshot_.lights;document_=next;snapshot_.generation=next->generation;++snapshot_.revision;select(selected_,selected_joint_);renderer_->set_document(document_,snapshot_,false);
+    next->loaded.scene.lights=snapshot_.lights;document_=next;snapshot_.generation=next->generation;++snapshot_.revision;select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
   }
   int selected_skin() const {
     if(selected_<0||!document_) return -1;const auto instance=document_->catalog.targets[size_t(selected_)].instance;
@@ -247,8 +286,13 @@ class Editor final:public QMainWindow {
   void set_morph(size_t morph,double value) {
     if(selected_<0) return;
     auto &current=snapshot_.values[size_t(selected_)].morphs[morph];const float next=float(value);
-    if(current==next) return;runtime::set_parameter(document_->catalog.targets[size_t(selected_)],snapshot_.values[size_t(selected_)],morph,next);
+    if(current==next) return;
+    const auto &target=document_->catalog.targets[size_t(selected_)];const auto canonical=target.morphs[morph].alias_morph>=0?size_t(target.morphs[morph].alias_morph):morph;
+    const auto key=std::make_pair(target.id,target.morphs[canonical].id);
+    if(manual_morph_->isChecked()) pending_parameters_.try_emplace(key,snapshot_.values[size_t(selected_)].morphs[canonical]);
+    runtime::set_parameter(target,snapshot_.values[size_t(selected_)],morph,next);
     parameters_->refresh(morph);
+    if(manual_morph_->isChecked()) {if(pending_parameters_.at(key)==snapshot_.values[size_t(selected_)].morphs[canonical]) pending_parameters_.erase(key);apply_parameters_->setEnabled(!pending_parameters_.empty());return;}
     send();
   }
   void select(int index,int joint=-1,int light=-1) {
@@ -277,6 +321,7 @@ class Editor final:public QMainWindow {
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};
     const auto &target=document_->catalog.targets[size_t(selected_)];
+    std::erase_if(pending_parameters_,[&](const auto &p){return p.first.first==target.id;});apply_parameters_->setEnabled(!pending_parameters_.empty());
     for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].evaluable||target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
     runtime::sync_aliases(target,value);
     const auto skin=selected_skin();if(skin>=0) {snapshot_.poses[size_t(skin)]=document_->skeletons.skins[size_t(skin)].initial;frame_pending_=true;pose_status_->setText(QStringLiteral("已重置选中角色的姿势与形态。"));pose_report_=nullptr;}
@@ -286,6 +331,7 @@ class Editor final:public QMainWindow {
     if(workflow_test_) SetCursorPos(workflow_cursor_.x,workflow_cursor_.y);
     const auto status=renderer_->status();
     nlohmann::json report={{"status",pass?"PASS":"FAIL"},{"error",error},{"stage",test_stage_},
+      {"lazy_test",lazy_test_},{"asset_revision",document_?document_->asset_revision:0},
       {"mesh_creations",status.adapter.meshes},{"curves",status.adapter.curves},{"geometry_updates",status.adapter.geometry_updates},{"instance_updates",status.adapter.instance_updates},
       {"morph_evaluations",status.evaluation.morph_evaluations},{"max_displacement_m",status.max_displacement},
       {"skin_evaluations",status.skinning.evaluations},{"skin_vertices",status.skinning.vertices},
@@ -411,6 +457,9 @@ class Editor final:public QMainWindow {
     if(size!=viewport_size_) {viewport_size_=size;resize_at_=QDateTime::currentMSecsSinceEpoch()+180;}
     if(resize_at_&&QDateTime::currentMSecsSinceEpoch()>=resize_at_) {resize_at_=0;renderer_->resize(size.width(),size.height());}
     const auto state=renderer_->status();
+    if(refresh_parameters_) refresh_parameters_->setEnabled(!loading_&&document_&&selected_>=0);
+    if(retry_parameters_) retry_parameters_->setEnabled(document_&&!state.resource_error.empty());
+    static int resources_tick=0;if(++resources_tick%5==0) parameters_->resource_states();
     if(delete_) delete_->setEnabled(!loading_&&document_&&selected_joint_<0&&(selected_>=0||selected_light_>=0));
     if(lifecycle_test_) {lifecycle_tick(state);return;}
     if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint);hierarchy_->setFocus(Qt::MouseFocusReason);}
@@ -418,9 +467,42 @@ class Editor final:public QMainWindow {
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);
     if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
+    else if(!state.resource_error.empty()) statusBar()->showMessage(QStringLiteral("Morph 未应用：")+text(state.resource_error)+QStringLiteral("；可重试加载或刷新参数目录"));
+    else if(state.pending_payloads) statusBar()->showMessage(QStringLiteral("正在异步载入 %1 项 Morph 数据，完成后应用最新输入…").arg(state.pending_payloads));
+    else if(!pending_parameters_.empty()) statusBar()->showMessage(QStringLiteral("有 %1 项参数更改待应用").arg(pending_parameters_.size()));
     else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4 · 发丝 %5").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations).arg(state.adapter.curves));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
+    if(lazy_test_) {
+      if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000) {finish_test(false,"Morph 异步界面验证超时");return;}
+      if(!load_error_.isEmpty()||!state.resource_error.empty()) {finish_test(false,load_error_.toStdString()+state.resource_error);return;}
+      if(loading_||!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<8) return;
+      const auto &target=document_->catalog.targets.at(0);size_t a=target.morphs.size();for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].channel_id=="A") a=m;
+      if(a==target.morphs.size()) {finish_test(false,"缺少异步测试夹具参数 A");return;}
+      if(test_stage_==0) {
+        choose(0);if(!target.morphs[a].payload||target.morphs[a].payload->state()!=runtime::PayloadState::unloaded) {finish_test(false,"选择角色时预读了未使用差值");return;}
+        lazy_generation_=document_->generation;parameters_->select_parameter(a);set_morph(a,.2);set_morph(a,.7);++test_stage_;
+      } else if(test_stage_==1) {
+        if(state.effective.at(0).at(a)!=.7f||state.adapter.geometry_updates==0) {finish_test(false,"首用参数未按最新值增量提交");return;}
+        lazy_updates_=state.adapter.geometry_updates;manual_morph_->setChecked(true);set_morph(a,.4);++test_stage_;
+      } else if(test_stage_==2) {
+        if(state.effective.at(0).at(a)!=.7f||state.adapter.geometry_updates!=lazy_updates_||!apply_parameters_->isEnabled()) {finish_test(false,"手动输入在应用前改变了几何");return;}
+        if(++lazy_wait_ticks_<4) return;apply_parameters_->click();++test_stage_;
+      } else if(test_stage_==3) {
+        if(state.effective.at(0).at(a)!=.4f||state.adapter.geometry_updates<=lazy_updates_) {finish_test(false,"手动应用未提交几何");return;}
+        lazy_updates_=state.adapter.geometry_updates;set_morph(a,.9);refresh_parameters_->click();++test_stage_;
+      } else if(test_stage_==4) {
+        if(!document_->asset_revision||document_->generation!=lazy_generation_||snapshot_.values.at(0).morphs.at(a)!=.9f||state.effective.at(0).at(a)!=.4f||state.adapter.geometry_updates!=lazy_updates_) {finish_test(false,"目录刷新丢失输入、提前提交暂存值或重建了网格");return;}
+        apply_parameters_->click();++test_stage_;
+      } else if(test_stage_==5) {
+        if(state.effective.at(0).at(a)!=.9f||state.adapter.geometry_updates<=lazy_updates_) {finish_test(false,"刷新后的暂存值未能应用");return;}
+        reset_selected();++test_stage_;
+      } else {
+        if(state.max_displacement!=0||!pending_parameters_.empty()) {finish_test(false,"手动模式下重置失败");return;}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"lazy-editor.png").wstring()));finish_test(true);
+      }
+      return;
+    }
     if(!visibility_label_.isEmpty()) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>360000) {finish_test(false,"可见性界面验证超时");return;}
       if(!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<8) return;
@@ -660,6 +742,14 @@ public:
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column==0&&target>=0&&item->data(0,Qt::UserRole+1).toInt()<0) set_visible(size_t(target),item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     parameters_=new ParameterPanel;parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};properties->addWidget(parameters_,1);
+    auto *parameter_actions=new QHBoxLayout;
+    refresh_parameters_=new QPushButton(QStringLiteral("刷新参数目录"));retry_parameters_=new QPushButton(QStringLiteral("重试加载"));retry_parameters_->setEnabled(false);
+    parameter_actions->addWidget(refresh_parameters_);parameter_actions->addWidget(retry_parameters_);properties->addLayout(parameter_actions);
+    connect(refresh_parameters_,&QPushButton::clicked,this,[this]{load_error_.clear();refresh_parameter_catalog();});
+    connect(retry_parameters_,&QPushButton::clicked,this,[this]{renderer_->retry_resources();send();});
+    auto *apply_actions=new QHBoxLayout;manual_morph_=new QCheckBox(QStringLiteral("手动应用参数"));apply_parameters_=new QPushButton(QStringLiteral("应用"));apply_parameters_->setEnabled(false);
+    apply_actions->addWidget(manual_morph_);apply_actions->addWidget(apply_parameters_);properties->addLayout(apply_actions);
+    connect(apply_parameters_,&QPushButton::clicked,this,[this]{apply_parameters();});connect(manual_morph_,&QCheckBox::toggled,this,[this](bool manual){if(!manual) apply_parameters();});
     auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
     auto *file_menu=menuBar()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
     connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 文件 (*.duf)"));if(!file.isEmpty()) open_asset(file_path(file));});
@@ -695,6 +785,7 @@ public:
   }
   void closeEvent(QCloseEvent *event) override {if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));}QMainWindow::closeEvent(event);}
   ~Editor() override {loader_.request_stop();if(loader_.joinable()) loader_.join();renderer_.reset();}
+  void lazy_test() {lazy_test_=self_test_=true;}
   void load(const std::filesystem::path &file,bool preserve=false,bool append=false) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
     loading_=true;load_error_.clear();open_->setEnabled(false);project_action_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在后台解析场景与参数依赖…"));
@@ -704,7 +795,7 @@ public:
         auto document=std::make_shared<Document>();document->generation=generation;document->loaded=daz::load(file,{roots,false});
         std::vector<std::filesystem::path> resolved;for(const auto &p:document->loaded.report["content_roots"]) resolved.push_back(std::filesystem::u8path(p.get<std::string>()));
         progress(QStringLiteral("正在发现 Morph 与读取场景参数…"));
-        document->catalog=daz::discover_morphs(document->loaded,resolved,[this,stop](const std::string &message) {if(stop.stop_requested()) throw std::runtime_error("已取消加载");progress(text(message));});
+        document->catalog=daz::discover_morphs(document->loaded,resolved,[this,stop](const std::string &message) {if(stop.stop_requested()) throw std::runtime_error("已取消加载");progress(text(message));},true);
         progress(QStringLiteral("正在解析骨架与场景姿势…"));
         document->skeletons=daz::load_skeletons(document->loaded);
         progress(QStringLiteral("正在编译 Formula / ERC…"));
@@ -718,6 +809,7 @@ public:
         else if(document->loaded.scene.lights.empty()) ir::add_studio(document->loaded.scene);
         QMetaObject::invokeMethod(this,[this,document,preserve,previous_document] {
           const auto old=document_;const auto previous=snapshot_;parameters_->bind(nullptr,nullptr);
+          if(!preserve&&!previous_document) {pending_parameters_.clear();apply_parameters_->setEnabled(false);}
           document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.generation=document->generation;snapshot_.revision=1;snapshot_.lights=document->loaded.scene.lights;
           if(previous_document) for(size_t l=0;l<previous.lights.size();++l) snapshot_.lights[l]=previous.lights[l];
           frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));
@@ -739,7 +831,7 @@ public:
             runtime::sync_aliases(target,values);snapshot_.values.push_back(std::move(values));
           }
           rebuild_hierarchy();
-          renderer_->set_document(document_,snapshot_,!previous_document);select(-1);
+          renderer_->set_document(document_,submitted_snapshot(),!previous_document);select(-1);
           const auto first=previous_document?previous_document->catalog.targets.size():0;
           if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
           if(!pose_file_.empty()&&!pose_test_) {const auto file=pose_file_;pose_file_.clear();apply_pose_file(file);}
@@ -771,6 +863,7 @@ int main(int argc,char **argv) {
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
+  parser.addOption({"lazy-test",QStringLiteral("验证异步 Morph、手动应用和参数目录刷新后退出")});
   parser.addOption({"test-parameter",QStringLiteral("指定滑块验证参数，可重复，与 --formula-test 配合"),"name"});
   parser.addOption({"reload-test",QStringLiteral("验证后台场景替换后退出"),"file"});parser.process(app);
   const auto output=parser.isSet("output")?file_path(parser.value("output")):std::filesystem::path("artifacts")/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
@@ -780,9 +873,10 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("lazy-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"));
     editor.test_parameters(parser.values("test-parameter"));
+    if(parser.isSet("lazy-test")) editor.lazy_test();
     if(parser.isSet("workflow-test")) editor.workflow_test();
     if(parser.isSet("head-selection-test")) editor.head_selection_test();
     if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"),parser.isSet("capture-head"),parser.value("capture-samples").toInt());

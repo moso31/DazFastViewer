@@ -1,4 +1,5 @@
 #include "runtime/conform.h"
+#include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -45,16 +46,17 @@ public:
   explicit SurfaceIndex(const ir::Mesh &mesh):mesh_(mesh) {triangles_.resize(mesh.triangles.size());std::iota(triangles_.begin(),triangles_.end(),0);if(!triangles_.empty()) build(0,triangles_.size());}
   SurfaceBinding nearest(ir::Vec3 p) const {
     if(branches_.empty()) throw std::runtime_error("Fit To 目标没有可用于形变转移的三角形");
-    float best=std::numeric_limits<float>::max();SurfaceBinding result;std::vector<int> stack{0};
-    while(!stack.empty()) {const auto &b=branches_[stack.back()];stack.pop_back();if(box_distance(b.bounds,p)>best) continue;
-      if(b.left>=0) {const bool left_first=box_distance(branches_[b.left].bounds,p)<box_distance(branches_[b.right].bounds,p);stack.push_back(left_first?b.right:b.left);stack.push_back(left_first?b.left:b.right);continue;}
+    // 中位数二分树的深度受 size_t 位数约束；每次查询不再分配动态栈。
+    float best=std::numeric_limits<float>::max();SurfaceBinding result;std::array<int,8*sizeof(size_t)+1> stack{};size_t pending=1;
+    while(pending) {const auto &b=branches_[stack[--pending]];if(box_distance(b.bounds,p)>best) continue;
+      if(b.left>=0) {const bool left_first=box_distance(branches_[b.left].bounds,p)<box_distance(branches_[b.right].bounds,p);stack[pending++]=left_first?b.right:b.left;stack[pending++]=left_first?b.left:b.right;continue;}
       for(size_t i=b.begin;i<b.end;++i) {const auto vertices=mesh_.triangles[triangles_[i]].vertices;const auto a=mesh_.positions[vertices[0]],c=mesh_.positions[vertices[1]],d=mesh_.positions[vertices[2]];
         const auto bary=closest_barycentric(p,a,c,d),distance=sub(p,add(add(mul(a,bary.x),mul(c,bary.y)),mul(d,bary.z)));const float square=dot(distance,distance);
         if(square<best) {best=square;result={vertices,bary};result.polygon=mesh_.triangles[triangles_[i]].source_polygon;}}
     }return result;
   }
 };
-bool transferable(const Morph &m) {return m.evaluable&&m.auto_follow&&m.kind!="alias"&&m.alias_morph<0&&!m.offsets.empty();}
+bool transferable(const Morph &m) {return m.evaluable&&m.auto_follow&&m.kind!="alias"&&m.alias_morph<0&&m.has_offsets();}
 }
 ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs):targets_(targets) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("Fit To 公式图数量不一致");
@@ -68,7 +70,9 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     link_for_target_[t]=int(links_.size());links_.push_back(std::move(link));}
   std::vector<int> state(targets.size());std::function<void(size_t)> visit=[&](size_t t) {if(state[t]==2) return;if(state[t]==1) throw std::runtime_error("Fit To 关系存在循环");state[t]=1;if(const auto *l=link(t)) visit(l->source);state[t]=2;order_.push_back(t);};
   for(size_t t=0;t<targets.size();++t) visit(t);
+  std::map<uint32_t,std::unique_ptr<SurfaceIndex>> surface_indexes;
   for(auto &l:links_) {
+    diagnostics::Scope binding_scope(diagnostics::active?"conform_binding/"+targets[l.follower].id:std::string{});
     const auto &source=targets[l.source];const auto &follower=targets[l.follower];const auto &g=graphs[l.follower];
     std::map<std::string,std::vector<size_t>> names;for(size_t m=0;m<source.morphs.size();++m) if(transferable(source.morphs[m])) names[source.morphs[m].channel_id].push_back(m);
     l.morph_sources.resize(follower.morphs.size(),-1);std::set<size_t> authored;
@@ -94,7 +98,8 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
       }
     }
     const auto &a=scene.instances.at(source.instance),&b=scene.instances.at(follower.instance);const auto follower_to_source=inverse(a.transform)*b.transform;l.source_to_follower=inverse(b.transform)*a.transform;
-    const auto &body=scene.meshes.at(a.mesh),&cloth=scene.meshes.at(b.mesh);SurfaceIndex index(body);l.surface.reserve(cloth.positions.size());
+    const auto &body=scene.meshes.at(a.mesh),&cloth=scene.meshes.at(b.mesh);
+    auto &cached_index=surface_indexes[a.mesh];if(!cached_index) cached_index=std::make_unique<SurfaceIndex>(body);const auto &index=*cached_index;l.surface.reserve(cloth.positions.size());
     l.neighbors.resize(cloth.positions.size());
     for(const auto &triangle:cloth.triangles) for(size_t i=0;i<3;++i) for(size_t j=0;j<3;++j) if(i!=j) l.neighbors[triangle.vertices[i]].push_back(triangle.vertices[j]);
     for(auto &neighbors:l.neighbors) {std::sort(neighbors.begin(),neighbors.end());neighbors.erase(std::unique(neighbors.begin(),neighbors.end()),neighbors.end());}
@@ -112,11 +117,12 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
 }
 const ConformLink *ConformRuntime::link(size_t target) const {const int i=link_for_target_.at(target);return i<0?nullptr:&links_[size_t(i)];}
 void ConformRuntime::project(const std::vector<std::vector<float>> &weights,MorphRuntime &morph) {
+  diagnostics::Scope scope("conform_project");
   for(auto target:order_) {const auto *l=link(target);if(!l) continue;const auto i=size_t(link_for_target_[target]);std::vector<float> current;current.reserve(l->projected_morphs.size());
     for(auto m:l->projected_morphs) current.push_back(weights.at(l->source).at(m));
     if(current==previous_weights_[i]&&source_revisions_[i]==revisions_[l->source]) continue;
     std::vector<ir::Vec3> source(vertex_counts_[l->source]);if(!offsets_[l->source].empty()) source=offsets_[l->source];
-    for(size_t m=0;m<current.size();++m) if(current[m]!=0) for(const auto &d:targets_[l->source].morphs[l->projected_morphs[m]].offsets) source[d.vertex]=add(source[d.vertex],mul(d.delta,current[m]));
+    for(size_t m=0;m<current.size();++m) if(current[m]!=0) for(const auto &d:targets_[l->source].morphs[l->projected_morphs[m]].data()) source[d.vertex]=add(source[d.vertex],mul(d.delta,current[m]));
     auto &offsets=offsets_[target];offsets.resize(l->surface.size());
     for(size_t v=0;v<offsets.size();++v) {const auto &b=l->surface[v];const auto a=source[b.vertices[0]],c=source[b.vertices[1]],d=source[b.vertices[2]],edge1=sub(c,a),edge2=sub(d,a);
       auto delta=add(add(mul(a,b.barycentric.x),mul(c,b.barycentric.y)),mul(d,b.barycentric.z));
@@ -178,6 +184,7 @@ CollisionRuntime::CollisionRuntime(ir::Scene &scene,const std::vector<Target> &t
   for(const auto &[i,b]:pending) visit(i);
 }
 ir::Delta CollisionRuntime::evaluate(ir::Delta delta) {
+  diagnostics::Scope scope("collision_evaluate");
   std::set<uint32_t> changed;
   for(const auto &e:delta.meshes) changed.insert(e.index);
   // 先截取所有未修正输入，后续碰撞链的输出不能覆盖下游的蒙皮缓存。

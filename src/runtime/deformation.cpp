@@ -1,4 +1,5 @@
 #include "runtime/deformation.h"
+#include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -59,6 +60,7 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
   }
 }
 void DeformationRuntime::feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved) {
+  diagnostics::Scope scope("formula_feed");
   if(values.size()!=targets_.size()||poses.size()!=skins_.size()) throw std::runtime_error("变形快照数量不一致");
   weights.resize(targets_.size());resolved=poses;
   for(size_t s=0;s<skins_.size();++s) validate_pose(skins_[s],poses[s]);
@@ -78,11 +80,29 @@ void DeformationRuntime::feed(const std::vector<Properties> &values,const std::v
     if(link&&g.skin>=0) for(size_t j=0;j<link->joints.size();++j) if(link->joints[j]>=0) resolved[size_t(g.skin)][j]=inherited[j];
   }
 }
+PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry) {
+  std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> resolved;
+  try {feed(values,poses,weights,resolved);}
+  catch(...) {std::vector<std::vector<float>> rollback_weights;std::vector<std::vector<JointPose>> rollback_poses;feed(previous_,previous_poses_,rollback_weights,rollback_poses);throw;}
+  PayloadProgress progress;std::vector<std::shared_ptr<const OffsetBuffer>> leases;std::set<MorphPayload *> seen;
+  for(size_t t=0;t<weights.size();++t) for(size_t m=0;m<weights[t].size();++m) if(weights[t][m]!=0) {
+    const auto &p=targets_[t].morphs[m].payload;if(!p||!seen.insert(p.get()).second) continue;
+    p->request(retry);if(auto data=p->acquire()) leases.push_back(std::move(data));
+    else if(p->state()==PayloadState::failed) {if(progress.error.empty()) progress.error=targets_[t].morphs[m].label+"："+p->error();}
+    else ++progress.pending;
+  }
+  payload_leases_=std::move(leases);trim_morph_cache();return progress;
+}
 ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
     for(const auto &p:values) validate_transform(p.transform);
     feed(values,poses,weights,resolved);
+    // 命令行调用保持同步语义；编辑器先调用 prepare，资源就绪后才提交形变。
+    std::vector<std::shared_ptr<const OffsetBuffer>> leases;
+    for(size_t t=0;t<weights.size();++t) for(size_t m=0;m<weights[t].size();++m) if(weights[t][m]!=0&&targets_[t].morphs[m].payload) leases.push_back(targets_[t].morphs[m].payload->ensure());
+    payload_leases_=std::move(leases);
+    trim_morph_cache();
     for(size_t s=0;s<skins_.size();++s) validate_pose(skins_[s],resolved[s]);
   } catch(...) {std::vector<std::vector<float>> rollback_weights;std::vector<std::vector<JointPose>> rollback_poses;feed(previous_,previous_poses_,rollback_weights,rollback_poses);throw;}
   for(size_t t=0;t<weights.size();++t) {
