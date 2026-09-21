@@ -13,7 +13,7 @@ double bone_input(const Binding &b,const Skin &skin,const std::vector<JointPose>
     case Property::translation:return component(p.translation_cm,b.axis);
     case Property::rotation:return component(p.rotation_degrees,b.axis);
     case Property::scale:return component(p.scale,b.axis);
-    case Property::general_scale:return p.general_scale;
+    case Property::general_scale:return p.general_scale*(b.index==0?skin.root_general_scale:1);
     case Property::center:return component(j.center_cm,b.axis)+component(p.center_offset_cm,b.axis);
     case Property::end:return component(j.end_cm,b.axis)+component(p.end_offset_cm,b.axis);
     case Property::orientation:return component(j.orientation_degrees,b.axis)+component(p.orientation_offset_degrees,b.axis);
@@ -26,7 +26,7 @@ void bone_output(const Binding &b,const Skin &skin,std::vector<JointPose> &poses
     case Property::translation:component(p.translation_cm,b.axis,value);break;
     case Property::rotation:component(p.rotation_degrees,b.axis,value);break;
     case Property::scale:component(p.scale,b.axis,value);break;
-    case Property::general_scale:if(!std::isfinite(float(value))) throw std::runtime_error("无效总体缩放");p.general_scale=float(value);break;
+    case Property::general_scale:if(!std::isfinite(float(value))) throw std::runtime_error("无效总体缩放");p.general_scale=float(value)/(b.index==0?skin.root_general_scale:1);break;
     case Property::center:component(p.center_offset_cm,b.axis,value-component(j.center_cm,b.axis));break;
     case Property::end:component(p.end_offset_cm,b.axis,value-component(j.end_cm,b.axis));break;
     case Property::orientation:component(p.orientation_offset_degrees,b.axis,value-component(j.orientation_degrees,b.axis));break;
@@ -37,7 +37,7 @@ void bone_output(const Binding &b,const Skin &skin,std::vector<JointPose> &poses
 void sync_aliases(const Target &target,Properties &values) {for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].alias_morph>=0) values.morphs[m]=values.morphs.at(size_t(target.morphs[m].alias_morph));}
 void set_parameter(const Target &target,Properties &values,size_t index,float value) {
   const auto &p=target.morphs.at(index);if(!p.unsupported.empty()) throw std::runtime_error(p.unsupported);if(!std::isfinite(value)) throw std::runtime_error("参数必须为有限值");
-  if(p.value_type=="bool") value=std::round(value);if(p.clamped) value=std::clamp(value,p.minimum,p.maximum);
+  if(p.value_type=="bool"||p.value_type=="int") value=std::round(value);
   values.morphs.at(p.alias_morph>=0?size_t(p.alias_morph):index)=value;sync_aliases(target,values);
 }
 DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs)
@@ -46,6 +46,15 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
   for(const auto &target:targets) {Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);sync_aliases(target,p);previous_.push_back(p);}
   for(const auto &skin:skins) previous_poses_.push_back(skin.initial);
+  for(size_t s=0;s<skins.size();++s) {
+    const auto &skin=skins[s];size_t parent=0;while(parent<targets.size()&&targets[parent].instance!=skin.instance) ++parent;
+    if(parent==targets.size()) continue;
+    const auto figure=scene.instances.at(skin.instance).transform;const auto bind=joint_transforms(skin,skin.initial);
+    for(size_t j=0;j<skin.joints.size();++j) if(!skin.joints[j].scene_id.empty()) for(size_t t=0;t<targets.size();++t)
+      if(targets[t].conform_target.empty()&&targets[t].parent=="#"+skin.joints[j].scene_id) {
+        morph_.bind_parent(t,parent);attachments_.push_back({t,s,j,figure,ir::inverse(figure*bind[j])});
+      }
+  }
 }
 void DeformationRuntime::feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved) {
   if(values.size()!=targets_.size()||poses.size()!=skins_.size()) throw std::runtime_error("变形快照数量不一致");
@@ -79,6 +88,11 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     morph_.set_transform(t,values[t].transform);
   }
   for(size_t s=0;s<resolved.size();++s) skin_.set_pose(s,resolved[s]);
+  std::vector<std::vector<ir::Transform>> joints(skins_.size());
+  for(const auto &a:attachments_) {
+    if(joints[a.skin].empty()) joints[a.skin]=joint_transforms(skins_[a.skin],resolved[a.skin]);
+    morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*a.inverse_bind);
+  }
   conform_.project(weights,morph_);
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;return skin_.evaluate(morph_.evaluate());
 }

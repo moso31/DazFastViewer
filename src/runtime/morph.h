@@ -9,6 +9,7 @@ struct Morph {
   // 参数目录包含控制器和子节点别名；发现能力与求值能力分开记录。
   std::string kind="sparse",owner,channel_id,alias_target,channel_name;
   std::string value_type="float",intrinsic_error;
+  std::string limitation;
   bool evaluable=false,locked=false;
   int alias_morph=-1;
   size_t formula_count=0,missing_dependencies=0;
@@ -41,14 +42,18 @@ class MorphRuntime {
   std::vector<std::vector<ir::Vec3>> bases_;
   std::vector<std::vector<ir::Vec3>> follow_offsets_;
   std::vector<ir::Transform> transforms_;
+  std::vector<ir::Transform> attachments_;
   std::vector<int> parents_;
   std::vector<std::set<size_t>> active_;
   std::set<size_t> dirty_meshes_,dirty_transforms_;
   EvaluationStats stats_;
+  void dirty_transform(size_t target);
 public:
   MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets);
   bool set_morph(size_t target,size_t morph,float value);
   bool set_transform(size_t target,const TransformValues &value);
+  void bind_parent(size_t target,size_t parent);
+  void set_attachment(size_t target,const ir::Transform &delta);
   bool set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets);
   ir::Delta evaluate();
   const auto &values() const {return values_;}

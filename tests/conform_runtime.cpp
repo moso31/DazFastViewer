@@ -19,7 +19,51 @@ static FormulaGraph graph(const Target &t,int skin) {
   if(skin>=0) for(auto property:{Property::rotation,Property::scale,Property::center}) {Channel c;c.binding={property,1,property==Property::rotation?2u:0u};c.initial=property==Property::scale?1:0;g.channels.push_back(c);}
   g.prepare();return g;
 }
+static void generated_field() {
+  ir::Mesh body;body.positions={{-2,-2,0},{0,-2,0},{0,2,0},{-2,2,0},{0,-2,0},{2,-2,0},{2,2,0},{0,2,0}};
+  for(const auto vertices:std::array<std::array<uint32_t,3>,4>{{{0,1,2},{0,2,3},{4,5,6},{4,6,7}}}) {ir::Triangle f;f.vertices=vertices;body.triangles.push_back(f);}
+  ir::Mesh cloth;for(int y=0;y<7;++y) for(int x=0;x<9;++x) cloth.positions.push_back({(x-4)*.2f,(y-3)*.2f,.1f+(x%2)*.01f});
+  for(uint32_t y=0;y<6;++y) for(uint32_t x=0;x<8;++x) {auto a=y*9+x;ir::Triangle f;f.vertices={a,a+1,a+10};cloth.triangles.push_back(f);f.vertices={a,a+10,a+9};cloth.triangles.push_back(f);}
+  ir::Scene scene;scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target source;source.id="body/mesh";source.morphs={morph("follow",{})};
+  for(uint32_t v=0;v<8;++v) source.morphs[0].offsets.push_back({v,{0,0,v<4?.1f:-.1f}});
+  Target follower;follower.id="cloth/mesh";follower.instance=1;follower.conform_target="#body";
+  std::vector<Target> targets={source,follower};std::vector<FormulaGraph> graphs={graph(source,-1),graph(follower,-1)};
+  const std::vector<Skin> skins;DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(2);values[0].morphs={1};runtime.evaluate(values,{});
+  const auto &positions=scene.meshes[1].positions;float jump=0;
+  for(size_t y=1;y<6;++y) for(size_t x=1;x<8;++x) {const auto v=y*9+x;const float a=positions[v].z-cloth.positions[v].z,b=positions[v-1].z-cloth.positions[v-1].z;jump=std::max(jump,std::abs(a-b));}
+  require(jump<.1f,"最近表面切换仍使衣物产生不连续位移");
+  values[0].morphs[0]=0;runtime.evaluate(values,{});require(distance(scene.meshes[1].positions,cloth.positions)==0,"生成场的平滑改变了原始褶皱或重置结果");
+}
+static void bone_attachment() {
+  ir::Scene base;ir::Mesh mesh;mesh.positions={{0,0,0}};mesh.material_slots={"surface"};base.materials.resize(1);
+  for(uint32_t i=0;i<4;++i) {base.meshes.push_back(mesh);ir::Instance instance;instance.mesh=i;instance.materials={0};instance.transform=ir::Transform::translate({i==0?2.f:i==1?3.f:i==2?3.5f:8.f,0,0});base.instances.push_back(instance);}
+  Target body;body.id="body/mesh";body.morphs={morph("head_size",{},false)};
+  Target glasses;glasses.id="glasses/mesh";glasses.instance=1;glasses.parent="#head-instance";
+  Target child;child.id="child/mesh";child.instance=2;child.parent="#glasses";
+  Target other;other.id="other/mesh";other.instance=3;
+  std::vector<Target> targets={body,glasses,child,other};Skin skin;skin.id="body";
+  Joint root,head;root.id="body";head.id="head";head.scene_id="head-instance";head.parent=0;skin.joints={root,head};skin.initial.resize(2);skin.weights={{{1,1}}};
+  std::vector<Skin> skins={skin};std::vector<FormulaGraph> graphs={graph(body,0),graph(glasses,-1),graph(child,-1),graph(other,-1)};
+  Expression scale;scale.output=2;scale.linear_input=0;scale.coefficient=1;graphs[0].expressions={scale};graphs[0].prepare();
+  auto scene=base;DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(4);values[0].morphs={1};auto poses=std::vector<std::vector<JointPose>>{skin.initial};poses[0][1].rotation_degrees.z=90;
+  runtime.evaluate(values,poses);
+  auto close=[&](size_t i,ir::Vec3 expected) {return distance({scene.instances[i].transform.point({})},{expected})<1e-6;};
+  require(close(1,{2,0,2})&&close(2,{2,0,3})&&close(3,{8,0,0}),"骨骼附件未跟随 ERC / 姿态，或污染无关对象");
+  for(int i=0;i<3;++i) require(runtime.evaluate(values,poses).instances.empty(),"附件重复求值产生更新或累计漂移");
+  values[0].transform.translation_cm.x=10;runtime.evaluate(values,poses);require(close(1,{2.1f,0,2})&&close(2,{2.1f,0,3}),"附件未继承角色的手动实例变换");
+  values[0].morphs={0};values[0].transform={};poses[0]=skin.initial;runtime.evaluate(values,poses);require(close(1,{3,0,0})&&close(2,{3.5f,0,0}),"骨骼附件重置不能恢复绑定位置");
+  // 初始场景已保存骨骼姿态：运行时不能重复应用这一次旋转。
+  skins[0].initial[1].rotation_degrees.z=30;poses[0]=skins[0].initial;auto saved=base;DeformationRuntime posed(saved,targets,skins,graphs);posed.evaluate(values,poses);
+  require(distance({saved.instances[1].transform.point({})},{{3,0,0}})<1e-6,"附件重复应用场景的初始骨骼姿态");
+  skins[0]=skin;editor::Document document;document.generation=9;document.loaded.scene=base;document.catalog.targets=targets;document.skeletons.skins=skins;document.formulas.graphs=graphs;auto duplicate=document;
+  editor::append_document(document,std::move(duplicate));auto snapshot=editor::initial_snapshot(document);snapshot.poses[1][1].rotation_degrees.z=90;
+  DeformationRuntime appended(document.loaded.scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);appended.evaluate(snapshot.values,snapshot.poses);
+  require(distance({document.loaded.scene.instances[1].transform.point({}),document.loaded.scene.instances[5].transform.point({})},{{3,0,0},{2,0,1}})<1e-6,"追加角色的骨骼附件串到已有角色");
+}
 static void unit() {
+  bone_attachment();
+  generated_field();
   ir::Mesh body;body.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle triangle;triangle.vertices={0,1,2};body.triangles={triangle};body.material_slots={"surface"};
   auto cloth=body;cloth.positions={{.25f,.25f,.1f},{.5f,.25f,.1f},{.25f,.5f,.1f}};
   ir::Scene scene;scene.meshes={cloth,body,body};scene.materials.resize(1);for(uint32_t m=0;m<3;++m) {ir::Instance instance;instance.mesh=m;instance.materials={0};scene.instances.push_back(instance);}
@@ -46,6 +90,10 @@ static void unit() {
   auto cyclic=targets;cyclic[1].conform_target="#cloth";rejects([&] {ConformRuntime bad(scene,cyclic,skins,graphs);},"Fit To 循环未拒绝");
   auto missing=targets;missing[0].conform_target="#missing";rejects([&] {ConformRuntime bad(scene,missing,skins,graphs);},"丢失 Fit To 对象仍静默显示错误形变");
   auto parent_only=targets;parent_only[0].conform_target.clear();ConformRuntime unbound(scene,parent_only,skins,graphs);require(unbound.links().empty(),"普通父子关系被误当服装绑定");
+  auto renamed=skins;renamed[0].joints[1].name="Chest";renamed[1].joints[1].name="Different";auto alternate=renamed[1].joints[1];alternate.id="chest-renamed";alternate.name="Chest";renamed[1].joints.push_back(alternate);renamed[1].initial.emplace_back();
+  ConformRuntime named(scene,targets,renamed,graphs);require(named.link(0)->joints[1]==2,"跨资产的局部 ID 抢占了唯一名称匹配");
+  renamed[1].joints[1].name="Chest";ConformRuntime disambiguated(scene,targets,renamed,graphs);require(disambiguated.link(0)->joints[1]==1,"同名骨骼没有按唯一 ID 消除歧义");
+  renamed[0].joints[1].id="unknown";rejects([&] {ConformRuntime ambiguous(scene,targets,renamed,graphs);},"多个同名骨骼被任意选择");
   // 不同实例矩阵：在人体坐标中绑定，位移转换回服装坐标。
   scene.instances[0].transform.value[0]=2;auto transformed=cloth;for(auto &p:transformed.positions) p.x*=.5f;scene.meshes[0]=transformed;
   DeformationRuntime scaled(scene,targets,skins,graphs);values[1].morphs[1]=1;scaled.evaluate(values,poses);auto scaled_expected=transformed.positions;scaled_expected[0].z+=.1f;scaled_expected[1].z+=.2f;scaled_expected[2].z+=.1f;

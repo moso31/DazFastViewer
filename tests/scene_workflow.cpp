@@ -7,7 +7,73 @@
 
 using namespace dfv;
 static void require(bool v,const char *message) {if(!v) throw std::runtime_error(message);}
+static void embedded_geometry() {
+  using J=nlohmann::json;namespace fs=std::filesystem;
+  const auto folder=fs::temp_directory_path()/("dfv-derived-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder/"data/Test/Morphs");
+  J asset=J::parse(R"({"node_library":[{"id":"figure","type":"figure"},{"id":"bone","type":"bone","parent":"#figure"}],
+    "geometry_library":[{"id":"mesh","vertices":{"count":3,"values":[[0,0,0],[100,0,0],[0,100,0]]},"polygon_material_groups":{"count":1,"values":["Skin"]},"polylist":{"count":1,"values":[[0,0,0,1,2]]},"default_uv_set":"#uv"}],
+    "uv_set_library":[{"id":"uv","vertex_count":3,"uvs":{"count":3,"values":[[0,0],[1,0],[0,1]]}}],
+    "modifier_library":[{"skin":{"node":"#figure","geometry":"#mesh","vertex_count":3,"joints":[{"node":"#bone","node_weights":{"count":3,"values":[[0,1],[1,1],[2,1]]}}]}}]})");
+  std::ofstream(folder/"data/Test/figure.dsf")<<asset.dump();
+  std::ofstream(folder/"data/Test/Morphs/raise.dsf")<<R"({"modifier_library":[{"id":"Raise","parent":"/data/Test/figure.dsf#mesh","channel":{"type":"float","value":0,"min":0,"max":1},"morph":{"vertex_count":3,"deltas":{"count":1,"values":[[1,20,0,0]]}}}]})";
+  auto geometry=asset["geometry_library"][0];geometry["id"]="embedded";geometry["source"]="/data/Test/figure.dsf#mesh";geometry["default_uv_set"]="/data/Test/figure.dsf#uv";geometry["vertices"]["values"][0][0]=10;
+  J duf={{"geometry_library",{geometry}},{"scene",{{"nodes",J::array()},{"materials",J::array()},{"modifiers",J::array()}}}};
+  for(int i=0;i<2;++i) {
+    const auto id="person"+std::to_string(i),shape="shape"+std::to_string(i);
+    duf["scene"]["nodes"].push_back({{"id",id},{"url","/data/Test/figure.dsf#figure"},{"geometries",{{{"id",shape},{"url","#embedded"}}}}});
+    duf["scene"]["nodes"].push_back({{"id","bone"+std::to_string(i)},{"parent","#"+id},{"url","/data/Test/figure.dsf#bone"},{"rotation",{{{"id","z"},{"current_value",i?0:90}}}}});
+    duf["scene"]["materials"].push_back({{"id","mat"+std::to_string(i)},{"geometry","#"+shape},{"groups",{"Skin"}}});
+    duf["scene"]["modifiers"].push_back({{"url","/data/Test/Morphs/raise.dsf#Raise"},{"parent","#"+id},{"channel",{{"current_value",i?.1:.5}}}});
+  }
+  const auto file=folder/"embedded.duf";std::ofstream(file)<<duf.dump();editor::Document document;document.loaded=daz::load(file,{{folder},false});
+  require(document.loaded.objects[0].geometry_sources.size()==1&&std::abs(document.loaded.scene.meshes[0].positions[0].x-.1f)<1e-6f,"内嵌几何 source 未解析或覆盖了本地顶点");
+  document.catalog=daz::discover_morphs(document.loaded,{folder});document.skeletons=daz::load_skeletons(document.loaded);document.formulas=daz::enable_formulas(document.catalog,document.skeletons);
+  require(document.catalog.targets[0].morphs.size()==1&&document.skeletons.skins.size()==2,"内嵌几何丢失继承的 Morph 或骨架");
+  auto snapshot=editor::initial_snapshot(document);auto rendered=document.loaded.scene;runtime::DeformationRuntime runtime(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
+  require(std::abs(rendered.meshes[rendered.instances[0].mesh].positions[1].z-1.1f)<1e-5f&&std::abs(rendered.meshes[rendered.instances[1].mesh].positions[1].x-1.02f)<1e-5f,"内嵌几何的保存 Morph / 姿势未应用或跨实例污染");
+  duf["geometry_library"][0]["polylist"]["values"][0][3]=2;duf["geometry_library"][0]["polylist"]["values"][0][4]=1;std::ofstream(file)<<duf.dump();auto incompatible=daz::load(file,{{folder},false});
+  require(incompatible.objects[0].geometry_sources.empty()&&!incompatible.report["warnings"].empty(),"不同拓扑错误继承了权重索引");
+  duf["geometry_library"][0]["source"]="#embedded";std::ofstream(file)<<duf.dump();bool rejected=false;try {daz::load(file,{{folder},false});} catch(const std::exception &) {rejected=true;}require(rejected,"派生几何循环没有拒绝");
+  fs::remove_all(folder);
+}
+static void lifecycle() {
+  editor::Document document;document.generation=1;
+  auto &scene=document.loaded.scene;ir::Mesh mesh;mesh.material_slots={"Skin"};mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};
+  scene.textures={{"a","a.png"},{"b","b.png"}};scene.materials.resize(2);scene.materials[0].color_texture=0;scene.materials[1].color_texture=1;
+  for(size_t i=0;i<4;++i) {
+    const auto id=std::string(1,char('a'+i));scene.meshes.push_back(mesh);ir::Instance instance;instance.id=id+"/mesh";instance.mesh=uint32_t(i);instance.materials={i==3?1u:0u};scene.instances.push_back(instance);
+    runtime::Target target;target.id=instance.id;target.instance=uint32_t(i);document.catalog.targets.push_back(target);document.formulas.graphs.emplace_back();
+    daz::AssetObject object;object.id=id;object.instance=uint32_t(i);document.loaded.objects.push_back(object);
+  }
+  document.loaded.nodes={{"a",""},{"head","#a"},{"b","#a"},{"c","#head"},{"d",""}};
+  document.loaded.objects[1].conform_target=document.catalog.targets[1].conform_target="#a";
+  document.loaded.objects[2].parent=document.catalog.targets[2].parent="#head";
+  for(auto i:{0u,3u}) {runtime::Skin skin;skin.id=std::string(1,char('a'+i));skin.instance=i;runtime::Joint root;root.id="root";skin.joints={root};skin.initial.resize(1);skin.weights={{{0,1}},{{0,1}},{{0,1}}};document.formulas.graphs[i].skin=int(document.skeletons.skins.size());document.skeletons.skins.push_back(skin);}
+  auto snapshot=editor::initial_snapshot(document);snapshot.values[3].transform.translation_cm.x=123;snapshot.poses[1][0].rotation_degrees.z=17;
+  auto clothes_only=document;auto clothes_snapshot=snapshot;require(editor::remove_target(clothes_only,clothes_snapshot,1)==1&&clothes_only.catalog.targets.size()==3,"删除衣物连带删除人物");
+  require(editor::remove_target(document,snapshot,0)==3,"删除人物没有清理 Fit To 或骨骼附件");
+  require(document.catalog.targets.size()==1&&document.catalog.targets[0].id=="d/mesh"&&document.catalog.targets[0].instance==0,"删除误伤无关模型或未重映射实例");
+  require(document.formulas.graphs[0].skin==0&&document.skeletons.skins[0].instance==0&&snapshot.values[0].transform.translation_cm.x==123&&snapshot.poses[0][0].rotation_degrees.z==17,"删除丢失其他角色的公式 / 姿势 / 变换");
+  require(scene.meshes.size()==1&&scene.materials.size()==1&&scene.textures.size()==1&&scene.textures[0].id=="b"&&scene.materials[0].color_texture==0,"删除后仍持有孤立资源");
+  auto rendered=scene;runtime::DeformationRuntime runtime(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
+  auto source=document;source.generation=0;
+  auto lamp=document;auto lamp_snapshot=snapshot;ir::AreaLight light;light.id="lamp";lamp_snapshot.lights={light};lamp.loaded.nodes.push_back({"lamp",""});lamp.loaded.nodes[0].parent="#lamp";
+  require(editor::remove_light(lamp,lamp_snapshot,0)==1&&lamp.loaded.nodes.empty()&&lamp_snapshot.lights.empty()&&lamp.loaded.scene.meshes.empty(),"删除灯光保留了节点或子对象");
+  for(int iteration=0;iteration<64;++iteration) {
+    document.generation=uint64_t(iteration+2);editor::append_document(document,source);snapshot=editor::initial_snapshot(document);
+    require(editor::remove_target(document,snapshot,1)==1&&scene.meshes.size()==1&&scene.materials.size()==1&&scene.textures.size()==1&&document.loaded.nodes.size()==1,"反复增删保留了历史模型资源");
+  }
+  daz::LoadedScene preset;preset.scene.textures={{"new","new.png"}};preset.scene.materials.resize(1);preset.scene.materials[0].color_texture=0;preset.report["materials"]={{{"groups",{"Skin"}}}};
+  for(int i=0;i<64;++i) editor::apply_materials(document,0,preset);
+  require(scene.materials.size()==1&&scene.textures.size()==1,"反复换材质累积旧贴图或材质");
+  preset.report["materials"][0]["groups"]={"missing"};bool rejected=false;try {editor::apply_materials(document,0,preset);} catch(const std::exception &) {rejected=true;}
+  require(rejected&&scene.materials.size()==1&&scene.textures.size()==1,"不匹配的材质污染文档");
+  editor::remove_target(document,snapshot,0);require(scene.instances.empty()&&scene.meshes.empty()&&scene.materials.empty()&&scene.textures.empty()&&document.catalog.targets.empty()&&document.skeletons.skins.empty()&&document.formulas.graphs.empty(),"删除最后一个对象未释放全部资源");
+  rendered=scene;runtime::DeformationRuntime empty(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);empty.evaluate(snapshot.values,snapshot.poses);
+}
 static void unit() {
+  embedded_geometry();
+  lifecycle();
   ir::Scene scene;ir::Mesh mesh;mesh.positions={{-1,0,-1},{1,0,-1},{0,0,1}};ir::Triangle triangle;triangle.vertices={0,1,2};mesh.triangles={triangle};mesh.material_slots={"Skin"};mesh.polygon_groups={"head"};scene.meshes={mesh};scene.materials.resize(1);
   ir::Instance a;a.materials={0};scene.instances={a,a};scene.instances[1].transform=ir::Transform::translate({0,1,0});
   runtime::PickingScene picking;picking.update(scene);require(picking.ray({0,-2,0},{0,1,0}).instance==0,"射线未选最近对象");require(picking.ray({4,-2,0},{0,1,0}).instance==-1,"射线空白误命中");
@@ -40,6 +106,9 @@ static void unit() {
   editor::append_document(first,std::move(second));require(first.catalog.targets[0].instance==2&&first.loaded.scene.instances[2].mesh==1,"合并资源索引错误");require(first.catalog.targets[0].id!="figure","合并未隔离实例身份");
   nlohmann::json shape={{"asset_info",{{"type","preset_shape"}}},{"scene",{{"animations",{{{"url","name://@selection#Face:?value/value"},{"keys",{{0,0}}}}}}}}};
   require(daz::parse_pose(shape).channels[0].value==0,"Shape 显式归零未保留");
+  auto combined=shape;combined["asset_info"]["type"]="preset_character";combined["scene"]["materials"]={{{"id","Skin"},{"groups",{"Skin"}}}};
+  const auto content=daz::inspect_contents(combined);require(!content.instantiate&&content.materials&&content.properties&&daz::parse_pose(combined).channels[0].value==0,"复合 DUF 被类型字符串拒绝或只执行一种用途");
+  combined["scene"]["nodes"]={{{"id","figure"},{"geometries",{{{"id","mesh"},{"url","#geometry"}}}}}};require(daz::inspect_contents(combined).instantiate,"复合 DUF 的几何内容没有优先实例化");
   editor::Document figure;figure.loaded.scene.meshes={mesh};figure.loaded.scene.instances={a};figure.loaded.scene.materials.resize(1);
   runtime::Morph morph;morph.id="Face";morph.channel_id=morph.channel_name="Face";morph.offsets={{0,{.1f,0,0}}};target.morphs={morph};target.id="figure/geometry";figure.catalog.targets={target};
   auto duplicate=figure;figure.generation=7;editor::append_document(figure,std::move(duplicate));
@@ -50,8 +119,8 @@ static void unit() {
   figure.catalog.targets[1].parent="#figure";runtime::MorphRuntime hierarchy(figure.loaded.scene,figure.catalog.targets);hierarchy.set_transform(0,transform);require(hierarchy.evaluate().instances.size()==2,"父对象移动未更新子对象");
   const auto temporary=std::filesystem::temp_directory_path()/("dfv-workflow-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));std::filesystem::create_directories(temporary);
   const auto preset_file=temporary/"material.duf";std::ofstream(preset_file)<<R"({"asset_info":{"type":"preset_material"},"scene":{"materials":[{"id":"Red","geometry":"#selection","groups":["Skin"],"diffuse":{"channel":{"value":[1,0,0]}}}]}})";
-  const auto preset=daz::load(preset_file,{{temporary},false});const auto previous=figure.loaded.scene.instances[1].materials;editor::apply_materials(figure,0,preset);
-  require(figure.loaded.scene.instances[1].materials==previous,"材质预设污染其他实例");require(figure.loaded.scene.materials[figure.loaded.scene.instances[0].materials[0]].base_color.x==1,"材质预设未应用");
+  const auto preset=daz::load(preset_file,{{temporary},false});const auto previous=figure.loaded.scene.materials.at(figure.loaded.scene.instances[1].materials[0]);editor::apply_materials(figure,0,preset);
+  const auto &unchanged=figure.loaded.scene.materials.at(figure.loaded.scene.instances[1].materials[0]);require(unchanged.id==previous.id&&unchanged.base_color.x==previous.base_color.x&&unchanged.base_color.y==previous.base_color.y&&unchanged.roughness==previous.roughness,"材质预设污染其他实例");require(figure.loaded.scene.materials[figure.loaded.scene.instances[0].materials[0]].base_color.x==1,"材质预设未应用");
   const auto light_file=temporary/"light.duf";std::ofstream(light_file)<<R"({"asset_info":{"type":"scene"},"scene":{"nodes":[{"id":"Spot","type":"light","color":[0.8,0.5,0.1],"spot":{"intensity":4,"falloff_angle":60}}]}})";
   const auto lights=daz::load(light_file,{{temporary},false});require(lights.scene.lights.size()==1&&lights.scene.lights[0].kind==ir::LightKind::spot&&lights.scene.lights[0].power.x==3.2f,"DSON 灯光导入错误");
   std::filesystem::remove(preset_file);std::filesystem::remove(light_file);std::filesystem::remove(temporary);
@@ -96,9 +165,44 @@ int wmain(int argc,wchar_t **argv) {
     if(argc==1) {unit();return 0;}
     if(argc==4&&std::wstring(argv[1])==L"--selection") {actual_selection(argv[2],argv[3]);return 0;}
     std::vector<std::filesystem::path> roots={L"H:/G1",L"H:/G3",L"C:/Users/Public/Documents/My DAZ 3D Library",L"C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"};
+    if(argc>=4&&std::wstring(argv[1])==L"--geometry") {
+      using J=nlohmann::json;editor::Document document;document.loaded=daz::load(argv[2],{roots,false});
+      if(argc>4) {std::set<std::string> selected;for(int i=4;i<argc;++i) {auto u=std::filesystem::path(argv[i]).u8string();selected.emplace(u.begin(),u.end());}
+        std::erase_if(document.loaded.objects,[&](const auto &o) {return !selected.contains(o.id)&&!selected.contains(o.label);});}
+      document.catalog=daz::discover_morphs(document.loaded,roots,[](const auto &s) {std::cout<<s<<std::endl;});
+      document.skeletons=daz::load_skeletons(document.loaded);document.formulas=daz::enable_formulas(document.catalog,document.skeletons);
+      const auto snapshot=editor::initial_snapshot(document);auto scene=document.loaded.scene;
+      runtime::DeformationRuntime runtime(scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
+      auto vec=[](ir::Vec3 v) {return J::array({v.x,v.y,v.z});};
+      auto vertices=[&](const std::vector<ir::Vec3> &positions,const ir::Transform &matrix) {J a=J::array();for(auto v:positions) a.push_back(vec(matrix.point(v)));return a;};
+      auto pose=[&](const runtime::JointPose &p) {return J{{"translation",vec(p.translation_cm)},{"rotation",vec(p.rotation_degrees)},{"scale",vec(p.scale)},{"general_scale",p.general_scale},{"center_offset",vec(p.center_offset_cm)},{"orientation_offset",vec(p.orientation_offset_degrees)}};};
+      J output={{"input",document.loaded.report["input"]},{"units","meters_z_up"},{"objects",J::array()}};
+      for(size_t t=0;t<document.catalog.targets.size();++t) {
+        const auto &target=document.catalog.targets[t];const auto &instance=scene.instances[target.instance];const auto &base=document.loaded.scene.meshes[document.loaded.scene.instances[target.instance].mesh];
+        J item={{"id",target.id},{"label",target.label},{"transform",instance.transform.value},{"base",vertices(base.positions,{})},{"world",vertices(scene.meshes[instance.mesh].positions,instance.transform)},{"channels",J::array()},{"bones",J::array()}};
+        auto morphed=base.positions;
+        for(size_t m=0;m<target.morphs.size();++m) {const auto &morph=target.morphs[m];const auto effective=runtime.effective()[t][m];
+          if(effective!=0||snapshot.values[t].morphs[m]!=0) item["channels"].push_back({{"id",morph.id},{"name",morph.channel_id},{"initial",snapshot.values[t].morphs[m]},{"effective",effective},{"error",morph.unsupported},{"offsets",morph.offsets.size()}});
+          for(const auto &offset:morph.offsets) {auto &v=morphed[offset.vertex];v.x+=effective*offset.delta.x;v.y+=effective*offset.delta.y;v.z+=effective*offset.delta.z;}}
+        item["morphed"]=vertices(morphed,{});
+        const auto s=document.formulas.graphs[t].skin;if(s>=0) {const auto &skin=document.skeletons.skins[size_t(s)];
+          for(size_t j=0;j<skin.joints.size();++j) {const auto &bone=skin.joints[j];item["bones"].push_back({{"id",bone.id},{"name",bone.name},{"parent",bone.parent},{"center",vec(bone.center_cm)},{"orientation",vec(bone.orientation_degrees)},{"initial",pose(skin.initial[j])},{"effective",pose(runtime.effective_poses()[size_t(s)][j])}});}}
+        output["objects"].push_back(std::move(item));
+      }
+      const std::filesystem::path destination=argv[3];if(!destination.parent_path().empty()) std::filesystem::create_directories(destination.parent_path());
+      std::ofstream stream(destination);stream<<output.dump();if(!stream) throw std::runtime_error("几何诊断写入失败");std::cout<<"Geometry diagnostic exported"<<std::endl;return 0;
+    }
+    if(argc==4&&std::wstring(argv[1])==L"--skeleton") {auto loaded=daz::load(argv[2],{roots,false});auto skins=daz::load_skeletons(loaded);std::ofstream(std::filesystem::path(argv[3]))<<skins.report.dump(2);std::cout<<"Skeletons: "<<skins.skins.size()<<std::endl;return 0;}
+    if(argc==4&&std::wstring(argv[1])==L"--bindings") {
+      auto loaded=daz::load(argv[2],{roots,false});auto skins=daz::load_skeletons(loaded);std::vector<runtime::Target> targets;std::vector<runtime::FormulaGraph> graphs;
+      for(const auto &object:loaded.objects) {runtime::Target t;t.instance=object.instance;t.id=loaded.scene.instances[t.instance].id;t.conform_target=object.conform_target;targets.push_back(t);runtime::FormulaGraph g;
+        for(size_t s=0;s<skins.skins.size();++s) if(skins.skins[s].instance==t.instance) g.skin=int(s);graphs.push_back(g);}
+      runtime::ConformRuntime bindings(loaded.scene,targets,skins.skins,graphs);auto report=skins.report;report["conform_links"]=bindings.links().size();report["bound_vertices"]=bindings.stats().bindings;report["status"]="PASS";
+      std::ofstream(std::filesystem::path(argv[3]))<<report.dump(2);std::cout<<"Skeleton bindings: PASS ("<<bindings.links().size()<<" links)"<<std::endl;return 0;
+    }
     editor::Document document;const auto start=std::chrono::steady_clock::now();nlohmann::json times;
     auto phase=[&](const char *name) {times[name]=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();std::cout<<name<<": "<<times[name]<<std::endl;};
-    document.loaded=daz::load(argv[1],{roots,false});phase("geometry");document.catalog=daz::discover_morphs(document.loaded,roots);phase("morphs");
+    document.loaded=daz::load(argv[1],{roots,false});phase("geometry");document.catalog=daz::discover_morphs(document.loaded,roots,[](const auto &message) {std::cout<<message<<std::endl;});phase("morphs");
     document.skeletons=daz::load_skeletons(document.loaded);phase("skeletons");document.formulas=daz::enable_formulas(document.catalog,document.skeletons);phase("formulas");
     auto snapshot=editor::initial_snapshot(document);auto scene=document.loaded.scene;
     runtime::DeformationRuntime runtime(scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);phase("evaluation");

@@ -72,7 +72,8 @@ FormulaRuntime::FormulaRuntime(const FormulaGraph &graph):graph_(graph) {
 }
 bool FormulaRuntime::set(uint32_t c,double value) {
   if(!std::isfinite(value)) throw std::runtime_error("公式输入必须为有限数");const auto &channel=graph_.channels.at(c);
-  if(!channel.error.empty()) value=0;if(channel.integer) value=std::round(value);if(channel.clamped) value=std::clamp(value,channel.minimum,channel.maximum);
+  // 保存值可以抵消 ERC（例如 -1 + 控制器的 1）；限幅只作用于合并后的结果。
+  if(!channel.error.empty()) value=0;if(channel.integer) value=std::round(value);
   if(inputs_.at(c)==value) return false;inputs_[c]=value;dirty_.insert({graph_.rank[c],c});return true;
 }
 void FormulaRuntime::evaluate() {

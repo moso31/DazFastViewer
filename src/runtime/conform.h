@@ -14,6 +14,7 @@ struct ConformLink {
   std::vector<int> joints,morph_sources;
   std::vector<size_t> projected_morphs;
   std::vector<SurfaceBinding> surface;
+  std::vector<std::vector<uint32_t>> neighbors;
   ir::Transform source_to_follower;
 };
 struct ConformStats {uint64_t bindings=0,authored_morphs=0,projected_vertices=0,evaluations=0;};

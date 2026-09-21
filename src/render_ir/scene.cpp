@@ -18,6 +18,15 @@ Transform operator*(const Transform &a,const Transform &b) {
   }
   return out;
 }
+Transform inverse(const Transform &m) {
+  const auto &a=m.value;const double determinant=double(a[0])*(double(a[5])*a[10]-double(a[6])*a[9])-double(a[1])*(double(a[4])*a[10]-double(a[6])*a[8])+double(a[2])*(double(a[4])*a[9]-double(a[5])*a[8]);
+  if(!std::isfinite(determinant)||std::abs(determinant)<1e-15) throw std::runtime_error("Fit To 的绑定矩阵不可逆");
+  ir::Transform result;auto &r=result.value;
+  r[0]=float((double(a[5])*a[10]-double(a[6])*a[9])/determinant);r[1]=float((double(a[2])*a[9]-double(a[1])*a[10])/determinant);r[2]=float((double(a[1])*a[6]-double(a[2])*a[5])/determinant);
+  r[4]=float((double(a[6])*a[8]-double(a[4])*a[10])/determinant);r[5]=float((double(a[0])*a[10]-double(a[2])*a[8])/determinant);r[6]=float((double(a[2])*a[4]-double(a[0])*a[6])/determinant);
+  r[8]=float((double(a[4])*a[9]-double(a[5])*a[8])/determinant);r[9]=float((double(a[1])*a[8]-double(a[0])*a[9])/determinant);r[10]=float((double(a[0])*a[5]-double(a[1])*a[4])/determinant);
+  const auto offset=result.point({-a[3],-a[7],-a[11]});r[3]=offset.x;r[7]=offset.y;r[11]=offset.z;return result;
+}
 void Bounds::add(Vec3 p) {
   if(empty) {minimum=maximum=p;empty=false;return;}
   minimum={std::min(minimum.x,p.x),std::min(minimum.y,p.y),std::min(minimum.z,p.z)};

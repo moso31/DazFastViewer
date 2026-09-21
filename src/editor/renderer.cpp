@@ -43,11 +43,13 @@ void Renderer::orbit(float x,float y) {window_->camera.orbit(x,y);window_->publi
 void Renderer::run(std::stop_token stop) {
   using namespace ccl;
   std::unique_ptr<Session> session;Display *display=nullptr;
+  std::unique_ptr<CyclesAdapter> adapter;
   HoverOverlay overlay;runtime::PickingScene picking;std::vector<runtime::JointRegions> regions;std::vector<uint8_t> pickable;bool geometry_dirty=true;uint64_t clicks=0;
   auto cleanup=[&] {
     if(session) {
       session->cancel(true);
       window_->present_context.activate();overlay.release();if(display) display->release_present_resources();window_->present_context.deactivate();
+      adapter.reset();
       session.reset();display=nullptr;
     }
   };
@@ -59,7 +61,6 @@ void Renderer::run(std::stop_token stop) {
     std::shared_ptr<const Document> current;
     ir::Scene render_scene;
     std::unique_ptr<runtime::DeformationRuntime> runtime;
-    std::unique_ptr<CyclesAdapter> adapter;
     uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
     SessionParams params;params.device=device;params.samples=64;params.pixel_size=1;params.background=false;
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
@@ -73,9 +74,13 @@ void Renderer::run(std::stop_token stop) {
         buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;
       }
       if(!document) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+      if(current==document&&!state.error.empty()) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+      try {
       if(current!=document||!session) {
         cleanup();geometry_dirty=true;
         if(current!=document) {
+          // 先销毁持有旧场景引用的求值器，再释放文档、顶点与射线缓存。
+          runtime.reset();picking={};regions={};pickable={};render_scene={};
           current=document;render_scene=current->loaded.scene;
           regions.clear();regions.resize(render_scene.instances.size());
           pickable=runtime::viewport_pick_mask(render_scene.instances.size(),current->catalog.targets);
@@ -159,6 +164,11 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       {std::lock_guard lock(mutex_);status_=state;}
+      } catch(const std::exception &e) {
+        const std::string error=e.what();cleanup();runtime.reset();render_scene={};picking={};regions={};pickable={};
+        current=document;state={};state.generation=document->generation;state.clicks=clicks;state.error=error;
+        std::lock_guard lock(mutex_);status_=state;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
     cleanup();

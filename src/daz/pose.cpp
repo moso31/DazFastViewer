@@ -6,8 +6,6 @@
 
 namespace dfv::daz {
 PosePreset parse_pose(const nlohmann::json &document,const std::string &source) {
-  const auto type=document.value("asset_info",nlohmann::json::object()).value("type","");
-  if(type!="preset_pose"&&type!="preset_shape") throw std::runtime_error("所选文件不是姿势或形态预设 DUF");
   PosePreset preset;preset.source=source;
   const auto &animations=document.at("scene").at("animations");if(!animations.is_array()||animations.empty()) throw std::runtime_error("姿势预设没有通道");
   std::set<std::string> seen;

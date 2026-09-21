@@ -15,15 +15,6 @@ ir::Vec3 mul(ir::Vec3 a,float v) {return {a.x*v,a.y*v,a.z*v};}
 float dot(ir::Vec3 a,ir::Vec3 b) {return a.x*b.x+a.y*b.y+a.z*b.z;}
 ir::Vec3 normal(ir::Vec3 a,ir::Vec3 b) {const ir::Vec3 n{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};const float length=std::sqrt(dot(n,n));return length>0?mul(n,1/length):ir::Vec3{};}
 ir::Vec3 direction(const ir::Transform &m,ir::Vec3 v) {const auto &a=m.value;return {a[0]*v.x+a[1]*v.y+a[2]*v.z,a[4]*v.x+a[5]*v.y+a[6]*v.z,a[8]*v.x+a[9]*v.y+a[10]*v.z};}
-ir::Transform inverse(const ir::Transform &m) {
-  const auto &a=m.value;const double determinant=double(a[0])*(double(a[5])*a[10]-double(a[6])*a[9])-double(a[1])*(double(a[4])*a[10]-double(a[6])*a[8])+double(a[2])*(double(a[4])*a[9]-double(a[5])*a[8]);
-  if(!std::isfinite(determinant)||std::abs(determinant)<1e-15) throw std::runtime_error("Fit To 的绑定矩阵不可逆");
-  ir::Transform result;auto &r=result.value;
-  r[0]=float((double(a[5])*a[10]-double(a[6])*a[9])/determinant);r[1]=float((double(a[2])*a[9]-double(a[1])*a[10])/determinant);r[2]=float((double(a[1])*a[6]-double(a[2])*a[5])/determinant);
-  r[4]=float((double(a[6])*a[8]-double(a[4])*a[10])/determinant);r[5]=float((double(a[0])*a[10]-double(a[2])*a[8])/determinant);r[6]=float((double(a[2])*a[4]-double(a[0])*a[6])/determinant);
-  r[8]=float((double(a[4])*a[9]-double(a[5])*a[8])/determinant);r[9]=float((double(a[1])*a[8]-double(a[0])*a[9])/determinant);r[10]=float((double(a[0])*a[5]-double(a[1])*a[4])/determinant);
-  const auto offset=direction(result,{-a[3],-a[7],-a[11]});r[3]=offset.x;r[7]=offset.y;r[11]=offset.z;return result;
-}
 float box_distance(const ir::Bounds &b,ir::Vec3 p) {
   const auto q=sub(p,{std::clamp(p.x,b.minimum.x,b.maximum.x),std::clamp(p.y,b.minimum.y,b.maximum.y),std::clamp(p.z,b.minimum.z,b.maximum.z)});return dot(q,q);
 }
@@ -91,10 +82,22 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     if(l.follower_skin>=0&&l.source_skin>=0) {
       const auto &a=skins.at(size_t(l.source_skin)),&b=skins.at(size_t(l.follower_skin));l.joints.resize(b.joints.size(),-1);
       for(size_t j=0;j<b.joints.size();++j) {if(j==0&&!a.joints.empty()) {l.joints[j]=0;continue;}const auto &joint=b.joints[j];
-        for(size_t k=1;k<a.joints.size();++k) if(joint.id==a.joints[k].id||(!joint.name.empty()&&joint.name==a.joints[k].name)) {if(l.joints[j]>=0) throw std::runtime_error("Fit To 骨骼名称不唯一："+joint.id);l.joints[j]=int(k);}}
+        // 跨资产的 name 比局部 ID 更稳定；G8.1 的部分 Carpal ID 已与名称错位。
+        std::vector<size_t> names;for(size_t k=1;k<a.joints.size();++k) if(!joint.name.empty()&&joint.name==a.joints[k].name) names.push_back(k);
+        if(names.size()==1) l.joints[j]=int(names.front());
+        else {
+          for(size_t k=1;k<a.joints.size();++k) if(joint.id==a.joints[k].id&&(names.empty()||joint.name==a.joints[k].name)) {
+            if(l.joints[j]>=0) throw std::runtime_error("Fit To 骨骼 ID 不唯一："+joint.id);l.joints[j]=int(k);
+          }
+          if(names.size()>1&&l.joints[j]<0) throw std::runtime_error("Fit To 骨骼名称不唯一："+joint.name);
+        }
+      }
     }
     const auto &a=scene.instances.at(source.instance),&b=scene.instances.at(follower.instance);const auto follower_to_source=inverse(a.transform)*b.transform;l.source_to_follower=inverse(b.transform)*a.transform;
     const auto &body=scene.meshes.at(a.mesh),&cloth=scene.meshes.at(b.mesh);SurfaceIndex index(body);l.surface.reserve(cloth.positions.size());
+    l.neighbors.resize(cloth.positions.size());
+    for(const auto &triangle:cloth.triangles) for(size_t i=0;i<3;++i) for(size_t j=0;j<3;++j) if(i!=j) l.neighbors[triangle.vertices[i]].push_back(triangle.vertices[j]);
+    for(auto &neighbors:l.neighbors) {std::sort(neighbors.begin(),neighbors.end());neighbors.erase(std::unique(neighbors.begin(),neighbors.end()),neighbors.end());}
     for(auto p:cloth.positions) {
       const auto query=follower_to_source.point(p);auto binding=index.nearest(query);const auto a=body.positions[binding.vertices[0]],b=body.positions[binding.vertices[1]],c=body.positions[binding.vertices[2]];
       binding.edge1=sub(b,a);binding.edge2=sub(c,a);binding.normal=normal(binding.edge1,binding.edge2);
@@ -121,6 +124,14 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
       delta=add(delta,add(mul(edge1,b.offset_coordinates.x),mul(edge2,b.offset_coordinates.y)));
       delta=add(delta,mul(sub(normal(add(b.edge1,edge1),add(b.edge2,edge2)),b.normal),b.offset_coordinates.z));
       offsets[v]=direction(l->source_to_follower,delta);
+    }
+    // 最近三角形会在腿间、腋下及远离皮肤的裙摆切换。只平滑生成的位移场，
+    // 不平滑衣物基础褶皱或作者的修正 Morph，也不把上次结果反馈进来。
+    auto filtered=offsets;
+    for(int iteration=0;iteration<24;++iteration) {
+      for(size_t v=0;v<offsets.size();++v) {const auto &neighbors=l->neighbors[v];if(neighbors.size()<3) continue;
+        ir::Vec3 average;for(auto n:neighbors) average=add(average,offsets[n]);filtered[v]=add(mul(offsets[v],.5f),mul(average,.5f/float(neighbors.size())));}
+      offsets.swap(filtered);
     }
     if(morph.set_follow_offsets(target,offsets)) ++revisions_[target];
     previous_weights_[i]=std::move(current);source_revisions_[i]=revisions_[l->source];++stats_.evaluations;stats_.projected_vertices+=offsets.size();

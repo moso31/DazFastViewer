@@ -60,7 +60,7 @@ FormulaCatalog enable_formulas(MorphCatalog &catalog,const SkinCatalog &skins) {
     std::map<std::string,int> assets,nodes;std::map<std::string,std::vector<int>> ids;
     std::vector<std::string> failures(target.morphs.size());
     for(size_t m=0;m<target.morphs.size();++m) {
-      const auto &p=target.morphs[m];Channel c;c.binding.index=uint32_t(m);c.initial=p.initial;c.minimum=p.minimum;c.maximum=p.maximum;c.clamped=p.clamped;c.integer=p.value_type=="bool";
+      const auto &p=target.morphs[m];Channel c;c.binding.index=uint32_t(m);c.initial=p.initial;c.minimum=p.minimum;c.maximum=p.maximum;c.clamped=p.clamped;c.integer=p.value_type=="bool"||p.value_type=="int";
       c.error=p.intrinsic_error;failures[m]=c.error;graph.channels.push_back(c);graph.morph_channels.push_back(int(m));assets[p.id]=int(m);if(p.kind!="alias") ids[p.channel_id].push_back(int(m));
     }
     for(size_t s=0;s<skins.skins.size();++s) if(skins.skins[s].instance==target.instance) graph.skin=int(s);
@@ -114,12 +114,20 @@ FormulaCatalog enable_formulas(MorphCatalog &catalog,const SkinCatalog &skins) {
     };
     for(size_t m=0;m<target.morphs.size();++m) alias(m);
     std::vector<int> symbols;for(const auto &address:source.symbols) {int c=resolve(address);if(c>=0&&size_t(c)<target.morphs.size()) c=graph.morph_channels[size_t(c)];symbols.push_back(c);}
-    size_t unresolved=0;
+    size_t unresolved=0;Json modifier_failures=Json::array();
     for(auto &raw:source.expressions) {
       auto e=std::move(raw);auto missing=e.output;const int output=symbols.at(e.output);bool valid=output>=0;
       for(const auto input:e.inputs()) if(symbols.at(input)<0) {valid=false;missing=input;}
       if(!valid) {++unresolved;const auto reason="公式引用缺失、被本代覆盖或不支持的属性："+source.symbols[missing];
-        if(e.owner<failures.size()) failures[e.owner]=reason;else node_failures.push_back({{"output",source.symbols[e.output]},{"reason",reason}});continue;}
+        if(e.owner<failures.size()) {
+          // 向缺失附件输出的公式不能使人物自身的顶点形态与其余有效 ERC 全部归零。
+          // 已解析输出若缺少输入则仍按失败隔离，避免产生错误的驱动值。
+          if(output<0) {auto &limitation=target.morphs[e.owner].limitation;const std::string message="部分关联对象驱动未应用；详见公式诊断";
+            if(limitation.find(message)==std::string::npos) {if(!limitation.empty()) limitation+="；";limitation+=message;}}
+          else failures[e.owner]=reason;
+          modifier_failures.push_back({{"owner",target.morphs[e.owner].id},{"output",source.symbols[e.output]},{"reason",reason}});
+        }
+        else node_failures.push_back({{"output",source.symbols[e.output]},{"reason",reason}});continue;}
       e.output=uint32_t(output);if(e.linear_input>=0) e.linear_input=symbols[size_t(e.linear_input)];for(auto &op:e.code) if(op.code==Op::channel) op.index=uint32_t(symbols[op.index]);graph.expressions.push_back(std::move(e));
     }
     for(size_t m=0;m<target.morphs.size();++m) graph.channels[m].error=failures[m];
@@ -143,11 +151,12 @@ FormulaCatalog enable_formulas(MorphCatalog &catalog,const SkinCatalog &skins) {
       if(p.unsupported.empty()) {++editable;if(p.visible) ++visible;}
       auto &item=catalog.report["targets"][t]["morphs"][m];item["unsupported"]=p.unsupported;item["evaluable"]=p.evaluable;item["alias_morph"]=p.alias_morph;
       item["initial"]=p.initial;item["min"]=p.minimum;item["max"]=p.maximum;
+      item["limitation"]=p.limitation;
     }
     size_t enabled=0;for(const auto &e:graph.expressions) enabled+=e.enabled;
     result.report["targets"].push_back({{"id",target.id},{"channels",graph.channels.size()},{"formulas",graph.expressions.size()},{"enabled_formulas",enabled},{"unresolved_formulas",unresolved},
       {"cyclic_channels",cycles},{"editable_parameters",editable},{"visible_editable_parameters",visible},{"resolved_aliases",aliases},
-      {"node_formulas",node_formula_count},{"node_formula_failures",node_failures}});
+      {"node_formulas",node_formula_count},{"node_formula_failures",node_failures},{"modifier_formula_failures",modifier_failures}});
     source={};result.graphs.push_back(std::move(graph));
   }
   return result;

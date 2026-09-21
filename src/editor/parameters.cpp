@@ -41,10 +41,10 @@ void ParameterPanel::rebuild() {
       path+="/"+part;auto &item=groups[path];
       if(!item) {item=parent?new QTreeWidgetItem(parent,{part}):new QTreeWidgetItem(tree_,{part});item->setData(0,Qt::UserRole,-1);}parent=item;
     }
-    const auto state=m.unsupported.empty()?QStringLiteral("可编辑"):m.kind=="alias"?QStringLiteral("别名"):QStringLiteral("待支持");
+    const auto state=m.unsupported.empty()?(m.limitation.empty()?QStringLiteral("可编辑"):QStringLiteral("部分支持")):m.kind=="alias"?QStringLiteral("别名"):QStringLiteral("待支持");
     auto *item=parent?new QTreeWidgetItem(parent,{text(m.label),state}):new QTreeWidgetItem(tree_,{text(m.label),state});items_[i]=item;item->setData(0,Qt::UserRole,int(i));
     item->setData(0,Qt::UserRole+1,text(m.label+" "+m.channel_id+" "+m.group+" "+m.owner));
-    item->setToolTip(0,text(m.group+"\n"+m.source+"\n"+m.unsupported));if(!m.unsupported.empty()) item->setForeground(1,Qt::darkGray);
+    item->setToolTip(0,text(m.group+"\n"+m.source+"\n"+m.unsupported+"\n"+m.limitation));if(!m.unsupported.empty()) item->setForeground(1,Qt::darkGray);
   }
   filter();
 }
@@ -69,9 +69,11 @@ void ParameterPanel::select(QTreeWidgetItem *item) {
   const auto &m=target_->morphs[size_t(current_)];QSignalBlocker a(slider_),b(spin_);
   const auto support=m.unsupported.empty()?(m.kind=="alias"?"别名：与原参数共享编辑值":m.formula_count||m.offsets.empty()?"Formula / ERC 驱动":"直接 Morph"):m.unsupported;
   QString detail=text(m.label+"\n"+m.group+"\n"+support);
+  if(!m.limitation.empty()) detail+=QStringLiteral("\n")+text(m.limitation);
   if(m.unsupported.empty()&&size_t(current_)<effective_.size()) detail+=QStringLiteral(" · 最终值 %1").arg(effective_[size_t(current_)],0,'f',4);
   details_->setText(detail);details_->setToolTip(detail+QStringLiteral("\n来源：")+text(m.source)+QStringLiteral("\n所属节点：")+text(m.owner)+QStringLiteral("\n未解析引用：%1\n已恢复的资源引用：%2").arg(m.missing_dependencies).arg(m.repaired_references));
-  spin_->setRange(m.clamped?m.minimum:std::min(-100.0f,m.minimum),m.clamped?m.maximum:std::max(100.0f,m.maximum));spin_->setSingleStep(std::max(.001,double(m.step)));
+  const auto raw=values_->morphs.at(size_t(current_));
+  spin_->setRange(m.clamped?std::min(m.minimum,raw):std::min(-100.0f,m.minimum),m.clamped?std::max(m.maximum,raw):std::max(100.0f,m.maximum));spin_->setSingleStep(std::max(.001,double(m.step)));
   slider_->setEnabled(m.unsupported.empty() && m.maximum>m.minimum);spin_->setEnabled(m.unsupported.empty());refresh(size_t(current_));
 }
 void ParameterPanel::refresh(size_t index) {

@@ -63,6 +63,7 @@ static Asset asset(const fs::path &file,const std::string &geometry) {
   return out;
 }
 MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots,const std::function<void(const std::string &)> &progress) {
+  struct CacheScope {~CacheScope() {path_keys.clear();resolved_paths.clear();}} cache_scope;
   path_keys.clear();resolved_paths.clear();
   MorphCatalog out;out.report={{"targets",J::array()},{"diagnostics",J::array()},{"files_scanned",0},{"skipped_types",J::object()},
     {"content_roots",J::array()},{"file_overrides",J::array()},{"empty_overrides",J::array()},{"root_scans",J::array()}};
@@ -98,7 +99,6 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       for(const auto &owner:{std::string{},"#"+object.id,"#"+object.geometry_instance_id}) if(auto it=overrides.find({owner,m.id});it!=overrides.end())
         m.initial=number(it->second,"current_value",number(it->second,"value",m.initial));
       if(!std::isfinite(m.initial)) throw std::runtime_error("场景参数权重无效");
-      if(m.clamped) m.initial=std::clamp(m.initial,m.minimum,m.maximum);
     };
     if(auto cached=cached_targets.find(target_key);cached!=cached_targets.end()) {
       target.morphs=cached->second.target.morphs;
@@ -110,10 +110,12 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     FormulaSource formula_source;
     std::map<std::string,std::pair<std::string,fs::path>> missing_addresses;
     std::vector<Asset> allowed{asset(object.geometry_file,object.geometry_id)};
-    const auto family=lower(object.geometry_file.parent_path().filename().string());
+    for(const auto &source:object.geometry_sources) allowed.insert(allowed.begin(),asset(source.file,source.id));
+    const auto family_file=object.geometry_sources.empty()?object.geometry_file:object.geometry_sources.back().file;
+    const auto family=lower(family_file.parent_path().filename().string());
     if(family=="female 8_1" || family=="male 8_1") {
       const bool female=family=="female 8_1";
-      auto legacy=object.geometry_file.parent_path().parent_path()/(female?"Female":"Male")/(female?"Genesis8Female.dsf":"Genesis8Male.dsf");
+      auto legacy=family_file.parent_path().parent_path()/(female?"Female":"Male")/(female?"Genesis8Female.dsf":"Genesis8Male.dsf");
       const auto relative=relative_to_roots(legacy,roots);
       if(!relative.empty()) {const auto resolved=resolve("/"+path_string(relative),legacy,roots);if(!resolved.empty()) legacy=resolved;}
       if(fs::is_regular_file(legacy)) {
@@ -205,7 +207,6 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           if(type=="bool") {morph.minimum=0;morph.maximum=1;morph.step=1;morph.clamped=true;}
           default_values[morph.id]=morph.initial;apply_override(morph);
           if(!std::isfinite(morph.initial)) throw std::runtime_error("场景参数权重无效");
-          if(morph.clamped) morph.initial=std::clamp(morph.initial,morph.minimum,morph.maximum);
           std::set<std::string> refs;const auto formulas=modifier.value("formulas",J::array());morph.formula_count=formulas.size();
           for(const auto &f:formulas) {
             if(f.contains("output")) refs.insert(f["output"].get<std::string>());
@@ -226,9 +227,9 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           }
           if(morph.offsets.empty()) morph.unsupported="控制器没有直接顶点差值，尚未实现公式 / 骨骼驱动";
           if(!formulas.empty()) morph.unsupported="包含 Formula / ERC，尚未支持完整驱动";
-          if(source.contains("hd_url")) {morph.intrinsic_error=morph.unsupported="包含 HD 数据，尚未支持完整形态";if(morph.offsets.empty()) morph.kind="hd_only";}
+          if(source.contains("hd_url")) {morph.limitation="仅应用基础网格形态；HD 细节尚未支持";if(morph.offsets.empty()) {morph.kind="hd_only";morph.intrinsic_error=morph.unsupported="仅包含 HD 数据，尚未支持";}}
           if(type=="alias") {morph.kind="alias";morph.alias_target=channel.value("target_channel","");morph.unsupported="子节点参数别名，尚未实现与目标通道的双向编辑";if(!morph.alias_target.empty()) refs.insert(morph.alias_target);}
-          else if(type!="float") {morph.kind=type;morph.unsupported="尚未支持该通道类型: "+type;if(type!="bool") morph.intrinsic_error=morph.unsupported;}
+          else if(type!="float") {morph.kind=type;morph.unsupported="尚未支持该通道类型: "+type;if(type!="bool"&&type!="int") morph.intrinsic_error=morph.unsupported;}
           if(channel.value("locked",false)) morph.unsupported="资产将此参数标为锁定";
           if(!geometry_reason.empty()) {morph.kind="unverified_sparse";morph.intrinsic_error=morph.unsupported=geometry_reason;}
           auto formula_address=[&](const std::string &uri) {

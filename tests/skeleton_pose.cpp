@@ -34,6 +34,8 @@ static void unit_tests() {
   skin=fixture();skin.method=runtime::SkinMethod::linear;skin.joints[1].inherits_scale=false;pose=skin.initial;pose[0].scale={2,2,2};
   require(near(runtime::deform(skin,pose,base)[0],{3,0,0}),"非继承缩放必须保留骨骼起点的父变换");
   skin.joints[1].inherits_scale=true;require(near(runtime::deform(skin,pose,base)[0],{4,0,0}),"继承缩放错误");
+  skin=fixture();skin.joints[0].orientation_degrees.z=90;skin.joints[1].inherits_scale=false;pose=skin.initial;pose[0].scale.x=2;
+  for(auto method:{runtime::SkinMethod::linear,runtime::SkinMethod::dual_quaternion}) {skin.method=method;require(near(runtime::deform(skin,pose,base)[0],{2,0,0}),"父骨骼缩放补偿没有转换到其 orientation 坐标系");}
   skin=fixture();skin.joints[1].parent=-1;skin.joints[1].center_cm={};skin.weights={{{0,2},{1,2}}};pose=skin.initial;pose[0].rotation_degrees.z=90;pose[1].rotation_degrees.z=-90;
   require(near(runtime::deform(skin,pose,{{1,0,0}})[0],{1,0,0}),"DQS 混合不应出现 LBS 体积塌陷");
   skin.method=runtime::SkinMethod::linear;require(near(runtime::deform(skin,pose,{{1,0,0}})[0],{0,0,0}),"LBS 权重归一化错误");
@@ -78,6 +80,17 @@ static void unit_tests() {
   std::ofstream(duf)<<saved.dump();daz::LoadedScene input;input.scene.meshes={mesh,mesh};input.scene.instances={a,b};input.report["input"]=utf8(duf);
   input.objects={{0,"figure-a","A","","geometry",dsf,true},{1,"figure-b","B","","geometry",dsf,true}};
   auto catalog=daz::load_skeletons(input);require(catalog.skins.size()==2&&catalog.skins[0].initial[1].rotation_degrees.z==90&&catalog.skins[1].initial[1].rotation_degrees.z==0,"载入姿势跨 Figure 污染或骨架未拓扑排序");
+  require(catalog.skins[0].joints[1].scene_id=="bone-a"&&catalog.skins[1].joints[1].scene_id.empty(),"骨骼实例身份没有按所属 Figure 保存");
+  saved["scene"]["nodes"].push_back({{"id","garment"},{"parent","#figure-a"},{"preview",{{"type","figure"}}}});
+  saved["scene"]["nodes"].push_back({{"id","garment-bone"},{"parent","#garment"},{"url","#oldId"},{"rotation",{{{"id","z"},{"current_value",-45}}}}});
+  std::ofstream(duf)<<saved.dump();catalog=daz::load_skeletons(input);require(catalog.skins[0].initial[1].rotation_degrees.z==90,"嵌套衣物的同名骨骼覆盖了人物姿势");
+  auto local=asset;auto &modifier=local["modifier_library"][0];auto &weight=modifier["skin"]["joints"][0];const auto map=weight["node_weights"];
+  modifier["extra"]={{{"type","skin_settings"},{"binding_mode","Local"},{"general_map_mode","Linear"}}};weight.erase("node_weights");weight["local_weights"]={{"x",map},{"y",map},{"z",map}};weight["scale_weights"]=map;
+  std::ofstream(dsf)<<local.dump();auto rigid=daz::load_skeletons(input);require(rigid.skins[0].method==runtime::SkinMethod::linear&&rigid.skins[0].weights[0][0].weight==1,"相同轴的刚性 Local 绑定未载入");
+  auto posed=rigid.skins[0].initial;posed[1].rotation_degrees.z=90;require(near(runtime::deform(rigid.skins[0],posed,{{1,0,0}})[0],{0,0,1}),"刚性 Local 绑定的实际旋转错误");
+  weight["local_weights"]["y"]["values"][0][1]=.5;std::ofstream(dsf)<<local.dump();rejects([&] {daz::load_skeletons(input);},"不同轴权重被误当作刚性 General");
+  auto scale=asset;scale["modifier_library"][0]["skin"]["joints"][0]["scale_weights"]=map;std::ofstream(dsf)<<scale.dump();require(daz::load_skeletons(input).skins.size()==2,"相同缩放图使 General 绑定失败");
+  scale["modifier_library"][0]["skin"]["joints"][0]["scale_weights"]["values"][0][1]=.5;std::ofstream(dsf)<<scale.dump();rejects([&] {daz::load_skeletons(input);},"独立缩放图被静默忽略");
   asset["modifier_library"][0]["skin"]["joints"][0]["node_weights"]["count"]=2;std::ofstream(dsf)<<asset.dump();rejects([&] {daz::load_skeletons(input);},"权重 count 不一致未拒绝");
   asset["modifier_library"][0]["skin"]["joints"][0]["node_weights"]["count"]=1;asset["node_library"][0]["parent"]="#missing";std::ofstream(dsf)<<asset.dump();rejects([&] {daz::load_skeletons(input);},"缺失父骨骼未拒绝");
 }

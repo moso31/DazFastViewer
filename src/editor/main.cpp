@@ -13,6 +13,7 @@
 #include <QFileSystemModel>
 #include <QFileDialog>
 #include <QMenuBar>
+#include <QMenu>
 #include <QStatusBar>
 #include <QToolBar>
 #include <QScrollArea>
@@ -37,6 +38,7 @@
 #include <QSettings>
 #include <QCloseEvent>
 #include <QTreeWidgetItemIterator>
+#include <psapi.h>
 #include <fstream>
 #include <cctype>
 
@@ -55,6 +57,7 @@ class Editor final:public QMainWindow {
   QLabel *selection_=nullptr;
   QLabel *pose_status_=nullptr;
   QAction *open_=nullptr;
+  QAction *delete_=nullptr;
   QAction *project_action_=nullptr;
   QDoubleSpinBox *transform_[9]{};
   ProjectSettings project_;
@@ -75,6 +78,14 @@ class Editor final:public QMainWindow {
   uint64_t head_test_epoch_=0;
   size_t head_test_triangles_=0;
   bool capture_test_=false;
+  QStringList capture_targets_;
+  bool capture_front_=false;
+  bool lifecycle_test_=false;
+  std::filesystem::path lifecycle_first_,lifecycle_second_;
+  std::weak_ptr<const Document> retired_document_;
+  nlohmann::json lifecycle_samples_=nlohmann::json::array();
+  size_t lifecycle_objects_=0;
+  int lifecycle_rounds_=8;
   uint64_t workflow_click_=0;
   int workflow_target_=-1,workflow_joint_=-1;
   nlohmann::json hover_checks_=nlohmann::json::array();
@@ -130,9 +141,42 @@ class Editor final:public QMainWindow {
     if(loading_) return;
     auto next=document_?std::make_shared<Document>(*document_):std::make_shared<Document>();next->generation=++generation_;
     next->loaded.scene.lights=snapshot_.lights;
-    ir::AreaLight light;light.id="Area "+std::to_string(next->loaded.scene.lights.size()+1);light.transform=ir::Transform::translate({0,-2,3});
+    ir::AreaLight light;size_t id=next->generation;auto exists=[&] {return std::any_of(next->loaded.scene.lights.begin(),next->loaded.scene.lights.end(),[&](const auto &old) {return old.id==light.id;});};
+    do {light.id="Area "+std::to_string(id++);} while(exists());light.transform=ir::Transform::translate({0,-2,3});
     next->loaded.scene.lights.push_back(light);document_=next;snapshot_.generation=next->generation;snapshot_.lights=next->loaded.scene.lights;++snapshot_.revision;
     rebuild_hierarchy();renderer_->set_document(document_,snapshot_,false);hierarchy_->setCurrentItem(hierarchy_->topLevelItem(hierarchy_->topLevelItemCount()-1));
+  }
+  void delete_selection() {
+    if(loading_||!document_||(selected_<0&&selected_light_<0)||selected_joint_>=0) return;
+    try {
+      auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;size_t removed=0;
+      if(selected_light_>=0) removed=remove_light(*next,snapshot,size_t(selected_light_));
+      else removed=remove_target(*next,snapshot,size_t(selected_));
+      next->generation=++generation_;snapshot.generation=next->generation;
+      parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);
+      select(-1);rebuild_hierarchy();frame_pending_=false;pose_report_=nullptr;pose_status_->clear();load_error_.clear();
+      renderer_->set_document(document_,snapshot_,false);
+      statusBar()->showMessage(removed?QStringLiteral("已删除 %1 个对象及其关联资源").arg(removed):QStringLiteral("已删除灯光"));
+    } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法删除对象"),text(e.what()));}
+  }
+  void clear_scene() {
+    if(loading_) return;
+    parameters_->bind(nullptr,nullptr);document_=std::make_shared<Document>();document_->generation=++generation_;
+    snapshot_=initial_snapshot(*document_);select(-1);rebuild_hierarchy();frame_pending_=false;pose_report_=nullptr;pose_status_->clear();load_error_.clear();
+    renderer_->set_document(document_,snapshot_,false);
+  }
+  void apply_combined_file(const std::filesystem::path &file,const nlohmann::json &data) {
+    if(loading_||!document_||selected_<0) throw std::runtime_error("请先选中复合预设的目标对象");
+    const auto skin=selected_skin();if(skin<0) throw std::runtime_error("姿势 / 形态通道需要带骨骼的目标角色");
+    auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;
+    auto applied=daz::apply_pose(daz::parse_pose(data),next->skeletons.skins.at(size_t(skin)),snapshot.poses.at(size_t(skin)),next->catalog.targets.at(size_t(selected_)),snapshot.values.at(size_t(selected_)));
+    apply_materials(*next,size_t(selected_),daz::load(file,{roots_,false}));
+    snapshot.poses[size_t(skin)]=std::move(applied.joints);snapshot.values[size_t(selected_)]=std::move(applied.properties);
+    next->generation=++generation_;snapshot.generation=next->generation;++snapshot.revision;next->loaded.scene.lights=snapshot.lights;
+    parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);pose_report_=std::move(applied.report);
+    std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
+    pose_status_->setText(QStringLiteral("已应用复合 DUF 的材质与姿势 / 形态；%1 项通道未应用，可查看详情。").arg(pose_report_["unapplied"].size()));
+    select(selected_,selected_joint_);renderer_->set_document(document_,snapshot_,false);
   }
   void apply_material_file(const std::filesystem::path &file) {
     if(loading_||selected_<0||!document_) throw std::runtime_error("请先选中材质预设的目标对象");
@@ -167,11 +211,12 @@ class Editor final:public QMainWindow {
   }
   void open_asset(const std::filesystem::path &file) {
     try {const auto data=daz::read_document_file(file);
-      const auto type=data.value("asset_info",nlohmann::json::object()).value("type","");
-      if(type=="preset_pose"||type=="preset_shape") apply_pose_file(file);
-      else if(type=="preset_material"||type=="preset_shader") apply_material_file(file);
-      else if(type.starts_with("preset_")&&type!="preset_scene"&&type!="preset_light") throw std::runtime_error("尚不支持的 DUF 预设类型："+type);
-      else load(file,false,document_!=nullptr);
+      const auto contents=daz::inspect_contents(data);
+      if(contents.instantiate) load(file,false,document_!=nullptr);
+      else if(contents.properties&&contents.materials) apply_combined_file(file,data);
+      else if(contents.properties) apply_pose_file(file);
+      else if(contents.materials) apply_material_file(file);
+      else throw std::runtime_error("DUF 中没有当前可实例化或应用的内容；资产定义需要 scene 实例引用");
     } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
   }
   void update_libraries() {
@@ -195,6 +240,7 @@ class Editor final:public QMainWindow {
   }
   void select(int index,int joint=-1,int light=-1) {
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
+    if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint);
     if(light>=0&&document_) {
       const auto &l=snapshot_.lights.at(size_t(light));light_base_=l.transform;light_base_.value[3]=light_base_.value[7]=light_base_.value[11]=0;selection_->setText(text(l.id));parameters_->bind(nullptr,nullptr);
@@ -236,6 +282,7 @@ class Editor final:public QMainWindow {
     if(workflow_test_) {report["scope"]="raycast-body-part-tree-head-morph-hover-resize-layout";report["viewport"]={status.width,status.height};report["hovered_instance"]=status.hovered;report["hovered_joint"]=status.hovered_joint;report["hovered_triangles"]=status.hovered_triangles;report["selected_joint"]=selected_joint_;report["hover_checks"]=hover_checks_;}
     if(head_selection_test_) report["scope"]="figure-head-detail-and-bound-clothing-picking";
     if(capture_test_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
+    if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
     if(!reload_file_.empty()) report["scope"]="background-scene-replacement-generation-isolation";
     if(pose_test_) report["scope"]="pose-apply-reset-camera-no-skin-evaluation";
     if(formula_test_) {report["scope"]="parameter-slider-regression-with-ERC-JCM";report["parameter_checks"]=parameter_checks_;}
@@ -304,12 +351,54 @@ class Editor final:public QMainWindow {
       if(state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"分级选择触发了变形");return;}record("body_selected_through_clothing");finish_test(true);
     }
   }
+  void lifecycle_tick(const RenderStatus &state) {
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>600000) {finish_test(false,"场景生命周期验证超时");return;}
+    if(loading_||!document_||state.generation!=document_->generation) return;
+    const int recovery=lifecycle_rounds_*6;
+    if(test_stage_==recovery+1) {
+      if(state.error.empty()) return;
+      retired_document_=document_;clear_scene();++test_stage_;return;
+    }
+    if(!state.error.empty()) {finish_test(false,state.error);return;}
+    if(state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<4) return;
+    if(!retired_document_.expired()) {finish_test(false,"旧文档仍被持有");return;}
+    for(size_t t=0;t<document_->catalog.targets.size();++t) for(size_t m=0;m<document_->catalog.targets[t].morphs.size();++m) {
+      const auto &parameter=document_->catalog.targets[t].morphs[m];
+      if(parameter.evaluable&&parameter.alias_morph<0&&snapshot_.values[t].morphs[m]!=parameter.initial) {finish_test(false,"增删或替换场景改变了已保存的 ERC 原始输入");return;}
+      if(parameter.channel_id=="Cancel"&&state.effective.at(t).at(m)!=0) {finish_test(false,"增删场景后 ERC 抵消形态失效");return;}
+    }
+    PROCESS_MEMORY_COUNTERS_EX memory{};memory.cb=sizeof(memory);
+    K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory),sizeof(memory));
+    const auto &scene=document_->loaded.scene;
+    lifecycle_samples_.push_back({{"stage",test_stage_},{"private_bytes",memory.PrivateUsage},{"working_set",memory.WorkingSetSize},{"objects",document_->catalog.targets.size()},{"meshes",scene.meshes.size()},{"materials",scene.materials.size()},{"textures",scene.textures.size()}});
+    std::ofstream(output_/"lifecycle-progress.json")<<lifecycle_samples_.dump(2);
+    if(test_stage_==recovery+2) {finish_test(true);return;}
+    retired_document_=document_;
+    if(test_stage_==recovery) {
+      auto broken=std::make_shared<Document>(*document_);broken->generation=++generation_;broken->formulas.graphs.clear();
+      parameters_->bind(nullptr,nullptr);document_=broken;snapshot_.generation=broken->generation;select(-1);renderer_->set_document(document_,snapshot_,false);++test_stage_;return;
+    }
+    const int phase=test_stage_%6;
+    if(phase==0) {lifecycle_objects_=document_->catalog.targets.size();if(!lifecycle_objects_) {finish_test(false,"生命周期样例没有模型");return;}load(lifecycle_first_,false,true);}
+    else if(phase==1) {
+      if(document_->catalog.targets.size()!=lifecycle_objects_*2) {finish_test(false,"追加没有创建独立对象");return;}
+      choose(int(lifecycle_objects_));delete_->trigger();
+    } else if(phase==2) {
+      if(document_->catalog.targets.size()!=lifecycle_objects_) {finish_test(false,"删除污染原场景");return;}clear_scene();
+    } else if(phase==3) {
+      if(!scene.instances.empty()||!scene.meshes.empty()||!scene.materials.empty()||!scene.textures.empty()||!snapshot_.values.empty()||!snapshot_.poses.empty()) {finish_test(false,"空场景仍持有旧资源");return;}load(lifecycle_second_);
+    } else if(phase==4) {choose(0);delete_->trigger();}
+    else {if(!document_->catalog.targets.empty()) {finish_test(false,"删除最后一个模型失败");return;}load(lifecycle_first_);}
+    ++test_stage_;
+  }
   void tick() {
     const QSize size(qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()));
     if(size!=viewport_size_) {viewport_size_=size;resize_at_=QDateTime::currentMSecsSinceEpoch()+180;}
     if(resize_at_&&QDateTime::currentMSecsSinceEpoch()>=resize_at_) {resize_at_=0;renderer_->resize(size.width(),size.height());}
     const auto state=renderer_->status();
-    if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint);}
+    if(delete_) delete_->setEnabled(!loading_&&document_&&selected_joint_<0&&(selected_>=0||selected_light_>=0));
+    if(lifecycle_test_) {lifecycle_tick(state);return;}
+    if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint);hierarchy_->setFocus(Qt::MouseFocusReason);}
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);
@@ -318,8 +407,14 @@ class Editor final:public QMainWindow {
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
     if(capture_test_) {
-      if(QDateTime::currentMSecsSinceEpoch()-test_started_>360000) {finish_test(false,"场景显示验证超时");return;}
+      if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"场景显示验证超时");return;}
       if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=16) {
+        if(test_stage_==0&&!capture_targets_.empty()) {
+          ir::Bounds bounds;size_t matched=0;
+          for(size_t t=0;t<document_->catalog.targets.size();++t) if(capture_targets_.contains(text(document_->catalog.targets[t].label))) {bounds.add(state.bounds.at(t).minimum);bounds.add(state.bounds.at(t).maximum);++matched;}
+          if(matched!=size_t(capture_targets_.size())) {finish_test(false,"截图目标未唯一匹配");return;}
+          choose(-1);renderer_->frame(bounds);if(capture_front_) renderer_->orbit(-568.3185f,24.f);test_stage_=1;return;
+        }
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"scene.png").wstring()));finish_test(true);
       }return;
     }
@@ -480,7 +575,8 @@ class Editor final:public QMainWindow {
 public:
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
-  void capture_test() {capture_test_=true;self_test_=true;}
+  void capture_test(QStringList targets={},bool front=false) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;}
+  void lifecycle_test(const std::filesystem::path &first,const std::filesystem::path &second,int rounds) {if(rounds<1||rounds>100) throw std::runtime_error("生命周期验证轮数应为 1 到 100");lifecycle_rounds_=rounds;lifecycle_test_=true;self_test_=true;lifecycle_first_=first;lifecycle_second_=second;}
   void test_parameters(const QStringList &names) {if(names.empty()) return;formula_names_.clear();for(const auto &name:names) formula_names_.push_back(name.toUtf8().toStdString());}
   Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
     setWindowTitle(QStringLiteral("DazFastViewer · 场景与形态编辑器"));setAttribute(Qt::WA_ShowWithoutActivating);
@@ -533,6 +629,12 @@ public:
     connect(project_action_,&QAction::triggered,this,[this] {project_settings();});
     connect(file_menu->addAction(QStringLiteral("退出")),&QAction::triggered,this,&QWidget::close);
     auto *edit=menuBar()->addMenu(QStringLiteral("编辑"));connect(edit->addAction(QStringLiteral("重置选中对象")),&QAction::triggered,this,[this] {reset_selected();});
+    delete_=edit->addAction(QStringLiteral("删除选中对象及其子对象"));delete_->setShortcut(QKeySequence::Delete);delete_->setEnabled(false);
+    delete_->setToolTip(QStringLiteral("删除对象、子对象及绑定的穿戴物；选择骨骼部位时请先选择所属模型"));
+    connect(delete_,&QAction::triggered,this,[this] {delete_selection();});
+    hierarchy_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this](const QPoint &point) {hierarchy_->setCurrentItem(hierarchy_->itemAt(point));QMenu menu(this);menu.addAction(delete_);menu.exec(hierarchy_->viewport()->mapToGlobal(point));});
+    connect(file_menu->addAction(QStringLiteral("新建空场景")),&QAction::triggered,this,[this] {clear_scene();});
     connect(file_menu->addAction(QStringLiteral("打开场景（替换）…")),&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("打开场景"),{},QStringLiteral("DAZ 场景 (*.duf)"));if(!file.isEmpty()) load(file_path(file));});
     auto *create=menuBar()->addMenu(QStringLiteral("创建"));
     connect(create->addAction(QStringLiteral("面光源")),&QAction::triggered,this,[this] {add_light();});
@@ -573,6 +675,7 @@ public:
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
         std::ofstream(output_/"skeleton-report.json")<<document->skeletons.report.dump(2);
         std::ofstream(output_/"formula-report.json")<<document->formulas.report.dump(2);
+        release_load_data(*document);
         if(previous_document) {auto merged=std::make_shared<Document>(*previous_document);merged->generation=generation;append_document(*merged,std::move(*document));document=std::move(merged);}
         else if(document->loaded.scene.lights.empty()) ir::add_studio(document->loaded.scene);
         QMetaObject::invokeMethod(this,[this,document,preserve,previous_document] {
@@ -593,7 +696,7 @@ public:
             if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
               values.transform=previous.values[t].transform;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
-              for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].unsupported.empty() && weights.contains(target.morphs[m].id)) values.morphs[m]=target.morphs[m].clamped?std::clamp(weights[target.morphs[m].id],target.morphs[m].minimum,target.morphs[m].maximum):weights[target.morphs[m].id];
+              for(size_t m=0;m<target.morphs.size();++m) if((target.morphs[m].evaluable||target.morphs[m].unsupported.empty())&&weights.contains(target.morphs[m].id)) values.morphs[m]=weights[target.morphs[m].id];
             }
             runtime::sync_aliases(target,values);snapshot_.values.push_back(std::move(values));
           }
@@ -620,6 +723,10 @@ int main(int argc,char **argv) {
   parser.addOption({"workflow-test",QStringLiteral("验证射线、部位 Morph 与视口缩放后退出")});
   parser.addOption({"head-selection-test",QStringLiteral("验证三级头部选择及绑定服装射线后退出")});
   parser.addOption({"capture-test",QStringLiteral("场景显示验证后截图退出")});
+  parser.addOption({"capture-target",QStringLiteral("截图时框选的对象标签，可重复"),"label"});
+  parser.addOption({"capture-front",QStringLiteral("截图时从框选对象正面观察")});
+  parser.addOption({"lifecycle-test",QStringLiteral("验证反复增删与替换场景，指定第二个测试 DUF"),"file"});
+  parser.addOption({"lifecycle-rounds",QStringLiteral("生命周期验证轮数"),"count","8"});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
@@ -632,12 +739,13 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"));
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("workflow-test")) editor.workflow_test();
     if(parser.isSet("head-selection-test")) editor.head_selection_test();
-    if(parser.isSet("capture-test")) editor.capture_test();
+    if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"));
+    if(parser.isSet("lifecycle-test")) editor.lifecycle_test(file_path(parser.value("file")),file_path(parser.value("lifecycle-test")),parser.value("lifecycle-rounds").toInt());
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

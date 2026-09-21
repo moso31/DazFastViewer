@@ -2,6 +2,10 @@
 
 更新：2026-09-21。
 
+最新视觉修复：真实场景的 ERC 抵消值、骨骼缩放补偿及基础形态恢复后，两参考人物头部与 DAZ DBZ 约 0.0002 毫米误差；服装跟随已改善，局部差异仍最高约 24 毫米。此前场景加载 PASS 不代表视觉验收，完整服装 Golden 仍未通过。见[形变修复报告](../Docs/scene_deformation_execution_cn.md)。
+
+最新追加：模型 / 灯光删除、空场景、资源回收及复合 DUF 内容分派；真实 `3.duf` 补上刚性 Local / 冗余 scale 图兼容和内嵌几何 `source` 的 Morph / 骨架继承。见[删除与 DUF 执行报告](../Docs/scene_lifecycle_execution_cn.md)。008 未开始。
+
 当前插入工作：007 结束、008 未开始；按用户授权实施[场景工作流优化](../Docs/scene_workflow_revision_cn.md)。独立记录于[执行报告](../Docs/scene_workflow_execution_cn.md)，不将这次 UI / DUF / 场景优化计为 008 FK / IK。
 
 最新：007 后场景工作流、服装 Morph / 骨骼跟随、头部三级选取及绑定服装射线过滤已实现并部署，按用户授权归档到本地 Git；验证和剩余边界见[场景执行报告](../Docs/scene_workflow_execution_cn.md)及[服装跟随报告](../Docs/conform_follow_execution_cn.md)。008 未开始。

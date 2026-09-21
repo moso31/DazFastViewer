@@ -8,6 +8,8 @@
 
 ## Formula、ERC、JCM 与参数复测（Spec 007）
 
+保存场景的脸型 / 服装修复：保留 ERC 的负数抵消输入，修正骨骼缩放补偿及基础 Morph 载入，改善服装生成位移的连续性。真实双角色的脸部已与 DAZ DBZ 对齐，服装仍有局部差异；[数值证据与边界](Docs/scene_deformation_execution_cn.md)。
+
 **最新兼容性修复已部署。** 007 基线已中文提交为 `da5d4f8`，随后两批修复使 G8 新增 476 个可编辑条目、G8.1 新增 614 个；本轮追加恢复各 122 个。Ren Yao、BGM Ava、BGM Big Girl Base、Yuki、Mariko 和 EasyFeet 代表项通过实际变形与副屏操作。完整计数、条件型参数和仍受阻原因见 [兼容性报告](specs/007-erc-jcm/compatibility-report.md)。本次按用户授权，将修复与未生效参数清单以中文归档到本地 Git。
 
 006 已中文提交为 `aa8fbc7`。007 归档时通过七项工程检查、G8 / G8.1 各 40 个姿势、独立数值对照与副屏滑块验证。G8 的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad Left 已启用且产生实际变形；当时默认可见可编辑条目从 720 增至 2,687，后续兼容性计数以上述最新报告为准。G8.1 使用新版 **Eye Blink** 闭眼，旧控制器空覆盖继续保留。
@@ -22,13 +24,13 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sample Genesis8 -Pose "H:\G1\People\Genesis 8 Female\Poses\Bed Hogs II for Genesis 8 Female\BH2 Basking.duf"
 ```
 
-选中角色后，通过“姿势 → 应用姿势 DUF…”或内容浏览器双击切换姿势；“恢复载入姿势”只恢复骨骼，保留 Morph。“姿势应用详情”列出未应用参数；骨骼层级可在左侧展开。007 已接入 ERC / JCM 和带缩放的 DQS；G8.1 不适用的旧眼睛控制器仍报告未应用。完整 DAZ Golden、多帧动画及 FitTo / IK 保留为后续工作。
+选中角色后，通过“文件 → 添加 / 应用 DUF…”或内容浏览器双击应用姿势、形态或材质预设；“恢复载入姿势”只恢复骨骼，保留 Morph。“预设应用详情”列出未应用参数；骨骼层级可在左侧展开。007 已接入 ERC / JCM 和带缩放的 DQS，后续已补上穿戴物跟随；完整 DAZ Golden、多帧动画及 IK 仍待完成。
 
 ## 中文编辑器与 Morph（Spec 005）
 
 **005 当前阶段实施范围已完成并通过工程验证。** 核查依据与后续边界见[阶段完成核查](specs/005-morph-runtime/completion-review.md)；不代表整个产品的 Golden / 性能验收已经完成。
 
-新增 Qt Widgets 编辑器，支持菜单、多个内容库、后台加载 DUF、场景对象选择、参数分组 / 搜索与滑块、变换参数及重置。参数目录同时发现直接 Morph、纯公式控制器、子节点别名与 HD 项；可编辑数量由当前内容库和目标角色决定。006 接入蒙皮，007 接入 Formula 骨骼控制器与 JCM；HD 和不满足求值条件的项显示原因，服装绑定仍在后续阶段。
+新增 Qt Widgets 编辑器，支持菜单、多个内容库、后台加载 DUF、场景对象选择、参数分组 / 搜索与滑块、变换参数及重置。参数目录同时发现直接 Morph、纯公式控制器、子节点别名与 HD 项；可编辑数量由当前内容库和目标角色决定。006 接入蒙皮，007 接入 Formula 骨骼控制器与 JCM，随后接入穿戴物跟随；HD 和不满足求值条件的项显示原因。
 
 在工程目录运行：
 
@@ -36,9 +38,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sampl
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sample Character
 ```
 
-道具使用 `-Sample Prop`，Genesis 8 Female 使用 `-Sample Genesis8`；默认 `Character` 仍是 Genesis 8.1 Female。也可直接打开 `out\DazFastViewer.exe`，通过“文件 → 打开 DUF…”加载资产。编辑器初始窗口只在第二屏打开，缺少第二屏会在输出目录记录错误并退出。
+道具使用 `-Sample Prop`，Genesis 8 Female 使用 `-Sample Genesis8`；默认 `Character` 仍是 Genesis 8.1 Female。也可直接打开 `out\DazFastViewer.exe`，通过“文件 → 添加 / 应用 DUF…”加载资产；“打开场景（替换）”用于替换当前场景。编辑器初始窗口只在第二屏打开，缺少第二屏会在输出目录记录错误并退出。
 
 先在左侧场景树选择对象，再在右侧搜索 `Bodybuilder`，选中具体参数后拖动下方滑块。参数按资产的 `group` 展开，子节点别名归入“子节点”；可以显示隐藏参数，悬停名称 / 详情查看来源和限制。变换为相对载入状态的 DAZ 坐标偏移；“重置选中对象”恢复载入参数。视口右键旋转、Shift＋右键平移、滚轮缩放。当前编辑不保存回原 DUF。
+
+选择整个模型后按 Delete，或使用场景树右键 / “编辑 → 删除选中对象及其子对象”。删除人物会包含子对象、骨骼附件与绑定穿戴物；单独删除衣物保留人物。灯光也可删除，“文件 → 新建空场景”清空当前文档。复合 DUF、内嵌几何源资产继承与资源回收的验证见[本轮执行报告](Docs/scene_lifecycle_execution_cn.md)。
 
 “项目 → 项目设置…”支持添加、移除、上移和下移内容库，并保存至工程根目录的 `DazFastViewer.project.json`。本机已写入用户指定的四个根目录；靠前的库优先解析相同资源路径。保存后重新扫描当前场景，并按稳定 ID 保留仍然兼容的 Morph 值与变换。内容浏览器顶部可以切换各个库。
 
@@ -48,7 +52,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sampl
 - [Spec 005 执行报告](specs/005-morph-runtime/execution-report.md)
 - [UI / Genesis 8 / FitTo 长期规划](Docs/editor_and_genesis8_roadmap_cn.md)
 
-构建需要本机 Qt MSVC 套件（当前 `C:\Qt\6.10.3\msvc2022_64`，可用 CMake `DFV_QT_ROOT` 指定）。`tools/build.ps1` 同时构建编辑器和原基准工具，运行七项轻量 CTest；`stage_runtime.py` 调用 Qt 官方部署工具复制 DLL、插件、中文翻译及许可证记录。
+构建需要本机 Qt MSVC 套件（当前 `C:\Qt\6.10.3\msvc2022_64`，可用 CMake `DFV_QT_ROOT` 指定）。`tools/build.ps1` 同时构建编辑器和原基准工具，运行十项轻量 CTest；`stage_runtime.py` 调用 Qt 官方部署工具复制 DLL、插件、中文翻译及许可证记录。
 
 ## 原视口预览与后台工具
 

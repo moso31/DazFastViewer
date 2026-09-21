@@ -23,17 +23,29 @@ void pose_channels(runtime::JointPose &p,const Json &node) {
 SkinCatalog load_skeletons(const LoadedScene &loaded) {
   SkinCatalog catalog;catalog.report={{"skins",Json::array()}};
   Json saved=Json::object();if(loaded.report.contains("input")) saved=read_document_file(std::filesystem::u8path(loaded.report.at("input").get<std::string>())).value("scene",Json::object());
+  std::map<std::string,Json> instances;std::set<std::string> figures;
+  for(const auto &n:saved.value("nodes",Json::array())) {const auto id=n.value("id","");instances[id]=n;
+    if(n.value("type","")=="figure"||n.value("preview",Json::object()).value("type","")=="figure"||n.contains("geometries")) figures.insert(id);}
+  for(const auto &o:loaded.objects) if(o.figure) figures.insert(o.id);
   for(const auto &object:loaded.objects) {
     if(!object.figure) continue;
-    const auto document=read_document_file(object.geometry_file);const Json *binding=nullptr,*modifier=nullptr;
-    if(document.contains("modifier_library")) for(const auto &m:document.at("modifier_library")) if(m.contains("skin")&&fragment(m.at("skin").value("geometry",""))==object.geometry_id) {if(binding) throw std::runtime_error("同一几何包含多个 SkinBinding");binding=&m.at("skin");modifier=&m;}
+    auto binding_file=object.geometry_file;auto document=read_document_file(binding_file);const Json *binding=nullptr,*modifier=nullptr;
+    auto find_binding=[&](const std::string &geometry) {
+      if(document.contains("modifier_library")) for(const auto &m:document.at("modifier_library")) if(m.contains("skin")&&fragment(m.at("skin").value("geometry",""))==geometry) {if(binding) throw std::runtime_error("同一几何包含多个 SkinBinding");binding=&m.at("skin");modifier=&m;}
+    };
+    find_binding(object.geometry_id);
+    for(const auto &source:object.geometry_sources) {
+      if(binding) break;binding_file=source.file;document=read_document_file(binding_file);find_binding(source.id);
+    }
     if(!binding) {catalog.report["skins"].push_back({{"object",object.id},{"status","NO_SKIN_BINDING"}});continue;}
     runtime::Skin skin;skin.id=object.id;skin.instance=object.instance;
-    std::string mode="DualQuat";
+    std::string mode="DualQuat",binding_mode="General";
     for(const auto &extra:modifier->value("extra",Json::array())) if(extra.value("type","")=="skin_settings") {
-      if(extra.value("binding_mode","General")!="General") throw std::runtime_error("当前只支持 General 权重蒙皮："+object.id);
+      binding_mode=extra.value("binding_mode","General");
+      if(binding_mode!="General"&&binding_mode!="Local") throw std::runtime_error("尚未支持的蒙皮绑定："+binding_mode+" / "+object.id);
       mode=extra.value("general_map_mode","DualQuat");
     }
+    if(binding_mode=="Local") mode="Linear";
     if(mode=="DualQuat") skin.method=runtime::SkinMethod::dual_quaternion;
     else if(mode=="Linear") skin.method=runtime::SkinMethod::linear;
     else throw std::runtime_error("尚未支持的蒙皮方式："+mode);
@@ -53,29 +65,49 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       const size_t index=skin.joints.size();skin.joints.push_back(j);skin.initial.push_back(pose);indices[id]=index;visiting.erase(id);return index;
     };
     add(root);
+    skin.root_general_scale=number(nodes.at(root).value("general_scale",Json::object()),1);
+    if(instances.contains(object.id)&&instances.at(object.id).contains("general_scale")) skin.root_general_scale=number(instances.at(object.id).at("general_scale"),skin.root_general_scale);
+    if(!std::isfinite(skin.root_general_scale)||skin.root_general_scale<=0) throw std::runtime_error("Figure 保存缩放必须大于零");
     const auto vertex_count=loaded.scene.meshes.at(loaded.scene.instances.at(object.instance).mesh).positions.size();
     if(binding->at("vertex_count").get<size_t>()!=vertex_count) throw std::runtime_error("SkinBinding 顶点数量不匹配");skin.weights.resize(vertex_count);
     size_t weight_count=0;std::set<size_t> weighted_joints;
+    auto weight_map=[&](const Json &weights) {
+      const auto &rows=weights.at("values");if(weights.at("count").get<size_t>()!=rows.size()) throw std::runtime_error("权重记录数量不匹配");
+      std::map<uint32_t,double> result;
+      for(const auto &row:rows) {
+        if(row.size()!=2) throw std::runtime_error("无效权重记录");const auto vertex=row.at(0).get<uint32_t>();const double value=row.at(1).get<double>();
+        if(vertex>=vertex_count||result.contains(vertex)||!std::isfinite(value)||value<0) throw std::runtime_error("权重索引或数值无效");
+        result.emplace(vertex,value);
+      }
+      std::erase_if(result,[](const auto &entry) {return entry.second==0;});return result;
+    };
     for(const auto &w:binding->at("joints")) {
       const auto index=add(fragment(w.at("node").get<std::string>()));if(!weighted_joints.insert(index).second) throw std::runtime_error("重复的关节权重记录");
-      if(w.contains("local_weights")||w.contains("scale_weights")) throw std::runtime_error("当前尚不支持独立局部或缩放权重图");
-      if(!w.contains("node_weights")) continue;
-      const auto &weights=w.at("node_weights");const auto &rows=weights.at("values");if(weights.at("count").get<size_t>()!=rows.size()) throw std::runtime_error("权重记录数量不匹配");
-      std::set<uint32_t> seen;
-      for(const auto &row:rows) {if(row.size()!=2) throw std::runtime_error("无效权重记录");const auto vertex=row.at(0).get<uint32_t>();const double value=row.at(1).get<double>();
-        if(vertex>=vertex_count||!seen.insert(vertex).second||!std::isfinite(value)||value<0) throw std::runtime_error("权重索引或数值无效");
-        if(value>0) {skin.weights[vertex].push_back({uint32_t(index),value});++weight_count;}}
+      std::map<uint32_t,double> weights;
+      if(binding_mode=="Local") {
+        const auto &local=w.at("local_weights");weights=weight_map(local.at("x"));
+        if(weight_map(local.at("y"))!=weights||weight_map(local.at("z"))!=weights||!w.contains("scale_weights"))
+          throw std::runtime_error("局部轴权重不同，尚需 TriAx 蒙皮："+object.id);
+      } else if(w.contains("node_weights")) weights=weight_map(w.at("node_weights"));
+      if(binding_mode=="General"&&w.contains("local_weights")) for(const auto &axis:w.at("local_weights"))
+        if(weight_map(axis)!=weights) throw std::runtime_error("独立局部权重与绑定权重不同："+object.id);
+      if(w.contains("scale_weights")&&weight_map(w.at("scale_weights"))!=weights) throw std::runtime_error("独立缩放权重与绑定权重不同："+object.id);
+      for(const auto &[vertex,value]:weights) {skin.weights[vertex].push_back({uint32_t(index),value});++weight_count;}
     }
+    // 各轴与缩放图一致且每个顶点只属于一个关节时，Local 与刚性 Linear 变换等价。
+    if(binding_mode=="Local") for(const auto &weights:skin.weights) if(!weights.empty()&&(weights.size()!=1||weights.front().weight!=1))
+      throw std::runtime_error("非刚性局部权重尚需 TriAx 蒙皮："+object.id);
     // 保存场景中的骨骼实例覆盖值只可作用于所属 Figure，不能按名称跨角色覆盖。
-    std::map<std::string,Json> instances;for(const auto &n:saved.value("nodes",Json::array())) instances[n.value("id","")]=n;
     for(const auto &[id,n]:instances) {
       if(id==object.id) continue;auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
-      while(!parent.empty()&&parent!=object.id&&instances.contains(parent)&&seen.insert(parent).second) parent=fragment(instances.at(parent).value("parent",""));
-      if(parent!=object.id) continue;const auto bone=fragment(n.value("url",""));if(indices.contains(bone)) pose_channels(skin.initial[indices.at(bone)],n);
+      while(!parent.empty()&&parent!=object.id&&!figures.contains(parent)&&instances.contains(parent)&&seen.insert(parent).second) parent=fragment(instances.at(parent).value("parent",""));
+      if(parent!=object.id) continue;const auto bone=fragment(n.value("url",""));if(indices.contains(bone)) {
+        const auto index=indices.at(bone);pose_channels(skin.initial[index],n);skin.joints[index].scene_id=id;
+      }
     }
     runtime::validate_pose(skin,skin.initial);size_t unweighted=0;double error=0;
     for(const auto &weights:skin.weights) {double sum=0;for(const auto &w:weights) sum+=w.weight;if(weights.empty()) ++unweighted;else error=std::max(error,std::abs(sum-1));}
-    catalog.report["skins"].push_back({{"object",object.id},{"source",path_string(object.geometry_file)},{"method",mode},{"joints",skin.joints.size()},
+    catalog.report["skins"].push_back({{"object",object.id},{"source",path_string(binding_file)},{"inherited_geometry",binding_file!=object.geometry_file},{"method",mode},{"binding_mode",binding_mode},{"weight_conversion",binding_mode=="Local"?"rigid-identical-axis-maps":"general-maps"},{"joints",skin.joints.size()},
       {"vertices",vertex_count},{"weights",weight_count},{"unweighted_vertices",unweighted},{"max_source_weight_sum_error",error},{"normalization","per_vertex"},{"status","READY"}});
     Json formulas=Json::array();
     for(const auto &joint:skin.joints) for(const auto &formula:nodes.at(joint.id).value("formulas",Json::array())) formulas.push_back(formula);

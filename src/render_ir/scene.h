@@ -16,6 +16,7 @@ struct Transform {
   static Transform translate(Vec3 p);
 };
 Transform operator*(const Transform &a,const Transform &b);
+Transform inverse(const Transform &transform);
 struct Bounds {
   Vec3 minimum{},maximum{};
   bool empty=true;

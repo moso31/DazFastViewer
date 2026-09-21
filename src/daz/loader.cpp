@@ -151,6 +151,19 @@ void add_channels(Channels &channels,const Json &material) {
 
 Json read_document_file(const fs::path &file) {return read_document(file);}
 std::string decode_uri(const std::string &uri) {return decode(uri);}
+DufContents inspect_contents(const Json &document) {
+  DufContents result;const auto &scene=document.value("scene",Json::object());
+  const auto type=document.value("asset_info",Json::object()).value("type","");
+  result.materials=!scene.value("materials",Json::array()).empty();
+  result.properties=!scene.value("animations",Json::array()).empty();
+  for(const auto &node:scene.value("nodes",Json::array())) {
+    const auto kind=node.value("type","");
+    result.instantiate|=!node.value("geometries",Json::array()).empty()||kind=="light"||kind=="camera";
+  }
+  // 类型只补充无法从实例字段推断的用途；复合文件优先按实际内容处理。
+  result.instantiate|=type=="scene"||type=="preset_scene"||type=="preset_light"||type=="preset_lights";
+  return result;
+}
 LoadedScene load(const fs::path &input,const LoadOptions &options) {
   const auto file=fs::weakly_canonical(input);
   if(!fs::is_regular_file(file)) fail("输入文件不存在: "+utf8(file));
@@ -215,6 +228,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     Json base=Json::object();if(instance.contains("url")) base=*repo.asset(instance.at("url"),file,"node_library").second;
     nodes.emplace(instance.at("id").get<std::string>(),merge_node(base,instance));
   }
+  for(const auto &[id,node]:nodes) out.nodes.push_back({id,decode(node.value("parent",""))});
   std::map<std::string,ir::Transform> transforms;std::set<std::string> visiting;
   std::function<ir::Transform(const std::string &)> world=[&](const std::string &id) {
     if(auto old=transforms.find(id);old!=transforms.end()) return old->second;
@@ -306,15 +320,30 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
         mesh_index=uint32_t(scene.meshes.size());mesh_cache.emplace(key,mesh_index);scene.meshes.push_back(std::move(mesh));
       }
       ir::Instance render_instance;render_instance.id=id+"/"+geometry_id;render_instance.mesh=mesh_index;render_instance.materials=std::move(material_indices);render_instance.transform=render_transform(world(id));
-      out.objects.push_back({uint32_t(scene.instances.size()),id,node.value("label",node.value("name",id)),node.value("parent",""),g.at("id").get<std::string>(),geometry_file,node.value("type","")=="figure",geometry_id,node.contains("conform_target")&&node["conform_target"].is_string()?decode_uri(node["conform_target"].get<std::string>()):""});
+      out.objects.push_back({uint32_t(scene.instances.size()),id,node.value("label",node.value("name",id)),decode(node.value("parent","")),g.at("id").get<std::string>(),geometry_file,node.value("type","")=="figure",geometry_id,node.contains("conform_target")&&node["conform_target"].is_string()?decode_uri(node["conform_target"].get<std::string>()):""});
+      // DUF 可以内嵌派生几何；保持其顶点、UV 与材质，同时解析可继承的源资产身份。
+      auto owner=geometry_file;const Json *derived=&g;std::set<std::pair<fs::path,std::string>> ancestors{{owner,g.at("id").get<std::string>()}};
+      while(!derived->value("source","").empty()) {
+        const auto [source_file,base]=repo.asset(derived->at("source"),owner,"geometry_library");const auto source_id=base->at("id").get<std::string>();
+        if(!ancestors.emplace(source_file,source_id).second) fail("派生几何 source 形成循环: "+uri);
+        bool compatible=values(derived->at("vertices")).size()==values(base->at("vertices")).size();
+        const auto &a=values(derived->at("polylist")),&b=values(base->at("polylist"));compatible&=a.size()==b.size();
+        for(size_t p=0;compatible&&p<a.size();++p) {
+          compatible=a[p].size()==b[p].size();
+          for(size_t v=2;compatible&&v<a[p].size();++v) compatible=a[p][v]==b[p][v];
+        }
+        if(!compatible) {warn("derived_geometry_topology",geometry_id,"派生几何拓扑不同，未继承源资产的 Morph / 蒙皮索引");break;}
+        out.objects.back().geometry_sources.push_back({source_file,source_id});owner=source_file;derived=base;
+      }
       scene.instances.push_back(std::move(render_instance));
       if(geometry_instance.value("type",g.value("type",""))=="subdivision_surface") warn("subdivision",geometry_id,"当前显示基础笼形网格；未应用 SubD/HD 细分");
     }
   }
   if(source.contains("modifiers")&&!source["modifiers"].empty())
     warn("runtime_modifiers",std::to_string(source["modifiers"].size()),"几何阶段不求值 Modifier；由后续 Morph / Skeleton / Formula 阶段应用并报告支持情况");
-  const auto type=document.value("asset_info",Json::object()).value("type","");
-  if(scene.instances.empty()&&scene.lights.empty()&&type!="preset_material"&&type!="preset_shader") fail("场景没有可加载的几何实例或灯光");
+  if(source.contains("animations")&&!source["animations"].empty())
+    warn("scene_animation_timeline",std::to_string(source["animations"].size()),"载入保存的节点和 Modifier 当前值；场景动画时间线尚未求值。选中对象的单帧预设由预设入口应用");
+  if(scene.instances.empty()&&scene.lights.empty()&&scene.materials.empty()&&source.value("nodes",Json::array()).empty()) fail("文件没有可加载的场景内容");
   scene.validate();const auto bounds=scene.bounds();
   out.report={{"input",utf8(file)},{"mode","static-base-mesh-preview"},{"content_roots",Json::array()},
               {"dependencies",repo.dependencies},{"parsed_documents",repo.documents.size()},{"geometries",geometry_reports},{"materials",material_reports},
@@ -322,6 +351,9 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
               {"bounds_m",{{"min",{bounds.minimum.x,bounds.minimum.y,bounds.minimum.z}},{"max",{bounds.maximum.x,bounds.maximum.y,bounds.maximum.z}}}},
               {"coordinate_conversion","DAZ centimeters Y-up to meters Z-up: (x,-z,y)/100"}};
   for(const auto &root:repo.roots) out.report["content_roots"].push_back(utf8(root));
+  out.report["geometry_sources"]=Json::array();
+  for(const auto &object:out.objects) for(const auto &source:object.geometry_sources)
+    out.report["geometry_sources"].push_back({{"object",object.id},{"file",utf8(source.file)},{"geometry",source.id},{"topology_verified",true}});
   if(options.strict && !warnings.empty()) fail("严格模式拒绝未支持语义；请先用 --inspect 查看诊断");
   return out;
 }

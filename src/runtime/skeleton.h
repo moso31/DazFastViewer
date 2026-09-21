@@ -10,6 +10,8 @@ struct JointPose {
 };
 struct Joint {
   std::string id,name,label,rotation_order="XYZ";
+  // 保存场景中的骨骼实例 ID；不同角色的同名骨骼不能共用附件绑定。
+  std::string scene_id;
   std::vector<std::string> aliases;
   int parent=-1;
   ir::Vec3 center_cm{},end_cm{},orientation_degrees{};
@@ -24,10 +26,13 @@ struct Skin {
   std::vector<Joint> joints;
   std::vector<JointPose> initial;
   std::vector<std::vector<Influence>> weights;
+  // 实例矩阵已包含 Figure 的保存缩放；ERC 在原通道空间求值后再换算为相对值。
+  float root_general_scale=1;
 };
 struct SkinStats {uint64_t evaluations=0,vertices=0,joints=0;};
 // 姿势在 DAZ 厘米 / Y 向上坐标内求值；几何输入输出均使用 Render IR 坐标。
 void validate_pose(const Skin &skin,const std::vector<JointPose> &pose);
+std::vector<ir::Transform> joint_transforms(const Skin &skin,const std::vector<JointPose> &pose);
 std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose,const std::vector<ir::Vec3> &source);
 class SkinningRuntime {
   ir::Scene &scene_;

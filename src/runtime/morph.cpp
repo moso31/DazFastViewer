@@ -11,7 +11,7 @@ static void finite(ir::Vec3 p) {
 }
 static bool same(ir::Vec3 a,ir::Vec3 b) {return a.x==b.x && a.y==b.y && a.z==b.z;}
 MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):scene_(scene),targets_(targets) {
-  parents_.resize(targets.size(),-1);follow_offsets_.resize(targets.size());
+  parents_.resize(targets.size(),-1);follow_offsets_.resize(targets.size());attachments_.resize(targets.size());
   for(size_t i=0;i<targets.size();++i) if(targets[i].parent.starts_with('#')) for(size_t j=0;j<targets.size();++j) if(i!=j&&targets[j].id.substr(0,targets[j].id.rfind('/'))==targets[i].parent.substr(1)) parents_[i]=int(j);
   for(size_t i=0;i<parents_.size();++i) {std::set<int> seen;for(int p=int(i);p>=0;p=parents_[size_t(p)]) if(!seen.insert(p).second) throw std::runtime_error("编辑对象的父子关系存在循环");}
   std::set<uint32_t> used_meshes;
@@ -66,9 +66,20 @@ bool MorphRuntime::set_transform(size_t target,const TransformValues &v) {
   validate_transform(v);
   auto &old=values_.at(target).transform;
   if(same(old.translation_cm,v.translation_cm)&&same(old.rotation_degrees,v.rotation_degrees)&&same(old.scale,v.scale)) return false;
-  old=v;dirty_transforms_.insert(target);
+  old=v;dirty_transform(target);return true;
+}
+void MorphRuntime::dirty_transform(size_t target) {
+  dirty_transforms_.insert(target);
   for(size_t i=0;i<parents_.size();++i) for(int p=parents_[i];p>=0;p=parents_[size_t(p)]) if(size_t(p)==target) {dirty_transforms_.insert(i);break;}
-  return true;
+}
+void MorphRuntime::bind_parent(size_t target,size_t parent) {
+  if(target>=parents_.size()||parent>=parents_.size()) throw std::runtime_error("附件父节点越界");
+  for(int p=int(parent);p>=0;p=parents_[size_t(p)]) if(size_t(p)==target) throw std::runtime_error("骨骼附件父子关系存在循环");
+  parents_[target]=int(parent);dirty_transform(target);
+}
+void MorphRuntime::set_attachment(size_t target,const ir::Transform &delta) {
+  auto &old=attachments_.at(target);if(old.value==delta.value) return;
+  old=delta;dirty_transform(target);
 }
 bool MorphRuntime::set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets) {
   if(offsets.size()!=bases_.at(target).size()) throw std::runtime_error("服装跟随顶点数量不一致");
@@ -97,7 +108,7 @@ ir::Delta MorphRuntime::evaluate() {
   }
   std::function<ir::Transform(size_t)> edit_transform=[&](size_t target) {
     const auto &v=values_[target].transform;
-    auto result=make_transform(v);
+    auto result=attachments_[target]*make_transform(v);
     if(parents_[target]>=0) result=edit_transform(size_t(parents_[target]))*result;
     return result;
   };

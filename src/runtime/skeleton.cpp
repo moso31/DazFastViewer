@@ -51,10 +51,8 @@ void validate_pose(const Skin &skin,const std::vector<JointPose> &pose) {
     if(p.scale.x<=0||p.scale.y<=0||p.scale.z<=0||p.general_scale<=0) throw std::runtime_error("骨骼缩放必须大于零");
   }
 }
-std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose,const std::vector<ir::Vec3> &source) {
+static std::vector<Palette> build_palettes(const Skin &skin,const std::vector<JointPose> &pose) {
   validate_pose(skin,pose);
-  if(source.size()!=skin.weights.size()) throw std::runtime_error("蒙皮权重与网格顶点数不一致");
-  bool neutral=true;for(const auto &p:pose) neutral=neutral&&same(p.translation_cm,{})&&same(p.rotation_degrees,{})&&same(p.scale,{1,1,1})&&p.general_scale==1;
   std::vector<Palette> palettes(pose.size());
   for(size_t i=0;i<pose.size();++i) {
     const auto &j=skin.joints[i];const auto &p=pose[i];auto &out=palettes[i];
@@ -67,7 +65,10 @@ std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose
       out.origin=parent.matrix*(offset+v(p.translation_cm))+parent.origin;out.rest_origin=parent.scale*offset+parent.rest_origin;
       out.rotation=parent.rotation*out.rotation;
       auto inherited=parent.scale;
-      if(!j.inherits_scale) inherited=inherited*scaling(pose[j.parent],true);
+      if(!j.inherits_scale) {
+        const auto parent_orientation=rotation(add(pj.orientation_degrees,pose[j.parent].orientation_offset_degrees),"XYZ");
+        inherited=inherited*parent_orientation*scaling(pose[j.parent],true)*transpose(parent_orientation);
+      }
       out.scale=inherited*out.scale;
     }
     out.matrix=out.rotation*out.scale;out.translation=out.origin-out.matrix*center;
@@ -75,6 +76,23 @@ std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose
     out.stretch_translation=out.rest_origin-out.scale*center;const auto rigid_translation=out.origin-out.rotation*out.rest_origin;
     out.real=quaternion(out.rotation);out.dual=(Q{0,rigid_translation.x,rigid_translation.y,rigid_translation.z}*out.real)*.5;
   }
+  return palettes;
+}
+std::vector<ir::Transform> joint_transforms(const Skin &skin,const std::vector<JointPose> &pose) {
+  std::vector<ir::Transform> result;
+  for(const auto &p:build_palettes(skin,pose)) {
+    ir::Transform transform;
+    const int axes[]={0,2,1};const double signs[]={1,-1,1};
+    for(int r=0;r<3;++r) for(int c=0;c<3;++c) transform.value[r*4+c]=float(signs[r]*signs[c]*p.matrix.a[axes[r]][axes[c]]);
+    transform.value[3]=float(p.translation.x*.01);transform.value[7]=float(-p.translation.z*.01);transform.value[11]=float(p.translation.y*.01);
+    result.push_back(transform);
+  }
+  return result;
+}
+std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose,const std::vector<ir::Vec3> &source) {
+  const auto palettes=build_palettes(skin,pose);
+  if(source.size()!=skin.weights.size()) throw std::runtime_error("蒙皮权重与网格顶点数不一致");
+  bool neutral=true;for(const auto &p:pose) neutral=neutral&&same(p.translation_cm,{})&&same(p.rotation_degrees,{})&&same(p.scale,{1,1,1})&&p.general_scale==1;
   auto result=source;
   for(size_t i=0;i<source.size();++i) {
     if(!finite(source[i])) throw std::runtime_error("蒙皮输入包含非有限顶点");
