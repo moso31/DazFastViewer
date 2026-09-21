@@ -1,5 +1,6 @@
 #pragma once
 #include "daz/morphs.h"
+#include "daz/skeleton.h"
 #include "cycles/adapter.h"
 #include "viewport/window.h"
 #include "bench/telemetry.h"
@@ -7,13 +8,15 @@
 #include <thread>
 
 namespace dfv::editor {
-struct Document {uint64_t generation=0;daz::LoadedScene loaded;daz::MorphCatalog catalog;};
-struct Snapshot {uint64_t generation=0,revision=0;std::vector<runtime::Properties> values;};
+struct Document {uint64_t generation=0;daz::LoadedScene loaded;daz::MorphCatalog catalog;daz::SkinCatalog skeletons;};
+struct Snapshot {uint64_t generation=0,revision=0;std::vector<runtime::Properties> values;std::vector<std::vector<runtime::JointPose>> poses;};
 struct RenderStatus {
   uint64_t generation=0,applied_revision=0,presented_revision=0,frames=0;
   uint64_t requested_epoch=0,presented_epoch=0;
   AdapterStats adapter;
   runtime::EvaluationStats evaluation;
+  runtime::SkinStats skinning;
+  std::vector<ir::Bounds> bounds;
   double max_displacement=0;
   int samples=0;
   std::string error;
@@ -35,5 +38,6 @@ public:
   void edit(const Snapshot &snapshot);
   RenderStatus status();
   void orbit(float x,float y);
+  void frame(const ir::Bounds &bounds);
 };
 }

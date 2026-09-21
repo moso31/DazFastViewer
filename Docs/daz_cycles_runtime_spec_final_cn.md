@@ -2,6 +2,8 @@
 
 ## 本地开发环境与版本基线（用户补充，2026-09-21 更新）
 
+- 用户已授权启动 **006 Skeleton / Skinning**，并要求同时支持用于摆姿势的 DUF。真实验证目录：`H:\G1\People\Genesis 8 Female\Poses\Bed Hogs II for Genesis 8 Female`，共 40 个单帧 `preset_pose`。对选中 Genesis 8 角色应用姿势，验证骨骼层级、权重、蒙皮、恢复与 Morph → Skinning 顺序；继续检查现有 Genesis 8.1 样例的兼容性。详细边界见 [006 规范](../specs/006-skeleton-skinning/proposal.md)。Formula / ERC / JCM 在 007 实现，当前未应用的控制器必须在界面和报告中列明。
+
 - 内容库必须支持多个可自定义根目录，并作为“项目 → 项目设置”持久保存。用户提供的查找顺序为 `H:\g1`、`H:\g3`、`C:\Users\Public\Documents\My DAZ 3D Library`、`C:\Users\xatia\Documents\DAZ 3D\Studio\My Library`。参数发现需包含目录子级、纯公式控制器及子节点别名，保留 DAZ 的 `group` 路径；发现完整度与求值支持程度分别报告，不仅统计带顶点差值的 Morph。相同资源按根目录优先级处理，G8.1 的空覆盖语义不能被依赖扫描绕过。
 
 - 用户已授权进入 **Spec 005 Morph Runtime**，补充长期中文 UI（Explorer、菜单、加载角色、SceneHierarchy、Morph / 变换编辑）与 Genesis 8 服装 FitTo / IK 跟随需求。采用 Qt Widgets 应用外壳与独立 Runtime；FitTo 按蒙皮 / ERC / IK 顺序集成，DBZ 保留为兼容与参考选项。详细设计见 [长期规划](editor_and_genesis8_roadmap_cn.md)。Spec 004 材质 Golden 尚未通过，继续作为独立剩余项。

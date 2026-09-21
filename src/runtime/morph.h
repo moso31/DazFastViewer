@@ -7,7 +7,7 @@ struct SparseOffset {uint32_t vertex=0;ir::Vec3 delta;};
 struct Morph {
   std::string id,label,group,source,unsupported;
   // 参数目录包含控制器和子节点别名；发现能力与求值能力分开记录。
-  std::string kind="sparse",owner,channel_id,alias_target;
+  std::string kind="sparse",owner,channel_id,alias_target,channel_name;
   size_t formula_count=0,missing_dependencies=0;
   size_t source_vertex_count=0,source_offset_count=0;
   float minimum=0,maximum=1,initial=0,step=.01f;

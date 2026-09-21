@@ -1,6 +1,16 @@
 # 交接记录
 
-## 最新状态：Spec 005 / Qt 编辑器
+## 最新状态：Spec 006 / 骨架、蒙皮与姿势 DUF
+
+用户授权启动 006，并提供 `H:\G1\People\Genesis 8 Female\Poses\Bed Hogs II for Genesis 8 Female` 的姿势用于蒙皮检查。当前实施范围已完成并部署；用户已明确要求将 006 以中文归档到本地 Git。此归档不代替完整 DAZ Golden。005 已提交为 `ee2ba05`。
+
+新增 `src/daz/skeleton.*`、`src/daz/pose.*`、`src/runtime/skeleton.*`：G8 / G8.1 各 171 节点、General DualQuat，按节点所属范围匹配姿势 name / id。`SkinningRuntime` 缓存 Morph 输出，应用 / 恢复姿势不累积变形。Qt 新增姿势菜单、Explorer 分派、骨骼树、取景与诊断，`tools/edit_sample.ps1` 新增 `-Pose`。
+
+六项工程 CTest、G8 / G8.1 各 40 姿势、三种姿势的独立 mathutils 数值对照及副屏端到端均通过；最大参考顶点差约 `6.431e-7 m`，恢复误差 0。第一轮副屏发现同名控制器 / Alias 范围问题，修复后复验通过；不要继续无目的重复扫描、demo 或性能回放。当前部署 EXE SHA-256 为 `08feda362e646fb07239785dcf78d9945e52fc96147ee341f07718efed489ad8`。
+
+**边界：** ERC / JCM、体型驱动骨骼中心、骨骼缩放的 DQS、多帧动画、TriAx / Blend、FitTo / IK 和 DAZ Studio Golden 尚未完成。目录中眼睛上下 / 左右两个非零控制器各出现于 33 个文件，明确报告未应用。下一阶段为 007 ERC / JCM；服装样例在 FitTo 验证前再收集，不影响本次姿势验证。详见 [006 执行报告](specs/006-skeleton-skinning/execution-report.md)及[预览命令](specs/006-skeleton-skinning/tests.md)。
+
+## Spec 005 / Qt 编辑器历史记录
 
 **阶段归档：** 用户本轮要求检查 005 完成后以中文提交。已对照总规范第 36 节确认当前阶段实施范围完成，并复核源码 / 部署 / 证据哈希一致。本次提交归档 005；核查过程没有再次运行 demo、全库扫描或性能回放。后续 Formula / Skinning / FitTo / IK 和整体 Golden 保留未完成，见 [阶段完成核查](specs/005-morph-runtime/completion-review.md)。
 

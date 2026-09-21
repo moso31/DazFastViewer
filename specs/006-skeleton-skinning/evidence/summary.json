@@ -1,0 +1,222 @@
+{
+  "status": "PASS",
+  "scope": "006 base skeleton skinning and single-frame pose presets",
+  "batches": {
+    "g8": {
+      "status": "PASS",
+      "count": 40,
+      "input": "C:/Users/Public/Documents/My DAZ 3D Library/People/Genesis 8 Female/Genesis 8 Basic Female.duf",
+      "skeleton": {
+        "skins": [
+          {
+            "joints": 171,
+            "max_source_weight_sum_error": 1.5679999998408078e-07,
+            "method": "DualQuat",
+            "normalization": "per_vertex",
+            "object": "Genesis8Female",
+            "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Genesis8Female.dsf",
+            "status": "READY",
+            "unweighted_vertices": 0,
+            "vertices": 16556,
+            "weights": 36666
+          }
+        ]
+      },
+      "bone_channels": 11997,
+      "minimum_moved_vertices": 16556,
+      "maximum_restore_error_m": 0.0,
+      "unapplied_nonzero_controls": {
+        "eCTRLEyesUpDown": 33,
+        "eCTRLEyesSideSide": 33
+      }
+    },
+    "g81": {
+      "status": "PASS",
+      "count": 40,
+      "input": "C:/Users/Public/Documents/My DAZ 3D Library/People/Genesis 8 Female/Genesis 8.1 Basic Female.duf",
+      "skeleton": {
+        "skins": [
+          {
+            "joints": 171,
+            "max_source_weight_sum_error": 1.5679999998408078e-07,
+            "method": "DualQuat",
+            "normalization": "per_vertex",
+            "object": "Genesis8_1Female",
+            "source": "C:/Users/Public/Documents/My DAZ 3D Library/data/DAZ 3D/Genesis 8/Female 8_1/Genesis8_1Female.dsf",
+            "status": "READY",
+            "unweighted_vertices": 0,
+            "vertices": 16556,
+            "weights": 36666
+          }
+        ]
+      },
+      "bone_channels": 11997,
+      "minimum_moved_vertices": 16556,
+      "maximum_restore_error_m": 0.0,
+      "unapplied_nonzero_controls": {
+        "eCTRLEyesUpDown": 33,
+        "eCTRLEyesSideSide": 33
+      }
+    }
+  },
+  "golden": "DAZ_STUDIO_NOT_RUN",
+  "reference": {
+    "blender": "5.2.2 LTS",
+    "scope": "DSF / pose + independent mathutils and NumPy DQS; not DAZ Studio Golden",
+    "threshold_m": 2e-05,
+    "results": [
+      {
+        "pose": "H:/G1/People/Genesis 8 Female/Poses/Bed Hogs II for Genesis 8 Female/BH2 Basking.duf",
+        "source_error_m": 0.0,
+        "max_vertex_error_m": 4.685580183010361e-07,
+        "rms_vertex_error_m": 2.3721927205736243e-07,
+        "vertices": 16556,
+        "status": "PASS"
+      },
+      {
+        "pose": "H:/G1/People/Genesis 8 Female/Poses/Bed Hogs II for Genesis 8 Female/BH2 Fetal Position on Pillow.duf",
+        "source_error_m": 0.0,
+        "max_vertex_error_m": 5.298513877791938e-07,
+        "rms_vertex_error_m": 2.358958795897547e-07,
+        "vertices": 16556,
+        "status": "PASS"
+      },
+      {
+        "pose": "H:/G1/People/Genesis 8 Female/Poses/Bed Hogs II for Genesis 8 Female/BH2 Stretch and Yawn.duf",
+        "source_error_m": 0.0,
+        "max_vertex_error_m": 6.430542185962344e-07,
+        "rms_vertex_error_m": 3.1396008920679456e-07,
+        "vertices": 16556,
+        "status": "PASS"
+      },
+      {
+        "pose": "H:/G1/People/Genesis 8 Female/Poses/Bed Hogs II for Genesis 8 Female/BH2 Basking.duf",
+        "source_error_m": 0.0,
+        "max_vertex_error_m": 4.685580183010361e-07,
+        "rms_vertex_error_m": 2.3721927205736243e-07,
+        "vertices": 16556,
+        "status": "PASS"
+      },
+      {
+        "pose": "H:/G1/People/Genesis 8 Female/Poses/Bed Hogs II for Genesis 8 Female/BH2 Fetal Position on Pillow.duf",
+        "source_error_m": 0.0,
+        "max_vertex_error_m": 5.298513877791938e-07,
+        "rms_vertex_error_m": 2.358958795897547e-07,
+        "vertices": 16556,
+        "status": "PASS"
+      },
+      {
+        "pose": "H:/G1/People/Genesis 8 Female/Poses/Bed Hogs II for Genesis 8 Female/BH2 Stretch and Yawn.duf",
+        "source_error_m": 0.0,
+        "max_vertex_error_m": 6.430542185962344e-07,
+        "rms_vertex_error_m": 3.1396008920679456e-07,
+        "vertices": 16556,
+        "status": "PASS"
+      }
+    ],
+    "status": "PASS"
+  },
+  "editor": {
+    "content_roots": [
+      "H:/g1",
+      "H:/g3",
+      "C:/Users/Public/Documents/My DAZ 3D Library",
+      "C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"
+    ],
+    "error": "",
+    "geometry_updates": 2,
+    "instance_updates": 0,
+    "max_displacement_m": 0.0,
+    "mesh_creations": 2,
+    "monitor": "VG279QL1A",
+    "morph_evaluations": 0,
+    "named_parameters": [
+      {
+        "group": "/Pose Controls/Head/Eyes",
+        "kind": "alias",
+        "label": "Eyes Closed",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/alias_head_eCTRLEyesClosed.dsf"
+      },
+      {
+        "group": "/Pose Controls/Head/Eyes",
+        "kind": "control",
+        "label": "Eyes Closed",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base Pose Head/eCTRLEyesClosed.dsf"
+      },
+      {
+        "group": "/Real World",
+        "kind": "control",
+        "label": "Chest Scale",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Base/SCLPropagatingChest.dsf"
+      },
+      {
+        "group": "/Real World",
+        "kind": "control",
+        "label": "Arms Length",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/DAZ 3D/Body/SCLArmsLength.dsf"
+      },
+      {
+        "group": "/Pose Controls/Head/Expressions/Sanny Expression",
+        "kind": "sparse",
+        "label": "HS Sanny Shy",
+        "source": "H:/G3/data/DAZ 3D/Genesis 8/Female/Morphs/Hamster/Sanny/CRTLHSSannyShy.dsf"
+      }
+    ],
+    "project_file": "D:/Github/DazFastViewer/DazFastViewer.project.json",
+    "qt_version": "6.10.3",
+    "scope": "pose-apply-reset-camera-no-skin-evaluation",
+    "skin_evaluations": 3,
+    "skin_vertices": 49668,
+    "stage": 3,
+    "status": "PASS",
+    "window": [
+      2729,
+      55,
+      1580,
+      920
+    ]
+  },
+  "renderer": {
+    "applied_revision": 3,
+    "camera_updates": 4,
+    "error": "",
+    "frames": 16,
+    "generation": 1,
+    "geometry_updates": 2,
+    "instance_updates": 0,
+    "interop_readback_bytes": 0,
+    "max_displacement_m": 0.0,
+    "mesh_creations": 2,
+    "morph_evaluations": 0,
+    "offsets_visited": 0,
+    "presented_epoch": 6,
+    "presented_revision": 3,
+    "requested_epoch": 6,
+    "skin_evaluations": 3,
+    "skin_vertices": 49668,
+    "visible_fps": "NOT_MEASURED"
+  },
+  "ctest": {
+    "passed": 6,
+    "failed": 0,
+    "log": "artifacts/spec006/ctest-final.log"
+  },
+  "sha256": {
+    "out/DazFastViewer.exe": "08feda362e646fb07239785dcf78d9945e52fc96147ee341f07718efed489ad8",
+    "src/runtime/skeleton.cpp": "2c2e9906c0a2f5a79036db292e1fc4c51806f3c3f7fffcada8c506d4cbea9b00",
+    "src/daz/skeleton.cpp": "b28156ff0a031fd573bb416e2ecbcd597091d7c80de5e46d4ceb4315c321668c",
+    "src/daz/pose.cpp": "beec0a8aafca51c61a8a9dc3fddb81eee7d45e2d9e386645c71bcb60dc1d766a",
+    "src/editor/main.cpp": "260bf1440948553079244941b5519bafcc97807939f2c6f93d1ee2ad8468553a",
+    "src/editor/renderer.cpp": "6c24a26fd3442e8142168c1a567e671c63b974bef70f70b1d21dcfa176f44570",
+    "tests/skeleton_pose.cpp": "fc1ac195bf257560b3ac18462d8ea69ca31c5dda45a4fc4df6d974ef28038400",
+    "tools/reference/pose_reference.py": "c73aa4c4de537f79c9406f198b4f640d57f96075a5905d0d8903f90932bf08a5",
+    "artifacts/spec006/ctest-final.log": "37ce1f89bdb28d7946545a3058cc14939fd046208c6da6fc279a96aab6b7ca09",
+    "artifacts/spec006/g8/batch-report.json": "a61613d172f853efbef8787bb6d14c4076abda419a93dd0af42a68ece3cc06cc",
+    "artifacts/spec006/g81/batch-report.json": "f890dd71d21762523a6ac9acdbd2c8356d7a0dc13d2874b31d787fe5c0aaec4a",
+    "artifacts/spec006/reference-report.json": "f21ae9ceba28f889e293aeee85cf7526f4f478ee23ef6e5e0bb86bfb21e8e9b7",
+    "artifacts/spec006/editor-final/editor-check.json": "8711d3da6514e84eb12ceb19d2beeecb1408774a79667a23a458b614d6b42006",
+    "artifacts/spec006/editor-final/editor-render.json": "28e62cc84ce494ee9ab3b6b061c32dd45cd016280cbf40f22b0e80a7bfc030fa",
+    "artifacts/spec006/editor-final/editor-pose.png": "9a4b67321fa3bd09732957b51242de4002d4618efe5c978ae22d699001f126e9",
+    "artifacts/spec006/editor-final/editor-pose-reset.png": "d4d9bad5b9fe66cc89df3b93e3798344c67ba3d2fabd7794c6cd29286ebcf801"
+  }
+}

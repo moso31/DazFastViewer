@@ -16,10 +16,13 @@ Renderer::Renderer(HWND host,int width,int height,const std::filesystem::path &o
 }
 Renderer::~Renderer() {thread_.request_stop();if(thread_.joinable()) thread_.join();}
 void Renderer::set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot) {
-  const auto bounds=document->loaded.scene.bounds();const auto c=bounds.center();
+  frame(document->loaded.scene.bounds());
+  std::lock_guard lock(mutex_);document_=std::move(document);snapshot_=snapshot;
+}
+void Renderer::frame(const ir::Bounds &bounds) {
+  if(bounds.empty) return;const auto c=bounds.center();
   window_->camera.target={c.x,c.y,c.z};window_->camera.distance=std::max(bounds.extent()*1.6f,.35f);window_->camera.yaw=.3f;
   window_->camera.pitch=bounds.maximum.z-bounds.minimum.z<bounds.extent()*.5f?.7f:.08f;window_->publish();
-  std::lock_guard lock(mutex_);document_=std::move(document);snapshot_=snapshot;
 }
 void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) snapshot_=snapshot;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
@@ -42,8 +45,9 @@ void Renderer::run(std::stop_token stop) {
     std::shared_ptr<const Document> current;
     ir::Scene render_scene;
     std::unique_ptr<runtime::MorphRuntime> runtime;
+    std::unique_ptr<runtime::SkinningRuntime> skinning;
     std::unique_ptr<CyclesAdapter> adapter;
-    uint64_t epoch=0,camera_epoch=0,applied_revision=0,measured_evaluation=0;
+    uint64_t epoch=0,camera_epoch=0,applied_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
     SessionParams params;params.device=device;params.samples=64;params.pixel_size=1;params.background=false;
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
@@ -54,11 +58,13 @@ void Renderer::run(std::stop_token stop) {
       if(current!=document) {
         cleanup();current=document;render_scene=current->loaded.scene;ir::add_studio(render_scene);
         runtime=std::make_unique<runtime::MorphRuntime>(render_scene,current->catalog.targets);
+        skinning=std::make_unique<runtime::SkinningRuntime>(render_scene,current->skeletons.skins);
         for(size_t t=0;t<desired.values.size();++t) {
           for(size_t m=0;m<desired.values[t].morphs.size();++m) if(current->catalog.targets[t].morphs[m].unsupported.empty()) runtime->set_morph(t,m,desired.values[t].morphs[m]);
           runtime->set_transform(t,desired.values[t].transform);
         }
-        runtime->evaluate();
+        for(size_t i=0;i<desired.poses.size();++i) skinning->set_pose(i,desired.poses[i]);
+        skinning->evaluate(runtime->evaluate());
         SceneParams scene_params;scene_params.background=false;scene_params.bvh_type=BVH_TYPE_DYNAMIC;
         scene_params.use_texture_cache=false;scene_params.auto_texture_cache=false;
         session=std::make_unique<Session>(params,scene_params);
@@ -72,7 +78,7 @@ void Renderer::run(std::stop_token stop) {
         auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
         display=driver.get();session->set_display_driver(std::move(driver));session->dfv_requested_epoch=++epoch;
         applied_revision=desired.revision;session->reset(params,buffers);session->start();
-        state={};state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=0;
+        state={};state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
       if(display->failed()) throw std::runtime_error(display->error());
@@ -84,7 +90,8 @@ void Renderer::run(std::stop_token stop) {
             for(size_t m=0;m<desired.values[t].morphs.size();++m) if(current->catalog.targets[t].morphs[m].unsupported.empty()) runtime->set_morph(t,m,desired.values[t].morphs[m]);
             runtime->set_transform(t,desired.values[t].transform);
           }
-          delta=runtime->evaluate();applied_revision=desired.revision;
+          for(size_t i=0;i<desired.poses.size();++i) skinning->set_pose(i,desired.poses[i]);
+          delta=skinning->evaluate(runtime->evaluate());applied_revision=desired.revision;
         }
         if(camera.epoch!=camera_epoch) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;}
         {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
@@ -98,11 +105,13 @@ void Renderer::run(std::stop_token stop) {
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.frames=telemetry_.submitted.load();state.samples=session->dfv_render_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->stats();
-      if(state.evaluation.morph_evaluations!=measured_evaluation) {
-        measured_evaluation=state.evaluation.morph_evaluations;state.max_displacement=0;
+      state.skinning=skinning->stats();
+      if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform) {
+        measured_evaluation=state.evaluation.morph_evaluations;measured_skinning=state.skinning.evaluations;measured_transform=state.evaluation.transform_evaluations;state.max_displacement=0;state.bounds.clear();
         for(const auto &target:current->catalog.targets) {
         const auto mesh=render_scene.instances[target.instance].mesh;
         const auto &base=current->loaded.scene.meshes[mesh].positions;const auto &positions=render_scene.meshes[mesh].positions;
+        ir::Bounds bounds;for(const auto p:positions) bounds.add(render_scene.instances[target.instance].transform.point(p));state.bounds.push_back(bounds);
         for(size_t v=0;v<base.size();++v) {
           const double x=positions[v].x-base[v].x,y=positions[v].y-base[v].y,z=positions[v].z-base[v].z;
           state.max_displacement=std::max(state.max_displacement,std::sqrt(x*x+y*y+z*z));
@@ -120,6 +129,7 @@ void Renderer::run(std::stop_token stop) {
   nlohmann::json report={{"generation",state.generation},{"applied_revision",state.applied_revision},{"presented_revision",state.presented_revision},
     {"mesh_creations",state.adapter.meshes},{"geometry_updates",state.adapter.geometry_updates},{"instance_updates",state.adapter.instance_updates},
     {"camera_updates",state.adapter.camera_updates},{"morph_evaluations",state.evaluation.morph_evaluations},{"offsets_visited",state.evaluation.offsets_visited},
+    {"skin_evaluations",state.skinning.evaluations},{"skin_vertices",state.skinning.vertices},
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
     {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"}};
   std::ofstream(output_/"editor-render.json")<<report.dump(2);

@@ -139,6 +139,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           runtime::Morph morph;const auto id=modifier.at("id").get<std::string>();
           morph.id=key(path)+"#"+id;if(!ids.insert(morph.id).second) throw std::runtime_error("同一文件存在重复参数 ID: "+id);
           morph.source=path_string(path);morph.label=channel.value("label",modifier.value("label",id));morph.channel_id=id;morph.owner=parent.id;
+          morph.channel_name=modifier.value("name",channel.value("name",id));
           morph.source_vertex_count=source.value("vertex_count",size_t(0));
           if(source.contains("deltas")) morph.source_offset_count=source["deltas"].value("count",size_t(0));
           morph.group=modifier.value("group","");morph.minimum=number(channel,"min",0);morph.maximum=number(channel,"max",1);
@@ -212,7 +213,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       m.missing_dependencies=unresolved.size();
       if(!unresolved.empty() && m.unsupported.empty()) m.unsupported="存在未解析的参数依赖";
       items.push_back({{"id",m.id},{"label",m.label},{"group",m.group},{"source",m.source},{"owner",m.owner},{"kind",m.kind},
-        {"channel_id",m.channel_id},{"alias_target",m.alias_target},{"formula_count",m.formula_count},{"offsets",m.offsets.size()},
+        {"channel_id",m.channel_id},{"channel_name",m.channel_name},{"alias_target",m.alias_target},{"formula_count",m.formula_count},{"offsets",m.offsets.size()},
         {"source_vertex_count",m.source_vertex_count},{"source_offset_count",m.source_offset_count},
         {"unsupported",m.unsupported},{"visible",m.visible},{"auto_follow",m.auto_follow},{"initial",m.initial},{"min",m.minimum},{"max",m.maximum},
         {"dependency_count",dependencies[i].size()},{"node_dependencies",nodes},{"parameter_dependencies",parameters},{"unresolved_dependencies",unresolved}});

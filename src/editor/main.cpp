@@ -1,6 +1,7 @@
 #include "editor/renderer.h"
 #include "editor/project.h"
 #include "editor/parameters.h"
+#include "daz/pose.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
 #include <QApplication>
@@ -31,6 +32,7 @@
 #include <QFileInfo>
 #include <QComboBox>
 #include <QDir>
+#include <QMessageBox>
 #include <fstream>
 
 namespace {
@@ -46,6 +48,7 @@ class Editor final:public QMainWindow {
   QTreeView *explorer_=nullptr;
   QFileSystemModel *files_=nullptr;
   QLabel *selection_=nullptr;
+  QLabel *pose_status_=nullptr;
   QAction *open_=nullptr;
   QAction *project_action_=nullptr;
   QDoubleSpinBox *transform_[9]{};
@@ -57,17 +60,51 @@ class Editor final:public QMainWindow {
   std::vector<std::filesystem::path> roots_;
   std::filesystem::path output_;
   std::filesystem::path reload_file_;
+  std::filesystem::path pose_file_;
+  bool pose_test_=false,frame_pending_=false;
   bool loading_=false,self_test_=false;
   QString load_error_;
   int selected_=-1,test_stage_=0;
   size_t test_morph_=0;
   uint64_t generation_=0,test_evaluations_=0;
+  uint64_t test_skin_evaluations_=0;
+  nlohmann::json pose_report_;
   double test_initial_displacement_=0;
   qint64 test_started_=QDateTime::currentMSecsSinceEpoch();
   QDockWidget *dock(const QString &title,QWidget *widget,Qt::DockWidgetArea area) {
     auto *d=new QDockWidget(title,this);d->setObjectName(title);d->setWidget(widget);addDockWidget(area,d);return d;
   }
   void send() {++snapshot_.revision;renderer_->edit(snapshot_);}
+  int selected_skin() const {
+    if(selected_<0||!document_) return -1;const auto instance=document_->catalog.targets[size_t(selected_)].instance;
+    for(size_t i=0;i<document_->skeletons.skins.size();++i) if(document_->skeletons.skins[i].instance==instance) return int(i);
+    return -1;
+  }
+  bool apply_pose_file(const std::filesystem::path &file) {
+    try {
+      if(loading_) throw std::runtime_error("请等待场景加载完成后应用姿势");
+      const auto index=selected_skin();if(index<0) throw std::runtime_error("请先选中一个带骨骼蒙皮的角色");
+      const auto &skin=document_->skeletons.skins[size_t(index)];
+      auto applied=daz::apply_pose(daz::read_pose(file),skin,snapshot_.poses[size_t(index)],document_->catalog.targets[size_t(selected_)],snapshot_.values[size_t(selected_)]);
+      snapshot_.poses[size_t(index)]=std::move(applied.joints);snapshot_.values[size_t(selected_)]=std::move(applied.properties);pose_report_=applied.report;
+      std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
+      const auto skipped=pose_report_["unapplied"].size();
+      pose_status_->setText(QStringLiteral("姿势：%1\n已应用 %2 个骨骼通道；%3 个参数未应用。%4").arg(QString::fromStdWString(file.stem().wstring())).arg(pose_report_["applied_bone_channels"].get<int>()).arg(skipped).arg(skipped?QStringLiteral("点击下方查看详情。") : QString()));
+      pose_status_->setToolTip(QString::fromStdWString(file.wstring()));select(selected_);send();frame_pending_=true;return true;
+    } catch(const std::exception &e) {
+      if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法应用姿势"),text(e.what()));return false;
+    }
+  }
+  void reset_pose() {
+    if(loading_) return;const auto index=selected_skin();if(index<0) return;
+    snapshot_.poses[size_t(index)]=document_->skeletons.skins[size_t(index)].initial;send();frame_pending_=true;
+    pose_status_->setText(QStringLiteral("已恢复载入时的骨骼姿势；Morph 保持当前值。"));pose_report_=nullptr;
+  }
+  void open_asset(const std::filesystem::path &file) {
+    try {const auto data=daz::read_document_file(file);
+      if(data.value("asset_info",nlohmann::json::object()).value("type","")=="preset_pose") apply_pose_file(file);else load(file);
+    } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
+  }
   void update_libraries() {
     QSignalBlocker block(libraries_);libraries_->clear();roots_.clear();
     for(const auto &root:project_.content_roots) {roots_.push_back(file_path(root));libraries_->addItem(root);}
@@ -102,6 +139,7 @@ class Editor final:public QMainWindow {
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};
     const auto &target=document_->catalog.targets[size_t(selected_)];
     for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
+    const auto skin=selected_skin();if(skin>=0) {snapshot_.poses[size_t(skin)]=document_->skeletons.skins[size_t(skin)].initial;frame_pending_=true;pose_status_->setText(QStringLiteral("已重置选中角色的姿势与形态。"));pose_report_=nullptr;}
     select(selected_);send();
   }
   void finish_test(bool pass,const std::string &error={}) {
@@ -109,9 +147,11 @@ class Editor final:public QMainWindow {
     nlohmann::json report={{"status",pass?"PASS":"FAIL"},{"error",error},{"stage",test_stage_},
       {"mesh_creations",status.adapter.meshes},{"geometry_updates",status.adapter.geometry_updates},{"instance_updates",status.adapter.instance_updates},
       {"morph_evaluations",status.evaluation.morph_evaluations},{"max_displacement_m",status.max_displacement},
+      {"skin_evaluations",status.skinning.evaluations},{"skin_vertices",status.skinning.vertices},
       {"qt_version",QT_VERSION_STR},{"monitor",screen()->name().toStdString()},{"window",{x(),y(),width(),height()}},
       {"scope","selected-object-morph-transform-reset-camera-no-morph-evaluation"}};
     if(!reload_file_.empty()) report["scope"]="background-scene-replacement-generation-isolation";
+    if(pose_test_) report["scope"]="pose-apply-reset-camera-no-skin-evaluation";
     report["project_file"]=project_.file.toUtf8().toStdString();report["content_roots"]=nlohmann::json::array();
     for(const auto &root:project_.content_roots) report["content_roots"].push_back(root.toUtf8().toStdString());
     report["named_parameters"]=nlohmann::json::array();
@@ -124,10 +164,26 @@ class Editor final:public QMainWindow {
     const auto state=renderer_->status();
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
-    else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 变换更新 %4").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.adapter.instance_updates));
+    else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations));
+    if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
     if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000) {finish_test(false,"等待编辑器验证超过 180 秒");return;}
     if(!document_ || state.generation!=document_->generation || state.presented_revision!=snapshot_.revision || state.presented_epoch!=state.requested_epoch || state.frames==0 || state.samples<8) return;
+    if(pose_test_) {
+      if(test_stage_==0) {test_initial_displacement_=state.max_displacement;test_stage_=1;apply_pose_file(pose_file_);}
+      else if(test_stage_==1) {
+        if(state.max_displacement<.1||state.skinning.evaluations<2||state.adapter.geometry_updates<1) {finish_test(false,"姿势没有更新蒙皮网格");return;}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"editor-pose.png").wstring()));
+        test_stage_=2;reset_pose();
+      } else if(test_stage_==2) {
+        if(state.max_displacement!=test_initial_displacement_) {finish_test(false,"恢复姿势出现顶点漂移");return;}
+        test_evaluations_=state.evaluation.morph_evaluations;test_skin_evaluations_=state.skinning.evaluations;test_stage_=3;renderer_->orbit(20,0);
+      } else if(test_stage_==3) {
+        if(state.skinning.evaluations!=test_skin_evaluations_||state.evaluation.morph_evaluations!=test_evaluations_) {finish_test(false,"相机更新触发了变形求值");return;}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"editor-pose-reset.png").wstring()));finish_test(true);
+      }
+      return;
+    }
     if(test_stage_==0) {
       if(!reload_file_.empty()) {test_stage_=5;load(reload_file_);return;}
       const auto &target=document_->catalog.targets[0];
@@ -160,7 +216,7 @@ class Editor final:public QMainWindow {
     }
   }
 public:
-  Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),self_test_(self_test) {
+  Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),self_test_(self_test||pose_test) {
     setWindowTitle(QStringLiteral("DazFastViewer · 场景与形态编辑器"));setAttribute(Qt::WA_ShowWithoutActivating);
     setDockOptions(AnimatedDocks|AllowNestedDocks|AllowTabbedDocks);
     auto *central=new QWidget;auto *layout=new QVBoxLayout(central);layout->setContentsMargins(4,4,4,4);
@@ -191,17 +247,29 @@ public:
       });
     }
     properties->addLayout(form);
+    pose_status_=new QLabel(QStringLiteral("选中角色后，可从“姿势”菜单加载姿势 DUF。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
+    auto *pose_details=new QPushButton(QStringLiteral("姿势应用详情"));properties->addWidget(pose_details);
+    connect(pose_details,&QPushButton::clicked,this,[this] {
+      QString details=QStringLiteral("尚未应用姿势。");
+      if(!pose_report_.is_null()) {details=QStringLiteral("未应用的非零控制器或未知骨骼通道：\n");for(const auto &c:pose_report_["unapplied"]) details+=text(c.value("node","")+c.value("modifier","")+" · "+c.value("property","")+" = "+std::to_string(c.at("value").get<float>())+"\n"+c.value("reason","")+"\n");
+        if(pose_report_["unapplied"].empty()) details=QStringLiteral("姿势文件中所有非零参数均已应用。");}
+      QMessageBox::information(this,QStringLiteral("姿势应用详情"),details);
+    });
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     parameters_=new ParameterPanel;parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};properties->addWidget(parameters_,1);
     dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);
     auto *file_menu=menuBar()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("打开 DUF…"));open_->setShortcut(QKeySequence::Open);
-    connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色或场景"),{},QStringLiteral("DAZ 场景 (*.duf)"));if(!file.isEmpty()) load(file_path(file));});
+    connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 文件 (*.duf)"));if(!file.isEmpty()) open_asset(file_path(file));});
     auto *project_menu=menuBar()->addMenu(QStringLiteral("项目"));project_action_=project_menu->addAction(QStringLiteral("项目设置…"));
     connect(project_action_,&QAction::triggered,this,[this] {project_settings();});
     connect(file_menu->addAction(QStringLiteral("退出")),&QAction::triggered,this,&QWidget::close);
     auto *edit=menuBar()->addMenu(QStringLiteral("编辑"));connect(edit->addAction(QStringLiteral("重置选中对象")),&QAction::triggered,this,[this] {reset_selected();});
+    auto *pose_menu=menuBar()->addMenu(QStringLiteral("姿势"));
+    connect(pose_menu->addAction(QStringLiteral("应用姿势 DUF…")),&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("为选中角色应用姿势"),{},QStringLiteral("DAZ 姿势 (*.duf)"));if(!file.isEmpty()) apply_pose_file(file_path(file));});
+    connect(pose_menu->addAction(QStringLiteral("恢复载入姿势")),&QAction::triggered,this,[this] {reset_pose();});
     auto *view=menuBar()->addMenu(QStringLiteral("视图"));for(auto *d:findChildren<QDockWidget *>()) view->addAction(d->toggleViewAction());
-    connect(explorer_,&QTreeView::doubleClicked,this,[this](const QModelIndex &index) {const auto file=files_->filePath(index);if(QFileInfo(file).suffix().compare("duf",Qt::CaseInsensitive)==0) load(file_path(file));});
+    connect(view->addAction(QStringLiteral("框选当前对象")),&QAction::triggered,this,[this] {frame_pending_=true;});
+    connect(explorer_,&QTreeView::doubleClicked,this,[this](const QModelIndex &index) {const auto file=files_->filePath(index);if(QFileInfo(file).suffix().compare("duf",Qt::CaseInsensitive)==0) open_asset(file_path(file));});
     connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item) {select(item?item->data(0,Qt::UserRole).toInt():-1);});
     QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens()) if(screen!=QGuiApplication::primaryScreen()) {secondary=screen;break;}
     if(!secondary) throw std::runtime_error("缺少第二屏，编辑器不会在主屏启动");
@@ -221,11 +289,22 @@ public:
         auto document=std::make_shared<Document>();document->generation=generation;document->loaded=daz::load(file,{roots,false});
         std::vector<std::filesystem::path> resolved;for(const auto &p:document->loaded.report["content_roots"]) resolved.push_back(std::filesystem::u8path(p.get<std::string>()));
         document->catalog=daz::discover_morphs(document->loaded,resolved);
+        document->skeletons=daz::load_skeletons(document->loaded);
         std::ofstream(output_/"asset-report.json")<<document->loaded.report.dump(2);
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
+        std::ofstream(output_/"skeleton-report.json")<<document->skeletons.report.dump(2);
         QMetaObject::invokeMethod(this,[this,document,preserve] {
           const auto old=document_;const auto previous=snapshot_;parameters_->bind(nullptr,nullptr);
           document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.generation=document->generation;snapshot_.revision=1;
+          frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("选中角色后，可从“姿势”菜单加载姿势 DUF。"));
+          for(const auto &skin:document_->skeletons.skins) {
+            auto pose=skin.initial;
+            if(preserve&&old) for(size_t s=0;s<old->skeletons.skins.size();++s) if(old->skeletons.skins[s].id==skin.id) {
+              std::map<std::string,runtime::JointPose> by_id;for(size_t j=0;j<old->skeletons.skins[s].joints.size();++j) by_id[old->skeletons.skins[s].joints[j].id]=previous.poses[s][j];
+              for(size_t j=0;j<skin.joints.size();++j) if(by_id.contains(skin.joints[j].id)) pose[j]=by_id.at(skin.joints[j].id);
+            }
+            snapshot_.poses.push_back(std::move(pose));
+          }
           for(const auto &target:document_->catalog.targets) {
             runtime::Properties values;for(const auto &m:target.morphs) values.morphs.push_back(m.unsupported.empty()?m.initial:0);
             if(preserve && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
@@ -236,8 +315,13 @@ public:
             snapshot_.values.push_back(std::move(values));
           }
           {QSignalBlocker block(hierarchy_);hierarchy_->clear();
-            for(size_t i=0;i<document_->catalog.targets.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{text(document_->catalog.targets[i].label)});item->setData(0,Qt::UserRole,int(i));item->setToolTip(0,text(document_->catalog.targets[i].id));}}
+            for(size_t i=0;i<document_->catalog.targets.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{text(document_->catalog.targets[i].label)});item->setData(0,Qt::UserRole,int(i));item->setToolTip(0,text(document_->catalog.targets[i].id));
+              for(const auto &skin:document_->skeletons.skins) if(skin.instance==document_->catalog.targets[i].instance) {
+                std::vector<QTreeWidgetItem *> bones;for(const auto &joint:skin.joints) {auto *bone=joint.parent<0?item:new QTreeWidgetItem(bones[size_t(joint.parent)],{text(joint.label)});bone->setData(0,Qt::UserRole,int(i));bone->setToolTip(0,text(joint.name+" · "+joint.rotation_order));bones.push_back(bone);}
+              }
+            }}
           renderer_->set_document(document_,snapshot_);select(-1);hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
+          if(!pose_file_.empty()&&!pose_test_) {const auto file=pose_file_;pose_file_.clear();apply_pose_file(file);}
         },Qt::QueuedConnection);
       } catch(const std::exception &e) {
         const std::string error=e.what();QMetaObject::invokeMethod(this,[this,error] {loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);load_error_=QStringLiteral("加载失败：")+text(error);statusBar()->showMessage(load_error_);if(self_test_) finish_test(false,error);},Qt::QueuedConnection);
@@ -253,6 +337,8 @@ int main(int argc,char **argv) {
   parser.addOption({"content-root",QStringLiteral("内容库目录，可重复"),"directory"});parser.addOption({"output",QStringLiteral("输出目录"),"directory"});
   parser.addOption({"project",QStringLiteral("项目设置文件"),"file"});
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
+  parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
+  parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"reload-test",QStringLiteral("验证后台场景替换后退出"),"file"});parser.process(app);
   const auto output=parser.isSet("output")?file_path(parser.value("output")):std::filesystem::path("artifacts")/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
   std::filesystem::create_directories(output);
@@ -261,7 +347,8 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{});
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+      parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"));
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

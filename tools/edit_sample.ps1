@@ -1,6 +1,7 @@
 ﻿param(
     [ValidateSet('Character','Genesis8','Prop')][string]$Sample='Character',
     [string]$File='',
+    [string]$Pose='',
     [string[]]$ContentRoot=@()
 )
 $ErrorActionPreference='Stop'
@@ -16,6 +17,7 @@ if (-not $File) {
 $editor=Join-Path $projectRoot 'out\DazFastViewer.exe'
 if (-not (Test-Path -LiteralPath $editor)) {throw '缺少编辑器，请先运行 tools/build.ps1'}
 $editorArguments=@('--file',$File,'--project',(Join-Path $projectRoot 'DazFastViewer.project.json'))
+if ($Pose) {$editorArguments+=@('--pose',$Pose)}
 foreach ($root in $ContentRoot) {$editorArguments+=@('--content-root',$root)}
 Push-Location $projectRoot
 try { & $editor @editorArguments } finally {Pop-Location}
