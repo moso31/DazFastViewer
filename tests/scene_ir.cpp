@@ -86,6 +86,47 @@ int main() {
     rejected=false;try {dfv::ir::validate(camera);} catch(const std::exception &) {rejected=true;}require(rejected,"非有限相机变换没有拒绝");
     auto material=loaded.scene.materials[0];material.roughness=std::numeric_limits<float>::infinity();
     rejected=false;try {dfv::ir::validate(material,0);} catch(const std::exception &) {rejected=true;}require(rejected,"非有限材质参数没有拒绝");
+    auto fidelity=duf;
+    fidelity["scene"]["nodes"][1]["conform_target"]="#one";
+    fidelity["scene"]["nodes"][1]["extra"]=Json::parse(R"([{"type":"studio_node_channels","channels":[{"channel":{"id":"Visible","current_value":false}}]}])");
+
+    fidelity["modifier_library"]=Json::parse(R"([{"id":"smooth","extra":[{"type":"studio/modifier/smoothing"},{"type":"studio_modifier_channels","channels":[{"channel":{"id":"Enable Smoothing","value":true}},{"channel":{"id":"Collision Iterations","value":5}},{"channel":{"id":"Collision Item","node":"#one"}}]}]}])");
+    fidelity["scene"]["modifiers"]=Json::parse(R"([{"id":"smooth-instance","url":"#smooth","parent":"#two","extra":[{"type":"studio_modifier_channels","channels":[{"channel":{"id":"Collision Iterations","current_value":3}}]}]}])");
+    write(path,fidelity);auto fitted=dfv::daz::load(path);
+    require(fitted.objects[1].smoothing.enabled&&fitted.objects[1].smoothing.collision_target=="#one"&&fitted.objects[1].smoothing.collision_iterations==3,"碰撞修改器默认值或场景覆盖未保留");
+
+    require(!fitted.scene.instances[1].visible,"保存的 Visible=false 被丢失");
+    require(std::abs(fitted.scene.instances[1].transform.value[3]-2)<1e-6f,"根层级 Fit To 未继承目标变换");
+    auto strands=asset;strands["geometry_library"][0]["polylist"]={{"count",0},{"values",Json::array()}};
+    strands["geometry_library"][0]["polyline_list"]={{"count",1},{"values",{{0,0,0,1,2,3}}}};
+    write(asset_path,strands);auto hair=dfv::daz::load(path);
+    require(hair.scene.meshes[0].curves.size()==1&&hair.scene.meshes[0].triangles.empty(),"纯发丝曲线被静默丢弃");
+    require(hair.scene.meshes[0].curves[0].vertices==std::vector<uint32_t>({0,1,2,3}),"发丝源顶点编号没有保留");
+    auto bad_curve=hair.scene;bad_curve.meshes[0].curves[0].vertices[0]=99;
+    rejected=false;try {bad_curve.validate();} catch(...) {rejected=true;}require(rejected,"发丝越界索引没有拒绝");
+    write(asset_path,asset);
+    fidelity["material_library"][0]["diffuse"]["channel"]["value"]={.5,.5,.5};
+    fidelity["material_library"][0]["extra"]=Json::parse(R"([{"channels":[
+      {"channel":{"id":"Thin Walled","value":true}},
+      {"channel":{"id":"Refraction Weight","value":1}},
+      {"channel":{"id":"Refraction Color","value":[1,1,1]}},
+      {"channel":{"id":"Refraction Roughness","value":0}},
+      {"channel":{"id":"Share Glossy Inputs","value":false}}
+    ]}])");
+    write(path,fidelity);const auto glass=dfv::daz::load(path).scene.materials[0];
+    require(glass.thin_walled&&glass.transmission==1&&glass.base_color.x==1&&glass.roughness==0,"薄壁眼部材质被当成深色实体玻璃");
+    fidelity["material_library"][0]["extra"][0]["channels"]=Json::parse(R"([
+      {"channel":{"id":"Thin Walled","value":false}},
+      {"channel":{"id":"Translucency Weight","value":0.6,"image_file":"height.png"}},
+      {"channel":{"id":"Dual Lobe Specular Weight","value":0.4}},
+      {"channel":{"id":"Top Coat Weight","value":0.2}},
+      {"channel":{"id":"Scattering Measurement Distance","value":0.02}},
+      {"channel":{"id":"Transmitted Measurement Distance","value":0.125}}
+    ])");
+    write(path,fidelity);const auto skin=dfv::daz::load(path).scene.materials[0];
+    require(skin.subsurface==.6f&&skin.translucency_texture>=0&&skin.dual_weight==.4f&&skin.coat==.2f,"皮肤散射 / 双瓣高光 / 涂层参数没有读取");
+    require(skin.base_color.x>.21f&&skin.base_color.x<.22f&&skin.subsurface_radius.x<.02f,"颜色没有线性化或散射距离单位错误");
+    write(path,duf);
     asset["geometry_library"][0]["vertices"]["count"]=5;write(asset_path,asset);
     rejected=false;try {(void)dfv::daz::load(path);} catch(const std::exception &) {rejected=true;}require(rejected,"无效 DSON count 没有拒绝");
     std::cout<<"IR references / UTF-8 URI / gzip / material binding / UV seams / transforms: PASS\n";

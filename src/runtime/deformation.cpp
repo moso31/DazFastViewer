@@ -41,11 +41,13 @@ void set_parameter(const Target &target,Properties &values,size_t index,float va
   values.morphs.at(p.alias_morph>=0?size_t(p.alias_morph):index)=value;sync_aliases(target,values);
 }
 DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs)
-  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs) {
+  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs),collision_(scene,targets) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("角色和公式图数量不一致");
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
   for(const auto &target:targets) {Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);sync_aliases(target,p);previous_.push_back(p);}
   for(const auto &skin:skins) previous_poses_.push_back(skin.initial);
+  // 没有父对象的穿戴物仍跟随 Fit To 目标的交互变换；不改写场景层级。
+  for(size_t t:conform_.order()) if(targets[t].parent.empty()) if(const auto *link=conform_.link(t)) morph_.bind_parent(t,link->source);
   for(size_t s=0;s<skins.size();++s) {
     const auto &skin=skins[s];size_t parent=0;while(parent<targets.size()&&targets[parent].instance!=skin.instance) ++parent;
     if(parent==targets.size()) continue;
@@ -86,6 +88,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
   for(size_t t=0;t<weights.size();++t) {
     for(size_t m=0;m<weights[t].size();++m) if(targets_[t].morphs[m].evaluable||targets_[t].morphs[m].unsupported.empty()) morph_.set_morph(t,m,weights[t][m]);
     morph_.set_transform(t,values[t].transform);
+    morph_.set_visible(t,values[t].visible);
   }
   for(size_t s=0;s<resolved.size();++s) skin_.set_pose(s,resolved[s]);
   std::vector<std::vector<ir::Transform>> joints(skins_.size());
@@ -94,7 +97,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*a.inverse_bind);
   }
   conform_.project(weights,morph_);
-  effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;return skin_.evaluate(morph_.evaluate());
+  effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;return collision_.evaluate(skin_.evaluate(morph_.evaluate()));
 }
 FormulaStats DeformationRuntime::formula_stats() const {FormulaStats out;for(const auto &f:formulas_) {out.expressions+=f->stats().expressions;out.channels+=f->stats().channels;}return out;}
 }

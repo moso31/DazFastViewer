@@ -148,7 +148,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
   scene.integrator->set_seed(1337);
   scene.integrator->set_max_bounce(8);scene.integrator->set_max_diffuse_bounce(4);
   scene.integrator->set_max_glossy_bounce(4);scene.integrator->set_max_transmission_bounce(8);
-  scene.integrator->set_transparent_max_bounce(8);
+  scene.integrator->set_transparent_max_bounce(32);
   scene.integrator->set_use_denoise(false);scene.integrator->set_use_adaptive_sampling(false);
   const auto start=now();
   CameraState initial=preview_camera(o,asset_bounds);

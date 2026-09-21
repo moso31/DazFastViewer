@@ -33,7 +33,7 @@ int PickingScene::build(int begin,int end) {
 void PickingScene::update(const ir::Scene &scene,const std::vector<uint8_t> &pickable) {
   if(!pickable.empty()&&pickable.size()!=scene.instances.size()) throw std::runtime_error("射线对象掩码数量不一致");
   faces_.clear();branches_.clear();
-  for(size_t i=0;i<scene.instances.size();++i) {if(!pickable.empty()&&!pickable[i]) continue;const auto &instance=scene.instances[i];const auto &mesh=scene.meshes[instance.mesh];
+  for(size_t i=0;i<scene.instances.size();++i) {if(!scene.instances[i].visible||(!pickable.empty()&&!pickable[i])) continue;const auto &instance=scene.instances[i];const auto &mesh=scene.meshes[instance.mesh];
     for(size_t t=0;t<mesh.triangles.size();++t) {const auto &v=mesh.triangles[t].vertices;faces_.push_back({instance.transform.point(mesh.positions[v[0]]),instance.transform.point(mesh.positions[v[1]]),instance.transform.point(mesh.positions[v[2]]),int(i),int(t)});}}
   if(!faces_.empty()) build(0,int(faces_.size()));
 }

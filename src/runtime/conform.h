@@ -7,6 +7,7 @@ namespace dfv::runtime {
 struct SurfaceBinding {
   std::array<uint32_t,3> vertices{};ir::Vec3 barycentric;
   ir::Vec3 edge1,edge2,normal,offset_coordinates;
+  uint32_t polygon=0;
 };
 struct ConformLink {
   size_t follower=0,source=0;
@@ -39,4 +40,24 @@ public:
 };
 // 保留穿戴物的局部编辑与额外骨骼，跟随骨骼使用角色最终 ERC 姿势。
 std::vector<JointPose> conform_pose(const ConformLink &link,const std::vector<Skin> &skins,const std::vector<std::vector<JointPose>> &resolved,const std::vector<JointPose> &input);
+struct CollisionStats {uint64_t evaluations=0,corrected_vertices=0;};
+// 每次从未碰撞的蒙皮输出求值，不将上次修正反馈到 Morph 或蒙皮。
+class CollisionRuntime {
+  struct Binding {
+    uint32_t follower=0,source=0;
+    ir::MeshSmoothing settings;
+    std::vector<uint32_t> grafts;
+    std::vector<ir::Vec3> input;
+    std::vector<std::vector<uint32_t>> neighbors;
+    ir::Transform relative;
+    bool initialized=false;
+  };
+  ir::Scene &scene_;
+  std::vector<Binding> bindings_;
+  CollisionStats stats_;
+public:
+  CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets);
+  ir::Delta evaluate(ir::Delta delta);
+  const auto &stats() const {return stats_;}
+};
 }

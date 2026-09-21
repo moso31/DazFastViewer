@@ -93,7 +93,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       instance.mesh=uint32_t(loaded.scene.meshes.size());loaded.scene.meshes.push_back(std::move(copy));
     }
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
-    runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;
+    runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;target.smoothing=object.smoothing;
     const auto target_key=key(object.geometry_file)+"#"+object.geometry_id;
     auto apply_override=[&](runtime::Morph &m) {
       for(const auto &owner:{std::string{},"#"+object.id,"#"+object.geometry_instance_id}) if(auto it=overrides.find({owner,m.id});it!=overrides.end())
@@ -164,7 +164,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     std::vector<std::set<std::string>> dependencies;
     std::map<std::string,std::string> declared_assets;
     for(size_t file_index=0;file_index<queue.size();++file_index) {
-      if(progress&&file_index%250==0) progress(object.label+" · 参数资源 "+std::to_string(file_index)+" / "+std::to_string(queue.size()));
+      if(progress&&file_index%(mesh.curves.empty()?250:10)==0) progress(object.label+" · 参数资源 "+std::to_string(file_index)+" / "+std::to_string(queue.size()));
       const auto path=queue[file_index];
       try {
         const auto doc=read_document_file(path);out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+1;

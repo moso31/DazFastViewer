@@ -8,11 +8,11 @@ void HoverOverlay::update(const ir::Scene &scene,const std::vector<runtime::Join
     const auto id=glGenLists(1);lists_.push_back(id);glNewList(id,GL_COMPILE);glBegin(GL_TRIANGLES);
     const auto &mesh=scene.meshes[instance.mesh];
     auto triangle=[&](const ir::Triangle &face) {for(auto v:face.vertices) {const auto p=instance.transform.point(mesh.positions[v]);glVertex3f(p.x,p.y,p.z);}};
-    for(const auto &face:mesh.triangles) triangle(face);
+    if(instance.visible) for(const auto &face:mesh.triangles) triangle(face);
     glEnd();glEndList();
     triangle_counts_.push_back(mesh.triangles.size());parts_.emplace_back();
     std::map<int,std::vector<size_t>> by_joint;
-    if(i<regions.size()) for(size_t t=0;t<regions[i].detail.size();++t) {
+    if(instance.visible&&i<regions.size()) for(size_t t=0;t<regions[i].detail.size();++t) {
       const auto &region=regions[i];const int detail=region.detail[t];if(detail>=0) by_joint[detail].push_back(t);
       if(region.head>=0&&region.body[t]==region.head&&detail!=region.head) by_joint[region.head].push_back(t);
     }

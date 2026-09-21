@@ -26,11 +26,12 @@ struct Target {
   uint32_t instance=0;
   std::vector<Morph> morphs;
   std::string conform_target;
+  ir::MeshSmoothing smoothing;
 };
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
 };
-struct Properties {std::vector<float> morphs;TransformValues transform;};
+struct Properties {std::vector<float> morphs;TransformValues transform;bool visible=true;};
 void validate_transform(const TransformValues &value);
 ir::Transform make_transform(const TransformValues &value);
 struct EvaluationStats {uint64_t morph_evaluations=0,offsets_visited=0,transform_evaluations=0;};
@@ -52,6 +53,7 @@ public:
   MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets);
   bool set_morph(size_t target,size_t morph,float value);
   bool set_transform(size_t target,const TransformValues &value);
+  void set_visible(size_t target,bool visible);
   void bind_parent(size_t target,size_t parent);
   void set_attachment(size_t target,const ir::Transform &delta);
   bool set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets);

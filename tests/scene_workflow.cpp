@@ -77,6 +77,7 @@ static void unit() {
   ir::Scene scene;ir::Mesh mesh;mesh.positions={{-1,0,-1},{1,0,-1},{0,0,1}};ir::Triangle triangle;triangle.vertices={0,1,2};mesh.triangles={triangle};mesh.material_slots={"Skin"};mesh.polygon_groups={"head"};scene.meshes={mesh};scene.materials.resize(1);
   ir::Instance a;a.materials={0};scene.instances={a,a};scene.instances[1].transform=ir::Transform::translate({0,1,0});
   runtime::PickingScene picking;picking.update(scene);require(picking.ray({0,-2,0},{0,1,0}).instance==0,"射线未选最近对象");require(picking.ray({4,-2,0},{0,1,0}).instance==-1,"射线空白误命中");
+  scene.instances[0].visible=false;picking.update(scene);require(picking.ray({0,-2,0},{0,1,0}).instance==1,"隐藏对象仍遮挡视口选取");scene.instances[0].visible=true;
   scene.instances[0].transform=ir::Transform::translate({4,0,0});picking.update(scene);require(picking.ray({0,-2,0},{0,1,0}).instance==1,"变换后命中未更新");
   runtime::Skin skin;runtime::Joint joint;joint.id="head";skin.joints={joint};require(runtime::hit_joint(mesh,0,skin)==0,"多边形组未映射到头部");
   auto parts_mesh=mesh;parts_mesh.polygon_groups.push_back("leftHandAlias");auto hand_face=triangle;hand_face.polygon_group=1;auto weighted_face=triangle;weighted_face.polygon_group=99;parts_mesh.triangles={triangle,hand_face,weighted_face};
@@ -165,6 +166,39 @@ int wmain(int argc,wchar_t **argv) {
     if(argc==1) {unit();return 0;}
     if(argc==4&&std::wstring(argv[1])==L"--selection") {actual_selection(argv[2],argv[3]);return 0;}
     std::vector<std::filesystem::path> roots={L"H:/G1",L"H:/G3",L"C:/Users/Public/Documents/My DAZ 3D Library",L"C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"};
+    if(argc==4&&std::wstring(argv[1])==L"--fidelity") {
+      using J=nlohmann::json;editor::Document doc;doc.loaded=daz::load(argv[2],{roots,false});
+      doc.catalog=daz::discover_morphs(doc.loaded,roots,[](const auto &m) {std::cout<<m<<std::endl;});
+      doc.skeletons=daz::load_skeletons(doc.loaded);doc.formulas=daz::enable_formulas(doc.catalog,doc.skeletons);
+      auto snapshot=editor::initial_snapshot(doc);auto scene=doc.loaded.scene;
+      runtime::DeformationRuntime runtime(scene,doc.catalog.targets,doc.skeletons.skins,doc.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
+      auto target=[&](const std::string &label) {for(size_t t=0;t<doc.catalog.targets.size();++t) if(doc.catalog.targets[t].label==label) return t;throw std::runtime_error("测试对象缺失："+label);};
+      const auto a=target("A"),b=target("B"),hair=target("FE Low Ponytail Base Hair"),shoe=target("RNKids Blooms Slippers"),hidden=target("HYLongHair");
+      auto instance=[&](size_t t)->ir::Instance & {return scene.instances.at(doc.catalog.targets.at(t).instance);};
+      require(!instance(hidden).visible,"真实隐藏头发仍可见");
+      const auto &curves=scene.meshes.at(instance(hair).mesh).curves;require(curves.size()==35638,"真实发丝数量不一致");
+      const auto shoe_bind=ir::inverse(instance(a).transform)*instance(shoe).transform;
+      require(std::abs(shoe_bind.value[3])<1e-5f&&std::abs(shoe_bind.value[7])<1e-5f&&std::abs(shoe_bind.value[11]-.01230652f)<1e-5f,"拖鞋没有位于角色绑定空间");
+      J report={{"status","PASS"},{"curves",curves.size()},{"objects",J::array()},{"materials",J::array()}};
+      for(size_t t=0;t<doc.catalog.targets.size();++t) {const auto &i=instance(t);ir::Bounds bounds;for(auto p:scene.meshes[i.mesh].positions) bounds.add(i.transform.point(p));
+        report["objects"].push_back({{"label",doc.catalog.targets[t].label},{"visible",i.visible},{"bounds",{{bounds.minimum.x,bounds.minimum.y,bounds.minimum.z},{bounds.maximum.x,bounds.maximum.y,bounds.maximum.z}}}});}
+      for(const auto &m:scene.materials) if(m.hair||m.subsurface>0||m.transmission>0) report["materials"].push_back({{"id",m.id},{"hair",m.hair},{"subsurface",m.subsurface},{"thin_walled",m.thin_walled},{"transmission",m.transmission},{"radius_m",m.hair_root_radius}});
+      const auto original=snapshot;const auto shoe_initial=instance(shoe).transform;const auto b_initial=instance(b).transform;
+      snapshot.values[a].transform.translation_cm.x=10;runtime.evaluate(snapshot.values,snapshot.poses);
+      require(std::abs(instance(shoe).transform.value[3]-shoe_initial.value[3]-.1f)<1e-5f&&instance(b).transform.value==b_initial.value,"拖鞋未跟随 A，或影响 B");
+      snapshot=original;runtime.evaluate(snapshot.values,snapshot.poses);require(instance(shoe).transform.value==shoe_initial.value,"拖鞋恢复存在漂移");
+      snapshot.values[hidden].visible=true;auto visible=runtime.evaluate(snapshot.values,snapshot.poses);require(instance(hidden).visible&&!visible.visibility.empty()&&visible.meshes.empty(),"真实隐藏物体不能增量显示");
+      snapshot=original;runtime.evaluate(snapshot.values,snapshot.poses);
+      const auto hair_before=scene.meshes.at(instance(hair).mesh).positions;const auto b_before=scene.meshes.at(instance(b).mesh).positions;
+      const int sk=doc.formulas.graphs[a].skin;require(sk>=0,"A 没有骨架");const auto &skin=doc.skeletons.skins[size_t(sk)];
+      size_t head=0;while(head<skin.joints.size()&&skin.joints[head].name!="head"&&skin.joints[head].id!="head") ++head;require(head<skin.joints.size(),"A 没有头骨");
+      snapshot.poses[size_t(sk)][head].rotation_degrees.y+=10;runtime.evaluate(snapshot.values,snapshot.poses);
+      double movement=0;const auto &after=scene.meshes.at(instance(hair).mesh).positions;for(size_t v=0;v<after.size();++v) movement=std::max(movement,double(std::abs(after[v].x-hair_before[v].x)+std::abs(after[v].y-hair_before[v].y)+std::abs(after[v].z-hair_before[v].z)));
+      require(movement>.001,"发丝没有随头骨变形");report["hair_pose_displacement_l1_m"]=movement;
+      const auto &other=scene.meshes.at(instance(b).mesh).positions;for(size_t v=0;v<other.size();++v) require(other[v].x==b_before[v].x&&other[v].y==b_before[v].y&&other[v].z==b_before[v].z,"A 发丝测试影响 B");
+      snapshot=original;runtime.evaluate(snapshot.values,snapshot.poses);const auto &reset=scene.meshes.at(instance(hair).mesh).positions;for(size_t v=0;v<reset.size();++v) require(reset[v].x==hair_before[v].x&&reset[v].y==hair_before[v].y&&reset[v].z==hair_before[v].z,"发丝姿势恢复存在漂移");
+      std::ofstream(std::filesystem::path(argv[3]))<<report.dump(2);std::cout<<"Scene fidelity: PASS"<<std::endl;return 0;
+    }
     if(argc>=4&&std::wstring(argv[1])==L"--geometry") {
       using J=nlohmann::json;editor::Document document;document.loaded=daz::load(argv[2],{roots,false});
       if(argc>4) {std::set<std::string> selected;for(int i=4;i<argc;++i) {auto u=std::filesystem::path(argv[i]).u8string();selected.emplace(u.begin(),u.end());}
@@ -173,13 +207,20 @@ int wmain(int argc,wchar_t **argv) {
       document.skeletons=daz::load_skeletons(document.loaded);document.formulas=daz::enable_formulas(document.catalog,document.skeletons);
       const auto snapshot=editor::initial_snapshot(document);auto scene=document.loaded.scene;
       runtime::DeformationRuntime runtime(scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
+      auto uncorrected=document.loaded.scene;
+      {auto targets=document.catalog.targets;for(auto &t:targets) t.smoothing.enabled=false;
+        runtime::DeformationRuntime without_collision(uncorrected,targets,document.skeletons.skins,document.formulas.graphs);without_collision.evaluate(snapshot.values,snapshot.poses);}
       auto vec=[](ir::Vec3 v) {return J::array({v.x,v.y,v.z});};
       auto vertices=[&](const std::vector<ir::Vec3> &positions,const ir::Transform &matrix) {J a=J::array();for(auto v:positions) a.push_back(vec(matrix.point(v)));return a;};
       auto pose=[&](const runtime::JointPose &p) {return J{{"translation",vec(p.translation_cm)},{"rotation",vec(p.rotation_degrees)},{"scale",vec(p.scale)},{"general_scale",p.general_scale},{"center_offset",vec(p.center_offset_cm)},{"orientation_offset",vec(p.orientation_offset_degrees)}};};
-      J output={{"input",document.loaded.report["input"]},{"units","meters_z_up"},{"objects",J::array()}};
+      require(runtime.evaluate(snapshot.values,snapshot.poses).meshes.empty(),"相同几何诊断输入产生重复更新");
+      J output={{"input",document.loaded.report["input"]},{"units","meters_z_up"},{"collision_evaluations",runtime.collision_stats().evaluations},{"collision_corrected_vertices",runtime.collision_stats().corrected_vertices},{"objects",J::array()}};
       for(size_t t=0;t<document.catalog.targets.size();++t) {
         const auto &target=document.catalog.targets[t];const auto &instance=scene.instances[target.instance];const auto &base=document.loaded.scene.meshes[document.loaded.scene.instances[target.instance].mesh];
         J item={{"id",target.id},{"label",target.label},{"transform",instance.transform.value},{"base",vertices(base.positions,{})},{"world",vertices(scene.meshes[instance.mesh].positions,instance.transform)},{"channels",J::array()},{"bones",J::array()}};
+        item["triangles"]=J::array();for(const auto &face:base.triangles) item["triangles"].push_back(face.vertices);
+        item["collision_target"]=target.smoothing.collision_target;
+        item["uncorrected_world"]=vertices(uncorrected.meshes[instance.mesh].positions,uncorrected.instances[target.instance].transform);
         auto morphed=base.positions;
         for(size_t m=0;m<target.morphs.size();++m) {const auto &morph=target.morphs[m];const auto effective=runtime.effective()[t][m];
           if(effective!=0||snapshot.values[t].morphs[m]!=0) item["channels"].push_back({{"id",morph.id},{"name",morph.channel_id},{"initial",snapshot.values[t].morphs[m]},{"effective",effective},{"error",morph.unsupported},{"offsets",morph.offsets.size()}});

@@ -2,6 +2,8 @@
 
 更新：2026-09-21。
 
+最新实际场景修复：`test.duf` 的 Visible 开关、35,638 根 StrandBasedHair、根层级 FitTo 拖鞋、头发 / 丝袜 / SSS / 薄壁眼部材质及 A 上衣碰撞已接入。10 项工程回归通过；完整材质 Golden 与任意姿势无穿插仍未通过，详见[验证报告](../Docs/scene_fidelity_execution_cn.md)。008 未开始。
+
 最新视觉修复：真实场景的 ERC 抵消值、骨骼缩放补偿及基础形态恢复后，两参考人物头部与 DAZ DBZ 约 0.0002 毫米误差；服装跟随已改善，局部差异仍最高约 24 毫米。此前场景加载 PASS 不代表视觉验收，完整服装 Golden 仍未通过。见[形变修复报告](../Docs/scene_deformation_execution_cn.md)。
 
 最新追加：模型 / 灯光删除、空场景、资源回收及复合 DUF 内容分派；真实 `3.duf` 补上刚性 Local / 冗余 scale 图兼容和内嵌几何 `source` 的 Morph / 骨架继承。见[删除与 DUF 执行报告](../Docs/scene_lifecycle_execution_cn.md)。008 未开始。

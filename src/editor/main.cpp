@@ -55,6 +55,7 @@ class Editor final:public QMainWindow {
   QTreeView *explorer_=nullptr;
   QFileSystemModel *files_=nullptr;
   QLabel *selection_=nullptr;
+  QCheckBox *visible_=nullptr;
   QLabel *pose_status_=nullptr;
   QAction *open_=nullptr;
   QAction *delete_=nullptr;
@@ -78,6 +79,12 @@ class Editor final:public QMainWindow {
   uint64_t head_test_epoch_=0;
   size_t head_test_triangles_=0;
   bool capture_test_=false;
+  bool capture_head_=false;
+  int capture_samples_=16;
+  QString visibility_label_;
+  int visibility_target_=-1;
+  bool visibility_initial_=true;
+  size_t visibility_geometry_updates_=0;
   QStringList capture_targets_;
   bool capture_front_=false;
   bool lifecycle_test_=false;
@@ -127,7 +134,7 @@ class Editor final:public QMainWindow {
     auto identify=[](QTreeWidgetItem *item,int target,int joint=-1,int light=-1) {item->setData(0,Qt::UserRole,target);item->setData(0,Qt::UserRole+1,joint);item->setData(0,Qt::UserRole+2,light);};
     std::vector<QTreeWidgetItem *> items;
     for(size_t i=0;i<document_->catalog.targets.size();++i) {
-      const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));items.push_back(item);
+      const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(0,snapshot_.values[i].visible?Qt::Checked:Qt::Unchecked);items.push_back(item);
       for(const auto &object:document_->loaded.objects) if(object.instance==target.instance) objects[object.id]=item;
       for(const auto &skin:document_->skeletons.skins) if(skin.instance==target.instance) {
         std::vector<QTreeWidgetItem *> bones;
@@ -136,6 +143,12 @@ class Editor final:public QMainWindow {
     }
     for(size_t i=0;i<items.size();++i) {const auto &parent=document_->catalog.targets[i].parent;if(parent.starts_with('#')&&objects.contains(parent.substr(1))&&objects[parent.substr(1)]!=items[i]) {hierarchy_->takeTopLevelItem(hierarchy_->indexOfTopLevelItem(items[i]));objects[parent.substr(1)]->addChild(items[i]);}}
     for(size_t i=0;i<snapshot_.lights.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{QStringLiteral("灯光 · ")+text(snapshot_.lights[i].id)});identify(item,-1,-1,int(i));}
+  }
+  void set_visible(size_t target,bool visible) {
+    if(loading_||!document_||snapshot_.values.at(target).visible==visible) return;
+    snapshot_.values[target].visible=visible;
+    {QSignalBlocker block(hierarchy_);for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==int(target)&&(*it)->data(0,Qt::UserRole+1).toInt()<0) (*it)->setCheckState(0,visible?Qt::Checked:Qt::Unchecked);}
+    if(selected_==int(target)) {QSignalBlocker block(visible_);visible_->setChecked(visible);}send();
   }
   void add_light() {
     if(loading_) return;
@@ -239,6 +252,7 @@ class Editor final:public QMainWindow {
     send();
   }
   void select(int index,int joint=-1,int light=-1) {
+    {QSignalBlocker block(visible_);visible_->setEnabled(document_&&index>=0&&joint<0&&light<0);visible_->setChecked(document_&&index>=0?snapshot_.values.at(size_t(index)).visible:false);}
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint);
@@ -272,7 +286,7 @@ class Editor final:public QMainWindow {
     if(workflow_test_) SetCursorPos(workflow_cursor_.x,workflow_cursor_.y);
     const auto status=renderer_->status();
     nlohmann::json report={{"status",pass?"PASS":"FAIL"},{"error",error},{"stage",test_stage_},
-      {"mesh_creations",status.adapter.meshes},{"geometry_updates",status.adapter.geometry_updates},{"instance_updates",status.adapter.instance_updates},
+      {"mesh_creations",status.adapter.meshes},{"curves",status.adapter.curves},{"geometry_updates",status.adapter.geometry_updates},{"instance_updates",status.adapter.instance_updates},
       {"morph_evaluations",status.evaluation.morph_evaluations},{"max_displacement_m",status.max_displacement},
       {"skin_evaluations",status.skinning.evaluations},{"skin_vertices",status.skinning.vertices},
       {"conform_bound_vertices",status.conform.bindings},{"conform_authored_morphs",status.conform.authored_morphs},{"conform_evaluations",status.conform.evaluations},
@@ -282,6 +296,7 @@ class Editor final:public QMainWindow {
     if(workflow_test_) {report["scope"]="raycast-body-part-tree-head-morph-hover-resize-layout";report["viewport"]={status.width,status.height};report["hovered_instance"]=status.hovered;report["hovered_joint"]=status.hovered_joint;report["hovered_triangles"]=status.hovered_triangles;report["selected_joint"]=selected_joint_;report["hover_checks"]=hover_checks_;}
     if(head_selection_test_) report["scope"]="figure-head-detail-and-bound-clothing-picking";
     if(capture_test_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
+    if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
     if(!reload_file_.empty()) report["scope"]="background-scene-replacement-generation-isolation";
     if(pose_test_) report["scope"]="pose-apply-reset-camera-no-skin-evaluation";
@@ -403,15 +418,34 @@ class Editor final:public QMainWindow {
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);
     if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
-    else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations));
+    else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4 · 发丝 %5").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations).arg(state.adapter.curves));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
+    if(!visibility_label_.isEmpty()) {
+      if(QDateTime::currentMSecsSinceEpoch()-test_started_>360000) {finish_test(false,"可见性界面验证超时");return;}
+      if(!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<8) return;
+      if(test_stage_==0) {
+        for(size_t t=0;t<document_->catalog.targets.size();++t) if(text(document_->catalog.targets[t].label)==visibility_label_) visibility_target_=int(t);
+        if(visibility_target_<0) {finish_test(false,"可见性测试对象缺失");return;}
+        choose(visibility_target_);visibility_initial_=snapshot_.values[size_t(visibility_target_)].visible;visibility_geometry_updates_=state.adapter.geometry_updates;
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"visible-initial.png").wstring()));
+        visible_->setChecked(!visibility_initial_);test_stage_=1;return;
+      }
+      const auto instance=document_->catalog.targets[size_t(visibility_target_)].instance;
+      const bool expected=test_stage_==1?!visibility_initial_:visibility_initial_;
+      if(state.visible.at(instance)!=expected||visible_->isChecked()!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)||state.adapter.geometry_updates!=visibility_geometry_updates_) {
+        finish_test(false,"树、属性和渲染可见性不同步，或切换触发了几何重建");return;
+      }
+      screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(test_stage_==1?"visible-toggled.png":"visible-restored.png")).wstring()));
+      if(test_stage_==1) {hierarchy_->currentItem()->setCheckState(0,visibility_initial_?Qt::Checked:Qt::Unchecked);test_stage_=2;return;}
+      finish_test(true);return;
+    }
     if(capture_test_) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"场景显示验证超时");return;}
-      if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=16) {
+      if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=capture_samples_) {
         if(test_stage_==0&&!capture_targets_.empty()) {
           ir::Bounds bounds;size_t matched=0;
-          for(size_t t=0;t<document_->catalog.targets.size();++t) if(capture_targets_.contains(text(document_->catalog.targets[t].label))) {bounds.add(state.bounds.at(t).minimum);bounds.add(state.bounds.at(t).maximum);++matched;}
+          for(size_t t=0;t<document_->catalog.targets.size();++t) if(capture_targets_.contains(text(document_->catalog.targets[t].label))) {const auto &b=capture_head_?state.head_bounds.at(t):state.bounds.at(t);if(b.empty) continue;bounds.add(b.minimum);bounds.add(b.maximum);++matched;}
           if(matched!=size_t(capture_targets_.size())) {finish_test(false,"截图目标未唯一匹配");return;}
           choose(-1);renderer_->frame(bounds);if(capture_front_) renderer_->orbit(-568.3185f,24.f);test_stage_=1;return;
         }
@@ -575,7 +609,8 @@ class Editor final:public QMainWindow {
 public:
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
-  void capture_test(QStringList targets={},bool front=false) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;}
+  void capture_test(QStringList targets={},bool front=false,bool head=false,int samples=16) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;capture_head_=head;capture_samples_=std::clamp(samples,1,64);}
+  void visibility_test(QString label) {visibility_label_=std::move(label);self_test_=true;}
   void lifecycle_test(const std::filesystem::path &first,const std::filesystem::path &second,int rounds) {if(rounds<1||rounds>100) throw std::runtime_error("生命周期验证轮数应为 1 到 100");lifecycle_rounds_=rounds;lifecycle_test_=true;self_test_=true;lifecycle_first_=first;lifecycle_second_=second;}
   void test_parameters(const QStringList &names) {if(names.empty()) return;formula_names_.clear();for(const auto &name:names) formula_names_.push_back(name.toUtf8().toStdString());}
   Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
@@ -620,6 +655,9 @@ public:
         if(pose_report_["unapplied"].empty()) details=QStringLiteral("预设中所有非零参数均已应用。");}
       QMessageBox::information(this,QStringLiteral("预设应用详情"),details);
     });
+    visible_=new QCheckBox(QStringLiteral("可见（Visible）"));visible_->setEnabled(false);properties->addWidget(visible_);
+    connect(visible_,&QCheckBox::toggled,this,[this](bool value) {if(selected_>=0) set_visible(size_t(selected_),value);});
+    connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column==0&&target>=0&&item->data(0,Qt::UserRole+1).toInt()<0) set_visible(size_t(target),item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     parameters_=new ParameterPanel;parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};properties->addWidget(parameters_,1);
     auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
@@ -692,9 +730,9 @@ public:
             snapshot_.poses.push_back(std::move(pose));
           }
           for(const auto &target:document_->catalog.targets) {
-            runtime::Properties values;for(const auto &m:target.morphs) values.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
+            runtime::Properties values;values.visible=document_->loaded.scene.instances.at(target.instance).visible;for(const auto &m:target.morphs) values.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
             if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
-              values.transform=previous.values[t].transform;std::map<std::string,float> weights;
+              values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if((target.morphs[m].evaluable||target.morphs[m].unsupported.empty())&&weights.contains(target.morphs[m].id)) values.morphs[m]=weights[target.morphs[m].id];
             }
@@ -725,6 +763,9 @@ int main(int argc,char **argv) {
   parser.addOption({"capture-test",QStringLiteral("场景显示验证后截图退出")});
   parser.addOption({"capture-target",QStringLiteral("截图时框选的对象标签，可重复"),"label"});
   parser.addOption({"capture-front",QStringLiteral("截图时从框选对象正面观察")});
+  parser.addOption({"capture-head",QStringLiteral("截图时框选角色头部")});
+  parser.addOption({"capture-samples",QStringLiteral("截图前累积样本数"),"count","16"});
+  parser.addOption({"visibility-test",QStringLiteral("验证指定对象的属性和层级可见性开关"),"label"});
   parser.addOption({"lifecycle-test",QStringLiteral("验证反复增删与替换场景，指定第二个测试 DUF"),"file"});
   parser.addOption({"lifecycle-rounds",QStringLiteral("生命周期验证轮数"),"count","8"});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
@@ -744,7 +785,8 @@ int main(int argc,char **argv) {
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("workflow-test")) editor.workflow_test();
     if(parser.isSet("head-selection-test")) editor.head_selection_test();
-    if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"));
+    if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"),parser.isSet("capture-head"),parser.value("capture-samples").toInt());
+    if(parser.isSet("visibility-test")) editor.visibility_test(parser.value("visibility-test"));
     if(parser.isSet("lifecycle-test")) editor.lifecycle_test(file_path(parser.value("file")),file_path(parser.value("lifecycle-test")),parser.value("lifecycle-rounds").toInt());
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();

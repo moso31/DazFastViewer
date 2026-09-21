@@ -29,7 +29,7 @@ void collect_resources(Document &document) {
   const auto mesh_map=retain(scene.meshes,meshes),material_map=retain(scene.materials,materials);
   for(auto &instance:scene.instances) {instance.mesh=uint32_t(mesh_map.at(instance.mesh));for(auto &m:instance.materials) m=uint32_t(material_map.at(m));}
   std::vector<ir::Texture> textures;std::map<std::pair<std::filesystem::path,ir::ColorSpace>,int> texture_map;
-  for(auto &material:scene.materials) for(auto *index:{&material.color_texture,&material.roughness_texture,&material.opacity_texture,&material.normal_texture,&material.bump_texture}) if(*index>=0) {
+  for(auto &material:scene.materials) for(auto *index:ir::texture_indices(material)) if(*index>=0) {
     const auto &texture=scene.textures.at(size_t(*index));const auto key=std::make_pair(texture.file,texture.colorspace);
     auto [found,inserted]=texture_map.emplace(key,int(textures.size()));if(inserted) textures.push_back(texture);*index=found->second;
   }
@@ -55,11 +55,11 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   for(const auto &s:document.skeletons.skins) skins.push_back(instances.at(s.instance));
   const auto instance_map=retain(scene.instances,instances),skin_map=retain(document.skeletons.skins,skins);
   retain(snapshot.poses,skins);retain(document.catalog.targets,targets);retain(snapshot.values,targets);retain(document.formulas.graphs,targets);
-  for(auto &t:document.catalog.targets) t.instance=uint32_t(instance_map.at(t.instance));
+  for(auto &t:document.catalog.targets) {t.instance=uint32_t(instance_map.at(t.instance));if(refers_to(t.smoothing.collision_target,removed)) t.smoothing.collision_target.clear();}
   for(auto &s:document.skeletons.skins) s.instance=uint32_t(instance_map.at(s.instance));
   for(auto &g:document.formulas.graphs) if(g.skin>=0) g.skin=skin_map.at(size_t(g.skin));
   std::erase_if(document.loaded.objects,[&](const auto &o) {return removed.contains(o.id);});
-  for(auto &o:document.loaded.objects) o.instance=uint32_t(instance_map.at(o.instance));
+  for(auto &o:document.loaded.objects) {o.instance=uint32_t(instance_map.at(o.instance));if(refers_to(o.smoothing.collision_target,removed)) o.smoothing.collision_target.clear();}
   std::erase_if(document.loaded.nodes,[&](const auto &n) {return removed.contains(n.id);});
   std::erase_if(snapshot.lights,[&](const auto &l) {return removed.contains(l.id);});scene.lights=snapshot.lights;
   collect_resources(document);release_load_data(document);++snapshot.revision;
@@ -85,7 +85,7 @@ size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &
   if(matches.empty()) throw std::runtime_error("材质预设没有匹配当前对象的表面组");
   scene.textures.insert(scene.textures.end(),preset.scene.textures.begin(),preset.scene.textures.end());
   for(const auto &[m,slot]:matches) {
-    auto material=preset.scene.materials[m];for(auto *index:{&material.color_texture,&material.roughness_texture,&material.opacity_texture,&material.normal_texture,&material.bump_texture}) if(*index>=0) *index+=offset;
+    auto material=preset.scene.materials[m];for(auto *index:ir::texture_indices(material)) if(*index>=0) *index+=offset;
     instance.materials[slot]=uint32_t(scene.materials.size());scene.materials.push_back(std::move(material));
   }
   collect_resources(document);return matches.size();
@@ -95,6 +95,7 @@ Snapshot initial_snapshot(const Document &document) {
   for(const auto &skin:document.skeletons.skins) result.poses.push_back(skin.initial);
   for(const auto &target:document.catalog.targets) {
     runtime::Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
+    p.visible=document.loaded.scene.instances.at(target.instance).visible;
     runtime::sync_aliases(target,p);result.values.push_back(std::move(p));
   }
   result.lights=document.loaded.scene.lights;return result;
@@ -107,15 +108,15 @@ void append_document(Document &destination,Document source) {
   a.textures.insert(a.textures.end(),b.textures.begin(),b.textures.end());
   for(auto m:b.materials) {
     m.id=prefix+m.id;
-    for(auto *index:{&m.color_texture,&m.roughness_texture,&m.opacity_texture,&m.normal_texture,&m.bump_texture}) if(*index>=0) *index+=textures;
+    for(auto *index:ir::texture_indices(m)) if(*index>=0) *index+=textures;
     a.materials.push_back(std::move(m));
   }
   for(auto &m:b.meshes) {m.id=prefix+m.id;a.meshes.push_back(std::move(m));}
   for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
   for(auto l:b.lights) {l.id=prefix+l.id;a.lights.push_back(std::move(l));}
   for(auto n:source.loaded.nodes) {n.id=prefix+n.id;if(n.parent.starts_with('#')) n.parent="#"+prefix+n.parent.substr(1);destination.loaded.nodes.push_back(std::move(n));}
-  for(auto o:source.loaded.objects) {o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);destination.loaded.objects.push_back(std::move(o));}
-  for(auto &t:source.catalog.targets) {t.instance+=instances;t.id=prefix+t.id;if(t.parent.starts_with('#')) t.parent="#"+prefix+t.parent.substr(1);if(t.conform_target.starts_with('#')) t.conform_target="#"+prefix+t.conform_target.substr(1);destination.catalog.targets.push_back(std::move(t));}
+  for(auto o:source.loaded.objects) {o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);if(o.smoothing.collision_target.starts_with('#')) o.smoothing.collision_target="#"+prefix+o.smoothing.collision_target.substr(1);destination.loaded.objects.push_back(std::move(o));}
+  for(auto &t:source.catalog.targets) {t.instance+=instances;t.id=prefix+t.id;if(t.parent.starts_with('#')) t.parent="#"+prefix+t.parent.substr(1);if(t.conform_target.starts_with('#')) t.conform_target="#"+prefix+t.conform_target.substr(1);if(t.smoothing.collision_target.starts_with('#')) t.smoothing.collision_target="#"+prefix+t.smoothing.collision_target.substr(1);destination.catalog.targets.push_back(std::move(t));}
   for(auto &s:source.skeletons.skins) {s.instance+=instances;s.id=prefix+s.id;for(auto &j:s.joints) if(!j.scene_id.empty()) j.scene_id=prefix+j.scene_id;destination.skeletons.skins.push_back(std::move(s));}
   for(auto &g:source.formulas.graphs) {if(g.skin>=0) g.skin+=skins;destination.formulas.graphs.push_back(std::move(g));}
   release_load_data(destination);

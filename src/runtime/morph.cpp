@@ -20,6 +20,7 @@ MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):
     if(!used_meshes.insert(instance.mesh).second) throw std::runtime_error("可编辑对象必须拥有独立网格实例");
     bases_.push_back(mesh.positions);transforms_.push_back(instance.transform);active_.emplace_back();
     Properties property;
+    property.visible=instance.visible;
     for(const auto &m:target.morphs) {
       if(!std::isfinite(m.minimum)||!std::isfinite(m.maximum)||!std::isfinite(m.initial)||m.minimum>m.maximum)
         throw std::runtime_error("Morph 范围无效");
@@ -68,6 +69,7 @@ bool MorphRuntime::set_transform(size_t target,const TransformValues &v) {
   if(same(old.translation_cm,v.translation_cm)&&same(old.rotation_degrees,v.rotation_degrees)&&same(old.scale,v.scale)) return false;
   old=v;dirty_transform(target);return true;
 }
+void MorphRuntime::set_visible(size_t target,bool visible) {values_.at(target).visible=visible;}
 void MorphRuntime::dirty_transform(size_t target) {
   dirty_transforms_.insert(target);
   for(size_t i=0;i<parents_.size();++i) for(int p=parents_[i];p>=0;p=parents_[size_t(p)]) if(size_t(p)==target) {dirty_transforms_.insert(i);break;}
@@ -92,6 +94,12 @@ bool MorphRuntime::set_follow_offsets(size_t target,const std::vector<ir::Vec3> 
 }
 ir::Delta MorphRuntime::evaluate() {
   ir::Delta delta;
+  for(size_t t=0;t<targets_.size();++t) {
+    // DAZ 普通节点的 Visible 独立于 parent / Fit To；递归隐藏属于显式 UI 操作。
+    const bool visible=values_[t].visible;
+    auto &instance=scene_.instances.at(targets_[t].instance);
+    if(instance.visible!=visible) {instance.visible=visible;delta.visibility.push_back({targets_[t].instance,visible});}
+  }
   for(auto target:dirty_meshes_) {
     auto positions=bases_[target];
     for(auto index:active_[target]) {

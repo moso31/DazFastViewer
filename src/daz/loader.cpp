@@ -107,7 +107,20 @@ ir::Vec3 axes(const Json &node,const char *key,ir::Vec3 fallback) {
 }
 Json merge_node(Json base,const Json &instance) {
   for(auto it=instance.begin();it!=instance.end();++it) {
-    if(it.value().is_array() && (it.key()=="rotation" || it.key()=="translation" || it.key()=="scale" || it.key()=="center_point" || it.key()=="orientation")) {
+    if(it.key()=="extra"&&it.value().is_array()) {
+      auto extras=base.value("extra",Json::array());
+      for(const auto &entry:it.value()) {
+        auto old=std::find_if(extras.begin(),extras.end(),[&](const Json &e) {return e.value("type","")==entry.value("type","");});
+        if(old==extras.end()) {extras.push_back(entry);continue;}
+        auto channels=old->value("channels",Json::array());old->update(entry);
+        for(const auto &c:entry.value("channels",Json::array())) {
+          auto found=std::find_if(channels.begin(),channels.end(),[&](const Json &a) {return a.at("channel").value("id","")==c.at("channel").value("id","");});
+          if(found==channels.end()) channels.push_back(c);else (*found)["channel"].update(c.at("channel"));
+        }
+        if(!channels.empty()) (*old)["channels"]=std::move(channels);
+      }
+      base["extra"]=std::move(extras);
+    } else if(it.value().is_array() && (it.key()=="rotation" || it.key()=="translation" || it.key()=="scale" || it.key()=="center_point" || it.key()=="orientation")) {
       auto data=base.value(it.key(),Json::array());
       for(const auto &channel:it.value()) {
         bool merged=false;
@@ -191,9 +204,17 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     add_channels(channels,instance);
     ir::Material material;material.id=instance.at("id").get<std::string>();
     auto channel=[&](const std::string &name)->Json {auto i=channels.find(name);return i==channels.end()?Json::object():i->second;};
+    auto scalar=[&](const std::string &name,float fallback) {return number(channel(name),fallback);};
+    auto unit=[&](const std::string &name,float fallback=0) {return std::clamp(scalar(name,fallback),0.f,1.f);};
+    auto linear=[](float v) {return v<=.04045f?v/12.92f:std::pow((v+.055f)/1.055f,2.4f);};
+    auto color_value=[&](const std::string &name,ir::Vec3 fallback) {
+      const auto c=channel(name);const auto value=c.value("current_value",c.value("value",Json()));
+      if(!value.is_array()||value.size()!=3) return fallback;
+      return ir::Vec3{linear(value[0].get<float>()),linear(value[1].get<float>()),linear(value[2].get<float>())};
+    };
     const auto diffuse=channel("diffuse");const auto color=diffuse.value("current_value",diffuse.value("value",Json::array({1,1,1})));
     if(!color.is_array() || color.size()!=3) fail("材质 diffuse 必须为三通道颜色");
-    material.base_color={color[0].get<float>(),color[1].get<float>(),color[2].get<float>()};
+    material.base_color=color_value("diffuse",{1,1,1});
     material.roughness=std::clamp(number(channel("Glossy Roughness"),.5f),0.0f,1.0f);
     material.metallic=std::clamp(number(channel("Metallic Weight"),0),0.0f,1.0f);
     material.opacity=std::clamp(number(channel("Cutout Opacity"),1),0.0f,1.0f);
@@ -209,15 +230,81 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     material.opacity_texture=texture(channel("Cutout Opacity"),ir::ColorSpace::linear,material_file);
     material.normal_texture=texture(channel("Normal Map"),ir::ColorSpace::linear,material_file);
     material.bump_texture=texture(channel("Bump Strength"),ir::ColorSpace::linear,material_file);
+    material.thin_walled=scalar("Thin Walled",0)!=0;
+    material.roughness_from_glossiness=int(scalar("Base Mixing",0))==1;
+    if(material.roughness_from_glossiness) {
+      material.roughness=unit("Glossiness",.5f);
+      material.roughness_texture=texture(channel("Glossiness"),ir::ColorSpace::linear,material_file);
+    }
+    const auto glossy=int(scalar("Base Mixing",0))==2?"Glossy Weight":"Glossy Layered Weight";
+    material.specular=unit(glossy,1)*unit("Glossy Reflectivity",.5f);
+    material.weighted_glossy=int(scalar("Base Mixing",0))==2;
+    if(material.weighted_glossy) {const float weight=unit("Glossy Weight");material.specular=weight/std::max(1e-6f,weight+unit("Diffuse Weight",1));}
+    material.specular_color=color_value("Glossy Color",{1,1,1});
+    material.specular_texture=texture(channel(glossy),ir::ColorSpace::linear,material_file);
+    material.anisotropy=unit("Glossy Anisotropy");material.anisotropy_rotation=scalar("Glossy Anisotropy Rotations",0);
+    material.translucency_color=color_value("Translucency Color",{1,1,1});
+    material.translucency_texture=texture(channel("Translucency Weight"),ir::ColorSpace::linear,material_file);
+    material.translucency_color_texture=texture(channel("Translucency Color"),ir::ColorSpace::srgb,material_file);
+    if(material.thin_walled) material.translucency=unit("Translucency Weight");
+    else {
+      material.subsurface=unit("Translucency Weight");
+      material.subsurface_anisotropy=std::clamp(scalar("SSS Direction",0),-.9f,.9f);
+      const auto transmitted=color_value("Transmitted Color",{1,1,1});
+      const auto scatter=color_value("SSS Color",{.5f,.5f,.5f});
+      const float td=std::max(1e-6f,.01f*scalar("Transmitted Measurement Distance",.1f));
+      const float sd=std::max(1e-6f,.01f*scalar("Scattering Measurement Distance",.1f));
+      auto radius=[&](float t,float s) {return std::clamp(1.f/std::max(1.f,-std::log(std::clamp(t,.0001f,.9999f))/td-std::log(std::clamp(s,.0001f,.9999f))/sd),1e-6f,.02f);};
+      material.subsurface_radius={radius(transmitted.x,scatter.x),radius(transmitted.y,scatter.y),radius(transmitted.z,scatter.z)};
+      if(material.subsurface>0) warn("sss_transport_approximation",material.id,"按厘米测量距离与颜色构建米制散射半径；Cycles Random Walk 与 Iray 体积散射不保证等价");
+    }
+    material.coat=unit("Top Coat Weight");material.coat_roughness=unit("Top Coat Roughness",.1f);material.coat_ior=std::max(1.f,scalar("Top Coat IOR",1.5f));
+    material.coat_color=color_value("Top Coat Color",{1,1,1});
+    material.coat_texture=texture(channel("Top Coat Weight"),ir::ColorSpace::linear,material_file);
+    material.coat_roughness_texture=texture(channel("Top Coat Roughness"),ir::ColorSpace::linear,material_file);
+    material.dual_weight=unit("Dual Lobe Specular Weight");material.dual_ratio=unit("Dual Lobe Specular Ratio",.5f);
+    material.dual_roughness1=unit("Specular Lobe 1 Roughness",.3f);material.dual_roughness2=unit("Specular Lobe 2 Roughness",.6f);
+    material.dual_specular=unit("Dual Lobe Specular Reflectivity",.5f);
+    material.dual_texture=texture(channel("Dual Lobe Specular Weight"),ir::ColorSpace::linear,material_file);
+    material.metallic_texture=texture(channel("Metallic Weight"),ir::ColorSpace::linear,material_file);
+    material.transmission_texture=texture(channel("Refraction Weight"),ir::ColorSpace::linear,material_file);
+    material.uv_scale={scalar("Horizontal Tiles",1),scalar("Vertical Tiles",1)};
+    material.uv_offset={scalar("Horizontal Offset",0),scalar("Vertical Offset",0)};
+    if(material.transmission>0) {
+      // 透射层使用折射颜色，不能把视口漫反射颜色乘进角膜和泪膜。
+      const bool share=scalar("Share Glossy Inputs",0)!=0;
+      material.base_color=color_value(share?"Glossy Color":"Refraction Color",{1,1,1});
+      material.color_texture=texture(channel(share?"Glossy Color":"Refraction Color"),ir::ColorSpace::srgb,material_file);
+      if(!share) {material.roughness=unit("Refraction Roughness");material.roughness_texture=texture(channel("Refraction Roughness"),ir::ColorSpace::linear,material_file);material.roughness_from_glossiness=false;}
+    }
+    material.hair=channels.contains("Hair Root Color")||channels.contains("Root Transmission Color");
+    material.hair_root_radius=.0005f*std::max(0.f,scalar("Line Start Width",.1f));
+    material.hair_tip_radius=.0005f*std::max(0.f,scalar("Line End Width",.05f));
+    if(material.hair) {
+      material.base_color=color_value(channels.contains("Hair Root Color")?"Hair Root Color":"Root Transmission Color",{.1f,.1f,.1f});
+      material.hair_tip_color=color_value(channels.contains("Hair Tip Color")?"Hair Tip Color":"Tip Transmission Color",material.base_color);
+      material.roughness=unit("Roughness",.3f);material.hair_radial_roughness=unit("Azimuthal Roughness",.3f);
+      material.hair_melanin=unit("Melanin");material.hair_redness=unit("Melanin Redness",.5f);
+      material.color_texture=texture(channel("Hair Root Color"),ir::ColorSpace::srgb,material_file);
+      material.roughness_from_glossiness=false;
+    }
     if(material.bump_texture>=0 && !explicit_bump_range)
       warn("bump_distance_approximation",material.id,"资产未提供凹凸高度范围；暂用 1 毫米。参考 Importer 根据几何和纹理得到不同距离，尚未对齐");
-    const std::set<std::string> supported={"diffuse","Glossy Roughness","Metallic Weight","Cutout Opacity","Refraction Weight","Refraction Index","Normal Map","Bump Strength","Bump Minimum","Bump Maximum"};
-    for(const char *id:{"Metallic Weight","Refraction Weight","Refraction Index"})
+    const std::set<std::string> supported={"diffuse","Glossy Roughness","Metallic Weight","Cutout Opacity","Refraction Weight","Refraction Index","Normal Map","Bump Strength","Bump Minimum","Bump Maximum",
+      "Thin Walled","Base Mixing","Glossiness","Glossy Layered Weight","Glossy Weight","Glossy Reflectivity","Glossy Color","Glossy Anisotropy","Glossy Anisotropy Rotations",
+      "Translucency Weight","Translucency Color","SSS Direction","Transmitted Color","SSS Color","Transmitted Measurement Distance","Scattering Measurement Distance",
+      "Top Coat Weight","Top Coat Roughness","Top Coat IOR","Top Coat Color","Dual Lobe Specular Weight","Dual Lobe Specular Ratio","Dual Lobe Specular Reflectivity","Specular Lobe 1 Roughness","Specular Lobe 2 Roughness",
+      "Horizontal Tiles","Vertical Tiles","Horizontal Offset","Vertical Offset","Share Glossy Inputs","Refraction Color","Refraction Roughness","Line Start Width","Line End Width",
+      "Hair Root Color","Hair Tip Color","Root Transmission Color","Tip Transmission Color","Roughness","Azimuthal Roughness","Melanin","Melanin Redness"};
+    for(const char *id:{"Refraction Index","Glossy Color","Top Coat Color","Specular Lobe 1 Roughness","Specular Lobe 2 Roughness","Hair Tip Color"})
       if(!channel(id).value("image_file","").empty()) warn("unmapped_channel_texture",material.id,std::string(id)+" 目前仅支持常量，贴图尚未映射");
     Json unmapped=Json::array();for(const auto &[id,c]:channels) if(!supported.contains(id)) unmapped.push_back(id);
     if(!unmapped.empty()) warn("material_subset",material.id,"仅映射基础 PBR 参数；未映射通道详见 materials.unmapped_channels");
     material_reports.push_back({{"id",material.id},{"groups",instance.value("groups",Json::array())},{"unmapped_channels",unmapped},{"color_texture",material.color_texture},
       {"roughness_texture",material.roughness_texture},{"normal_texture",material.normal_texture},{"bump_texture",material.bump_texture},
+      {"hair",material.hair},{"thin_walled",material.thin_walled},{"subsurface_weight",material.subsurface},{"translucency_weight",material.translucency},
+      {"subsurface_radius_m",{material.subsurface_radius.x,material.subsurface_radius.y,material.subsurface_radius.z}},{"dual_lobe_weight",material.dual_weight},
+      {"line_root_radius_m",material.hair_root_radius},{"line_tip_radius_m",material.hair_tip_radius},
       {"bump_distance_m",material.bump_distance},{"bump_distance_source",explicit_bump_range?"explicit-centimeter-range":"preview-approximation"}});
     const uint32_t index=uint32_t(scene.materials.size());scene.materials.push_back(material);
     const auto geometry=decode(instance.value("geometry",""));const auto uv=instance.value("uv_set","");
@@ -248,6 +335,21 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     visiting.erase(id);transforms.emplace(id,matrix);return matrix;
   };
   std::map<std::string,uint32_t> mesh_cache;
+  auto fitted_world=[&](const std::string &id) {
+    const auto original=world(id); // 同时先验证 parent 链，避免损坏文件的循环遍历。
+    auto terminal=id;std::set<std::string> seen;
+    while(nodes.at(terminal).contains("conform_target")&&nodes.at(terminal)["conform_target"].is_string()) {
+      if(!seen.insert(terminal).second) fail("Fit To 关系存在循环: "+id);
+      const auto ref=decode(nodes.at(terminal)["conform_target"].get<std::string>());
+      if(ref.empty()) break;
+      if(!ref.starts_with('#')||!nodes.contains(ref.substr(1))) fail("Fit To 目标不存在: "+ref);
+      terminal=ref.substr(1);
+    }
+    auto root=id;bool already_inherited=root==terminal;
+    while(!nodes.at(root).value("parent","").empty()) {root=decode(nodes.at(root).at("parent").get<std::string>()).substr(1);already_inherited|=root==terminal;}
+    // 同一 Figure 下的服装已经含父变换。根层级穿戴物需继承目标的场景变换。
+    return terminal!=id&&!already_inherited?world(terminal)*original:original;
+  };
   for(const auto &instance:source.value("nodes",Json::array())) {
     const auto id=instance.at("id").get<std::string>();const auto &node=nodes.at(id);
     if(node.value("type","")=="camera") warn("scene_camera",id,"保留编辑器观察相机，未切换到保存的 DAZ 相机");
@@ -272,6 +374,10 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     for(const auto &geometry_instance:instance.value("geometries",Json::array())) {
       const auto uri=geometry_instance.at("url").get<std::string>();const auto [geometry_file,gptr]=repo.asset(uri,file,"geometry_library");const auto &g=*gptr;
       ir::Mesh mesh;mesh.id=uri;
+      if(g.contains("graft")&&g["graft"].contains("vertex_count")) {
+        mesh.graft_target_vertices=g["graft"]["vertex_count"].get<uint32_t>();
+        for(const auto &p:values(g["graft"].at("hidden_polys"))) mesh.graft_hidden_polygons.push_back(p.get<uint32_t>());
+      }
       if(g.contains("polygon_groups")) for(const auto &name:values(g.at("polygon_groups"))) mesh.polygon_groups.push_back(name.get<std::string>());
       for(const auto &name:values(g.at("polygon_material_groups"))) mesh.material_slots.push_back(name.get<std::string>());
       std::vector<uint32_t> material_indices;std::vector<std::string> uv_refs;
@@ -301,6 +407,18 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
           uv_cache.emplace(ref,std::move(uv));
         }
         const auto &polygons=values(g.at("polylist"));
+        if(g.contains("polyline_list")) for(const auto &line:values(g.at("polyline_list"))) {
+          if(line.size()<4) fail("发丝至少需要两个控制点");
+          ir::Curve curve;curve.material_slot=line[1].get<uint32_t>();
+          if(curve.material_slot>=mesh.material_slots.size()) fail("发丝材质槽越界");
+          for(size_t k=2;k<line.size();++k) {const auto v=line[k].get<uint32_t>();if(v>=mesh.positions.size()) fail("发丝顶点越界");curve.vertices.push_back(v);}
+          const auto &uv=uv_cache.at(uv_refs.at(curve.material_slot));
+          if(curve.vertices.front()<uv.values.size()) curve.uv=uv.values[curve.vertices.front()];
+          mesh.curves.push_back(std::move(curve));
+        }
+        if(!mesh.curves.empty()) for(const auto &modifier:repo.document(geometry_file).value("modifier_library",Json::array()))
+          for(const auto &extra:modifier.value("extra",Json::array())) if(extra.value("type","")=="studio/modifier/dynamic_generate_hair"&&extra.value("generates_for_render",false))
+            warn("strand_render_generator",geometry_id,"已导入资产保存的发丝曲线与蒙皮；额外渲染发丝生成及 dForce 模拟尚未复现");
         for(size_t p=0;p<polygons.size();++p) {
           const auto &polygon=polygons[p];if(polygon.size()<5 || polygon.size()>6) fail("仅支持 DSON 三角形和四边形");
           const auto slot=polygon[1].get<uint32_t>();if(slot>=mesh.material_slots.size()) fail("多边形材质组索引越界");
@@ -308,6 +426,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
           for(size_t k=3;k+1<polygon.size();++k) {
             ir::Triangle triangle;triangle.material_slot=slot;
             triangle.polygon_group=polygon[0].get<uint32_t>();
+            triangle.source_polygon=uint32_t(p);
             triangle.vertices={polygon[2].get<uint32_t>(),polygon[k].get<uint32_t>(),polygon[k+1].get<uint32_t>()};
             for(size_t c=0;c<3;++c) {
               const auto v=triangle.vertices[c];auto seam=uv.seams.find({uint32_t(p),v});const auto ui=seam==uv.seams.end()?v:seam->second;
@@ -316,10 +435,13 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
             mesh.triangles.push_back(triangle);
           }
         }
-        geometry_reports.push_back({{"id",geometry_id},{"vertices",mesh.positions.size()},{"polygons",polygons.size()},{"triangles",mesh.triangles.size()},{"material_groups",mesh.material_slots}});
+        geometry_reports.push_back({{"id",geometry_id},{"vertices",mesh.positions.size()},{"polygons",polygons.size()},{"triangles",mesh.triangles.size()},{"curves",mesh.curves.size()},{"material_groups",mesh.material_slots}});
         mesh_index=uint32_t(scene.meshes.size());mesh_cache.emplace(key,mesh_index);scene.meshes.push_back(std::move(mesh));
       }
-      ir::Instance render_instance;render_instance.id=id+"/"+geometry_id;render_instance.mesh=mesh_index;render_instance.materials=std::move(material_indices);render_instance.transform=render_transform(world(id));
+      ir::Instance render_instance;render_instance.id=id+"/"+geometry_id;render_instance.mesh=mesh_index;render_instance.materials=std::move(material_indices);render_instance.transform=render_transform(fitted_world(id));
+      for(const auto &extra:node.value("extra",Json::array())) for(const auto &entry:extra.value("channels",Json::array())) {
+        const auto &c=entry.at("channel");if(c.value("id","")=="Visible") render_instance.visible=number(c,1)!=0;
+      }
       out.objects.push_back({uint32_t(scene.instances.size()),id,node.value("label",node.value("name",id)),decode(node.value("parent","")),g.at("id").get<std::string>(),geometry_file,node.value("type","")=="figure",geometry_id,node.contains("conform_target")&&node["conform_target"].is_string()?decode_uri(node["conform_target"].get<std::string>()):""});
       // DUF 可以内嵌派生几何；保持其顶点、UV 与材质，同时解析可继承的源资产身份。
       auto owner=geometry_file;const Json *derived=&g;std::set<std::pair<fs::path,std::string>> ancestors{{owner,g.at("id").get<std::string>()}};
@@ -338,6 +460,25 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       scene.instances.push_back(std::move(render_instance));
       if(geometry_instance.value("type",g.value("type",""))=="subdivision_surface") warn("subdivision",geometry_id,"当前显示基础笼形网格；未应用 SubD/HD 细分");
     }
+  }
+  for(const auto &instance:source.value("modifiers",Json::array())) {
+    if(instance.contains("channel")||instance.contains("skin")) continue;
+    Json modifier=instance;
+    if(instance.contains("url")) modifier=merge_node(*repo.asset(instance.at("url"),file,"modifier_library").second,instance);
+    bool smoothing=false;std::map<std::string,Json> channels;
+    for(const auto &extra:modifier.value("extra",Json::array())) {
+      smoothing|=extra.value("type","")=="studio/modifier/smoothing";
+      for(const auto &entry:extra.value("channels",Json::array())) if(entry.contains("channel")) {const auto &c=entry["channel"];channels[c.at("id").get<std::string>()]=c;}
+    }
+    if(!smoothing) continue;
+    auto value=[&](const char *id,float fallback) {auto c=channels.find(id);return c==channels.end()?fallback:number(c->second,fallback);};
+    ir::MeshSmoothing settings;settings.enabled=value("Enable Smoothing",1)!=0;
+    settings.smoothing_iterations=int(std::clamp(value("Smoothing Iterations",2),0.f,200.f));
+    settings.collision_iterations=int(std::clamp(value("Collision Iterations",3),0.f,100.f));settings.weight=std::clamp(value("Weight",.5f),0.f,1.f);
+    if(auto c=channels.find("Collision Item");c!=channels.end()&&c->second.contains("node")&&c->second["node"].is_string()) settings.collision_target=decode(c->second["node"].get<std::string>());
+    const auto parent=decode(instance.value("parent",""));
+    for(auto &object:out.objects) if(parent=="#"+object.id||parent=="#"+object.geometry_instance_id) object.smoothing=settings;
+    if(settings.enabled) warn("mesh_collision_approximation",parent,"蒙皮后执行表面碰撞与修正位移平滑；不是 DAZ Pyramid Coordinates 或 dForce 的等价实现");
   }
   if(source.contains("modifiers")&&!source["modifiers"].empty())
     warn("runtime_modifiers",std::to_string(source["modifiers"].size()),"几何阶段不求值 Modifier；由后续 Morph / Skeleton / Formula 阶段应用并报告支持情况");

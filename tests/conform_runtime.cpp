@@ -19,6 +19,51 @@ static FormulaGraph graph(const Target &t,int skin) {
   if(skin>=0) for(auto property:{Property::rotation,Property::scale,Property::center}) {Channel c;c.binding={property,1,property==Property::rotation?2u:0u};c.initial=property==Property::scale?1:0;g.channels.push_back(c);}
   g.prepare();return g;
 }
+
+static void mesh_collision() {
+  ir::Scene scene;ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};
+  ir::Triangle f;f.vertices={0,1,2};body.triangles.push_back(f);f.vertices={0,2,3};body.triangles.push_back(f);
+  ir::Mesh cloth;cloth.positions={{-.5f,-.5f,-.1f},{.5f,-.5f,-.1f},{0,.5f,-.1f}};f.vertices={0,1,2};cloth.triangles={f};
+  scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target a;a.id="body/mesh";Target b;b.id="cloth/mesh";b.instance=1;b.smoothing.enabled=true;b.smoothing.collision_target="#body";
+  std::vector<Target> targets={a,b};CollisionRuntime runtime(scene,targets);auto d=runtime.evaluate({});
+  require(d.meshes.size()==1,"初始碰撞未输出服装更新");for(auto p:scene.meshes[1].positions) require(p.z>=.00049f,"穿入平面的服装未推出");
+  const auto baseline=scene.meshes[1].positions;
+  require(runtime.evaluate({}).meshes.empty(),"相同输入重复执行碰撞");
+  for(auto &p:scene.meshes[0].positions) p.z=.2f;d={};d.meshes.push_back({0,scene.meshes[0].positions});runtime.evaluate(d);
+  for(auto p:scene.meshes[1].positions) require(p.z>=.20049f,"只有碰撞对象改变时服装没有更新");
+  scene.meshes[0]=body;d={};d.meshes.push_back({0,body.positions});runtime.evaluate(d);
+  require(distance(scene.meshes[1].positions,baseline)==0,"碰撞求值累积漂移");
+  scene.instances[1].transform=ir::Transform::translate({0,0,1});runtime.evaluate({});
+  require(distance(scene.meshes[1].positions,cloth.positions)==0,"服装移出碰撞区后没有恢复未修正输入");
+  auto cyclic=targets;cyclic[0].smoothing=b.smoothing;cyclic[0].smoothing.collision_target="#cloth";
+  rejects([&] {CollisionRuntime bad(scene,cyclic);},"碰撞循环未拒绝");
+  auto disabled=targets;disabled[1].smoothing.enabled=false;scene.meshes[1]=cloth;scene.instances[1].transform={};CollisionRuntime off(scene,disabled);
+  require(off.evaluate({}).meshes.empty()&&distance(scene.meshes[1].positions,cloth.positions)==0,"关闭碰撞仍修改几何");
+  auto graft=body;graft.graft_target_vertices=4;graft.graft_hidden_polygons={0};for(auto &p:graft.positions) p.z=.2f;
+  scene.meshes.push_back(graft);scene.instances.push_back({});scene.instances.back().mesh=2;
+  Target g;g.id="graft/mesh";g.instance=2;g.conform_target="#body";g.smoothing=b.smoothing;
+  auto combined=targets;combined.push_back(g);CollisionRuntime composite(scene,combined);composite.evaluate({});
+  for(auto p:scene.meshes[1].positions) require(p.z>=.20049f,"服装碰撞没有包含 GeoGraft 表面");
+  scene.instances[2].visible=false;d={};d.visibility.push_back({2,false});composite.evaluate(d);
+  for(auto p:scene.meshes[1].positions) require(std::abs(p.z-.0005f)<1e-6f,"隐藏 GeoGraft 后没有恢复人体碰撞表面");
+  scene.instances[2].visible=true;for(auto &p:scene.meshes[2].positions) p.z=-.02f;
+  d={};d.meshes.push_back({2,scene.meshes[2].positions});d.visibility.push_back({2,true});composite.evaluate(d);
+  for(auto p:scene.meshes[1].positions) require(p.z>=.00049f,"内层 GeoGraft 使服装重新穿入基础人体");
+  scene.meshes={body,cloth};scene.instances.resize(2);a.morphs={morph("bulge",{{0,{0,0,.2f}},{1,{0,0,.2f}},{2,{0,0,.2f}},{3,{0,0,.2f}}})};
+  targets={a,b};std::vector<Skin> skins;std::vector<FormulaGraph> graphs={graph(a,-1),graph(b,-1)};
+  DeformationRuntime deformed(scene,targets,skins,graphs);std::vector<Properties> values(2);values[0].morphs={0};deformed.evaluate(values,{});
+  const auto initial=scene.meshes[1].positions;values[0].morphs[0]=1;deformed.evaluate(values,{});
+  for(auto p:scene.meshes[1].positions) require(p.z>=.20049f,"完整形变管线未在 Morph 后更新碰撞");
+  values[0].morphs[0]=0;deformed.evaluate(values,{});require(distance(scene.meshes[1].positions,initial)==0,"完整形变碰撞归零发生漂移");
+  ir::Mesh bump;const ir::Vec3 peak{.11f,.08f,.01f};bump.positions={{.09f,.06f,0},{.13f,.06f,0},{.13f,.10f,0},{.09f,.10f,0},peak};
+  for(uint32_t k=0;k<4;++k) {ir::Triangle face;face.vertices={k,(k+1)%4,4};bump.triangles.push_back(face);}
+  auto coarse=cloth;for(auto &p:coarse.positions) p.z=.002f;
+  scene.meshes={bump,coarse};targets[0].morphs.clear();CollisionRuntime small_bump(scene,targets);small_bump.evaluate({});
+  const auto &p=scene.meshes[1].positions;const auto u=ir::Vec3{p[1].x-p[0].x,p[1].y-p[0].y,p[1].z-p[0].z},v=ir::Vec3{p[2].x-p[0].x,p[2].y-p[0].y,p[2].z-p[0].z};
+  const ir::Vec3 n{u.y*v.z-u.z*v.y,u.z*v.x-u.x*v.z,u.x*v.y-u.y*v.x};
+  require((peak.x-p[0].x)*n.x+(peak.y-p[0].y)*n.y+(peak.z-p[0].z)*n.z<0,"粗服装面漏掉采样点之间的小凸起");
+}
 static void generated_field() {
   ir::Mesh body;body.positions={{-2,-2,0},{0,-2,0},{0,2,0},{-2,2,0},{0,-2,0},{2,-2,0},{2,2,0},{0,2,0}};
   for(const auto vertices:std::array<std::array<uint32_t,3>,4>{{{0,1,2},{0,2,3},{4,5,6},{4,6,7}}}) {ir::Triangle f;f.vertices=vertices;body.triangles.push_back(f);}
@@ -61,7 +106,25 @@ static void bone_attachment() {
   DeformationRuntime appended(document.loaded.scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);appended.evaluate(snapshot.values,snapshot.poses);
   require(distance({document.loaded.scene.instances[1].transform.point({}),document.loaded.scene.instances[5].transform.point({})},{{3,0,0},{2,0,1}})<1e-6,"追加角色的骨骼附件串到已有角色");
 }
+static void root_follower_and_visibility() {
+  ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};
+  scene.meshes={mesh,mesh,mesh};scene.instances.resize(3);for(int i=0;i<3;++i) scene.instances[i].mesh=i;
+  Target body;body.id="body/mesh";Target shoe;shoe.id="shoe/mesh";shoe.instance=1;shoe.conform_target="#body";
+  Target child;child.id="child/mesh";child.instance=2;child.parent="#body";
+  std::vector<Target> targets={body,shoe,child};std::vector<FormulaGraph> graphs={graph(body,-1),graph(shoe,-1),graph(child,-1)};std::vector<Skin> skins;
+  DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(3);runtime.evaluate(values,{});
+  values[0].transform.translation_cm={10,20,30};runtime.evaluate(values,{});
+  require(distance({scene.instances[0].transform.point({})},{scene.instances[1].transform.point({})})<1e-7,"根层级 Fit To 没有跟随目标交互变换");
+  values[0].visible=false;auto delta=runtime.evaluate(values,{});
+  require(!scene.instances[0].visible&&scene.instances[2].visible&&scene.instances[1].visible,"普通节点可见性错误地沿 parent 或 Fit To 传播");
+  require(delta.visibility.size()==1&&delta.meshes.empty()&&delta.instances.empty(),"切换可见性不应重算顶点或实例变换");
+  values[2].visible=false;values[0].visible=true;runtime.evaluate(values,{});
+  require(scene.instances[0].visible&&!scene.instances[2].visible,"显示父对象覆盖了子对象自己的隐藏状态");
+  values[0].transform={};runtime.evaluate(values,{});require(distance({scene.instances[1].transform.point({})},{{}})==0,"根层级 Fit To 重置产生漂移");
+}
 static void unit() {
+  mesh_collision();
+  root_follower_and_visibility();
   bone_attachment();
   generated_field();
   ir::Mesh body;body.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle triangle;triangle.vertices={0,1,2};body.triangles={triangle};body.material_slots={"surface"};
@@ -134,4 +197,20 @@ static void actual(const std::filesystem::path &file,const std::filesystem::path
   const auto &stats=runtime.conform_stats();report["stats"]={{"bindings",stats.bindings},{"authored_morphs",stats.authored_morphs},{"evaluations",stats.evaluations},{"projected_vertices",stats.projected_vertices}};
   std::filesystem::create_directories(output.parent_path());std::ofstream(output)<<report.dump(2);std::cout<<"Real scene conform: PASS\n";
 }
-int wmain(int argc,wchar_t **argv) {try {if(argc>2) actual(argv[1],argv[2],argc>3?std::filesystem::path(argv[3]):std::filesystem::path{});else unit();return 0;} catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}}
+static void cached_collision(const std::filesystem::path &input,const std::filesystem::path &output) {
+  Json data;std::ifstream(input)>>data;ir::Scene scene;std::vector<Target> targets;
+  for(const auto &o:data["objects"]) {
+    ir::Instance instance;instance.mesh=uint32_t(scene.meshes.size());instance.transform.value=o["transform"].get<std::array<float,12>>();
+    const auto inverse=ir::inverse(instance.transform);ir::Mesh mesh;
+    mesh.graft_target_vertices=o.value("graft_target_vertices",0u);mesh.graft_hidden_polygons=o.value("graft_hidden_polygons",std::vector<uint32_t>{});
+    for(const auto &p:o["uncorrected_world"]) mesh.positions.push_back(inverse.point({p[0],p[1],p[2]}));
+    for(size_t f=0;f<o["triangles"].size();++f) {ir::Triangle face;face.vertices=o["triangles"][f].get<std::array<uint32_t,3>>();face.source_polygon=o["triangle_polygons"][f];mesh.triangles.push_back(face);}
+    Target t;t.id=o["id"];t.instance=uint32_t(scene.instances.size());t.conform_target=o.value("conform_target","");
+    t.smoothing.enabled=o.value("collision_enabled",false);t.smoothing.collision_target=o.value("collision_target","");
+    targets.push_back(std::move(t));scene.instances.push_back(instance);scene.meshes.push_back(std::move(mesh));
+  }
+  CollisionRuntime runtime(scene,targets);runtime.evaluate({});require(runtime.evaluate({}).meshes.empty(),"缓存碰撞重复求值发生漂移");
+  for(size_t i=0;i<targets.size();++i) {auto &world=data["objects"][i]["world"];world=Json::array();for(auto p:scene.meshes[i].positions) {p=scene.instances[i].transform.point(p);world.push_back({p.x,p.y,p.z});}}
+  std::ofstream(output)<<data.dump();std::cout<<"Cached collision: PASS\n";
+}
+int wmain(int argc,wchar_t **argv) {try {if(argc==4&&std::wstring(argv[1])==L"--collision-cache") cached_collision(argv[2],argv[3]);else if(argc>2) actual(argv[1],argv[2],argc>3?std::filesystem::path(argv[3]):std::filesystem::path{});else unit();return 0;} catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}}

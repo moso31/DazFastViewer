@@ -3,16 +3,18 @@
 #include <cstddef>
 #include <vector>
 
-namespace ccl {class Scene;class Shader;class Mesh;class Object;class Light;}
+namespace ccl {class Scene;class Shader;class Mesh;class Hair;class Object;class Light;}
 namespace dfv {
-struct AdapterStats {size_t meshes=0,instances=0,materials=0,textures=0,unique_triangles=0,triangles=0,camera_updates=0,material_updates=0,geometry_updates=0,instance_updates=0;};
+struct AdapterStats {size_t meshes=0,instances=0,materials=0,textures=0,unique_triangles=0,triangles=0,camera_updates=0,material_updates=0,geometry_updates=0,instance_updates=0,curves=0;};
 class CyclesAdapter {
   ccl::Scene &scene_;
   std::vector<ccl::Shader *> shaders_;
   std::vector<ir::Texture> textures_;
   std::vector<std::vector<ccl::Mesh *>> meshes_;
+  struct HairBinding {ccl::Hair *hair;std::vector<uint32_t> vertices;};
+  std::vector<std::vector<HairBinding>> hairs_;
   std::vector<size_t> vertex_counts_;
-  std::vector<ccl::Object *> objects_;
+  std::vector<std::vector<ccl::Object *>> objects_;
   std::vector<ccl::Object *> light_objects_;
   std::vector<ccl::Light *> lights_;
   AdapterStats stats_;

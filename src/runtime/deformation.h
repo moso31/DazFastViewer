@@ -13,6 +13,7 @@ class DeformationRuntime {
   MorphRuntime morph_;
   SkinningRuntime skin_;
   ConformRuntime conform_;
+  CollisionRuntime collision_;
   std::vector<std::unique_ptr<FormulaRuntime>> formulas_;
   std::vector<Properties> previous_;
   std::vector<std::vector<JointPose>> previous_poses_;
@@ -28,6 +29,7 @@ public:
   const auto &skin_stats() const {return skin_.stats();}
   FormulaStats formula_stats() const;
   const auto &conform_stats() const {return conform_.stats();}
+  const auto &collision_stats() const {return collision_.stats();}
   const auto &conform_links() const {return conform_.links();}
   const auto &effective() const {return effective_;}
   const auto &effective_poses() const {return effective_poses_;}

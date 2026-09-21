@@ -36,7 +36,7 @@ Vec3 Bounds::center() const {return {(minimum.x+maximum.x)*.5f,(minimum.y+maximu
 float Bounds::extent() const {return std::max({maximum.x-minimum.x,maximum.y-minimum.y,maximum.z-minimum.z});}
 Bounds Scene::bounds() const {
   Bounds b;
-  for(const auto &instance:instances) for(const auto p:meshes.at(instance.mesh).positions) b.add(instance.transform.point(p));
+  for(const auto &instance:instances) if(instance.visible) for(const auto p:meshes.at(instance.mesh).positions) b.add(instance.transform.point(p));
   return b;
 }
 void validate(const Camera &camera) {
@@ -47,9 +47,15 @@ void validate(const Camera &camera) {
 void validate(const Material &m,size_t texture_count) {
   for(float f:{m.base_color.x,m.base_color.y,m.base_color.z,m.roughness,m.metallic,m.opacity,m.transmission,m.ior,m.normal_strength,m.bump_strength,m.bump_distance})
     if(!std::isfinite(f)) throw std::runtime_error("IR: 无效材质参数");
+  for(float f:{m.specular,m.anisotropy,m.anisotropy_rotation,m.translucency,m.subsurface,m.subsurface_anisotropy,m.coat,m.coat_roughness,m.coat_ior,
+      m.dual_weight,m.dual_ratio,m.dual_roughness1,m.dual_roughness2,m.dual_specular,m.hair_root_radius,m.hair_tip_radius,m.hair_radial_roughness,m.hair_melanin,m.hair_redness,m.uv_scale.x,m.uv_scale.y,m.uv_offset.x,m.uv_offset.y})
+    if(!std::isfinite(f)) throw std::runtime_error("IR: 扩展材质参数无效");
+  for(auto v:{m.subsurface_radius,m.translucency_color,m.coat_color,m.specular_color,m.hair_tip_color}) for(float f:{v.x,v.y,v.z})
+    if(!std::isfinite(f)||f<0) throw std::runtime_error("IR: 材质颜色或散射半径无效");
+  if(m.hair_root_radius<0||m.hair_tip_radius<0) throw std::runtime_error("IR: 发丝半径不能为负");
   if(m.bump_strength<0 || m.bump_distance<0) throw std::runtime_error("IR: 凹凸强度或距离不能为负");
-  for(int t:{m.color_texture,m.roughness_texture,m.opacity_texture,m.normal_texture,m.bump_texture})
-    if(t< -1 || (t>=0 && size_t(t)>=texture_count)) throw std::runtime_error("IR: 贴图索引越界");
+  for(const auto *t:texture_indices(m))
+    if(*t< -1 || (*t>=0 && size_t(*t)>=texture_count)) throw std::runtime_error("IR: 贴图索引越界");
 }
 void Scene::validate() const {
   auto require=[](bool valid,const char *reason) {if(!valid) throw std::runtime_error(reason);};
@@ -60,6 +66,11 @@ void Scene::validate() const {
   for(const auto &mesh:meshes) {
     require(!mesh.positions.empty() && !mesh.material_slots.empty(),"IR: 网格为空或没有材质槽");
     for(auto p:mesh.positions) require(finite(p),"IR: 顶点包含非有限值");
+    for(const auto &curve:mesh.curves) {
+      require(curve.vertices.size()>=2&&curve.material_slot<mesh.material_slots.size(),"IR: 发丝长度或材质槽无效");
+      for(auto v:curve.vertices) require(v<mesh.positions.size(),"IR: 发丝顶点索引越界");
+      require(std::isfinite(curve.uv.x)&&std::isfinite(curve.uv.y),"IR: 发丝 UV 无效");
+    }
     for(const auto &t:mesh.triangles) {
       require(t.material_slot<mesh.material_slots.size(),"IR: 三角形材质槽越界");
       for(auto v:t.vertices) require(v<mesh.positions.size(),"IR: 顶点索引越界");

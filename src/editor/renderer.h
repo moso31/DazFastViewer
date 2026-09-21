@@ -15,8 +15,11 @@ struct RenderStatus {
   runtime::SkinStats skinning;
   runtime::FormulaStats formulas;
   runtime::ConformStats conform;
+  runtime::CollisionStats collision;
   std::vector<std::vector<float>> effective;
   std::vector<ir::Bounds> bounds;
+  std::vector<ir::Bounds> head_bounds;
+  std::vector<bool> visible;
   uint64_t clicks=0;
   int hit_target=-1,hit_joint=-1,hovered=-1,hovered_joint=-1,width=0,height=0;
   size_t hovered_triangles=0;
