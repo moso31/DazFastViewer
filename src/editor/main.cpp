@@ -1,6 +1,9 @@
 #include "editor/renderer.h"
 #include "editor/project.h"
 #include "editor/parameters.h"
+#include "editor/content_browser.h"
+#include "editor/content_catalog.h"
+#include "daz/documents.h"
 #include "render_ir/options_json.h"
 #include "daz/pose.h"
 #include "runtime/picking.h"
@@ -53,10 +56,8 @@ static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsi
 class Editor final:public QMainWindow {
   QWidget *host_=nullptr;
   ParameterPanel *parameters_=nullptr;
-  QComboBox *libraries_=nullptr;
+  ContentBrowser *browser_=nullptr;
   QTreeWidget *hierarchy_=nullptr;
-  QTreeView *explorer_=nullptr;
-  QFileSystemModel *files_=nullptr;
   QLabel *selection_=nullptr;
   QCheckBox *visible_=nullptr;
   QCheckBox *manual_morph_=nullptr;
@@ -258,12 +259,14 @@ class Editor final:public QMainWindow {
     std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
     pose_status_->setText(QStringLiteral("已应用复合 DUF 的材质与姿势 / 形态；%1 项通道未应用，可查看详情。").arg(pose_report_["unapplied"].size()));
     select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
+    if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(data));
   }
   void apply_material_file(const std::filesystem::path &file) {
     if(loading_||selected_<0||!document_) throw std::runtime_error("请先选中材质预设的目标对象");
     auto preset=daz::load(file,{roots_,false});auto next=std::make_shared<Document>(*document_);next->generation=++generation_;
     apply_materials(*next,size_t(selected_),preset);
     next->loaded.scene.lights=snapshot_.lights;document_=next;snapshot_.generation=next->generation;++snapshot_.revision;select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
+    if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*daz::document_view(file)));
   }
   int selected_skin() const {
     if(selected_<0||!document_) return -1;const auto instance=document_->catalog.targets[size_t(selected_)].instance;
@@ -275,12 +278,14 @@ class Editor final:public QMainWindow {
       if(loading_) throw std::runtime_error("请等待场景加载完成后应用姿势");
       const auto index=selected_skin();if(index<0) throw std::runtime_error("请先选中一个带骨骼蒙皮的角色");
       const auto &skin=document_->skeletons.skins[size_t(index)];
-      auto applied=daz::apply_pose(daz::read_pose(file),skin,snapshot_.poses[size_t(index)],document_->catalog.targets[size_t(selected_)],snapshot_.values[size_t(selected_)]);
+      const auto data=daz::document_view(file);
+      auto applied=daz::apply_pose(daz::parse_pose(*data),skin,snapshot_.poses[size_t(index)],document_->catalog.targets[size_t(selected_)],snapshot_.values[size_t(selected_)]);
       snapshot_.poses[size_t(index)]=std::move(applied.joints);snapshot_.values[size_t(selected_)]=std::move(applied.properties);pose_report_=applied.report;
       std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
       const auto skipped=pose_report_["unapplied"].size();
       pose_status_->setText(QStringLiteral("预设：%1\n已应用 %2 个骨骼通道、%3 个 Morph 通道；%4 项未应用。%5").arg(QString::fromStdWString(file.stem().wstring())).arg(pose_report_["applied_bone_channels"].get<int>()).arg(pose_report_["applied_morph_channels"].get<int>()).arg(skipped).arg(skipped?QStringLiteral("点击下方查看详情。") : QString()));
-      pose_status_->setToolTip(QString::fromStdWString(file.wstring()));select(selected_,selected_joint_);send();frame_pending_=self_test_;return true;
+      pose_status_->setToolTip(QString::fromStdWString(file.wstring()));select(selected_,selected_joint_);send();frame_pending_=self_test_;
+      if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*data));return true;
     } catch(const std::exception &e) {
       if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法应用预设"),text(e.what()));return false;
     }
@@ -291,6 +296,7 @@ class Editor final:public QMainWindow {
     pose_status_->setText(QStringLiteral("已恢复载入时的骨骼姿势；Morph 保持当前值。"));pose_report_=nullptr;
   }
   void open_asset(const std::filesystem::path &file) {
+    if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
     try {const auto data=daz::read_document_file(file);
       const auto contents=daz::inspect_contents(data);
       if(contents.instantiate) load(file,false,document_!=nullptr);
@@ -301,10 +307,8 @@ class Editor final:public QMainWindow {
     } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
   }
   void update_libraries() {
-    QSignalBlocker block(libraries_);libraries_->clear();roots_.clear();
-    for(const auto &root:project_.content_roots) {roots_.push_back(file_path(root));libraries_->addItem(root);}
-    if(!project_.content_roots.empty()) explorer_->setRootIndex(files_->setRootPath(project_.content_roots.front()));
-    else explorer_->setRootIndex(files_->setRootPath(QString()));
+    roots_.clear();for(const auto &root:project_.content_roots) roots_.push_back(file_path(root));
+    browser_->set_roots(project_.content_roots);
   }
   void project_settings() {
     if(loading_) return;
@@ -919,15 +923,9 @@ public:
     setDockOptions(AnimatedDocks|AllowNestedDocks|AllowTabbedDocks);
     auto *central=new QWidget;auto *layout=new QVBoxLayout(central);layout->setContentsMargins(4,4,4,4);
     host_=new QWidget;host_->setAttribute(Qt::WA_NativeWindow);host_->setAttribute(Qt::WA_DontCreateNativeAncestors);host_->setMinimumSize(160,120);host_->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
-    layout->addWidget(host_,1);auto *navigation_help=new QLabel(QStringLiteral("右键环绕 · 中键 / Shift＋右键平移 · 后侧键 / Ctrl＋右键转头\n后侧键单击 / F 聚焦所选 · 滚轮缩放 · WASDQE 移动（Shift 加速）"));navigation_help->setAlignment(Qt::AlignCenter);layout->addWidget(navigation_help);auto *viewport_dock=dock(QStringLiteral("视口"),central,Qt::RightDockWidgetArea);viewport_dock->setObjectName("Viewport");
-    files_=new QFileSystemModel(this);files_->setNameFilters({"*.duf"});files_->setNameFilterDisables(false);files_->setReadOnly(true);
-    explorer_=new QTreeView;explorer_->setModel(files_);
-    for(int i=1;i<4;++i) explorer_->hideColumn(i);explorer_->setHeaderHidden(true);explorer_->setMinimumWidth(185);
-    auto *browser=new QWidget;auto *browser_layout=new QVBoxLayout(browser);browser_layout->setContentsMargins(0,0,0,0);
-    libraries_=new QComboBox;libraries_->setMinimumContentsLength(16);libraries_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    browser_layout->addWidget(libraries_);browser_layout->addWidget(explorer_);update_libraries();
-    connect(libraries_,&QComboBox::currentTextChanged,this,[this](const QString &root) {explorer_->setRootIndex(files_->setRootPath(root));});
-    auto *explorer_dock=dock(QStringLiteral("内容浏览器"),browser,Qt::LeftDockWidgetArea);
+    layout->addWidget(host_,1);auto *viewport_dock=dock(QStringLiteral("视口"),central,Qt::RightDockWidgetArea);viewport_dock->setObjectName("Viewport");
+    browser_=new ContentBrowser;browser_->open_asset=[this](const QString &file){open_asset(file_path(file));};update_libraries();
+    auto *explorer_dock=dock(QStringLiteral("内容浏览器"),browser_,Qt::LeftDockWidgetArea);
     hierarchy_=new QTreeWidget;hierarchy_->setHeaderLabel(QStringLiteral("场景对象"));hierarchy_->setMinimumWidth(240);hierarchy_->setIndentation(12);hierarchy_->header()->setStretchLastSection(false);hierarchy_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     auto *hierarchy_dock=dock(QStringLiteral("场景层次"),hierarchy_,Qt::LeftDockWidgetArea);tabifyDockWidget(explorer_dock,hierarchy_dock);hierarchy_dock->raise();
     auto *panel=new QWidget;auto *properties=new QVBoxLayout(panel);panel->setMinimumWidth(380);
@@ -972,6 +970,7 @@ public:
     auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
     auto *file_menu=menuBar()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
     connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 文件 (*.duf)"));if(!file.isEmpty()) open_asset(file_path(file));});
+    connect(file_menu->addAction(QStringLiteral("近期使用…")),&QAction::triggered,this,[this,explorer_dock]{explorer_dock->show();explorer_dock->raise();browser_->show_recent();});
     connect(file_menu->addAction(QStringLiteral("保存环境与色调设置…")),&QAction::triggered,this,[this]{
       if(!document_) return;const auto file=QFileDialog::getSaveFileName(this,QStringLiteral("保存渲染设置"),{},QStringLiteral("渲染设置 (*.dfv-render.json)"));if(file.isEmpty()) return;
       try {std::ofstream output(file_path(file));output<<ir::options_json(snapshot_.options).dump(2);if(!output) throw std::runtime_error("写入失败");}catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("保存失败"),text(e.what()));}
@@ -996,7 +995,6 @@ public:
     connect(create->addAction(QStringLiteral("面光源")),&QAction::triggered,this,[this] {add_light();});
     auto *view=menuBar()->addMenu(QStringLiteral("视图"));for(auto *d:findChildren<QDockWidget *>()) view->addAction(d->toggleViewAction());
     connect(view->addAction(QStringLiteral("框选当前对象")),&QAction::triggered,this,[this] {frame_pending_=true;});
-    connect(explorer_,&QTreeView::doubleClicked,this,[this](const QModelIndex &index) {const auto file=files_->filePath(index);if(QFileInfo(file).suffix().compare("duf",Qt::CaseInsensitive)==0) open_asset(file_path(file));});
     connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item) {select(item?item->data(0,Qt::UserRole).toInt():-1,item?item->data(0,Qt::UserRole+1).toInt():-1,item?item->data(0,Qt::UserRole+2).toInt():-1);});
     connect(view->addAction(QStringLiteral("恢复默认布局")),&QAction::triggered,this,[this] {restoreState(default_layout_,1);});
     QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens()) if(screen!=QGuiApplication::primaryScreen()) {secondary=screen;break;}
@@ -1011,7 +1009,7 @@ public:
     renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_,sampling);
     auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this] {tick();});timer->start(50);
   }
-  void closeEvent(QCloseEvent *event) override {if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));}QMainWindow::closeEvent(event);}
+  void closeEvent(QCloseEvent *event) override {if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));browser_->save();}QMainWindow::closeEvent(event);}
   ~Editor() override {loader_.request_stop();if(loader_.joinable()) loader_.join();renderer_.reset();}
   void options_test() {options_test_=self_test_=true;}
   void navigation_test() {navigation_test_=self_test_=true;}
@@ -1036,10 +1034,11 @@ public:
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
         std::ofstream(output_/"skeleton-report.json")<<document->skeletons.report.dump(2);
         std::ofstream(output_/"formula-report.json")<<document->formulas.report.dump(2);
+        const auto category=content_category(*daz::document_view(file));
         release_load_data(*document);
         if(previous_document) {auto merged=std::make_shared<Document>(*previous_document);merged->generation=generation;append_document(*merged,std::move(*document));document=std::move(merged);}
         else if(document->loaded.scene.lights.empty()) ir::add_studio(document->loaded.scene);
-        QMetaObject::invokeMethod(this,[this,document,preserve,previous_document] {
+        QMetaObject::invokeMethod(this,[this,document,preserve,previous_document,file,category] {
           const auto old=document_;const auto previous=snapshot_;parameters_->bind(nullptr,nullptr);
           if(!preserve&&!previous_document) {pending_parameters_.clear();apply_parameters_->setEnabled(false);}
           document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.options=(preserve||previous_document)?previous.options:document->loaded.scene.options;snapshot_.generation=document->generation;snapshot_.revision=1;snapshot_.lights=document->loaded.scene.lights;
@@ -1066,6 +1065,7 @@ public:
           renderer_->set_document(document_,submitted_snapshot(),!previous_document);select(-1);
           const auto first=previous_document?previous_document->catalog.targets.size():0;
           if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
+          if(!self_test_&&!preserve) browser_->record_use(QString::fromStdWString(file.wstring()),category);
           if(!pose_file_.empty()&&!pose_test_) {const auto file=pose_file_;pose_file_.clear();apply_pose_file(file);}
         },Qt::QueuedConnection);
       } catch(const std::exception &e) {
