@@ -39,7 +39,12 @@ struct CameraState {
     const Vec3 forward=normalized(target-eye()),right=normalized(cross(forward,{0,0,1}));
     target=target+right*(-dx*distance*0.001f)+cross(right,forward)*(dy*distance*0.001f);
   }
-  void dolly(float ticks) { distance=std::clamp(distance*std::exp(-ticks*0.12f),0.3f,200.0f); }
+  void move(float forward,float right,float up,float seconds,bool fast=false) {
+    const Vec3 f=normalized(target-eye()),r=normalized(cross(f,{0,0,1}));
+    const float length=std::sqrt(forward*forward+right*right+up*up);
+    if(length>0) target=target+(f*forward+r*right+Vec3{0,0,up})*(std::max(.05f,distance*.6f)*seconds*(fast?4.f:1.f)/length);
+  }
+  void dolly(float ticks) { distance=std::clamp(distance*std::exp(-ticks*0.12f),0.01f,2000.0f); }
 };
 class CameraMailbox {
   std::mutex mutex_;

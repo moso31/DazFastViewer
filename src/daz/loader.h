@@ -16,6 +16,8 @@ struct AssetObject {
   ir::MeshSmoothing smoothing;
   std::filesystem::path source_file;
   std::string source_node;
+  ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
+  float general_scale=1;
   std::vector<std::pair<std::filesystem::path,std::string>> geometry_versions;
 };
 struct AssetNode {std::string id,parent;};

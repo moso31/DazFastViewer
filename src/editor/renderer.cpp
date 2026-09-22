@@ -36,10 +36,16 @@ void Renderer::frame(const ir::Bounds &bounds) {
   window_->camera.target={c.x,c.y,c.z};window_->camera.distance=std::max(bounds.extent()*1.6f,.35f);window_->camera.yaw=.3f;
   window_->camera.pitch=bounds.maximum.z-bounds.minimum.z<bounds.extent()*.5f?.7f:.08f;window_->publish();
 }
+void Renderer::focus(const ir::Bounds &bounds) {
+  if(bounds.empty) return;const auto c=bounds.center();window_->camera.target={c.x,c.y,c.z};
+  const auto dx=bounds.maximum.x-bounds.minimum.x,dy=bounds.maximum.y-bounds.minimum.y,dz=bounds.maximum.z-bounds.minimum.z;
+  window_->camera.distance=std::max(.025f,.55f*std::sqrt(dx*dx+dy*dy+dz*dz)/std::sin(.4f));window_->publish();
+}
 void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) snapshot_=snapshot;}
 void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources_;}
 void Renderer::select(uint64_t generation,int target,int joint) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
+void Renderer::keyboard(int key,bool pressed) {SetFocus(window_->hwnd);PostMessageW(window_->hwnd,pressed?WM_KEYDOWN:WM_KEYUP,WPARAM(key),0);}
 void Renderer::orbit(float x,float y) {window_->camera.orbit(x,y);window_->publish();}
 void Renderer::run(std::stop_token stop) {
   using namespace ccl;
@@ -105,7 +111,7 @@ void Renderer::run(std::stop_token stop) {
           {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;
         }
         runtime->evaluate(desired.values,desired.poses);
-        render_scene.lights=desired.lights;
+        render_scene.lights=desired.lights;render_scene.options=desired.options;
         SceneParams scene_params;scene_params.background=false;scene_params.bvh_type=BVH_TYPE_DYNAMIC;
         scene_params.use_texture_cache=false;scene_params.auto_texture_cache=false;
         session=std::make_unique<Session>(params,scene_params);
@@ -117,7 +123,7 @@ void Renderer::run(std::stop_token stop) {
         auto camera=window_->mailbox.latest();render_scene.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;
         adapter=std::make_unique<CyclesAdapter>(scene);adapter->load(render_scene);
         auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
-        display=driver.get();session->set_display_driver(std::move(driver));session->dfv_requested_epoch=++epoch;
+        display=driver.get();display->set_options(desired.options);session->set_display_driver(std::move(driver));session->dfv_requested_epoch=++epoch;
         applied_revision=attempted_revision=desired.revision;session->reset(params,buffers);session->start();
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
@@ -138,16 +144,18 @@ void Renderer::run(std::stop_token stop) {
             }
             geometry_dirty|=!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
             for(size_t l=0;l<desired.lights.size();++l) delta.lights.push_back({uint32_t(l),desired.lights[l]});
+            if(render_scene.options!=desired.options) {delta.options=desired.options;render_scene.options=desired.options;display->set_options(desired.options);}
             applied_revision=desired.revision;state.edit_error.clear();}
           }
           catch(const std::exception &e) {attempted_revision=desired.revision;state.edit_error=e.what();}
         }
         if(camera.epoch!=camera_epoch) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;}
-        if(delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
+        if(delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
           {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
         state.applied_revision=applied_revision;
       }
       window_->present_context.activate();
+      const bool bounds_dirty=geometry_dirty;
       if(geometry_dirty) {overlay.update(render_scene,regions);picking.update(render_scene,pickable);geometry_dirty=false;}
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
       session->draw();
@@ -156,9 +164,31 @@ void Renderer::run(std::stop_token stop) {
       bool editable=false;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
       if(!editable) hover={};
       state.hovered_detail_joint=hover.instance>=0&&hover.triangle>=0&&size_t(hover.triangle)<regions[size_t(hover.instance)].detail.size()?regions[size_t(hover.instance)].detail[size_t(hover.triangle)]:-1;
+      const bool selection_dirty=state.selection_generation!=selection_generation||state.selected_target!=selected_target||state.selected_joint!=selected_joint;
       state.selection_generation=selection_generation;state.selected_target=selection_generation==current->generation?selected_target:-1;
       state.selected_joint=state.selected_target>=0?selected_joint:-1;
       const int selected_instance=state.selected_target>=0&&size_t(state.selected_target)<current->catalog.targets.size()?int(current->catalog.targets[size_t(state.selected_target)].instance):-1;
+      state.focus_requests=window_->focus_requests;
+      if(bounds_dirty||selection_dirty) {state.selection_bounds={};
+      if(selected_instance>=0) {
+        const auto &instance=render_scene.instances.at(size_t(selected_instance));const auto &mesh=render_scene.meshes.at(instance.mesh);
+        if(selected_joint<0) {for(auto p:mesh.positions) state.selection_bounds.add(instance.transform.point(p));}
+        else {
+          const auto &r=regions.at(size_t(selected_instance));
+          for(size_t f=0;f<mesh.triangles.size();++f) {
+            int j=f<r.detail.size()?r.detail[f]:-1;bool selected=j==selected_joint;
+            for(int depth=0;j>=0&&size_t(j)<r.parents.size()&&depth<256;++depth) {selected|=j==selected_joint;j=r.parents[size_t(j)];}
+            if(selected) for(auto v:mesh.triangles[f].vertices) state.selection_bounds.add(instance.transform.point(mesh.positions[v]));
+          }
+        }
+        if(state.selection_bounds.empty&&selected_joint>=0) for(size_t s=0;s<current->skeletons.skins.size();++s) {
+          const auto &skin=current->skeletons.skins[s];if(skin.instance!=uint32_t(selected_instance)||size_t(selected_joint)>=skin.joints.size()) continue;
+          const auto &pose=runtime->effective_poses()[s];const auto &j=skin.joints[size_t(selected_joint)];const auto &p=pose[size_t(selected_joint)];const auto matrices=runtime::joint_transforms(skin,pose);
+          auto center=matrices[size_t(selected_joint)].point({(j.center_cm.x+p.center_offset_cm.x)*.01f,-(j.center_cm.z+p.center_offset_cm.z)*.01f,(j.center_cm.y+p.center_offset_cm.y)*.01f});center=instance.transform.point(center);
+          state.selection_bounds.add({center.x-.01f,center.y-.01f,center.z-.01f});state.selection_bounds.add({center.x+.01f,center.y+.01f,center.z+.01f});break;
+        }
+      }
+      }
       const auto region=runtime::hover_region(hover,selected_instance,state.selected_joint,regions);
       state.hovered=region.instance;state.hovered_joint=region.joint;state.hovered_triangles=overlay.triangle_count(region.instance,region.joint);
       const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;

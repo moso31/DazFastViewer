@@ -18,6 +18,10 @@ class CyclesAdapter {
   std::vector<ccl::Object *> light_objects_;
   std::vector<ccl::Light *> lights_;
   AdapterStats stats_;
+  ir::RenderOptions options_;
+  ir::Vec3 environment_;
+  std::vector<ir::Vec3> light_power_;
+  void environment(const ir::RenderOptions &options);
   bool loaded_=false;
   void material(ccl::Shader &shader,const ir::Material &value);
 public:

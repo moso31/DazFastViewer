@@ -89,6 +89,7 @@ void Scene::validate() const {
   }
 }
 void add_studio(Scene &scene) {
+  if(!scene.options.environment.id.empty()) return;
   const auto b=scene.bounds();if(b.empty) return;
   const float s=std::max(b.extent(),.05f);const auto c=b.center();
   Material floor;floor.id="preview-floor";floor.base_color={.18f,.18f,.18f};floor.roughness=.8f;

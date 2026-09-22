@@ -107,6 +107,7 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
       const auto query=follower_to_source.point(p);auto binding=index.nearest(query);const auto a=body.positions[binding.vertices[0]],b=body.positions[binding.vertices[1]],c=body.positions[binding.vertices[2]];
       binding.edge1=sub(b,a);binding.edge2=sub(c,a);binding.normal=normal(binding.edge1,binding.edge2);
       const auto offset=sub(query,add(add(mul(a,binding.barycentric.x),mul(b,binding.barycentric.y)),mul(c,binding.barycentric.z)));
+      binding.distance=std::sqrt(dot(offset,offset));
       const double aa=dot(binding.edge1,binding.edge1),bb=dot(binding.edge2,binding.edge2),ab=dot(binding.edge1,binding.edge2),u=dot(offset,binding.edge1),v=dot(offset,binding.edge2),det=aa*bb-ab*ab;
       if(det>1e-12*aa*bb) binding.offset_coordinates={float((bb*u-ab*v)/det),float((aa*v-ab*u)/det),dot(offset,binding.normal)};
       l.surface.push_back(binding);
@@ -136,7 +137,9 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
     auto filtered=offsets;
     for(int iteration=0;iteration<24;++iteration) {
       for(size_t v=0;v<offsets.size();++v) {const auto &neighbors=l->neighbors[v];if(neighbors.size()<3) continue;
-        ir::Vec3 average;for(auto n:neighbors) average=add(average,offsets[n]);filtered[v]=add(mul(offsets[v],.5f),mul(average,.5f/float(neighbors.size())));}
+        // 贴体区域保留表面形变；远离身体的裙摆才逐渐增强平滑，避免压平鞋面。
+        const float weight=std::clamp((l->surface[v].distance-.03f)/.06f,0.f,.5f);
+        ir::Vec3 average;for(auto n:neighbors) average=add(average,offsets[n]);filtered[v]=add(mul(offsets[v],1-weight),mul(average,weight/float(neighbors.size())));}
       offsets.swap(filtered);
     }
     if(morph.set_follow_offsets(target,offsets)) ++revisions_[target];

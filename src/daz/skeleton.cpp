@@ -21,6 +21,14 @@ void pose_channels(runtime::JointPose &p,const Json &node) {
   p.translation_cm=vector(node,"translation",p.translation_cm);p.rotation_degrees=vector(node,"rotation",p.rotation_degrees);p.scale=vector(node,"scale",p.scale);
   if(node.contains("general_scale")) p.general_scale=number(node.at("general_scale"),p.general_scale);
 }
+void joint_channels(runtime::Joint &joint,const Json &node) {
+  // 场景可以重新定义附件的铰链与局部轴；preview 仅为缓存，不能当输入。
+  joint.center_cm=vector(node,"center_point",joint.center_cm);
+  joint.end_cm=vector(node,"end_point",joint.end_cm);
+  joint.orientation_degrees=vector(node,"orientation",joint.orientation_degrees);
+  joint.rotation_order=node.value("rotation_order",joint.rotation_order);
+  joint.inherits_scale=node.value("inherits_scale",joint.inherits_scale);
+}
 }
 SkinCatalog load_skeletons(const LoadedScene &loaded) {
   SkinCatalog catalog;catalog.report={{"skins",Json::array()}};
@@ -102,10 +110,10 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       throw std::runtime_error("非刚性局部权重尚需 TriAx 蒙皮："+object.id);
     // 保存场景中的骨骼实例覆盖值只可作用于所属 Figure，不能按名称跨角色覆盖。
     for(const auto &[id,n]:instances) {
-      if(id==object.id) continue;auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
+      if(id==object.id) {joint_channels(skin.joints[indices.at(root)],n);continue;}auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
       while(!parent.empty()&&parent!=object.id&&!figures.contains(parent)&&instances.contains(parent)&&seen.insert(parent).second) parent=fragment(instances.at(parent).value("parent",""));
       if(parent!=object.id) continue;const auto bone=fragment(n.value("url",""));if(indices.contains(bone)) {
-        const auto index=indices.at(bone);pose_channels(skin.initial[index],n);skin.joints[index].scene_id=id;
+        const auto index=indices.at(bone);joint_channels(skin.joints[index],n);pose_channels(skin.initial[index],n);skin.joints[index].scene_id=id;
       }
     }
     runtime::validate_pose(skin,skin.initial);size_t unweighted=0;double error=0;

@@ -1,5 +1,13 @@
 # 交接记录
 
+## 最新复查：A 眼镜层级及穿脸已修复
+
+用户重新导出 `test3.dbz` 并在 Blender 确认位置正确。除 Head 场景树和镜腿定义覆盖外，最终根因是漏读场景通道下限：A 的 `Youth Morph=-0.2` 被资产下限 `0` 错误截断，影响头部网格和 Head 中心。现继承实例 min / max / clamped / step_size，并保持共享缓存隔离。A / B 眼镜对新 DBZ 的 RMS 均约 0.0005 毫米；A 头部约 0.093 毫米，B 人物和眼镜逐顶点不变。12 项回归及原始场景副屏检查通过，已目视确认 A 镜架下缘不再穿脸，并部署到 `out`。最终证据为 `artifacts/test3-glasses/channel-*`，详见[专项记录](Docs/test3_glasses_followup_cn.md)。完整全身 / 服装仍保留近似差异，008 未开始。本轮按用户要求，以中文提交说明将代码、测试与文档归档至本地 Git，提交记录见 `git log`。
+
+## 最新：test3 渲染选项、参数面板及导航
+
+修复深色 Top Coat 导致 B 皮肤发黑、骨骼中心变化导致眼镜偏移及拖鞋生成位移过度平滑；接入 HDRI Environment Options、ToneMapper、独立设置保存 / 载入，改为左右分类参数面板，增加 F 与 WASDQE。12 项工程测试及原始 test3 的副屏选项 / 导航、异步 Morph 界面回归通过，已部署到 `out`。拖鞋局部接触与 Iray 色调 / 材质仍有近似差异，不能宣称完整 Golden；A 的最终定位以本页最新眼镜专项复查为准。详见[本轮执行报告](Docs/test3_scene_repair_execution_cn.md)。008 未开始；本轮与眼镜专项修复一并按用户要求归档至本地 Git。
+
 ## 最新：test.duf 可见性、发丝、材质与 A 上衣贴合
 
 本轮已接入节点 Visible 与两个 UI 开关、原生曲线头发、根层级 FitTo 变换跟随、薄壁眼部 / SSS / 分层高光材质及蒙皮后服装碰撞。A 有 GeoGraft，碰撞必须同时保证处于基础人体和可见附加表面的外侧，并反查粗服装面内部的小凸起；仅最近复合表面会选到内层而重新漏碰撞。详细实现、最终证据与近似限制见 [执行报告](Docs/scene_fidelity_execution_cn.md)。10 项工程回归通过；当前工程验证不等于 Iray Golden 或任意姿势完全无穿插。008 未开始。本轮按用户要求以中文提交说明归档到本地 Git，提交记录见 `git log`。

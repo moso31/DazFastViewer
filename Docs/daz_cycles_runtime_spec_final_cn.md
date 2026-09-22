@@ -1,6 +1,8 @@
 # DAZ 轻量级 Cycles Runtime —— 实现规范（含模型路由）
 
-## 本地开发环境与版本基线（用户补充，2026-09-21 更新）
+## 本地开发环境与版本基线（用户补充，2026-09-22 更新）
+
+- **test3 场景复测修复**：修正 Top Coat 黑皮肤、骨骼中心偏移的眼镜挂接与贴身鞋面过度平滑；导入 HDRI / ToneMapper，增加设置保存、分类参数面板、F 聚焦与 WASDQE。眼镜后续补齐 Head 层级、镜腿定义和场景 Morph 下限覆盖，两副眼镜对新 DBZ 的 RMS 均约 0.0005 毫米，见[专项复查](test3_glasses_followup_cn.md)。12 项工程测试与副屏交互通过，Iray 等价及拖鞋局部接触仍需复核；见[本轮报告](test3_scene_repair_execution_cn.md)。不计为 008。
 
 - **007 后场景加载与 Morph 按需交互优化**：已实现完整参数目录、共享差值按需加载、异步补载、手动应用、目录刷新、失败重试与元数据缓存。真实 `H:\G1\Scenes\3.duf` 冷缓存首帧约 183 秒，缓存命中首帧约 128 秒（原约 369 秒）；独立 CPU 缓存命中诊断约 101 秒（原约 425 秒），峰值工作集约 1.46 GiB（原约 3.89 GiB）。详细口径、验证和刷新边界见[执行报告](scene_load_optimization_execution_cn.md)，原始瓶颈见[性能分析](scene_load_performance_analysis_cn.md)。不计为 008。
 

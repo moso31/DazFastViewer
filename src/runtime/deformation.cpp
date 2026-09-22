@@ -114,7 +114,10 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
   std::vector<std::vector<ir::Transform>> joints(skins_.size());
   for(const auto &a:attachments_) {
     if(joints[a.skin].empty()) joints[a.skin]=joint_transforms(skins_[a.skin],resolved[a.skin]);
-    morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*a.inverse_bind);
+    const auto &now=resolved[a.skin][a.joint].center_offset_cm;const auto &initial=skins_[a.skin].initial[a.joint].center_offset_cm;
+    const auto moved=ir::Transform::translate({(now.x-initial.x)*.01f,-(now.z-initial.z)*.01f,(now.y-initial.y)*.01f});
+    // 刚性附件还需继承关节中心的 Morph 位移。
+    morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*moved*a.inverse_bind);
   }
   conform_.project(weights,morph_);
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;return collision_.evaluate(skin_.evaluate(morph_.evaluate()));

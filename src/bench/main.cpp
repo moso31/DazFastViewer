@@ -269,7 +269,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
     return 0;
   }
   auto display_owner=std::make_unique<Display>(*window,telemetry,session->dfv_render_epoch,session->dfv_render_samples,o.readback);
-  Display *display=display_owner.get();session->set_display_driver(std::move(display_owner));
+  Display *display=display_owner.get();display->set_options(render_scene.options);session->set_display_driver(std::move(display_owner));
   std::atomic<bool> stop{false};
   std::string worker_error;std::mutex error_mutex;
   auto failure=[&](const std::exception &e) {std::lock_guard lock(error_mutex);worker_error=e.what();stop=true;};

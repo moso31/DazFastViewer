@@ -4,6 +4,7 @@
 #include "session/display_driver.h"
 #include <epoxy/gl.h>
 #include <array>
+#include "render_ir/options.h"
 
 namespace dfv {
 class Display final:public ccl::DisplayDriver {
@@ -19,6 +20,7 @@ class Display final:public ccl::DisplayDriver {
   GLuint pbo_=0,program_=0,font_=0;
   GLsync upload_=nullptr;
   bool allow_readback_;
+  ir::RenderOptions options_;
   Frame last_drawn_;
   uint64_t last_presented_=0;
   std::atomic<bool> failed_{false};
@@ -39,6 +41,7 @@ public:
   void graphics_interop_update_buffer() override;
   void graphics_interop_activate() override {window_.render_context.activate();}
   void graphics_interop_deactivate() override {window_.render_context.deactivate();}
+  void set_options(const ir::RenderOptions &options) {options_=options;}
   void after_swap();
   Frame drawn_frame() const {return last_drawn_;}
   void hud(const std::string &text);

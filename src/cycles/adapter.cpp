@@ -1,4 +1,5 @@
 #include "cycles/adapter.h"
+#include "render_ir/options.h"
 #include "scene/scene.h"
 #include "scene/camera.h"
 #include "scene/mesh.h"
@@ -82,7 +83,7 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m) {
       node->set_coat_ior(m.coat_ior);node->set_coat_tint(vector(m.coat_color));
       graph->connect(base,node->input("Base Color"));graph->connect(rough,node->input("Roughness"));graph->connect(specular,node->input("Specular IOR Level"));
       graph->connect(sss,node->input("Subsurface Weight"));graph->connect(metallic,node->input("Metallic"));graph->connect(transmission,node->input("Transmission Weight"));
-      graph->connect(coat,node->input("Coat Weight"));graph->connect(coat_rough,node->input("Coat Roughness"));
+      node->set_coat_weight(0);graph->connect(coat_rough,node->input("Coat Roughness"));
       if(surface_normal) {graph->connect(surface_normal,node->input("Normal"));graph->connect(surface_normal,node->input("Coat Normal"));}
       return node->output("BSDF");
     };
@@ -98,6 +99,21 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m) {
       auto *b=principled(scalar(-1,m.dual_roughness2),scalar(-1,m.dual_specular),{1,1,1});
       surface=mix(surface,mix(b,a,scalar(-1,m.dual_ratio)),scalar(m.dual_texture,m.dual_weight));
     }
+    if(m.coat>0) {
+      // Top Coat 反射色不能直接作为 Principled Coat Tint 的吸收色。
+      auto *gloss=graph->create_node<GlossyBsdfNode>();gloss->set_color(vector(m.coat_color));graph->connect(coat_rough,gloss->input("Roughness"));
+      if(surface_normal) graph->connect(surface_normal,gloss->input("Normal"));
+      ShaderOutput *fresnel=nullptr;
+      if(m.coat_mode==1) fresnel=scalar(-1,1);
+      else if(m.coat_mode==2) {auto *f=graph->create_node<FresnelNode>();f->set_IOR(m.coat_ior);if(surface_normal) graph->connect(surface_normal,f->input("Normal"));fresnel=f->output("Fac");}
+      else {
+        auto *layer=graph->create_node<LayerWeightNode>();layer->set_blend(.5f);if(surface_normal) graph->connect(surface_normal,layer->input("Normal"));
+        auto *power=graph->create_node<MathNode>();power->set_math_type(NODE_MATH_POWER);power->set_value2(m.coat_exponent);graph->connect(layer->output("Facing"),power->input("Value1"));
+        auto *scale=graph->create_node<MathNode>();scale->set_math_type(NODE_MATH_MULTIPLY);scale->set_value2(m.coat_grazing-m.coat_normal);graph->connect(power->output("Value"),scale->input("Value1"));
+        auto *bias=graph->create_node<MathNode>();bias->set_math_type(NODE_MATH_ADD);bias->set_value2(m.coat_normal);graph->connect(scale->output("Value"),bias->input("Value1"));fresnel=bias->output("Value");
+      }
+      auto *weight=graph->create_node<MathNode>();weight->set_math_type(NODE_MATH_MULTIPLY);graph->connect(coat,weight->input("Value1"));graph->connect(fresnel,weight->input("Value2"));surface=mix(surface,gloss->output("BSDF"),weight->output("Value"));
+    }
     if(m.translucency>0) {
       auto *translucent=graph->create_node<TranslucentBsdfNode>();graph->connect(color(m.translucency_color_texture,m.translucency_color),translucent->input("Color"));
       if(surface_normal) graph->connect(surface_normal,translucent->input("Normal"));
@@ -110,6 +126,29 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m) {
   }
   graph->connect(surface,graph->output()->input("Surface"));
   shader.name=ustring(m.id);shader.set_graph(std::move(graph));shader.tag_update(&scene_);
+}
+void CyclesAdapter::environment(const ir::RenderOptions &options) {
+  using namespace ccl;options_=options;
+  auto graph=make_unique<ShaderGraph>();auto *bg=graph->create_node<BackgroundNode>();
+  const auto &n=options.environment;const int mode=int(ir::number(n,"Environment Mode",0));
+  bg->set_color(vector(n.id.empty()?environment_:ir::color(n,"Environment Tint")));
+  bg->set_strength(n.id.empty()?1:mode==3?0:float(ir::number(n,"Environment Intensity",1)*ir::number(n,"Environment Map",1)));
+  if(!options.environment_file.empty()&&(mode==0||mode==1)) {
+    auto *tex=graph->create_node<EnvironmentTextureNode>();const auto path=options.environment_file.u8string();tex->set_filename(ustring(std::string(path.begin(),path.end())));tex->set_colorspace(u_colorspace_data);
+    auto *coord=graph->create_node<TextureCoordinateNode>();ShaderOutput *direction=coord->output("Generated");
+    // 逆向采样穹顶旋转，并转换 DAZ Y 向上坐标。
+    const std::array<std::pair<float3,double>,4> rotations={{{make_float3(0,0,1),ir::number(n,"Dome Orientation Y",0)},{make_float3(1,0,0),ir::number(n,"Dome Orientation X",0)},{make_float3(0,1,0),-ir::number(n,"Dome Orientation Z",0)},{make_float3(0,0,1),-ir::number(n,"Dome Rotation",0)}}};
+    for(const auto &[axis,degrees]:rotations) if(degrees!=0) {auto *r=graph->create_node<VectorRotateNode>();r->set_axis(axis);r->set_angle(float(degrees*.017453292519943));graph->connect(direction,r->input("Vector"));direction=r->output("Vector");}
+    graph->connect(direction,tex->input("Vector"));
+    auto *tint=graph->create_node<VectorMathNode>();tint->set_math_type(NODE_VECTOR_MATH_MULTIPLY);tint->set_vector2(vector(ir::color(n,"Environment Tint")));graph->connect(tex->output("Color"),tint->input("Vector1"));graph->connect(tint->output("Vector"),bg->input("Color"));
+  }
+  ShaderOutput *surface=bg->output("Background");
+  if(!n.id.empty()&&!ir::number(n,"Draw Dome",0)) {
+    auto *back=graph->create_node<BackgroundNode>();back->set_color(make_float3(options.backdrop[0],options.backdrop[1],options.backdrop[2]));back->set_strength(1);
+    auto *path=graph->create_node<LightPathNode>();auto *mix=graph->create_node<MixClosureNode>();graph->connect(surface,mix->input("Closure1"));graph->connect(back->output("Background"),mix->input("Closure2"));graph->connect(path->output("Is Camera Ray"),mix->input("Fac"));surface=mix->output("Closure");
+  }
+  graph->connect(surface,graph->output()->input("Surface"));scene_.default_background->set_graph(std::move(graph));scene_.default_background->tag_update(&scene_);
+  for(size_t i=0;i<lights_.size();++i) {lights_[i]->set_strength(ir::scene_lights(options)?vector(light_power_[i]):zero_float3());lights_[i]->tag_update(&scene_);}
 }
 void CyclesAdapter::load(const ir::Scene &source) {
   using namespace ccl;
@@ -179,12 +218,11 @@ void CyclesAdapter::load(const ir::Scene &source) {
     else if(data.kind==ir::LightKind::spot) {auto *spot=scene_.create_node<SpotLight>();spot->set_angle(data.angle);light=spot;}
     else if(data.kind==ir::LightKind::distant) light=scene_.create_node<SunLight>();
     else {auto *area=scene_.create_node<AreaLight>();area->set_sizeu(data.width);area->set_sizev(data.height);light=area;}
-    light->set_strength(vector(data.power));light->set_use_mis(true);lights_.push_back(light);
+    light_power_.push_back(data.power);light->set_strength(vector(data.power));light->set_use_mis(true);lights_.push_back(light);
     auto *object=scene_.create_node<Object>();object->set_geometry(light);object->set_tfm(transform(data.transform));
     light_objects_.push_back(object);
   }
-  auto graph=make_unique<ShaderGraph>();auto *bg=graph->create_node<BackgroundNode>();bg->set_color(vector(source.environment));bg->set_strength(1);
-  graph->connect(bg->output("Background"),graph->output()->input("Surface"));scene_.default_background->set_graph(std::move(graph));scene_.default_background->tag_update(&scene_);
+  environment_=source.environment;environment(source.options);
   loaded_=true;ir::Delta initial;initial.camera=source.camera;apply(initial);
 }
 void CyclesAdapter::apply(const ir::Delta &delta) {
@@ -210,6 +248,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     for(auto *object:objects_[edit.index]) if(object->get_geometry()->transform_applied) throw std::runtime_error("对象变换已烘焙，不能直接动态修改");
   }
   for(const auto &edit:delta.visibility) if(edit.index>=objects_.size()) throw std::runtime_error("可见性实例索引越界");
+  if(delta.options) environment(*delta.options);
   if(delta.camera) {
     const auto &c=*delta.camera;auto &camera=*scene_.camera;
     camera.set_camera_type(ccl::CAMERA_PERSPECTIVE);camera.set_full_width(c.width);camera.set_full_height(c.height);
@@ -218,7 +257,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
   }
   for(const auto &edit:delta.materials) {material(*shaders_.at(edit.index),edit.value);++stats_.material_updates;}
   for(const auto &edit:delta.lights) {
-    lights_[edit.index]->set_strength(vector(edit.value.power));lights_[edit.index]->tag_update(&scene_);
+    light_power_[edit.index]=edit.value.power;lights_[edit.index]->set_strength(ir::scene_lights(options_)?vector(edit.value.power):ccl::zero_float3());lights_[edit.index]->tag_update(&scene_);
     auto *object=light_objects_[edit.index];object->set_tfm(transform(edit.value.transform));object->tag_update(&scene_);
   }
   for(const auto &edit:delta.meshes) {

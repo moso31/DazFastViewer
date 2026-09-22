@@ -65,7 +65,7 @@ Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor,HWND
   ShowWindow(hwnd,SW_SHOWNOACTIVATE);
   SetWindowPos(hwnd,HWND_TOP,parent?0:left,parent?0:top,outer_width,outer_height,SWP_NOACTIVATE);
   std::cout<<"Window monitor "<<monitor<<" "<<monitor_device<<" at "<<left<<","<<top<<" client "<<w<<"x"<<h<<std::endl;
-  publish();
+  SetTimer(hwnd,1,16,nullptr);moved_=GetTickCount64();publish();
 }
 Window::~Window() {
   render_context.destroy();present_context.destroy();
@@ -89,12 +89,24 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
   }
   if(!self) return DefWindowProcW(hwnd,msg,w,l);
   switch(msg) {
+    case WM_LBUTTONDOWN:SetFocus(hwnd);return 0;
     case WM_LBUTTONUP:self->click_x=GET_X_LPARAM(l);self->click_y=GET_Y_LPARAM(l);++self->clicks;return 0;
     case WM_MOUSELEAVE:self->pointer_x=-1;self->pointer_y=-1;return 0;
     case WM_CLOSE:self->close=true;return 0;
-    case WM_KEYDOWN:if(w==VK_ESCAPE && !self->embedded) self->close=true;return 0;
+    case WM_KEYDOWN:
+      if(w==VK_ESCAPE&&!self->embedded) self->close=true;
+      if(w=='F'&&!(l&(1LL<<30))) ++self->focus_requests;
+      for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=true;return 0;
+    case WM_KEYUP:for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=false;return 0;
+    case WM_KILLFOCUS:std::fill(std::begin(self->keys_),std::end(self->keys_),false);self->dragging_=false;return 0;
+    case WM_TIMER: {
+      const auto now=GetTickCount64();const float seconds=std::min(float(now-self->moved_)*.001f,.1f);self->moved_=now;
+      if(GetFocus()==hwnd&&std::any_of(std::begin(self->keys_),std::end(self->keys_),[](bool k){return k;})) {
+        self->camera.move(float(self->keys_[0])-self->keys_[2],float(self->keys_[3])-self->keys_[1],float(self->keys_[5])-self->keys_[4],seconds,(GetKeyState(VK_SHIFT)&0x8000)!=0);self->publish();
+      }return 0;
+    }
     case WM_RBUTTONDOWN:
-      self->dragging_=true;self->last_x_=GET_X_LPARAM(l);self->last_y_=GET_Y_LPARAM(l);SetCapture(hwnd);return 0;
+      SetFocus(hwnd);self->dragging_=true;self->last_x_=GET_X_LPARAM(l);self->last_y_=GET_Y_LPARAM(l);SetCapture(hwnd);return 0;
     case WM_RBUTTONUP:self->dragging_=false;ReleaseCapture();return 0;
     case WM_MOUSEMOVE:
       self->pointer_x=GET_X_LPARAM(l);self->pointer_y=GET_Y_LPARAM(l);

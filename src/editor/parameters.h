@@ -2,34 +2,51 @@
 #include "runtime/morph.h"
 #include <QWidget>
 #include <functional>
+#include <map>
+#include <set>
 class QTreeWidget;
 class QTreeWidgetItem;
 class QLineEdit;
 class QCheckBox;
 class QLabel;
-class QSlider;
-class QDoubleSpinBox;
 namespace dfv::editor {
+struct ParameterControl {
+  std::string id,label,group,detail;
+  double minimum=-10000,maximum=10000,step=.01,initial=0;
+  double slider_minimum=0,slider_maximum=1;
+  int morph=-1;
+  bool enabled=true,visible=true;
+  std::vector<std::string> choices;
+  std::set<int> disabled_choices;
+  std::function<double()> read;
+  std::function<void(double)> write;
+};
 class ParameterPanel final:public QWidget {
   const runtime::Target *target_=nullptr;
   const runtime::Properties *values_=nullptr;
-  QTreeWidget *tree_;
+  QTreeWidget *groups_,*tree_;
   QLineEdit *search_;
   QCheckBox *hidden_;
-  QLabel *count_,*details_;
-  QSlider *slider_;
-  QDoubleSpinBox *spin_;
+  QLabel *count_;
   int current_=-1;
   std::string node_;
   std::vector<float> effective_;
+  std::vector<ParameterControl> controls_,extra_;
+  std::vector<int> morph_rows_;
   std::vector<QTreeWidgetItem *> items_;
+  std::map<int,QWidget *> mounted_;
+  std::set<std::string> favorites_;
   void rebuild();
   void filter();
-  void select(QTreeWidgetItem *item);
+  void mount();
+  void update_rows();
 public:
   explicit ParameterPanel(QWidget *parent=nullptr);
   std::function<void(size_t,double)> changed;
   void bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node={});
+  void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback);
+  void set_extra(std::vector<ParameterControl> controls) {extra_=std::move(controls);}
+  void bind_controls(std::vector<ParameterControl> controls) {target_=nullptr;values_=nullptr;controls_=std::move(controls);morph_rows_.clear();rebuild();}
   void refresh(size_t index);
   void query(const QString &text);
   void select_parameter(size_t index);

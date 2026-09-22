@@ -50,11 +50,12 @@ bool MorphRuntime::set_morph(size_t target,size_t index,float value) {
 }
 void validate_transform(const TransformValues &v) {
   finite(v.translation_cm);finite(v.rotation_degrees);finite(v.scale);
+  if(!std::isfinite(v.general_scale)||v.general_scale<=0) throw std::runtime_error("总体缩放必须为正数");
   if(v.scale.x<=0 || v.scale.y<=0 || v.scale.z<=0) throw std::runtime_error("缩放必须大于零");
 }
 ir::Transform make_transform(const TransformValues &v) {
   validate_transform(v);
-    ir::Transform scale;scale.value[0]=v.scale.x;scale.value[5]=v.scale.y;scale.value[10]=v.scale.z;
+    ir::Transform scale;scale.value[0]=v.scale.x*v.general_scale;scale.value[5]=v.scale.y*v.general_scale;scale.value[10]=v.scale.z*v.general_scale;
     ir::Transform rotation;
     for(int axis=0;axis<3;++axis) {
       const float angle=(axis==0?v.rotation_degrees.x:axis==1?v.rotation_degrees.y:v.rotation_degrees.z)*std::numbers::pi_v<float>/180;
@@ -68,7 +69,7 @@ ir::Transform make_transform(const TransformValues &v) {
 bool MorphRuntime::set_transform(size_t target,const TransformValues &v) {
   validate_transform(v);
   auto &old=values_.at(target).transform;
-  if(same(old.translation_cm,v.translation_cm)&&same(old.rotation_degrees,v.rotation_degrees)&&same(old.scale,v.scale)) return false;
+  if(same(old.translation_cm,v.translation_cm)&&same(old.rotation_degrees,v.rotation_degrees)&&same(old.scale,v.scale)&&old.general_scale==v.general_scale) return false;
   old=v;dirty_transform(target);return true;
 }
 void MorphRuntime::set_visible(size_t target,bool visible) {values_.at(target).visible=visible;}

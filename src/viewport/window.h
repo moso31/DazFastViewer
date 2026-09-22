@@ -29,6 +29,8 @@ class Window {
   static LRESULT CALLBACK procedure(HWND,UINT,WPARAM,LPARAM);
   int last_x_=0,last_y_=0;
   bool dragging_=false;
+  bool keys_[6]{};
+  ULONGLONG moved_=0;
   Telemetry *telemetry_=nullptr;
 public:
   HWND hwnd{},hidden{};
@@ -36,7 +38,7 @@ public:
   GLContext present_context,render_context;
   std::atomic<bool> close{false},minimized{false},size_changed{false};
   std::atomic<int> pointer_x{-1},pointer_y{-1},click_x{-1},click_y{-1};
-  std::atomic<uint64_t> clicks{0};
+  std::atomic<uint64_t> clicks{0},focus_requests{0};
   CameraState camera;
   CameraMailbox mailbox;
   std::atomic<int> width,height;

@@ -46,6 +46,7 @@ struct Material {
   float subsurface=0,subsurface_anisotropy=0;
   Vec3 subsurface_radius{.001f,.001f,.001f},translucency_color{1,1,1};
   float coat=0,coat_roughness=.1f,coat_ior=1.5f;
+  int coat_mode=2;float coat_normal=.04f,coat_grazing=1,coat_exponent=5;
   Vec3 coat_color{1,1,1},specular_color{1,1,1};
   float dual_weight=0,dual_ratio=.5f,dual_roughness1=.3f,dual_roughness2=.6f,dual_specular=.5f;
   float hair_root_radius=.00005f,hair_tip_radius=.000025f,hair_radial_roughness=.3f;
@@ -108,7 +109,27 @@ struct Camera {
   float fov=.8f;
   uint64_t revision=1;
 };
+struct Option {
+  std::string id,label,group,type,image_uri;
+  std::vector<double> value;
+  std::vector<std::string> choices;
+  double minimum=-10000,maximum=10000,step=.01;
+  bool visible=true,supported=false;
+  bool operator==(const Option &) const = default;
+};
+struct OptionNode {
+  std::string id,label;
+  std::vector<Option> parameters;
+  bool operator==(const OptionNode &) const = default;
+};
+struct RenderOptions {
+  OptionNode environment,tonemapper;
+  std::filesystem::path environment_file;
+  std::array<float,3> backdrop{.055f,.055f,.055f};
+  bool operator==(const RenderOptions &) const = default;
+};
 struct Scene {
+  RenderOptions options;
   std::vector<Texture> textures;
   std::vector<Material> materials;
   std::vector<Mesh> meshes;
@@ -125,6 +146,7 @@ struct InstanceEdit {uint32_t index=0;Transform transform;};
 struct VisibilityEdit {uint32_t index=0;bool visible=true;};
 struct LightEdit {uint32_t index=0;AreaLight value;};
 struct Delta {
+  std::optional<RenderOptions> options;
   std::optional<Camera> camera;
   std::vector<MaterialEdit> materials;
   std::vector<MeshEdit> meshes;

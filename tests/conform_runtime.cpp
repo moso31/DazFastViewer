@@ -78,6 +78,9 @@ static void generated_field() {
   const auto &positions=scene.meshes[1].positions;float jump=0;
   for(size_t y=1;y<6;++y) for(size_t x=1;x<8;++x) {const auto v=y*9+x;const float a=positions[v].z-cloth.positions[v].z,b=positions[v-1].z-cloth.positions[v-1].z;jump=std::max(jump,std::abs(a-b));}
   require(jump<.1f,"最近表面切换仍使衣物产生不连续位移");
+  auto fitted=scene;fitted.meshes[0]=body;fitted.meshes[1]=cloth;for(auto &p:fitted.meshes[1].positions) p.z=.01f;
+  DeformationRuntime close_fit(fitted,targets,skins,graphs);close_fit.evaluate(values,{});
+  require(std::abs(fitted.meshes[1].positions[3*9+2].z-.11f)<1e-6f,"贴体的自动跟随被平滑压回身体内部");
   values[0].morphs[0]=0;runtime.evaluate(values,{});require(distance(scene.meshes[1].positions,cloth.positions)==0,"生成场的平滑改变了原始褶皱或重置结果");
 }
 static void bone_attachment() {
@@ -105,6 +108,12 @@ static void bone_attachment() {
   editor::append_document(document,std::move(duplicate));auto snapshot=editor::initial_snapshot(document);snapshot.poses[1][1].rotation_degrees.z=90;
   DeformationRuntime appended(document.loaded.scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);appended.evaluate(snapshot.values,snapshot.poses);
   require(distance({document.loaded.scene.instances[1].transform.point({}),document.loaded.scene.instances[5].transform.point({})},{{3,0,0},{2,0,1}})<1e-6,"追加角色的骨骼附件串到已有角色");
+  poses[0][1].rotation_degrees.z=0;values[0].morphs[0]=0;
+  poses[0][1].center_offset_cm={10,0,0};runtime.evaluate(values,poses);
+  require(close(1,{3.1f,0,0})&&close(2,{3.6f,0,0}),"刚性附件漏掉关节中心的 Morph 位移");
+  poses[0][1].center_offset_cm={};runtime.evaluate(values,poses);
+  require(close(1,{3,0,0})&&close(2,{3.5f,0,0}),"关节中心恢复后附件发生漂移");
+
 }
 static void root_follower_and_visibility() {
   ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};

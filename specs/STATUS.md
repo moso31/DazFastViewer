@@ -1,6 +1,10 @@
 # 实施状态
 
-更新：2026-09-21。
+更新：2026-09-22。
+
+最新眼镜复查：补齐 Head 树层级、镜腿轴心及场景 Morph 限幅覆盖，修复 A 的 `Youth Morph=-0.2` 被错误截成 0 导致的头部 / 眼镜偏移。A / B 眼镜对用户新 DBZ 的 RMS 均约 0.0005 毫米，12 项回归和副屏层级 / 近景复核通过，已部署到 `out`，并按用户要求归档至本地 Git；详见[专项记录](../Docs/test3_glasses_followup_cn.md)。
+
+最新：test3 黑皮肤、眼镜挂接、拖鞋贴合修复及环境 / 色调选项、分类参数面板、F / WASDQE 已部署。12 项 CTest、原始场景选项导航和异步 Morph 界面检查通过。局部穿插与完整 Iray 等价尚未验收，见[本轮报告](../Docs/test3_scene_repair_execution_cn.md)。008 未开始。
 
 最新实际场景修复：`test.duf` 的 Visible 开关、35,638 根 StrandBasedHair、根层级 FitTo 拖鞋、头发 / 丝袜 / SSS / 薄壁眼部材质及 A 上衣碰撞已接入。10 项工程回归通过；完整材质 Golden 与任意姿势无穿插仍未通过，详见[验证报告](../Docs/scene_fidelity_execution_cn.md)。008 未开始。
 

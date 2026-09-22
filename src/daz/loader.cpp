@@ -1,4 +1,6 @@
 #include "daz/loader.h"
+#include "render_ir/options_json.h"
+#include "render_ir/options.h"
 #include "daz/documents.h"
 #include "diagnostics/load_profile.h"
 #include <zlib.h>
@@ -244,6 +246,9 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     }
     material.coat=unit("Top Coat Weight");material.coat_roughness=unit("Top Coat Roughness",.1f);material.coat_ior=std::max(1.f,scalar("Top Coat IOR",1.5f));
     material.coat_color=color_value("Top Coat Color",{1,1,1});
+    material.coat_mode=int(scalar("Top Coat Layering Mode",2));
+    material.coat_normal=material.coat_mode==0?.08f*unit("Reflectivity",.5f):unit("Top Coat Curve Normal",.04f);
+    material.coat_grazing=unit("Top Coat Curve Grazing",1);material.coat_exponent=std::max(.001f,scalar("Top Coat Curve Exponent",5));
     material.coat_texture=texture(channel("Top Coat Weight"),ir::ColorSpace::linear,material_file);
     material.coat_roughness_texture=texture(channel("Top Coat Roughness"),ir::ColorSpace::linear,material_file);
     material.dual_weight=unit("Dual Lobe Specular Weight");material.dual_ratio=unit("Dual Lobe Specular Ratio",.5f);
@@ -298,6 +303,40 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   for(const auto &instance:source.value("nodes",Json::array())) {
     Json base=Json::object();if(instance.contains("url")) base=*repo.asset(instance.at("url"),file,"node_library").second;
     nodes.emplace(instance.at("id").get<std::string>(),merge_node(base,instance));
+  }
+  // 无网格的选项节点仍属于场景状态，保留参数元数据。
+  for(const auto &[id,node]:nodes) {
+    bool environment=false,tone=false;
+    for(const auto &e:node.value("extra",Json::array())) {environment|=e.value("type","")=="studio/node/environment";tone|=e.value("type","")=="studio/node/tone_mapper";}
+    if(!environment&&!tone) continue;
+    auto &options=environment?scene.options.environment:scene.options.tonemapper;options.id=id;options.label=node.value("label",id);
+    const std::set<std::string> supported=environment?std::set<std::string>{"Environment Mode","Environment Intensity","Environment Map","Environment Tint","Draw Dome","Dome Orientation X","Dome Orientation Y","Dome Orientation Z","Dome Rotation"}:
+      std::set<std::string>{"Tone Mapping Enable","Exposure Value","Shutter Speed","Aperture","Film ISO","cm2 Factor","Vignetting","White Point Scale","White Point","Burn Highlights Per Component","Burn Highlights","Crush Blacks","Saturation","Gamma"};
+    for(const auto &e:node.value("extra",Json::array())) for(const auto &entry:e.value("channels",Json::array())) {
+      const auto &c=entry.at("channel");ir::Option p;p.id=c.at("id");p.label=c.value("label",p.id);p.group=entry.value("group","");p.type=c.value("type","float");p.visible=c.value("visible",true);p.supported=supported.contains(p.id);p.image_uri=c.value("image_file","");
+      const auto value=c.value("current_value",c.value("value",Json()));
+      if(value.is_array()) {for(const auto &v:value) if(v.is_number()) p.value.push_back(v.get<double>());}
+      else if(value.is_number()||value.is_boolean()) p.value.push_back(number(value,0));
+      if(p.value.empty()) p.supported=false;
+      p.minimum=c.value("min",-10000.0);p.maximum=c.value("max",10000.0);p.step=c.value("step_size",.01);
+      if(!c.value("clamped",false)) {p.minimum=std::min(p.minimum,0.0);p.maximum=std::max(p.maximum,10000.0);}
+      if(c.contains("enum_values")) {p.choices=c["enum_values"].get<std::vector<std::string>>();p.minimum=0;p.maximum=double(p.choices.size()-1);}
+      if(p.type=="bool") {p.minimum=0;p.maximum=1;}
+      if(p.id=="Gamma"||p.id=="Aperture"||p.id=="Shutter Speed"||p.id=="White Point Scale"||p.id=="White Point") p.minimum=.001;
+      if(p.id=="Environment Map"&&!p.image_uri.empty()) {
+        try {scene.options.environment_file=repo.path(p.image_uri,file);}
+        catch(const std::exception &) {
+          // DAZ 内置 resources URI 从安装目录只读解析。
+          if(p.image_uri.starts_with("/resources/")) for(const auto *installation:{L"DAZStudio4",L"DAZStudio6",L"DAZStudio4 Public Build",L"DAZStudio6 Public Build"}) {
+            const auto candidate=fs::path(L"C:/Program Files/DAZ 3D")/installation/L"shaders/iray"/fs::u8path(decode(p.image_uri.substr(1)));
+            if(fs::is_regular_file(candidate)) {scene.options.environment_file=candidate;repo.dependencies.insert(utf8(candidate));break;}
+          }
+          if(scene.options.environment_file.empty()) warn("environment_map_missing",id,"未找到环境贴图："+p.image_uri);
+        }
+      }
+      options.parameters.push_back(std::move(p));
+    }
+    if(environment&&int(ir::number(options,"Environment Mode",0))==2) warn("environment_mode_unsupported",id,"Sun-Sky Only 参数已保留，太阳天空模型尚未实现；当前仅显示均匀环境。");
   }
   for(const auto &[id,node]:nodes) out.nodes.push_back({id,decode(node.value("parent",""))});
   std::map<std::string,ir::Transform> transforms;std::set<std::string> visiting;
@@ -481,9 +520,11 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
               {"instances",scene.instances.size()},{"textures",scene.textures.size()},{"warnings",warnings},{"fully_supported",warnings.empty()},
               {"bounds_m",{{"min",{bounds.minimum.x,bounds.minimum.y,bounds.minimum.z}},{"max",{bounds.maximum.x,bounds.maximum.y,bounds.maximum.z}}}},
               {"coordinate_conversion","DAZ centimeters Y-up to meters Z-up: (x,-z,y)/100"}};
+  out.report["render_options"]=ir::options_json(scene.options);
   for(const auto &root:repo.roots) out.report["content_roots"].push_back(utf8(root));
   for(auto &object:out.objects) {
     object.source_file=file;object.source_node=object.id;
+    const auto &n=nodes.at(object.id);object.translation_cm=axes(n,"translation",{});object.rotation_degrees=axes(n,"rotation",{});object.scale=axes(n,"scale",{1,1,1});object.general_scale=number(n.value("general_scale",Json(1)),1);
     object.geometry_versions.push_back({object.geometry_file,file_version(object.geometry_file)});
     for(const auto &source:object.geometry_sources) object.geometry_versions.push_back({source.file,file_version(source.file)});
   }

@@ -6,6 +6,8 @@
 
 已实现独立 Render Scene IR、Cycles Adapter、原生 DUF / DSF 加载、Mesh / UV / 基础材质、OptiX 视口、稀疏 Morph、Genesis 8 骨架 / 双四元数蒙皮、Formula / ERC / JCM、单帧姿势 DUF 及相机操作。当前仍基于基础网格，尚未实现 SubD / HD 或完整 Iray Uber 材质，公式与变形的完整 DAZ Studio Golden 仍待验收。
 
+最新 test3 修复已部署：HDRI / ToneMapper 导入与设置保存、左右分类参数面板、F 聚焦及 WASDQE 导航；同时修正黑皮肤、眼镜挂接和拖鞋形变。验证与近似边界见[本轮报告](Docs/test3_scene_repair_execution_cn.md)。
+
 ## Formula、ERC、JCM 与参数复测（Spec 007）
 
 保存场景的脸型 / 服装修复：保留 ERC 的负数抵消输入，修正骨骼缩放补偿及基础 Morph 载入，改善服装生成位移的连续性。真实双角色的脸部已与 DAZ DBZ 对齐，服装仍有局部差异；[数值证据与边界](Docs/scene_deformation_execution_cn.md)。
@@ -40,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\edit_sample.ps1 -Sampl
 
 道具使用 `-Sample Prop`，Genesis 8 Female 使用 `-Sample Genesis8`；默认 `Character` 仍是 Genesis 8.1 Female。也可直接打开 `out\DazFastViewer.exe`，通过“文件 → 添加 / 应用 DUF…”加载资产；“打开场景（替换）”用于替换当前场景。编辑器初始窗口只在第二屏打开，缺少第二屏会在输出目录记录错误并退出。
 
-先在左侧场景树选择对象，再在右侧搜索 `Bodybuilder`，选中具体参数后拖动下方滑块。参数按资产的 `group` 展开，子节点别名归入“子节点”；可以显示隐藏参数，悬停名称 / 详情查看来源和限制。变换为相对载入状态的 DAZ 坐标偏移；“重置选中对象”恢复载入参数。视口右键旋转、Shift＋右键平移、滚轮缩放。当前编辑不保存回原 DUF。
+先在场景树选择对象，再在属性面板左侧选分类、右侧搜索和调整参数；每行提供滑块和数值输入。可显示隐藏项、收藏参数，悬停名称查看来源、最终 ERC 值及限制。位置、旋转、总体缩放和 XYZ 缩放归入 General / Transforms；重置恢复载入状态。视口右键旋转、Shift＋右键平移、滚轮缩放；F 聚焦当前对象或身体部位，点击视口后用 WASDQE 移动，Shift 加速。Environment Options 与 Tonemapper Options 也可从场景树编辑，并通过文件菜单保存 / 载入 `.dfv-render.json`；当前不回写原 DUF。
 
 选择整个模型后按 Delete，或使用场景树右键 / “编辑 → 删除选中对象及其子对象”。删除人物会包含子对象、骨骼附件与绑定穿戴物；单独删除衣物保留人物。灯光也可删除，“文件 → 新建空场景”清空当前文档。复合 DUF、内嵌几何源资产继承与资源回收的验证见[本轮执行报告](Docs/scene_lifecycle_execution_cn.md)。
 

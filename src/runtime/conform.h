@@ -7,6 +7,7 @@ namespace dfv::runtime {
 struct SurfaceBinding {
   std::array<uint32_t,3> vertices{};ir::Vec3 barycentric;
   ir::Vec3 edge1,edge2,normal,offset_coordinates;
+  float distance=0;
   uint32_t polygon=0;
 };
 struct ConformLink {

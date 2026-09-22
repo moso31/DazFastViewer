@@ -1,6 +1,7 @@
 #include "editor/parameters.h"
 #include "runtime/picking.h"
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QHeaderView>
 #include <QLabel>
@@ -8,96 +9,129 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
+#include <QStandardItemModel>
 #include <QVBoxLayout>
+#include <QSplitter>
+#include <QScrollBar>
+#include <QTimer>
+#include <QToolButton>
+#include <QSettings>
 #include <algorithm>
-#include <map>
 
 namespace dfv::editor {
 static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsizetype(s.size()));}
 ParameterPanel::ParameterPanel(QWidget *parent):QWidget(parent) {
   auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);
-  search_=new QLineEdit;search_->setPlaceholderText(QStringLiteral("搜索名称、ID、分组或子节点…"));layout->addWidget(search_);
-  hidden_=new QCheckBox(QStringLiteral("显示隐藏参数"));layout->addWidget(hidden_);
-  count_=new QLabel;count_->setWordWrap(true);layout->addWidget(count_);
-  tree_=new QTreeWidget;tree_->setHeaderLabels({QStringLiteral("参数分组 / 名称"),QStringLiteral("状态")});tree_->setUniformRowHeights(true);tree_->setIndentation(12);tree_->setColumnWidth(0,210);layout->addWidget(tree_,1);
-  details_=new QLabel(QStringLiteral("选择参数查看来源和支持状态"));details_->setWordWrap(true);details_->setTextInteractionFlags(Qt::TextSelectableByMouse);details_->setMinimumHeight(72);details_->setMaximumHeight(100);layout->addWidget(details_);
-  auto *line=new QHBoxLayout;slider_=new QSlider(Qt::Horizontal);slider_->setRange(0,1000);spin_=new QDoubleSpinBox;spin_->setDecimals(4);spin_->setKeyboardTracking(false);line->addWidget(slider_,1);line->addWidget(spin_);layout->addLayout(line);slider_->setEnabled(false);spin_->setEnabled(false);
-  connect(search_,&QLineEdit::textChanged,this,[this] {filter();});connect(hidden_,&QCheckBox::toggled,this,[this] {rebuild();});
-  connect(tree_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item) {select(item);});
-  connect(slider_,&QSlider::valueChanged,this,[this](int v) {if(current_>=0 && changed) {const auto &m=target_->morphs[size_t(current_)];changed(size_t(current_),m.minimum+(m.maximum-m.minimum)*v/1000.0);}});
-  connect(spin_,&QDoubleSpinBox::valueChanged,this,[this](double v) {if(current_>=0 && changed) changed(size_t(current_),v);});
+  search_=new QLineEdit;search_->setPlaceholderText(QStringLiteral("搜索参数名称、分组或 ID…"));layout->addWidget(search_);
+  auto *line=new QHBoxLayout;hidden_=new QCheckBox(QStringLiteral("显示隐藏参数"));line->addWidget(hidden_);count_=new QLabel;line->addWidget(count_,1);layout->addLayout(line);
+  auto *split=new QSplitter;groups_=new QTreeWidget;groups_->setHeaderHidden(true);groups_->setIndentation(12);groups_->setMinimumWidth(115);
+  tree_=new QTreeWidget;tree_->setHeaderHidden(true);tree_->setRootIsDecorated(false);tree_->setUniformRowHeights(true);tree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);tree_->setMinimumWidth(185);
+  split->addWidget(groups_);split->addWidget(tree_);split->setStretchFactor(1,1);split->setSizes({140,250});layout->addWidget(split,1);
+  for(const auto &id:QSettings().value("parameters/favorites").toStringList()) favorites_.insert(id.toStdString());
+  connect(search_,&QLineEdit::textChanged,this,[this]{filter();});connect(hidden_,&QCheckBox::toggled,this,[this]{filter();});
+  connect(groups_,&QTreeWidget::currentItemChanged,this,[this]{filter();});
+  connect(tree_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item){current_=item?item->data(0,Qt::UserRole).toInt():-1;});
+  connect(tree_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{mount();});
+  auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this]{mount();});timer->start(150);
 }
-void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node) {target_=target;values_=values;node_=node;effective_.clear();rebuild();}
-void ParameterPanel::rebuild() {
-  QSignalBlocker block(tree_);tree_->clear();items_.clear();current_=-1;slider_->setEnabled(false);spin_->setEnabled(false);details_->setText(QStringLiteral("选择参数查看来源和支持状态"));
-  if(!target_) {count_->clear();return;}
-  items_.resize(target_->morphs.size());std::map<QString,QTreeWidgetItem *> groups;
-  for(size_t i=0;i<target_->morphs.size();++i) {
-    const auto &m=target_->morphs[i];if(!hidden_->isChecked() && !m.visible) continue;
-    if(!runtime::parameter_on_node(m.owner,m.group,node_)) continue;
-    QString group=text(m.group);if(m.kind=="alias") group=QStringLiteral("/子节点/")+text(m.owner)+group;
-    QTreeWidgetItem *parent=nullptr;QString path;
-    for(const auto &part:group.split('/',Qt::SkipEmptyParts)) {
-      path+="/"+part;auto &item=groups[path];
-      if(!item) {item=parent?new QTreeWidgetItem(parent,{part}):new QTreeWidgetItem(tree_,{part});item->setData(0,Qt::UserRole,-1);}parent=item;
+void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node) {
+  target_=target;values_=values;node_=node;effective_.clear();controls_.clear();morph_rows_.clear();
+  if(target_) {
+    controls_=extra_;morph_rows_.resize(target_->morphs.size(),-1);
+    for(size_t i=0;i<target_->morphs.size();++i) {
+      const auto &m=target_->morphs[i];if(!runtime::parameter_on_node(m.owner,m.group,node_)) continue;
+      ParameterControl c;c.morph=int(i);c.id=m.source+"#"+m.id;c.label=m.label;c.group=m.group.empty()?"/Morphs":m.group;c.detail=m.source+"\n"+m.unsupported+"\n"+m.limitation;
+      c.minimum=m.clamped?std::min(m.minimum,values_->morphs[i]):std::min(-100.f,m.minimum);c.maximum=m.clamped?std::max(m.maximum,values_->morphs[i]):std::max(100.f,m.maximum);c.slider_minimum=m.minimum;c.slider_maximum=m.maximum;c.step=m.step;c.initial=m.initial;c.visible=m.visible;c.enabled=m.unsupported.empty()&&!m.locked;
+      c.read=[this,i]{return double(values_->morphs.at(i));};c.write=[this,i](double v){if(changed) changed(i,v);};
+      if(m.value_type=="bool") c.choices={"关闭","开启"};morph_rows_[i]=int(controls_.size());controls_.push_back(std::move(c));
     }
-    const auto state=m.unsupported.empty()?(m.limitation.empty()?QStringLiteral("可编辑"):QStringLiteral("部分支持")):m.kind=="alias"?QStringLiteral("别名"):QStringLiteral("待支持");
-    auto *item=parent?new QTreeWidgetItem(parent,{text(m.label),state}):new QTreeWidgetItem(tree_,{text(m.label),state});items_[i]=item;item->setData(0,Qt::UserRole,int(i));
-    item->setData(0,Qt::UserRole+1,text(m.label+" "+m.channel_id+" "+m.group+" "+m.owner));
-    item->setToolTip(0,text(m.group+"\n"+m.source+"\n"+m.unsupported+"\n"+m.limitation));if(!m.unsupported.empty()) item->setForeground(1,Qt::darkGray);
   }
-  filter();
+  rebuild();
+}
+void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback) {
+  target_=nullptr;values_=nullptr;controls_.clear();morph_rows_.clear();
+  if(node) for(size_t i=0;i<node->parameters.size();++i) {const auto &p=node->parameters[i];
+    for(size_t k=0;k<p.value.size();++k) {
+      ParameterControl c;c.id=node->id+"/"+p.id+std::to_string(k);c.label=p.label+(p.value.size()==3?std::string(" ")+"RGB"[k]:"");c.group=p.group;c.minimum=p.minimum;c.maximum=p.maximum;c.slider_minimum=p.minimum;c.slider_maximum=std::min(p.maximum,std::max(2.0,p.value[k]*2));c.step=p.step;c.initial=p.value[k];c.visible=p.visible;c.enabled=p.supported;c.choices=p.choices;
+      if(p.type=="bool") c.choices={"关闭","开启"};c.detail=p.image_uri+(!p.supported?"\n已保留原值，此参数尚未参与渲染":"");
+      if(p.id=="Environment Mode"&&c.choices.size()>2) {c.choices[2]+="（待支持）";c.disabled_choices.insert(2);c.detail+="\nSun-Sky Only 参数已保留；太阳天空模型尚未实现。";}
+      c.read=[node,i,k]{return node->parameters.at(i).value.at(k);};c.write=[this,callback,i,k](double v){callback(i,k,v);update_rows();};controls_.push_back(std::move(c));
+    }
+  }
+  rebuild();
+  if(node) for(QTreeWidgetItemIterator it(groups_);*it;++it) {
+    const auto path=(*it)->data(0,Qt::UserRole).toString();
+    if(path=="/Tone Mapping"||path=="/Environment") {groups_->setCurrentItem(*it);break;}
+  }
+}
+void ParameterPanel::rebuild() {
+  QSignalBlocker a(groups_),b(tree_),scroll(tree_->verticalScrollBar());mounted_.clear();tree_->clear();groups_->clear();items_.clear();current_=-1;
+  auto *all=new QTreeWidgetItem(groups_,{QStringLiteral("全部")});all->setData(0,Qt::UserRole,QString("*"));
+  auto *fav=new QTreeWidgetItem(groups_,{QStringLiteral("收藏")});fav->setData(0,Qt::UserRole,QString("@favorites"));
+  auto *used=new QTreeWidgetItem(groups_,{QStringLiteral("当前使用")});used->setData(0,Qt::UserRole,QString("@used"));
+  std::map<QString,QTreeWidgetItem *> paths;
+  for(size_t i=0;i<controls_.size();++i) {
+    auto &c=controls_[i];if(c.group.empty()) c.group="/General";QTreeWidgetItem *parent=nullptr;QString path;
+    for(const auto &part:text(c.group).split('/',Qt::SkipEmptyParts)) {
+      path+="/"+part;auto &item=paths[path];if(!item) {item=parent?new QTreeWidgetItem(parent,{part}):new QTreeWidgetItem(groups_,{part});item->setData(0,Qt::UserRole,path);}parent=item;
+    }
+    auto *item=new QTreeWidgetItem(tree_);item->setData(0,Qt::UserRole,int(i));item->setSizeHint(0,QSize(180,58));items_.push_back(item);
+  }
+  groups_->setCurrentItem(all);groups_->expandToDepth(1);filter();
 }
 void ParameterPanel::filter() {
-  const auto query=search_->text().trimmed();size_t matched=0,supported=0;
-  std::function<bool(QTreeWidgetItem *)> visit=[&](QTreeWidgetItem *item) {
-    bool shown=false;
-    if(item->childCount()) {for(int i=0;i<item->childCount();++i) shown=visit(item->child(i))||shown;}
-    else {
-      const int index=item->data(0,Qt::UserRole).toInt();
-      shown=index>=0 && item->data(0,Qt::UserRole+1).toString().contains(query,Qt::CaseInsensitive);
-      if(shown) {++matched;if(target_->morphs[size_t(index)].unsupported.empty()) ++supported;}
+  QSignalBlocker scroll(tree_->verticalScrollBar());
+  const auto q=search_->text().trimmed();const auto group=groups_->currentItem()?groups_->currentItem()->data(0,Qt::UserRole).toString():"*";int count=0;
+  for(size_t i=0;i<controls_.size();++i) {
+    const auto &c=controls_[i];const auto path=text(c.group);
+    const bool category=group=="*"||(group=="@favorites"&&favorites_.contains(c.id))||(group=="@used"&&std::abs(c.read())>1e-6)||(path==group||path.startsWith(group+"/"));
+    const bool shown=category&&(hidden_->isChecked()||c.visible)&&text(c.label+" "+c.id+" "+c.group).contains(q,Qt::CaseInsensitive);items_[i]->setHidden(!shown);if(shown) ++count;
+  }
+  count_->setText(QStringLiteral("%1 / %2 项").arg(count).arg(controls_.size()));mount();
+}
+void ParameterPanel::mount() {
+  std::set<int> visible;const auto rect=tree_->viewport()->rect();
+  for(int y=0;y<rect.height()+58;y+=20) if(auto *item=tree_->itemAt(2,std::min(y,std::max(0,rect.height()-1)))) visible.insert(item->data(0,Qt::UserRole).toInt());
+  for(auto it=mounted_.begin();it!=mounted_.end();) {if(!visible.contains(it->first)) {tree_->removeItemWidget(items_.at(size_t(it->first)),0);it=mounted_.erase(it);}else ++it;}
+  for(int i:visible) if(!mounted_.contains(i)) {
+    const auto &c=controls_.at(size_t(i));auto *widget=new QWidget;auto *layout=new QVBoxLayout(widget);layout->setContentsMargins(5,2,5,3);layout->setSpacing(1);
+    auto *title=new QHBoxLayout;title->setSpacing(2);auto *label=new QLabel(text(c.label));label->setObjectName("valueLabel");label->setToolTip(text(c.detail));title->addWidget(label,1);
+    auto *favorite=new QToolButton;favorite->setText(favorites_.contains(c.id)?QStringLiteral("★"):QStringLiteral("☆"));favorite->setAutoRaise(true);favorite->setToolTip(QStringLiteral("收藏参数"));title->addWidget(favorite);layout->addLayout(title);
+    connect(favorite,&QToolButton::clicked,this,[this,i,favorite]{const auto key=controls_[i].id;if(favorites_.contains(key)) favorites_.erase(key);else favorites_.insert(key);favorite->setText(favorites_.contains(key)?QStringLiteral("★"):QStringLiteral("☆"));QStringList ids;for(const auto &v:favorites_) ids<<text(v);QSettings().setValue("parameters/favorites",ids);});
+    auto *line=new QHBoxLayout;line->setSpacing(4);layout->addLayout(line);
+    if(!c.choices.empty()) {
+      auto *combo=new QComboBox;combo->setObjectName("valueChoice");for(const auto &choice:c.choices) combo->addItem(text(choice));combo->setCurrentIndex(int(c.read()));combo->setEnabled(c.enabled);line->addWidget(combo);
+      if(auto *model=qobject_cast<QStandardItemModel *>(combo->model())) for(int index:c.disabled_choices) if(auto *item=model->item(index)) item->setEnabled(false);
+      connect(combo,&QComboBox::currentIndexChanged,this,[this,i](int value){current_=i;controls_[i].write(value);update_rows();});
+    } else {
+      auto *slider=new QSlider(Qt::Horizontal);slider->setObjectName("valueSlider");slider->setRange(0,1000);slider->setEnabled(c.enabled&&c.slider_maximum>c.slider_minimum);
+      auto *spin=new QDoubleSpinBox;spin->setObjectName("valueSpin");spin->setDecimals(4);spin->setRange(c.minimum,c.maximum);spin->setSingleStep(std::max(.0001,c.step));spin->setKeyboardTracking(false);spin->setMaximumWidth(105);spin->setEnabled(c.enabled);
+      line->addWidget(slider,1);line->addWidget(spin);spin->setValue(c.read());slider->setValue(c.slider_maximum>c.slider_minimum?qRound((c.read()-c.slider_minimum)/(c.slider_maximum-c.slider_minimum)*1000):0);
+      connect(slider,&QSlider::valueChanged,this,[this,i](int value){current_=i;const auto &c=controls_[i];c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();});
+      connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){current_=i;controls_[i].write(value);update_rows();});
     }
-    item->setHidden(!shown);if(!query.isEmpty() && shown) item->setExpanded(true);return shown;
-  };
-  for(int i=0;i<tree_->topLevelItemCount();++i) visit(tree_->topLevelItem(i));
-  if(target_) count_->setText(QStringLiteral("已发现 %1 项 · 匹配 %2 项 · 可编辑 %3 项").arg(target_->morphs.size()).arg(matched).arg(supported));
-}
-void ParameterPanel::select(QTreeWidgetItem *item) {
-  current_=item?item->data(0,Qt::UserRole).toInt():-1;slider_->setEnabled(false);spin_->setEnabled(false);
-  if(current_<0 || !target_) return;
-  const auto &m=target_->morphs[size_t(current_)];QSignalBlocker a(slider_),b(spin_);
-  const auto support=m.unsupported.empty()?(m.kind=="alias"?"别名：与原参数共享编辑值":m.formula_count||!m.has_offsets()?"Formula / ERC 驱动":"直接 Morph"):m.unsupported;
-  QString detail=text(m.label+"\n"+m.group+"\n"+support);
-  if(!m.limitation.empty()) detail+=QStringLiteral("\n")+text(m.limitation);
-  if(m.unsupported.empty()&&size_t(current_)<effective_.size()) detail+=QStringLiteral(" · 最终值 %1").arg(effective_[size_t(current_)],0,'f',4);
-  details_->setText(detail);details_->setToolTip(detail+QStringLiteral("\n来源：")+text(m.source)+QStringLiteral("\n所属节点：")+text(m.owner)+QStringLiteral("\n未解析引用：%1\n已恢复的资源引用：%2").arg(m.missing_dependencies).arg(m.repaired_references));
-  const auto raw=values_->morphs.at(size_t(current_));
-  spin_->setRange(m.clamped?std::min(m.minimum,raw):std::min(-100.0f,m.minimum),m.clamped?std::max(m.maximum,raw):std::max(100.0f,m.maximum));spin_->setSingleStep(std::max(.001,double(m.step)));
-  slider_->setEnabled(m.unsupported.empty() && m.maximum>m.minimum);spin_->setEnabled(m.unsupported.empty());refresh(size_t(current_));
-}
-void ParameterPanel::refresh(size_t index) {
-  if(current_!=int(index) || !target_ || !values_) return;const auto &m=target_->morphs[index];
-  const double value=m.unsupported.empty()?values_->morphs[index]:m.initial;QSignalBlocker a(slider_),b(spin_);spin_->setValue(value);
-  slider_->setValue(m.maximum>m.minimum?qRound((value-m.minimum)/(m.maximum-m.minimum)*1000):0);
-}
-void ParameterPanel::query(const QString &text) {search_->setText(text);}
-void ParameterPanel::select_parameter(size_t index) {if(index<items_.size() && items_[index]) {tree_->setCurrentItem(items_[index]);tree_->scrollToItem(items_[index]);}}
-void ParameterPanel::set_slider(int value) {slider_->setValue(value);}
-void ParameterPanel::evaluated(const std::vector<float> &values) {if(effective_==values) return;effective_=values;if(current_>=0) select(tree_->currentItem());}
-void ParameterPanel::resource_states() {
-  if(!target_) return;
-  for(size_t i=0;i<items_.size();++i) if(items_[i]&&target_->morphs[i].payload&&target_->morphs[i].unsupported.empty()) {
-    const auto &p=target_->morphs[i].payload;QString status;
-    switch(p->state()) {
-      case runtime::PayloadState::unloaded:status=QStringLiteral("首用时载入");break;
-      case runtime::PayloadState::loading:status=QStringLiteral("加载中");break;
-      case runtime::PayloadState::ready:status=QStringLiteral("已就绪");break;
-      case runtime::PayloadState::failed:status=QStringLiteral("加载失败");items_[i]->setToolTip(1,text(p->error()));break;
-    }
-    if(p->state()!=runtime::PayloadState::failed) items_[i]->setToolTip(1,{});
-    if(!target_->morphs[i].limitation.empty()) status=QStringLiteral("部分支持 · ")+status;
-    if(items_[i]->text(1)!=status) items_[i]->setText(1,status);
+    widget->setToolTip(text(c.detail));tree_->setItemWidget(items_[size_t(i)],0,widget);mounted_[i]=widget;
   }
 }
+void ParameterPanel::update_rows() {
+  for(const auto &[i,w]:mounted_) {const auto &c=controls_[i];
+    if(target_&&c.morph>=0) {
+      const auto &m=target_->morphs[size_t(c.morph)];QString detail=text(c.detail),status;
+      if(!m.unsupported.empty()) status=QStringLiteral(" · 待支持");
+      else if(m.payload) switch(m.payload->state()) {case runtime::PayloadState::unloaded:status=QStringLiteral(" · 按需加载");break;case runtime::PayloadState::loading:status=QStringLiteral(" · 加载中");break;case runtime::PayloadState::failed:status=QStringLiteral(" · 加载失败");detail+="\n"+text(m.payload->error());break;default:break;}
+      if(size_t(c.morph)<effective_.size()) detail+=QStringLiteral("\n最终值：%1").arg(effective_[size_t(c.morph)]);
+      if(auto *label=w->findChild<QLabel *>("valueLabel")) {label->setText(text(c.label)+status);label->setToolTip(detail);}w->setToolTip(detail);
+    }
+    if(auto *spin=w->findChild<QDoubleSpinBox *>("valueSpin")) {QSignalBlocker block(spin);spin->setValue(c.read());}
+    if(auto *slider=w->findChild<QSlider *>("valueSlider")) {QSignalBlocker block(slider);slider->setValue(c.slider_maximum>c.slider_minimum?qRound((c.read()-c.slider_minimum)/(c.slider_maximum-c.slider_minimum)*1000):0);}
+    if(auto *combo=w->findChild<QComboBox *>("valueChoice")) {QSignalBlocker block(combo);combo->setCurrentIndex(int(c.read()));}
+  }
+}
+void ParameterPanel::refresh(size_t) {update_rows();}
+void ParameterPanel::query(const QString &value) {search_->setText(value);}
+void ParameterPanel::select_parameter(size_t index) {if(index<morph_rows_.size()&&morph_rows_[index]>=0) {current_=morph_rows_[index];auto *item=items_[size_t(current_)];tree_->setCurrentItem(item);tree_->scrollToItem(item);mount();}}
+void ParameterPanel::set_slider(int value) {if(current_>=0) {const auto &c=controls_.at(size_t(current_));c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();}}
+void ParameterPanel::evaluated(const std::vector<float> &values) {effective_=values;update_rows();}
+void ParameterPanel::resource_states() {update_rows();}
 }

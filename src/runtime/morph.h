@@ -34,6 +34,7 @@ struct Target {
 };
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
+  float general_scale=1;
 };
 struct Properties {std::vector<float> morphs;TransformValues transform;bool visible=true;};
 void validate_transform(const TransformValues &value);

@@ -39,6 +39,68 @@ static void embedded_geometry() {
   duf["geometry_library"][0]["source"]="#embedded";std::ofstream(file)<<duf.dump();bool rejected=false;try {daz::load(file,{{folder},false});} catch(const std::exception &) {rejected=true;}require(rejected,"派生几何循环没有拒绝");
   fs::remove_all(folder);
 }
+static void joint_overrides() {
+  using J=nlohmann::json;namespace fs=std::filesystem;
+  const auto folder=fs::temp_directory_path()/("dfv-joint-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);
+  auto asset=J::parse(R"({"node_library":[{"id":"figure","type":"figure"},{"id":"hinge","type":"bone","parent":"#figure","center_point":[{"id":"x","value":0}]}],
+    "geometry_library":[{"id":"mesh","vertices":{"count":3,"values":[[100,0,0],[100,10,0],[100,0,10]]},"polygon_material_groups":{"count":1,"values":["Frame"]},"polylist":{"count":1,"values":[[0,0,0,1,2]]},"default_uv_set":"#uv"}],
+    "uv_set_library":[{"id":"uv","vertex_count":3,"uvs":{"count":3,"values":[[0,0],[1,0],[0,1]]}}],
+    "modifier_library":[{"skin":{"node":"#figure","geometry":"#mesh","vertex_count":3,"joints":[{"node":"#hinge","node_weights":{"count":3,"values":[[0,1],[1,1],[2,1]]}}]}}]})");
+  std::ofstream(folder/"asset.dsf")<<asset.dump();J scene={{"scene",{{"nodes",J::array()},{"materials",J::array()}}}};
+  for(int i=0;i<2;++i) {
+    const auto id="glasses"+std::to_string(i),shape="shape"+std::to_string(i);
+    scene["scene"]["nodes"].push_back({{"id",id},{"url","asset.dsf#figure"},{"center_point",{{{"id","y"},{"current_value",5}}}},{"geometries",{{{"id",shape},{"url","asset.dsf#mesh"}}}}});
+    J bone={{"id","hinge"+std::to_string(i)},{"url","asset.dsf#hinge"},{"parent","#"+id},{"rotation",{{{"id","x"},{"current_value",90}}}},{"preview",{{"center_point",{999,999,999}}}}};
+    if(i==0) {bone["center_point"]={{{"id","x"},{"current_value",10}}};bone["orientation"]={{{"id","z"},{"current_value",90}}};bone["end_point"]={{{"id","x"},{"current_value",20}}};bone["rotation_order"]="ZYX";bone["inherits_scale"]=false;}
+    scene["scene"]["nodes"].push_back(bone);scene["scene"]["materials"].push_back({{"id","material"+std::to_string(i)},{"geometry","#"+shape},{"groups",{"Frame"}}});
+  }
+  const auto file=folder/"scene.duf";std::ofstream(file)<<scene.dump();const auto loaded=daz::load(file,{{folder},false});const auto catalog=daz::load_skeletons(loaded);
+  require(catalog.skins.size()==2,"同一眼镜资产的两个实例丢失");const auto &a=catalog.skins[0],&b=catalog.skins[1];
+  require(a.joints[0].center_cm.y==5&&a.joints[1].center_cm.x==10&&a.joints[1].end_cm.x==20&&a.joints[1].rotation_order=="ZYX"&&!a.joints[1].inherits_scale,"保存的关节定义未覆盖资产");
+  const auto pa=runtime::deform(a,a.initial,loaded.scene.meshes[loaded.scene.instances[a.instance].mesh].positions)[0],pb=runtime::deform(b,b.initial,loaded.scene.meshes[loaded.scene.instances[b.instance].mesh].positions)[0];
+  require(std::abs(pa.x-.1f)<1e-6f&&std::abs(pa.y-.9f)<1e-6f&&std::abs(pa.z)<1e-6f,"铰链没有绕场景保存的中心和轴向旋转");
+  require(pb.x==1&&pb.y==0&&pb.z==0&&b.joints[1].center_cm.x==0,"关节覆盖跨实例污染或读取了 preview 缓存");
+  fs::remove_all(folder);
+}
+static void scene_channel_overrides() {
+  using J=nlohmann::json;namespace fs=std::filesystem;
+  const auto folder=fs::temp_directory_path()/("dfv-channel-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder/"data/Morphs");
+  const auto asset=J::parse(R"({"node_library":[{"id":"figure","type":"figure"},{"id":"head","type":"bone","parent":"#figure"}],
+    "geometry_library":[{"id":"mesh","vertices":{"count":3,"values":[[0,0,0],[100,0,0],[0,100,0]]},"polygon_material_groups":{"count":1,"values":["Skin"]},"polylist":{"count":1,"values":[[0,0,0,1,2]]},"default_uv_set":"#uv"}],
+    "uv_set_library":[{"id":"uv","vertex_count":3,"uvs":{"count":3,"values":[[0,0],[1,0],[0,1]]}}],
+    "modifier_library":[{"skin":{"node":"#figure","geometry":"#mesh","vertex_count":3,"joints":[{"node":"#head","node_weights":{"count":3,"values":[[0,1],[1,1],[2,1]]}}]}}]})");
+  std::ofstream(folder/"data/figure.dsf")<<asset.dump();
+  std::ofstream(folder/"data/Morphs/shape.dsf")<<R"({"modifier_library":[{"id":"Shape","parent":"/data/figure.dsf#mesh",
+    "channel":{"type":"float","value":0,"min":0,"max":1,"clamped":true,"step_size":0.01},
+    "morph":{"vertex_count":3,"deltas":{"count":1,"values":[[1,0,20,0]]}},
+    "formulas":[{"output":"head:/data/figure.dsf#head?center_point/y","operations":[{"op":"push","url":"#Shape?value"},{"op":"push","val":10},{"op":"mult"}]}]}]})";
+  J scene={{"scene",{{"nodes",J::array()},{"materials",J::array()},{"modifiers",J::array()}}}};
+  const std::array<J,4> channels={J{{"current_value",-.2},{"min",-.2},{"step_size",.1}},J{{"current_value",-.2}},J{{"current_value",2},{"clamped",false}},J{{"current_value",2},{"max",1.5}}};
+  for(size_t i=0;i<channels.size();++i) {
+    const auto id="person"+std::to_string(i),shape="shape"+std::to_string(i);
+    scene["scene"]["nodes"].push_back({{"id",id},{"url","/data/figure.dsf#figure"},{"geometries",{{{"id",shape},{"url","/data/figure.dsf#mesh"}}}}});
+    scene["scene"]["nodes"].push_back({{"id","head"+std::to_string(i)},{"parent","#"+id},{"url","/data/figure.dsf#head"}});
+    scene["scene"]["materials"].push_back({{"id","mat"+std::to_string(i)},{"geometry","#"+shape},{"groups",{"Skin"}}});
+    scene["scene"]["modifiers"].push_back({{"url","/data/Morphs/shape.dsf#Shape"},{"parent","#"+(i%2?id:shape)},{"channel",channels[i]}});
+  }
+  const auto file=folder/"scene.duf";std::ofstream(file)<<scene.dump();
+  // 改过限制的实例既在缓存建立前出现，也在缓存复用后出现；同步与延迟目录结果相同。
+  for(bool lazy:{false,true}) for(bool reverse:{false,true}) {
+    editor::Document document;document.loaded=daz::load(file,{{folder},false});if(reverse) std::reverse(document.loaded.objects.begin(),document.loaded.objects.end());
+    document.catalog=daz::discover_morphs(document.loaded,{folder},{},lazy);document.skeletons=daz::load_skeletons(document.loaded);document.formulas=daz::enable_formulas(document.catalog,document.skeletons);
+    const auto snapshot=editor::initial_snapshot(document);auto rendered=document.loaded.scene;runtime::DeformationRuntime runtime(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
+    const float expected[]={-.2f,0,2,1.5f};
+    for(size_t t=0;t<4;++t) {
+      const auto i=document.catalog.targets[t].instance;const auto &m=document.catalog.targets[t].morphs[0];const auto s=size_t(document.formulas.graphs[t].skin);
+      require(std::abs(runtime.effective()[t][0]-expected[i])<1e-6f,"场景 min / max / clamped 覆盖未生效或污染另一实例");
+      require(std::abs(runtime.effective_poses()[s][1].center_offset_cm.y-10*expected[i])<1e-6f,"场景通道限制未用于 Head 中心 ERC");
+      require(std::abs(rendered.meshes[rendered.instances[i].mesh].positions[1].z-.2f*expected[i])<1e-6f,"场景通道限制未用于网格形态");
+      require(m.step==(i==0?.1f:.01f)&&m.minimum==(i==0?-.2f:0)&&m.maximum==(i==3?1.5f:1)&&m.clamped==(i!=2),"通道未覆盖字段没有继承资产默认值");
+      require(document.catalog.report["targets"][t]["morphs"][0]["clamped"]==m.clamped,"参数诊断未反映场景限制");
+    }
+  }
+  fs::remove_all(folder);
+}
 static void lifecycle() {
   editor::Document document;document.generation=1;
   auto &scene=document.loaded.scene;ir::Mesh mesh;mesh.material_slots={"Skin"};mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};
@@ -75,6 +137,8 @@ static void lifecycle() {
   rendered=scene;runtime::DeformationRuntime empty(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);empty.evaluate(snapshot.values,snapshot.poses);
 }
 static void unit() {
+  scene_channel_overrides();
+  joint_overrides();
   embedded_geometry();
   lifecycle();
   ir::Scene scene;ir::Mesh mesh;mesh.positions={{-1,0,-1},{1,0,-1},{0,0,1}};ir::Triangle triangle;triangle.vertices={0,1,2};mesh.triangles={triangle};mesh.material_slots={"Skin"};mesh.polygon_groups={"head"};scene.meshes={mesh};scene.materials.resize(1);

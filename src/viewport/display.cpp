@@ -85,7 +85,28 @@ static GLuint shader(GLenum type,const char *source) {
 }
 void Display::make_program() {
   const auto v=shader(GL_VERTEX_SHADER,"#version 130\nout vec2 uv;void main(){gl_Position=gl_Vertex;uv=gl_MultiTexCoord0.xy;}");
-  const auto f=shader(GL_FRAGMENT_SHADER,"#version 130\nuniform sampler2D beauty;in vec2 uv;out vec4 color;void main(){vec3 x=max(texture(beauty,uv).rgb,vec3(0));vec3 s=mix(12.92*x,1.055*pow(x,vec3(1.0/2.4))-0.055,greaterThan(x,vec3(0.0031308)));color=vec4(s,1);}");
+  const auto f=shader(GL_FRAGMENT_SHADER,R"GLSL(#version 130
+uniform sampler2D beauty;
+uniform int enabled,per_component;
+uniform vec4 tone; // exposure, burn, crush, saturation
+uniform vec3 white;
+uniform float gamma_value,vignette,aspect;
+in vec2 uv;out vec4 color;
+vec3 compress_color(vec3 x) {return x*(vec3(1)+tone.y*x)/(vec3(1)+x);}
+void main(){
+ vec3 x=max(texture(beauty,uv).rgb,vec3(0));
+ if(enabled!=0){
+   x=x*tone.x/max(white,vec3(.0001));
+   vec2 p=(uv*2-1)*vec2(max(aspect,1.0),max(1.0/aspect,1.0))*.422793;
+   x*=pow(1.0+dot(p,p),-vignette);
+   float l=dot(x,vec3(.2126,.7152,.0722));
+   x=per_component!=0?compress_color(x):x*(1.0+tone.y*l)/(1.0+l);
+   x=mix(x,pow(max(x,vec3(0)),vec3(1.0+2.0*tone.z)),vec3(1)-clamp(x,vec3(0),vec3(1)));
+   x=max(mix(vec3(dot(x,vec3(.2126,.7152,.0722))),x,tone.w),vec3(0));
+   x=pow(x,vec3(1.0/max(gamma_value,.001)));
+ }else{x=mix(12.92*x,1.055*pow(x,vec3(1.0/2.4))-0.055,greaterThan(x,vec3(.0031308)));}
+ color=vec4(x,1);
+})GLSL");
   program_=glCreateProgram();glAttachShader(program_,v);glAttachShader(program_,f);glLinkProgram(program_);
   glDeleteShader(v);glDeleteShader(f);
   GLint ok;glGetProgramiv(program_,GL_LINK_STATUS,&ok);if(!ok) throw std::runtime_error("显示着色器链接失败");
@@ -117,6 +138,14 @@ void Display::draw(const Params &) {
   glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glUseProgram(program_);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,slot.texture);
   glUniform1i(glGetUniformLocation(program_,"beauty"),0);
+  const auto &n=options_.tonemapper;const auto w=ir::color(n,"White Point");const auto ws=float(ir::number(n,"White Point Scale",1));
+  glUniform1i(glGetUniformLocation(program_,"enabled"),!n.id.empty()&&ir::number(n,"Tone Mapping Enable",1));
+  glUniform1i(glGetUniformLocation(program_,"per_component"),int(ir::number(n,"Burn Highlights Per Component",1)));
+  glUniform4f(glGetUniformLocation(program_,"tone"),ir::exposure(options_),float(ir::number(n,"Burn Highlights",.25)),float(ir::number(n,"Crush Blacks",.2)),float(ir::number(n,"Saturation",1)));
+  glUniform3f(glGetUniformLocation(program_,"white"),w.x*ws,w.y*ws,w.z*ws);
+  glUniform1f(glGetUniformLocation(program_,"gamma_value"),float(ir::number(n,"Gamma",2.2)));
+  glUniform1f(glGetUniformLocation(program_,"vignette"),float(ir::number(n,"Vignetting",0)));
+  glUniform1f(glGetUniformLocation(program_,"aspect"),float(window_.width)/float(window_.height));
   glBegin(GL_QUADS);
   glTexCoord2f(0,0);glVertex2f(-1,-1);glTexCoord2f(1,0);glVertex2f(1,-1);
   glTexCoord2f(1,1);glVertex2f(1,1);glTexCoord2f(0,1);glVertex2f(-1,1);

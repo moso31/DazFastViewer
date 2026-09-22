@@ -13,6 +13,7 @@ struct Document {
   daz::FormulaCatalog formulas;
 };
 struct Snapshot {
+  ir::RenderOptions options;
   uint64_t generation=0,revision=0;
   std::vector<runtime::Properties> values;
   std::vector<std::vector<runtime::JointPose>> poses;

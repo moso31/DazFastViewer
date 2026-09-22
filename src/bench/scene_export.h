@@ -1,5 +1,5 @@
 #pragma once
-#include "render_ir/scene.h"
+#include "render_ir/options_json.h"
 #include <nlohmann/json.hpp>
 
 namespace dfv {
@@ -7,7 +7,7 @@ inline nlohmann::json scene_json(const ir::Scene &scene,int samples) {
   using J=nlohmann::json;
   auto vec=[](ir::Vec3 v) {return J::array({v.x,v.y,v.z});};
   J result={{"schema","dfv-material-reference-1"},{"coordinate_system","meters-Z-up"},
-    {"environment",vec(scene.environment)},
+    {"environment",vec(scene.environment)},{"render_options",ir::options_json(scene.options)},
     {"camera",{{"transform",scene.camera.transform.value},{"width",scene.camera.width},
                {"height",scene.camera.height},{"fov_short_axis",scene.camera.fov}}},
     {"render",{{"samples",samples},{"seed",1337},{"max_bounces",8},{"diffuse_bounces",4},

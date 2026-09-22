@@ -20,7 +20,8 @@ struct RenderStatus {
   std::vector<ir::Bounds> bounds;
   std::vector<ir::Bounds> head_bounds;
   std::vector<bool> visible;
-  uint64_t clicks=0;
+  uint64_t clicks=0,focus_requests=0;
+  ir::Bounds selection_bounds;
   int hit_target=-1,hit_joint=-1,hovered=-1,hovered_joint=-1,width=0,height=0;
   size_t hovered_triangles=0;
   uint64_t selection_generation=0;
@@ -59,6 +60,8 @@ public:
   void retry_resources();
   RenderStatus status();
   void orbit(float x,float y);
+  void keyboard(int key,bool pressed);
   void frame(const ir::Bounds &bounds);
+  void focus(const ir::Bounds &bounds);
 };
 }

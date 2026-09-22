@@ -83,3 +83,8 @@ add_executable(LazyMorphTest tests/lazy_morph.cpp)
 target_link_libraries(LazyMorphTest PRIVATE dfv_scene bf::dependencies::zlib)
 target_compile_options(LazyMorphTest PRIVATE /utf-8)
 add_test(NAME lazy_morph COMMAND LazyMorphTest)
+
+add_executable(RenderOptionsTest tests/render_options.cpp)
+target_link_libraries(RenderOptionsTest PRIVATE dfv_scene bf::dependencies::zlib)
+target_compile_options(RenderOptionsTest PRIVATE /utf-8)
+add_test(NAME render_options COMMAND RenderOptionsTest)
