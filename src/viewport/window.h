@@ -29,9 +29,15 @@ class Window {
   static LRESULT CALLBACK procedure(HWND,UINT,WPARAM,LPARAM);
   int last_x_=0,last_y_=0;
   bool dragging_=false;
+  bool middle_dragging_=false,back_pressed_=false,back_dragging_=false,back_click_=false;
+  int back_x_=0,back_y_=0;
   bool keys_[6]{};
   ULONGLONG moved_=0;
   Telemetry *telemetry_=nullptr;
+  void update_navigation();
+  bool inside(int x,int y) const;
+  bool side_combo(WPARAM buttons) const;
+  void release_navigation_capture();
 public:
   HWND hwnd{},hidden{};
   HDC dc{},render_dc{};

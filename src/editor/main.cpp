@@ -79,7 +79,14 @@ class Editor final:public QMainWindow {
   std::filesystem::path pose_file_;
   bool pose_test_=false,frame_pending_=false;
   uint64_t focus_requests_=0;
-  void focus_selection() {if(!renderer_) return;const auto state=renderer_->status();if(document_&&state.selection_generation==document_->generation&&state.selected_target==selected_&&state.selected_joint==selected_joint_) renderer_->focus(state.selection_bounds);if(selected_light_>=0) {ir::Bounds b;const auto &m=snapshot_.lights.at(size_t(selected_light_)).transform;b.add(m.point({-.1f,-.1f,-.1f}));b.add(m.point({.1f,.1f,.1f}));renderer_->focus(b);}}
+  bool focus_pending_=false;
+  void focus_selection() {
+    if(!renderer_||!document_) return;
+    if(selected_light_>=0) {ir::Bounds b;const auto &m=snapshot_.lights.at(size_t(selected_light_)).transform;b.add(m.point({-.1f,-.1f,-.1f}));b.add(m.point({.1f,.1f,.1f}));renderer_->focus(b);focus_pending_=false;return;}
+    const auto state=renderer_->status();
+    focus_pending_=state.selection_generation!=document_->generation||state.selected_target!=selected_||state.selected_joint!=selected_joint_;
+    if(!focus_pending_) renderer_->focus(state.selection_bounds);
+  }
   bool formula_test_=false;
   bool lazy_test_=false;int lazy_wait_ticks_=0;size_t lazy_updates_=0;uint64_t lazy_generation_=0;
   bool workflow_test_=false;
@@ -89,6 +96,12 @@ class Editor final:public QMainWindow {
   uint64_t head_test_epoch_=0;
   size_t head_test_triangles_=0;
   bool options_test_=false;int options_wait_=0;CameraState options_camera_;size_t options_geometry_=0;uint64_t options_epoch_=0;
+  bool navigation_test_=false;
+  bool keep_open_after_test_=false;
+  RenderStatus navigation_before_;
+  CameraState navigation_after_input_;
+  qint64 navigation_at_=0;
+  nlohmann::json navigation_checks_=nlohmann::json::array();
   bool attachment_test_=false;std::vector<std::array<int,3>> attachment_cases_;nlohmann::json attachment_report_=nlohmann::json::array();
   bool capture_test_=false;
   bool capture_head_=false;
@@ -372,6 +385,7 @@ class Editor final:public QMainWindow {
       {"scope","selected-object-morph-transform-reset-camera-no-morph-evaluation"}};
     if(workflow_test_) {report["scope"]="raycast-body-part-tree-head-morph-hover-resize-layout";report["viewport"]={status.width,status.height};report["hovered_instance"]=status.hovered;report["hovered_joint"]=status.hovered_joint;report["hovered_triangles"]=status.hovered_triangles;report["selected_joint"]=selected_joint_;report["hover_checks"]=hover_checks_;}
     if(head_selection_test_) report["scope"]="figure-head-detail-and-bound-clothing-picking";
+    if(navigation_test_) {report["scope"]="navigation-preview-and-refinement";report["checks"]=navigation_checks_;}
     if(capture_test_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
@@ -384,7 +398,15 @@ class Editor final:public QMainWindow {
     if(document_) for(const auto &target:document_->catalog.targets) for(const auto &m:target.morphs)
       if(m.label=="Arms Length" || m.label=="Chest Scale" || m.label=="Eyes Closed" || m.label=="HS Sanny Shy")
         report["named_parameters"].push_back({{"label",m.label},{"group",m.group},{"kind",m.kind},{"source",m.source}});
-    std::ofstream(output_/"editor-check.json")<<report.dump(2);QApplication::exit(pass?0:1);
+    std::ofstream(output_/"editor-check.json")<<report.dump(2);
+    if(keep_open_after_test_&&navigation_test_) {
+      navigation_test_=self_test_=false;focus_pending_=false;
+      const auto viewport=FindWindowExW(reinterpret_cast<HWND>(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);
+      if(viewport) SendMessageW(viewport,WM_CANCELMODE,0,0);
+      if(document_&&!status.bounds.empty()) {choose(0);renderer_->frame(status.bounds.front());}
+      statusBar()->showMessage(pass?QStringLiteral("导航验收通过，可以直接体验。") : text(error));return;
+    }
+    QApplication::exit(pass?0:1);
   }
   void head_selection_tick(const RenderStatus &state) {
     auto &skin=document_->skeletons.skins.at(size_t(std::max(0,head_test_skin_)));
@@ -483,12 +505,114 @@ class Editor final:public QMainWindow {
     else {if(!document_->catalog.targets.empty()) {finish_test(false,"删除最后一个模型失败");return;}load(lifecycle_first_);}
     ++test_stage_;
   }
+  void navigation_tick(const RenderStatus &state) {
+    const auto time=QDateTime::currentMSecsSinceEpoch();
+    std::ofstream(output_/"navigation-progress.json")<<nlohmann::json({{"stage",test_stage_},{"preview",state.preview},{"camera_epoch",state.camera.epoch},{"navigating",state.camera.navigating},{"focus_requests",state.focus_requests},{"last_preview_frame",state.last_preview_frame},{"previous_preview_frame",navigation_before_.last_preview_frame},{"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"samples",state.samples}}).dump(2);
+    if(time-test_started_>600000) {finish_test(false,"导航预览验证超时");return;}
+    if(!state.error.empty()) {finish_test(false,state.error);return;}
+    if(!document_||state.generation!=document_->generation||resize_at_) return;
+    const auto hwnd=FindWindowExW(reinterpret_cast<HWND>(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);
+    if(!hwnd) {finish_test(false,"找不到原生视口");return;}
+    auto input=[&](UINT message,WPARAM w=0,LPARAM l=0) {SendMessageW(hwnd,message,w,l);};
+    const int item=test_stage_/3,phase=test_stage_%3;
+    if(phase&&time-navigation_at_>15000) {finish_test(false,"导航输入未在 15 秒内完成预期切换");return;}
+    // 用实际呈现的尺寸和版本判断恢复，结束采样后的诊断计数可能归零。
+    const bool full=state.frames>0&&!state.preview&&state.presented_epoch==state.requested_epoch&&state.render_width==state.width&&state.render_height==state.height;
+    static const char *names[]={"W","A","S","D","Q","E","右键环绕","Ctrl＋右键转头","右键松开但 W 仍按住","滚轮","F 聚焦","捕获丢失","窗口失焦",
+      "Shift＋右键平移","中键平移","后侧键转头","后侧键单击聚焦","侧键拖回起点不聚焦","Ctrl＋侧键不聚焦","侧键加键盘不聚焦","侧键加右键不聚焦",
+      "侧键在外部释放不聚焦","视口外侧键不聚焦","前侧键不聚焦","侧键轻微抖动仍单击","Hierarchy 切换后立即侧键聚焦","侧键加 W 不聚焦","侧键捕获丢失","侧键失焦","视口外滚轮","视口外中键","Hierarchy 区域侧键不聚焦"};
+    const bool no_change=(item>=18&&item<=23)||item==27||item==28||item==29||item==30||item==31;
+    const bool focus_click=item==16||item==24||item==25;
+    const bool instant=item==9||item==10||focus_click||item==17;
+    const LPARAM point=MAKELPARAM(200,200),moved=MAKELPARAM(220,210),outside=MAKELPARAM(-20,-20);
+    auto side=[&](bool down,LPARAM position,WORD flags=0,WORD button=XBUTTON1) {input(down?WM_XBUTTONDOWN:WM_XBUTTONUP,MAKEWPARAM(flags,button),position);};
+    auto wheel=[&](bool in_view) {POINT p{in_view?200:-20,in_view?200:-20};ClientToScreen(hwnd,&p);input(WM_MOUSEWHEEL,MAKEWPARAM(0,WHEEL_DELTA),MAKELPARAM(p.x,p.y));};
+    if(phase==0) {
+      if(!full) return;
+      if(item==int(std::size(names))) {finish_test(true);return;}
+      activateWindow();raise();SetForegroundWindow(reinterpret_cast<HWND>(winId()));
+      // 用户仍按着键时不注入下一项单击，避免把正确的组合键排除当成失败。
+      for(int key=VK_BACK;key<256;++key) if((GetKeyState(key)|GetAsyncKeyState(key))&0x8000) return;
+      const bool drag_case=(item>=6&&item<=8)||item==11||item==12||item==13||item==14||item==15;
+      POINT cursor{drag_case?220:200,drag_case?210:200};ClientToScreen(hwnd,&cursor);SetCursorPos(cursor.x,cursor.y);
+      MSG pending{};while(PeekMessageW(&pending,hwnd,WM_MOUSEMOVE,WM_MOUSEMOVE,PM_REMOVE)) DispatchMessageW(&pending);
+      navigation_before_=state;navigation_at_=time;SetFocus(hwnd);
+      navigation_before_.camera=renderer_->input_camera();
+      if(item<6) input(WM_KEYDOWN,"WASDQE"[item]);
+      else if(item==9) wheel(true);
+      else if(item==10) {input(WM_KEYDOWN,'F');input(WM_KEYUP,'F');}
+      else if(item==14) {input(WM_MBUTTONDOWN,MK_MBUTTON,point);input(WM_MOUSEMOVE,MK_MBUTTON,moved);}
+      else if(item>=15) {
+        if(item==25) {choose(-1);choose(int(state.bounds.size())-1);}
+        if(item==29) wheel(false);
+        else if(item==30) {input(WM_MBUTTONDOWN,MK_MBUTTON,outside);input(WM_MOUSEMOVE,MK_MBUTTON,outside);input(WM_MBUTTONUP,0,outside);}
+        else if(item==31) {SendMessageW(reinterpret_cast<HWND>(hierarchy_->winId()),WM_XBUTTONDOWN,MAKEWPARAM(0,XBUTTON1),point);SendMessageW(reinterpret_cast<HWND>(hierarchy_->winId()),WM_XBUTTONUP,MAKEWPARAM(0,XBUTTON1),point);}
+        else {
+          side(true,item==22?outside:point,item==18?MK_CONTROL:0,item==23?XBUTTON2:XBUTTON1);
+          if(item==15||item==17) input(WM_MOUSEMOVE,MK_XBUTTON1,moved);
+          if(item==17) input(WM_MOUSEMOVE,MK_XBUTTON1,point);
+          if(item==19) {input(WM_KEYDOWN,'X');input(WM_KEYUP,'X');}
+          if(item==20) {input(WM_RBUTTONDOWN,MK_RBUTTON|MK_XBUTTON1,point);input(WM_RBUTTONUP,MK_XBUTTON1,point);}
+          if(item==24) input(WM_MOUSEMOVE,MK_XBUTTON1,MAKELPARAM(201,201));
+          if(item==26) input(WM_KEYDOWN,'W');
+          if(item==27) ReleaseCapture();
+          else if(item==28) SetFocus(reinterpret_cast<HWND>(host_->winId()));
+          else if(item!=15&&item!=26) side(false,item==21||item==22?outside:point,0,item==23?XBUTTON2:XBUTTON1);
+        }
+      }
+      else {
+        input(WM_RBUTTONDOWN,MK_RBUTTON,MAKELPARAM(200,200));
+        input(WM_MOUSEMOVE,MK_RBUTTON|(item==7?MK_CONTROL:item==13?MK_SHIFT:0),MAKELPARAM(220,210));
+        if(item==8) {input(WM_KEYDOWN,'W');input(WM_RBUTTONUP);}
+      }
+      navigation_after_input_=renderer_->input_camera();++test_stage_;return;
+    }
+    if(phase==1) {
+      if(no_change) {if(time-navigation_at_<300) return;++test_stage_;return;}
+      if(state.last_preview_frame<=navigation_before_.last_preview_frame) return;
+      if(!instant) {
+        if(!state.camera.navigating||!state.preview) {finish_test(false,"持续输入期间提前恢复全分辨率");return;}
+        if(state.render_width!=std::max(1,state.width/4)||state.render_height!=std::max(1,state.height/4)||state.samples>2) {finish_test(false,"移动预览尺寸或采样上限错误");return;}
+        if(time-navigation_at_<500) return;
+      }
+      if(item==7||item==15) {
+        const auto d=navigation_after_input_.eye()-navigation_before_.camera.eye();
+        if(std::abs(d.x)+std::abs(d.y)+std::abs(d.z)>.0001f) {finish_test(false,"第一人称转头改变了相机位置");return;}
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"navigation-preview.png").wstring()));
+      }
+      if(item==13||item==14) {
+        auto expected=navigation_before_.camera;expected.pan(20,10);const auto d=navigation_after_input_.target-expected.target;
+        if(std::abs(d.x)+std::abs(d.y)+std::abs(d.z)>.0001f||navigation_after_input_.yaw!=expected.yaw||navigation_after_input_.pitch!=expected.pitch) {finish_test(false,"屏幕朝向平移不等于原 Shift＋右键");return;}
+      }
+      if(item<6) input(WM_KEYUP,"WASDQE"[item]);
+      else if(item==8) input(WM_KEYUP,'W');
+      else if(item==11) ReleaseCapture();
+      else if(item==12) {input(WM_KEYDOWN,'W');SetFocus(reinterpret_cast<HWND>(host_->winId()));}
+      else if(item==14) input(WM_MBUTTONUP,0,moved);
+      else if(item==15||item==26) {if(item==26) input(WM_KEYUP,'W');side(false,moved);}
+      else if(!instant) input(WM_RBUTTONUP);
+      ++test_stage_;return;
+    }
+    if(!full) return;
+    const uint64_t expected_focus=navigation_before_.focus_requests+((item==10||focus_click)?1:0);
+    if(state.focus_requests!=expected_focus) {finish_test(false,"侧键单击、拖动或组合键的聚焦计数错误");return;}
+    if(no_change&&state.camera.epoch!=navigation_before_.camera.epoch) {finish_test(false,"非导航操作改变了相机");return;}
+    if(focus_click) {
+      const auto c=state.selection_bounds.center();const auto t=state.camera.target;
+      if(std::abs(c.x-t.x)+std::abs(c.y-t.y)+std::abs(c.z-t.z)>.0001f||state.selected_target!=selected_) {finish_test(false,"侧键聚焦未同步 Hierarchy 当前选择");return;}
+    }
+    if(state.camera.navigating||state.adapter.geometry_updates!=navigation_before_.adapter.geometry_updates||state.skinning.evaluations!=navigation_before_.skinning.evaluations||state.evaluation.morph_evaluations!=navigation_before_.evaluation.morph_evaluations) {finish_test(false,"导航结束状态或几何隔离错误");return;}
+    if(item==7) screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"navigation-refined.png").wstring()));
+    navigation_checks_.push_back({{"input",names[item]},{"preview_frame",state.last_preview_frame},{"full_size",{state.render_width,state.render_height}},{"full_samples",state.samples},{"focus_requests",state.focus_requests},{"selected_target",state.selected_target}});
+    ++test_stage_;
+  }
   void tick() {
-    const auto focus_state=renderer_->status();if(focus_state.focus_requests!=focus_requests_) {focus_requests_=focus_state.focus_requests;focus_selection();}
+    const auto focus_state=renderer_->status();if(focus_state.focus_requests!=focus_requests_||focus_pending_) {focus_requests_=focus_state.focus_requests;focus_selection();}
     const QSize size(qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()));
     if(size!=viewport_size_) {viewport_size_=size;resize_at_=QDateTime::currentMSecsSinceEpoch()+180;}
     if(resize_at_&&QDateTime::currentMSecsSinceEpoch()>=resize_at_) {resize_at_=0;renderer_->resize(size.width(),size.height());}
     const auto state=renderer_->status();
+    if(navigation_test_) {navigation_tick(state);return;}
     if(refresh_parameters_) refresh_parameters_->setEnabled(!loading_&&document_&&selected_>=0);
     if(retry_parameters_) retry_parameters_->setEnabled(document_&&!state.resource_error.empty());
     static int resources_tick=0;if(++resources_tick%5==0) parameters_->resource_states();
@@ -795,7 +919,7 @@ public:
     setDockOptions(AnimatedDocks|AllowNestedDocks|AllowTabbedDocks);
     auto *central=new QWidget;auto *layout=new QVBoxLayout(central);layout->setContentsMargins(4,4,4,4);
     host_=new QWidget;host_->setAttribute(Qt::WA_NativeWindow);host_->setAttribute(Qt::WA_DontCreateNativeAncestors);host_->setMinimumSize(160,120);host_->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
-    layout->addWidget(host_,1);layout->addWidget(new QLabel(QStringLiteral("右键旋转 · Shift＋右键平移 · 滚轮缩放 · F 聚焦 · WASDQE 移动（Shift 加速）")),0,Qt::AlignCenter);auto *viewport_dock=dock(QStringLiteral("视口"),central,Qt::RightDockWidgetArea);viewport_dock->setObjectName("Viewport");
+    layout->addWidget(host_,1);auto *navigation_help=new QLabel(QStringLiteral("右键环绕 · 中键 / Shift＋右键平移 · 后侧键 / Ctrl＋右键转头\n后侧键单击 / F 聚焦所选 · 滚轮缩放 · WASDQE 移动（Shift 加速）"));navigation_help->setAlignment(Qt::AlignCenter);layout->addWidget(navigation_help);auto *viewport_dock=dock(QStringLiteral("视口"),central,Qt::RightDockWidgetArea);viewport_dock->setObjectName("Viewport");
     files_=new QFileSystemModel(this);files_->setNameFilters({"*.duf"});files_->setNameFilterDisables(false);files_->setReadOnly(true);
     explorer_=new QTreeView;explorer_->setModel(files_);
     for(int i=1;i<4;++i) explorer_->hideColumn(i);explorer_->setHeaderHidden(true);explorer_->setMinimumWidth(185);
@@ -890,6 +1014,8 @@ public:
   void closeEvent(QCloseEvent *event) override {if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));}QMainWindow::closeEvent(event);}
   ~Editor() override {loader_.request_stop();if(loader_.joinable()) loader_.join();renderer_.reset();}
   void options_test() {options_test_=self_test_=true;}
+  void navigation_test() {navigation_test_=self_test_=true;}
+  void keep_open_after_test() {keep_open_after_test_=true;}
   void attachment_test() {attachment_test_=self_test_=true;}
   void lazy_test() {lazy_test_=self_test_=true;}
   void load(const std::filesystem::path &file,bool preserve=false,bool append=false) {
@@ -959,6 +1085,8 @@ int main(int argc,char **argv) {
   parser.addOption({"workflow-test",QStringLiteral("验证射线、部位 Morph 与视口缩放后退出")});
   parser.addOption({"head-selection-test",QStringLiteral("验证三级头部选择及绑定服装射线后退出")});
   parser.addOption({"options-test",QStringLiteral("验证环境 / 色调参数及 F / WASDQE 导航后退出")});
+  parser.addOption({"navigation-test",QStringLiteral("验证移动预览、第一人称转头与静止恢复后退出")});
+  parser.addOption({"keep-open-after-test",QStringLiteral("导航验收完成后保留客户端供手动体验")});
   parser.addOption({"attachment-test",QStringLiteral("逐一验证 Head 附件的场景树父节点并截图")});
   parser.addOption({"capture-test",QStringLiteral("场景显示验证后截图退出")});
   parser.addOption({"capture-target",QStringLiteral("截图时框选的对象标签，可重复"),"label"});
@@ -995,6 +1123,8 @@ int main(int argc,char **argv) {
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("options-test")) editor.options_test();
+    if(parser.isSet("navigation-test")) editor.navigation_test();
+    if(parser.isSet("keep-open-after-test")) editor.keep_open_after_test();
     if(parser.isSet("attachment-test")) editor.attachment_test();
     if(parser.isSet("lazy-test")) editor.lazy_test();
     if(parser.isSet("workflow-test")) editor.workflow_test();

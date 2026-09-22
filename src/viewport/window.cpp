@@ -74,8 +74,25 @@ Window::~Window() {
 }
 void Window::publish() {
   ++camera.epoch;camera.input_seconds=now();
+  if(!camera.navigating) camera.preview_until=camera.input_seconds+.15;
   if(telemetry_) {Frame frame;frame.epoch=camera.epoch;telemetry_->event("camera_input",frame);}
   mailbox.publish(camera);
+}
+void Window::update_navigation() {
+  camera.navigating=dragging_||middle_dragging_||back_dragging_||std::any_of(std::begin(keys_),std::end(keys_),[](bool k){return k;});
+  mailbox.publish(camera);
+}
+bool Window::inside(int x,int y) const {
+  RECT rect{};GetClientRect(hwnd,&rect);return PtInRect(&rect,POINT{x,y})!=0;
+}
+bool Window::side_combo(WPARAM buttons) const {
+  if((LOWORD(buttons)&~MK_XBUTTON1)||dragging_||middle_dragging_||std::any_of(std::begin(keys_),std::end(keys_),[](bool k){return k;})) return true;
+  for(int key=VK_BACK;key<256;++key) if(GetKeyState(key)&0x8000) return true;
+  return false;
+}
+void Window::release_navigation_capture() {
+  update_navigation();
+  if(!dragging_&&!middle_dragging_&&!back_pressed_&&GetCapture()==hwnd) ReleaseCapture();
 }
 void Window::poll() {
   MSG msg{};
@@ -89,16 +106,32 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
   }
   if(!self) return DefWindowProcW(hwnd,msg,w,l);
   switch(msg) {
-    case WM_LBUTTONDOWN:SetFocus(hwnd);return 0;
+    case WM_LBUTTONDOWN:self->back_click_=false;SetFocus(hwnd);return 0;
     case WM_LBUTTONUP:self->click_x=GET_X_LPARAM(l);self->click_y=GET_Y_LPARAM(l);++self->clicks;return 0;
-    case WM_MOUSELEAVE:self->pointer_x=-1;self->pointer_y=-1;return 0;
+    case WM_MOUSELEAVE:self->back_click_=false;self->pointer_x=-1;self->pointer_y=-1;return 0;
     case WM_CLOSE:self->close=true;return 0;
     case WM_KEYDOWN:
+      self->back_click_=false;
       if(w==VK_ESCAPE&&!self->embedded) self->close=true;
-      if(w=='F'&&!(l&(1LL<<30))) ++self->focus_requests;
-      for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=true;return 0;
-    case WM_KEYUP:for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=false;return 0;
-    case WM_KILLFOCUS:std::fill(std::begin(self->keys_),std::end(self->keys_),false);self->dragging_=false;return 0;
+      if(w=='F'&&!self->back_pressed_&&!(l&(1LL<<30))) ++self->focus_requests;
+      for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=true;
+      self->update_navigation();return 0;
+    case WM_KEYUP:
+      for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=false;
+      self->update_navigation();return 0;
+    case WM_SYSKEYDOWN:self->back_click_=false;break;
+    case WM_MOUSEHWHEEL:self->back_click_=false;return 0;
+    case WM_KILLFOCUS:
+    case WM_CANCELMODE:
+      if(self->telemetry_) self->telemetry_->event(msg==WM_KILLFOCUS?"viewport_focus_lost":"viewport_cancel_input");
+      std::fill(std::begin(self->keys_),std::end(self->keys_),false);
+      self->dragging_=self->middle_dragging_=self->back_pressed_=self->back_dragging_=self->back_click_=false;
+      self->camera.preview_until=0;self->update_navigation();
+      if(GetCapture()==hwnd) ReleaseCapture();return 0;
+    case WM_CAPTURECHANGED:
+      if(self->telemetry_) self->telemetry_->event("viewport_capture_changed");
+      self->dragging_=self->middle_dragging_=self->back_pressed_=self->back_dragging_=self->back_click_=false;
+      self->update_navigation();return 0;
     case WM_TIMER: {
       const auto now=GetTickCount64();const float seconds=std::min(float(now-self->moved_)*.001f,.1f);self->moved_=now;
       if(GetFocus()==hwnd&&std::any_of(std::begin(self->keys_),std::end(self->keys_),[](bool k){return k;})) {
@@ -106,19 +139,54 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
       }return 0;
     }
     case WM_RBUTTONDOWN:
-      SetFocus(hwnd);self->dragging_=true;self->last_x_=GET_X_LPARAM(l);self->last_y_=GET_Y_LPARAM(l);SetCapture(hwnd);return 0;
-    case WM_RBUTTONUP:self->dragging_=false;ReleaseCapture();return 0;
+    case WM_MBUTTONDOWN:
+      self->back_click_=false;
+      if(!self->inside(GET_X_LPARAM(l),GET_Y_LPARAM(l))) return 0;
+      SetFocus(hwnd);if(msg==WM_RBUTTONDOWN) self->dragging_=true;else self->middle_dragging_=true;
+      self->update_navigation();self->last_x_=GET_X_LPARAM(l);self->last_y_=GET_Y_LPARAM(l);SetCapture(hwnd);return 0;
+    case WM_RBUTTONUP:self->dragging_=false;self->release_navigation_capture();return 0;
+    case WM_MBUTTONUP:self->middle_dragging_=false;self->release_navigation_capture();return 0;
+    case WM_XBUTTONDOWN:
+      if(GET_XBUTTON_WPARAM(w)!=XBUTTON1) {self->back_click_=false;return TRUE;}
+      if(!self->inside(GET_X_LPARAM(l),GET_Y_LPARAM(l))) return TRUE;
+      SetFocus(hwnd);self->back_pressed_=true;self->back_dragging_=false;self->back_click_=!self->side_combo(w);
+      if(self->telemetry_) self->telemetry_->event(self->back_click_?"side_press_candidate":"side_press_combination");
+      self->back_x_=self->last_x_=GET_X_LPARAM(l);self->back_y_=self->last_y_=GET_Y_LPARAM(l);
+      SetCapture(hwnd);return TRUE;
+    case WM_XBUTTONUP: {
+      if(GET_XBUTTON_WPARAM(w)!=XBUTTON1) return TRUE;
+      const int x=GET_X_LPARAM(l),y=GET_Y_LPARAM(l);
+      if(self->telemetry_) self->telemetry_->event(!self->back_pressed_?"side_release_without_press":self->back_dragging_?"side_release_drag":!self->back_click_?"side_release_cancelled":self->side_combo(w)?"side_release_combination":!self->inside(x,y)?"side_release_outside":"side_release_click_candidate");
+      const bool click=self->back_pressed_&&self->back_click_&&!self->back_dragging_&&!self->side_combo(w)&&self->inside(x,y)&&
+        std::abs(x-self->back_x_)<GetSystemMetrics(SM_CXDRAG)&&std::abs(y-self->back_y_)<GetSystemMetrics(SM_CYDRAG);
+      self->back_pressed_=self->back_dragging_=self->back_click_=false;self->release_navigation_capture();
+      if(click) ++self->focus_requests;return TRUE;
+    }
     case WM_MOUSEMOVE:
       self->pointer_x=GET_X_LPARAM(l);self->pointer_y=GET_Y_LPARAM(l);
       {TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT),TME_LEAVE,hwnd,0};TrackMouseEvent(&track);}
-      if(self->dragging_) {
+      if(self->dragging_||self->middle_dragging_||self->back_pressed_) {
         const int x=GET_X_LPARAM(l),y=GET_Y_LPARAM(l);
-        if(w&MK_SHIFT) self->camera.pan(float(x-self->last_x_),float(y-self->last_y_));
-        else self->camera.orbit(float(x-self->last_x_),float(y-self->last_y_));
-        self->last_x_=x;self->last_y_=y;self->publish();
+        if(!self->inside(x,y)) {self->back_click_=false;self->last_x_=x;self->last_y_=y;return 0;}
+        if(self->back_pressed_) {
+          if(self->side_combo(w)) {if(self->back_click_&&self->telemetry_) self->telemetry_->event("side_move_combination");self->back_click_=false;}
+          if(!self->back_dragging_&&(std::abs(x-self->back_x_)>=GetSystemMetrics(SM_CXDRAG)||std::abs(y-self->back_y_)>=GetSystemMetrics(SM_CYDRAG))) {
+            self->back_dragging_=true;self->back_click_=false;self->update_navigation();
+          }
+        }
+        const float dx=float(x-self->last_x_),dy=float(y-self->last_y_);
+        if(self->back_dragging_||(self->dragging_&&(w&MK_CONTROL))) self->camera.look(dx,dy);
+        else if(self->middle_dragging_||(self->dragging_&&(w&MK_SHIFT))) self->camera.pan(dx,dy);
+        else if(self->dragging_) self->camera.orbit(dx,dy);
+        else return 0;
+        self->last_x_=x;self->last_y_=y;if(dx||dy) self->publish();
       }
       return 0;
-    case WM_MOUSEWHEEL:self->camera.dolly(float(GET_WHEEL_DELTA_WPARAM(w))/WHEEL_DELTA);self->publish();return 0;
+    case WM_MOUSEWHEEL: {
+      self->back_click_=false;
+      POINT p{GET_X_LPARAM(l),GET_Y_LPARAM(l)};ScreenToClient(hwnd,&p);
+      if(self->inside(p.x,p.y)) {self->camera.dolly(float(GET_WHEEL_DELTA_WPARAM(w))/WHEEL_DELTA);self->publish();}return 0;
+    }
     case WM_SIZE:
       self->minimized=w==SIZE_MINIMIZED;
       if(w!=SIZE_MINIMIZED && (LOWORD(l)!=self->width || HIWORD(l)!=self->height)) self->size_changed=true;

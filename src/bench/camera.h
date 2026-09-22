@@ -22,6 +22,12 @@ struct CameraState {
   float yaw=0.5f, pitch=0.28f, distance=12.0f;
   uint64_t epoch=1;
   double input_seconds=0;
+  bool navigating=false;
+  double preview_until=0;
+  // 新视角至少先呈现一帧预览；持续输入期间不能提前恢复完整采样。
+  bool needs_preview(uint64_t applied_epoch,double seconds) const {
+    return navigating || seconds<preview_until || epoch!=applied_epoch;
+  }
   Vec3 eye() const {
     return target+Vec3{std::sin(yaw)*std::cos(pitch),-std::cos(yaw)*std::cos(pitch),std::sin(pitch)}*distance;
   }
@@ -35,6 +41,9 @@ struct CameraState {
             right.z,up.z,forward.z,origin.z};
   }
   void orbit(float dx,float dy) { yaw-=dx*0.005f; pitch=std::clamp(pitch+dy*0.005f,-1.45f,1.45f); }
+  void look(float dx,float dy) {
+    const Vec3 origin=eye();orbit(dx,dy);target=target+(origin-eye());
+  }
   void pan(float dx,float dy) {
     const Vec3 forward=normalized(target-eye()),right=normalized(cross(forward,{0,0,1}));
     target=target+right*(-dx*distance*0.001f)+cross(right,forward)*(dy*distance*0.001f);

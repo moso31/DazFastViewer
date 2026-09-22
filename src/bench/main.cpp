@@ -296,7 +296,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
         glViewport(0,0,o.width,o.height);glClearColor(0.03f,0.03f,0.03f,1);glClear(GL_COLOR_BUFFER_BIT);
         session->draw();
         std::ostringstream text;text<<o.backend<<" | "<<o.width<<'x'<<o.height<<" | epoch "<<telemetry.displayed_epoch
-          <<" | samples "<<session->dfv_render_samples<<" | submitted "<<telemetry.submitted<<" | RMB orbit / Shift+RMB pan / wheel dolly";
+          <<" | samples "<<session->dfv_render_samples<<" | submitted "<<telemetry.submitted<<" | RMB orbit / Shift+RMB or MMB pan / Ctrl+RMB or Back drag look";
         if(unsupported) text<<" | Preview limitations: "<<unsupported;
         display->hud(text.str());
         LARGE_INTEGER before{},after{};QueryPerformanceCounter(&before);
@@ -419,7 +419,7 @@ int wmain(int argc,wchar_t **wide_argv) {
                <<"  --dump-shaders  导出材质图和绑定诊断，不创建窗口或执行渲染\n"
                <<"  --export-scene  无需 GPU 导出参考场景、相机、灯光及材质参数\n"
                <<"  --material-delta-check  与 --smoke --file 合用，检查同一 Session 的材质增量\n"
-               <<"  右键旋转 / Shift+右键平移 / 滚轮缩放 / Esc 退出\n";return 0;
+               <<"  右键环绕 / Shift+右键或中键平移 / Ctrl+右键或后侧键拖动转头 / 滚轮缩放 / Esc 退出\n";return 0;
     }
     if(options.inspect || options.export_scene) {
       auto loaded=dfv::daz::load(options.file,{options.content_roots,options.strict});

@@ -45,6 +45,7 @@ void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(d
 void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources_;}
 void Renderer::select(uint64_t generation,int target,int joint) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
+CameraState Renderer::input_camera() {return window_->mailbox.latest();}
 void Renderer::keyboard(int key,bool pressed) {SetFocus(window_->hwnd);PostMessageW(window_->hwnd,pressed?WM_KEYDOWN:WM_KEYUP,WPARAM(key),0);}
 void Renderer::orbit(float x,float y) {window_->camera.orbit(x,y);window_->publish();}
 void Renderer::run(std::stop_token stop) {
@@ -79,6 +80,12 @@ void Renderer::run(std::stop_token stop) {
     SessionParams params;params.device=device;params.samples=sampling_.samples;params.pixel_size=1;params.background=false;
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
+    bool preview=false;
+    auto set_quality=[&](bool moving) {
+      preview=moving;params.samples=moving?2:sampling_.samples;
+      buffers.width=buffers.full_width=moving?std::max(1,window_->width.load()/4):window_->width.load();
+      buffers.height=buffers.full_height=moving?std::max(1,window_->height.load()/4):window_->height.load();
+    };
     Snapshot desired;
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;
@@ -120,6 +127,8 @@ void Renderer::run(std::stop_token stop) {
         render_scene.lights=desired.lights;render_scene.options=desired.options;
         SceneParams scene_params;scene_params.background=false;scene_params.bvh_type=BVH_TYPE_DYNAMIC;
         scene_params.use_texture_cache=false;scene_params.auto_texture_cache=false;
+        const auto initial_camera=window_->mailbox.latest();
+        set_quality(initial_camera.navigating||now()<initial_camera.preview_until);
         session=std::make_unique<Session>(params,scene_params);
         auto &scene=*session->scene;
         auto *pass=scene.create_node<Pass>();pass->set_name(ustring("combined"));pass->set_type(PASS_COMBINED);
@@ -140,7 +149,11 @@ void Renderer::run(std::stop_token stop) {
       if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
       if(display->failed()) throw std::runtime_error(display->error());
       auto camera=window_->mailbox.latest();
-      if((camera.epoch!=camera_epoch || desired.revision!=attempted_revision) && telemetry_.displayed_epoch.load()>=epoch && session->ready_to_reset()) {
+      const bool wanted_preview=camera.needs_preview(camera_epoch,now());
+      const bool quality_changed=wanted_preview!=preview;
+      // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
+      if((quality_changed || camera.epoch!=camera_epoch || desired.revision!=attempted_revision) &&
+         ((wanted_preview&&!preview)||(telemetry_.displayed_epoch.load()>=epoch && session->ready_to_reset()))) {
         ir::Delta delta;
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
           try {
@@ -167,8 +180,8 @@ void Renderer::run(std::stop_token stop) {
           catch(const std::exception &e) {attempted_revision=desired.revision;state.edit_error=e.what();}
         }
         if(camera.epoch!=camera_epoch) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;}
-        if(delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
-          {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
+        if(quality_changed||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
+          {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);set_quality(wanted_preview);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
         state.applied_revision=applied_revision;
       }
       window_->present_context.activate();
@@ -177,7 +190,7 @@ void Renderer::run(std::stop_token stop) {
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
       session->draw();
       state.camera=camera;state.pointer_x=window_->pointer_x;state.pointer_y=window_->pointer_y;
-      auto hover=picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
+      auto hover=preview?runtime::PickHit{}:picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
       bool editable=false;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
       if(!editable) hover={};
       state.hovered_detail_joint=hover.instance>=0&&hover.triangle>=0&&size_t(hover.triangle)<regions[size_t(hover.instance)].detail.size()?regions[size_t(hover.instance)].detail[size_t(hover.triangle)]:-1;
@@ -209,7 +222,7 @@ void Renderer::run(std::stop_token stop) {
       const auto region=runtime::hover_region(hover,selected_instance,state.selected_joint,regions);
       state.hovered=region.instance;state.hovered_joint=region.joint;state.hovered_triangles=overlay.triangle_count(region.instance,region.joint);
       const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;
-      if(presented) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint);
+      if(presented&&!preview) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint);
       if(presented&&window_->clicks.load()!=clicks) {
         clicks=window_->clicks.load();const auto hit=picking.screen(camera,window_->click_x,window_->click_y,window_->width,window_->height);
         state.clicks=clicks;state.hit_target=-1;state.hit_joint=-1;
@@ -222,6 +235,9 @@ void Renderer::run(std::stop_token stop) {
       state.visible.clear();for(const auto &instance:render_scene.instances) state.visible.push_back(instance.visible);
       if(!SwapBuffers(window_->dc)) {window_->present_context.deactivate();throw std::runtime_error("Qt 视口 SwapBuffers 失败");}
       display->after_swap();window_->present_context.deactivate();
+      const auto shown=display->drawn_frame();
+      state.preview=preview;state.render_width=shown.width;state.render_height=shown.height;
+      if(shown.id&&shown.width==std::max(1,window_->width.load()/4)&&shown.height==std::max(1,window_->height.load()/4)) state.last_preview_frame=shown.id;
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
@@ -262,7 +278,8 @@ void Renderer::run(std::stop_token stop) {
     {"collision_evaluations",state.collision.evaluations},{"collision_corrected_vertices",state.collision.corrected_vertices},
     {"formula_evaluations",state.formulas.expressions},{"formula_channels",state.formulas.channels},{"edit_error",state.edit_error},
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
-    {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"}};
+    {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"},
+    {"navigation_preview",{{"width_divisor",4},{"height_divisor",4},{"samples",2},{"idle_seconds",.15}}}};
   report["sampling"]=sampling_report;std::ofstream(output_/"editor-render.json")<<report.dump(2);
 }
 }

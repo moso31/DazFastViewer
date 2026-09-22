@@ -24,6 +24,23 @@ int main() {
     producer.join();
     require(mailbox.latest().epoch==1001,"消费者停顿后没有取得最新状态");
     dfv::CameraState camera;
+    camera.navigating=true;
+    require(camera.needs_preview(camera.epoch,1000),"持续按键或右键不能因超时恢复完整渲染");
+    camera.navigating=false;camera.preview_until=.15;
+    require(camera.needs_preview(camera.epoch,.1),"滚轮静止窗口内应保持预览");
+    require(!camera.needs_preview(camera.epoch,.2),"输入停止后应恢复完整渲染");
+    require(camera.needs_preview(camera.epoch-1,1000),"延迟处理的滚轮或聚焦也必须先输出预览");
+    const auto origin=camera.eye();const auto target=camera.target;
+    camera.look(40,-20);
+    const auto moved=camera.eye()-origin;
+    require(std::abs(moved.x)+std::abs(moved.y)+std::abs(moved.z)<.00001f,"第一人称转头改变了相机位置");
+    require(std::abs(camera.target.x-target.x)>.01f,"第一人称转头没有改变观察方向");
+    camera.look(0,10000);
+    const auto clamped=camera.eye()-origin;
+    require(std::abs(clamped.x)+std::abs(clamped.y)+std::abs(clamped.z)<.00001f,"俯仰限幅改变了第一人称位置");
+    const auto before_move=camera.eye();camera.move(1,1,0,.1f);
+    const auto after_move=camera.eye()-before_move;
+    require(std::abs(after_move.x)+std::abs(after_move.y)+std::abs(after_move.z)>.01f,"第一人称转头后 WASD 未移动");
     for(int i=0;i<10000;++i) {camera.orbit(0.3f,1);camera.dolly(i%2?2:-2);}
     const auto m=camera.matrix();
     for(float v:m) require(std::isfinite(v),"相机矩阵出现非有限值");

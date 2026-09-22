@@ -36,6 +36,9 @@ struct RenderStatus {
   int pointer_x=-1,pointer_y=-1,hovered_detail_joint=-1;
   double max_displacement=0;
   int samples=0;
+  bool preview=false;
+  int render_width=0,render_height=0;
+  uint64_t last_preview_frame=0;
   std::string error;
   std::string edit_error;
   size_t pending_payloads=0;
@@ -66,6 +69,7 @@ public:
   void edit(const Snapshot &snapshot);
   void retry_resources();
   RenderStatus status();
+  CameraState input_camera();
   void orbit(float x,float y);
   void keyboard(int key,bool pressed);
   void frame(const ir::Bounds &bounds);

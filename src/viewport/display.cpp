@@ -26,8 +26,8 @@ void Display::allocate() {
   if(glGetError()!=GL_NO_ERROR) throw std::runtime_error("分配 OpenGL 输出资源失败");
 }
 bool Display::update_begin(const Params &p,int width,int height) {
-  if(width!=window_.width || height!=window_.height || p.size.x!=width || p.size.y!=height) {
-    error_="渲染尺寸不等于原生 framebuffer";failed_=true;return false;
+  if(width<1 || height<1 || width>window_.width || height>window_.height || p.size.x!=width || p.size.y!=height) {
+    error_="渲染尺寸超出视口或与输出缓冲不一致";failed_=true;return false;
   }
   window_.render_context.activate();
   allocate();
@@ -53,7 +53,7 @@ bool Display::update_begin(const Params &p,int width,int height) {
 void Display::update_end() {
   auto &s=slots_[writing_];
   glBindTexture(GL_TEXTURE_2D,s.texture);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
-  glTexSubImage2D(GL_TEXTURE_2D,0,0,0,window_.width,window_.height,GL_RGBA,GL_HALF_FLOAT,nullptr);
+  glTexSubImage2D(GL_TEXTURE_2D,0,0,0,s.frame.width,s.frame.height,GL_RGBA,GL_HALF_FLOAT,nullptr);
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);glBindTexture(GL_TEXTURE_2D,0);
   upload_=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);
   {
@@ -87,6 +87,7 @@ void Display::make_program() {
   const auto v=shader(GL_VERTEX_SHADER,"#version 130\nout vec2 uv;void main(){gl_Position=gl_Vertex;uv=gl_MultiTexCoord0.xy;}");
   const auto f=shader(GL_FRAGMENT_SHADER,R"GLSL(#version 130
 uniform sampler2D beauty;
+uniform vec2 texture_scale;
 uniform int enabled,per_component;
 uniform vec4 tone; // exposure, burn, crush, saturation
 uniform vec3 white;
@@ -94,7 +95,7 @@ uniform float gamma_value,vignette,aspect;
 in vec2 uv;out vec4 color;
 vec3 compress_color(vec3 x) {return x*(vec3(1)+tone.y*x)/(vec3(1)+x);}
 void main(){
- vec3 x=max(texture(beauty,uv).rgb,vec3(0));
+ vec3 x=max(texture(beauty,uv*texture_scale).rgb,vec3(0));
  if(enabled!=0){
    x=x*tone.x/max(white,vec3(.0001));
    vec2 p=(uv*2-1)*vec2(max(aspect,1.0),max(1.0/aspect,1.0))*.422793;
@@ -138,6 +139,7 @@ void Display::draw(const Params &) {
   glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glUseProgram(program_);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,slot.texture);
   glUniform1i(glGetUniformLocation(program_,"beauty"),0);
+  glUniform2f(glGetUniformLocation(program_,"texture_scale"),float(slot.frame.width)/window_.width,float(slot.frame.height)/window_.height);
   const auto &n=options_.tonemapper;const auto w=ir::color(n,"White Point");const auto ws=float(ir::number(n,"White Point Scale",1));
   glUniform1i(glGetUniformLocation(program_,"enabled"),!n.id.empty()&&ir::number(n,"Tone Mapping Enable",1));
   glUniform1i(glGetUniformLocation(program_,"per_component"),int(ir::number(n,"Burn Highlights Per Component",1)));
