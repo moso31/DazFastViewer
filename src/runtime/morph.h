@@ -60,6 +60,7 @@ class MorphRuntime {
   std::vector<std::set<size_t>> active_;
   std::set<size_t> dirty_meshes_,dirty_transforms_;
   EvaluationStats stats_;
+  ir::Transform local_transform(size_t target) const;
   void dirty_transform(size_t target);
 public:
   MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets);
@@ -70,6 +71,8 @@ public:
   void set_attachment(size_t target,const ir::Transform &delta);
   bool set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets);
   ir::Delta evaluate();
+  // 先消去共同祖先，再求相对矩阵；共同刚性移动不会制造浮点差异。
+  ir::Transform relative_transform(uint32_t source,uint32_t follower) const;
   const auto &values() const {return values_;}
   const auto &stats() const {return stats_;}
 };

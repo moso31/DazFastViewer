@@ -137,6 +137,18 @@ static void lifecycle() {
   rendered=scene;runtime::DeformationRuntime empty(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);empty.evaluate(snapshot.values,snapshot.poses);
 }
 static void unit() {
+  {
+    ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};scene.meshes={mesh};scene.instances.resize(2);
+    scene.instances[1].transform.value={2,0,0,-.2f,0,3,0,-.3f,0,0,.5f,2};
+    runtime::PickingScene pick;pick.update(scene);const auto builds=pick.stats().mesh_builds;
+    auto hit=pick.ray({.2f,.2f,10},{0,0,-1});require(hit.instance==1&&std::abs(hit.distance-8)<1e-6f,"局部射线丢失非均匀缩放后的距离");
+    ir::Delta delta;scene.instances[1].transform.value[3]=10;delta.instances.push_back({1,scene.instances[1].transform});pick.apply(scene,delta);
+    require(pick.stats().mesh_builds==builds&&pick.ray({.2f,.2f,10},{0,0,-1}).instance==0,"实例移动重建三角面或没有更新包围盒");
+    delta={};scene.instances[0].visible=false;delta.visibility.push_back({0,false});pick.apply(scene,delta);
+    require(pick.ray({.2f,.2f,10},{0,0,-1}).instance<0&&pick.stats().mesh_builds==builds,"隐藏对象仍可选取或重建了几何");
+    scene.instances[0].visible=true;for(auto &p:scene.meshes[0].positions) p.z=1;delta={};delta.visibility.push_back({0,true});delta.meshes.push_back({0,scene.meshes[0].positions});pick.apply(scene,delta);
+    hit=pick.ray({.2f,.2f,10},{0,0,-1});require(hit.instance==0&&std::abs(hit.distance-9)<1e-6f&&pick.stats().mesh_builds==builds+1,"共享网格形变没有正确更新选取数据");
+  }
   scene_channel_overrides();
   joint_overrides();
   embedded_geometry();

@@ -7,6 +7,7 @@ struct JointPose {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
   float general_scale=1;
   ir::Vec3 center_offset_cm{},end_offset_cm{},orientation_offset_degrees{};
+  bool operator==(const JointPose &) const = default;
 };
 struct Joint {
   std::string id,name,label,rotation_order="XYZ";

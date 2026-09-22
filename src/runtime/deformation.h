@@ -26,6 +26,9 @@ class DeformationRuntime {
   std::vector<SurfaceAttachment> surface_attachments_;
   ir::Scene &scene_;
   std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
+  bool evaluated_=false;
+  bool same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const;
+  ir::Delta follow_surfaces(ir::Delta delta);
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
 public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs);

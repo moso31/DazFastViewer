@@ -43,6 +43,7 @@ class ParameterPanel final:public QWidget {
 public:
   explicit ParameterPanel(QWidget *parent=nullptr);
   std::function<void(size_t,double)> changed;
+  std::function<void(bool)> interaction_changed;
   void bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node={});
   void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback);
   void set_extra(std::vector<ParameterControl> controls) {extra_=std::move(controls);}

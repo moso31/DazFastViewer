@@ -11,8 +11,12 @@ class HoverOverlay {
   std::vector<GLuint> lists_;
   std::vector<size_t> triangle_counts_;
   std::vector<std::map<int,std::pair<GLuint,size_t>>> parts_;
+  std::vector<ir::Transform> transforms_;
+  std::vector<bool> visible_;
+  void rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i);
 public:
   void update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions);
+  void apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta);
   void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1);
   size_t triangle_count(int hovered,int joint=-1) const;
   void release();

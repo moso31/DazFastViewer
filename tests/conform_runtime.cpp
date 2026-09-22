@@ -135,6 +135,35 @@ static void root_follower_and_visibility() {
 }
 static void unit() {
   {
+    // 共同祖先的平移 / 旋转 / 缩放应完全保留碰撞缓存，包括 GeoGraft。
+    ir::Scene scene;ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};
+    ir::Triangle face;face.vertices={0,1,2};body.triangles.push_back(face);face.vertices={0,2,3};body.triangles.push_back(face);
+    auto cloth=body;for(auto &p:cloth.positions) {p.x*=.25f;p.y*=.25f;p.z=-.01f;}
+    auto graft=body;for(auto &p:graft.positions) p.z=.01f;graft.graft_target_vertices=4;graft.graft_hidden_polygons={0};
+    scene.meshes={body,cloth,graft,body};scene.instances.resize(4);
+    TransformValues base;base.translation_cm={123,-45,67};base.rotation_degrees={17,23,31};
+    for(uint32_t i=0;i<4;++i) {scene.instances[i].mesh=i;scene.instances[i].transform=make_transform(base);}
+    std::vector<Target> targets(4);for(size_t i=0;i<4;++i) {targets[i].instance=uint32_t(i);targets[i].id=std::to_string(i)+"/mesh";}
+    targets[1].conform_target=targets[2].conform_target="#0";targets[1].smoothing.enabled=true;targets[1].smoothing.collision_target="#0";
+    std::vector<FormulaGraph> graphs;for(const auto &t:targets) graphs.push_back(graph(t,-1));const std::vector<Skin> skins;
+    DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(4);runtime.evaluate(values,{});
+    const auto initial=scene;const auto collisions=runtime.collision_stats().evaluations;
+    for(int step=0;step<24;++step) {
+      values[0].transform.translation_cm={step*1.31f,-step*.71f,step*.19f};values[0].transform.rotation_degrees={step*.9f,step*1.3f,step*.7f};values[0].transform.scale={1.1f,.9f,1.2f};
+      require(!runtime.prepare(values,{}).pending,"刚性移动触发资源补载");const auto delta=runtime.evaluate(values,{});
+      require(delta.meshes.empty()&&runtime.collision_stats().evaluations==collisions,"共同移动重复碰撞或生成了几何更新");
+      require(scene.instances[0].transform.value==scene.instances[1].transform.value&&scene.instances[0].transform.value==scene.instances[2].transform.value,"共同移动丢失服装 / GeoGraft 跟随");
+      require(scene.instances[3].transform.value==initial.instances[3].transform.value,"实例移动污染无关对象");
+      for(size_t m=0;m<scene.meshes.size();++m) require(distance(scene.meshes[m].positions,initial.meshes[m].positions)==0,"刚性移动改变局部顶点");
+    }
+    values[1].transform.translation_cm.z=.002f;runtime.evaluate(values,{});
+    require(runtime.collision_stats().evaluations>collisions,"微小的独立服装移动没有重新碰撞");
+    const auto local=runtime.collision_stats().evaluations;values[2].transform.translation_cm.z=2;runtime.evaluate(values,{});
+    require(runtime.collision_stats().evaluations>local,"GeoGraft 独立移动没有重新碰撞");
+    const auto graft_moved=runtime.collision_stats().evaluations;values[2].visible=false;runtime.evaluate(values,{});
+    require(runtime.collision_stats().evaluations>graft_moved,"GeoGraft 可见性变化没有重新碰撞");
+  }
+  {
     const std::vector<ir::Vec3> a={{1,2,3},{2,2,3},{1,3,3},{2,3,3}},b={{-1,4,5},{-1,5,5},{-2,4,5},{-2,5,5}};
     const auto fit=fit_rigid(a,b);for(size_t i=0;i<a.size();++i) require(distance({fit.point(a[i])},{b[i]})<1e-6,"平面参考组的刚性拟合旋转 / 位移错误");
     ir::Scene scene;ir::Mesh mesh;mesh.positions=a;scene.meshes={mesh,mesh};scene.instances.resize(2);scene.instances[1].mesh=1;

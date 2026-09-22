@@ -2,6 +2,7 @@
 #include "runtime/formula.h"
 #include "runtime/morph.h"
 #include "runtime/skeleton.h"
+#include <functional>
 
 namespace dfv::runtime {
 struct SurfaceBinding {
@@ -51,13 +52,15 @@ class CollisionRuntime {
     std::vector<ir::Vec3> input;
     std::vector<std::vector<uint32_t>> neighbors;
     ir::Transform relative;
+    std::vector<ir::Transform> graft_relatives;
     bool initialized=false;
   };
   ir::Scene &scene_;
   std::vector<Binding> bindings_;
   CollisionStats stats_;
+  std::function<ir::Transform(uint32_t,uint32_t)> relative_;
 public:
-  CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets);
+  CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets,std::function<ir::Transform(uint32_t,uint32_t)> relative={});
   ir::Delta evaluate(ir::Delta delta);
   const auto &stats() const {return stats_;}
 };

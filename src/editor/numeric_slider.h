@@ -15,16 +15,20 @@ class NumericSlider final:public QSlider {
   bool dragging_=false;
   void commit(double v) {if(std::isfinite(v)&&edited) edited(v);}
 protected:
+  bool event(QEvent *e) override {
+    if(e->type()==QEvent::UngrabMouse||e->type()==QEvent::FocusOut||e->type()==QEvent::Hide||e->type()==QEvent::WindowDeactivate) {dragging_=false;setSliderDown(false);}
+    return QSlider::event(e);
+  }
   void mousePressEvent(QMouseEvent *e) override {
     if(e->button()!=Qt::LeftButton) {QSlider::mousePressEvent(e);return;}
-    setFocus();dragging_=true;anchor_x_=e->position().x();anchor_value_=value_;anchor_span_=span_;e->accept();
+    setFocus();dragging_=true;setSliderDown(true);anchor_x_=e->position().x();anchor_value_=value_;anchor_span_=span_;e->accept();
   }
   void mouseMoveEvent(QMouseEvent *e) override {
     if(!dragging_) return;
     const double precision=e->modifiers().testFlag(Qt::ShiftModifier)?.1:1;
     commit(anchor_value_+(e->position().x()-anchor_x_)*anchor_span_/std::max(1,width()-16)*precision);e->accept();
   }
-  void mouseReleaseEvent(QMouseEvent *e) override {dragging_=false;e->accept();}
+  void mouseReleaseEvent(QMouseEvent *e) override {if(e->button()==Qt::LeftButton) {dragging_=false;setSliderDown(false);}e->accept();}
   void wheelEvent(QWheelEvent *e) override {commit(value_+e->angleDelta().y()/120.0*step_);e->accept();}
   void keyPressEvent(QKeyEvent *e) override {
     const int key=e->key();

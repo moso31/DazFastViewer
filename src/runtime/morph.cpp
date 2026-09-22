@@ -99,6 +99,26 @@ bool MorphRuntime::set_follow_offsets(size_t target,const std::vector<ir::Vec3> 
   const bool changed=!old.empty()||std::any_of(offsets.begin(),offsets.end(),[](ir::Vec3 p) {return !same(p,{});});
   old=offsets;if(changed) dirty_meshes_.insert(target);return changed;
 }
+ir::Transform MorphRuntime::local_transform(size_t target) const {
+  const auto &v=values_[target].transform;auto result=attachments_[target];
+  if(!same(v.translation_cm,{})||!same(v.rotation_degrees,{})||!same(v.scale,{1,1,1})||v.general_scale!=1) {
+    const auto &t=targets_[target];auto rotation=v;rotation.translation_cm={};
+    rotation.rotation_degrees={v.rotation_degrees.x+t.base_rotation_degrees.x,v.rotation_degrees.y+t.base_rotation_degrees.y,v.rotation_degrees.z+t.base_rotation_degrees.z};
+    TransformValues base;base.rotation_degrees=t.base_rotation_degrees;
+    const auto frame=t.has_edit_frame?t.edit_frame:ir::Transform::translate(transforms_[target].point({}));
+    TransformValues translation;translation.translation_cm=v.translation_cm;
+    result=result*t.translation_frame*make_transform(translation)*ir::inverse(t.translation_frame)*frame*make_transform(rotation,t.rotation_order)*ir::inverse(make_transform(base,t.rotation_order))*ir::inverse(frame);
+  }
+  return result;
+}
+ir::Transform MorphRuntime::relative_transform(uint32_t source,uint32_t follower) const {
+  int a=-1,b=-1;for(size_t t=0;t<targets_.size();++t) {if(targets_[t].instance==source) a=int(t);if(targets_[t].instance==follower) b=int(t);}
+  if(a<0||b<0) return ir::inverse(scene_.instances.at(source).transform)*scene_.instances.at(follower).transform;
+  std::vector<size_t> left,right;for(int t=a;t>=0;t=parents_[t]) left.push_back(size_t(t));for(int t=b;t>=0;t=parents_[t]) right.push_back(size_t(t));
+  while(!left.empty()&&!right.empty()&&left.back()==right.back()) {left.pop_back();right.pop_back();}
+  ir::Transform l,r;for(auto i=left.rbegin();i!=left.rend();++i) l=l*local_transform(*i);for(auto i=right.rbegin();i!=right.rend();++i) r=r*local_transform(*i);
+  return ir::inverse(l*transforms_[a])*(r*transforms_[b]);
+}
 ir::Delta MorphRuntime::evaluate() {
   diagnostics::Scope scope("morph_evaluate");
   ir::Delta delta;
@@ -123,16 +143,7 @@ ir::Delta MorphRuntime::evaluate() {
     scene_.meshes[mesh].positions=positions;delta.meshes.push_back({mesh,std::move(positions)});++stats_.morph_evaluations;
   }
   std::function<ir::Transform(size_t)> edit_transform=[&](size_t target) {
-    const auto &v=values_[target].transform;
-    auto result=attachments_[target];
-    if(!same(v.translation_cm,{})||!same(v.rotation_degrees,{})||!same(v.scale,{1,1,1})||v.general_scale!=1) {
-    const auto &t=targets_[target];auto rotation=v;rotation.translation_cm={};
-    rotation.rotation_degrees={v.rotation_degrees.x+t.base_rotation_degrees.x,v.rotation_degrees.y+t.base_rotation_degrees.y,v.rotation_degrees.z+t.base_rotation_degrees.z};
-    TransformValues base;base.rotation_degrees=t.base_rotation_degrees;
-    const auto frame=t.has_edit_frame?t.edit_frame:ir::Transform::translate(transforms_[target].point({}));
-    TransformValues translation;translation.translation_cm=v.translation_cm;
-    result=result*t.translation_frame*make_transform(translation)*ir::inverse(t.translation_frame)*frame*make_transform(rotation,t.rotation_order)*ir::inverse(make_transform(base,t.rotation_order))*ir::inverse(frame);
-    }
+    auto result=local_transform(target);
     if(parents_[target]>=0) result=edit_transform(size_t(parents_[target]))*result;
     return result;
   };

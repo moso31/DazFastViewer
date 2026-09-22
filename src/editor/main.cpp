@@ -96,8 +96,22 @@ class Editor final:public QMainWindow {
   QPoint probe_center_,probe_point_;
   uint64_t head_test_epoch_=0;
   size_t head_test_triangles_=0;
+  std::map<int,ir::Vec3> head_test_positions_;
+  std::vector<size_t> head_test_occluders_;
   bool options_test_=false;int options_wait_=0;CameraState options_camera_;size_t options_geometry_=0;uint64_t options_epoch_=0;
   bool navigation_test_=false;
+  bool interaction_test_=false;
+  int interaction_case_=0,interaction_step_=0,interaction_target_=-1;
+  double interaction_begin_=0,interaction_stop_=0,interaction_first_=0,interaction_idle_=0;
+  RenderStatus interaction_before_;
+  RenderStatus interaction_initial_;
+  nlohmann::json interaction_checks_=nlohmann::json::array();
+  int interaction_boundary_=0;
+  double interaction_boundary_at_=0;
+  RenderStatus interaction_boundary_before_;
+  ir::RenderOptions interaction_options_;
+  QByteArray interaction_layout_;
+  nlohmann::json interaction_boundaries_=nlohmann::json::array();
   bool keep_open_after_test_=false;
   RenderStatus navigation_before_;
   CameraState navigation_after_input_;
@@ -390,6 +404,8 @@ class Editor final:public QMainWindow {
     if(workflow_test_) {report["scope"]="raycast-body-part-tree-head-morph-hover-resize-layout";report["viewport"]={status.width,status.height};report["hovered_instance"]=status.hovered;report["hovered_joint"]=status.hovered_joint;report["hovered_triangles"]=status.hovered_triangles;report["selected_joint"]=selected_joint_;report["hover_checks"]=hover_checks_;}
     if(head_selection_test_) report["scope"]="figure-head-detail-and-bound-clothing-picking";
     if(navigation_test_) {report["scope"]="navigation-preview-and-refinement";report["checks"]=navigation_checks_;}
+    if(interaction_test_) {report["scope"]="interaction-latency";report["checks"]=interaction_checks_;report["sessions"]=status.sessions;
+      report["local_geometry_restored"]=status.mesh_hashes==interaction_initial_.mesh_hashes;report["instance_transforms_restored"]=status.instance_transforms==interaction_initial_.instance_transforms;report["boundaries"]=interaction_boundaries_;}
     if(capture_test_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
@@ -415,25 +431,47 @@ class Editor final:public QMainWindow {
   void head_selection_tick(const RenderStatus &state) {
     auto &skin=document_->skeletons.skins.at(size_t(std::max(0,head_test_skin_)));
     std::ofstream(output_/"selection-progress.json")<<nlohmann::json({{"stage",test_stage_},{"camera_epoch",state.camera.epoch},{"frame_epoch",head_test_epoch_},{"selected_target",state.selected_target},{"selected_joint",state.selected_joint},{"requested_pointer",{probe_point_.x(),probe_point_.y()}},{"actual_pointer",{state.pointer_x,state.pointer_y}},{"detail",state.hovered_detail_joint},{"probe",probe_index_}}).dump();
-    auto position=[&](int joint) {const auto &instance=document_->loaded.scene.instances[skin.instance];const auto &mesh=document_->loaded.scene.meshes[instance.mesh];const auto regions=runtime::joint_regions(mesh,skin);ir::Bounds bounds;
-      for(size_t t=0;t<mesh.triangles.size();++t) {const auto &face=mesh.triangles[t];const bool matches=joint==lip_test_joint_?face.material_slot<mesh.material_slots.size()&&mesh.material_slots[face.material_slot]=="Lips":(joint==regions.head?regions.body[t]:regions.detail[t])==joint;
-        if(matches) for(auto v:face.vertices) bounds.add(instance.transform.point(mesh.positions[v]));}
-      if(bounds.empty) throw std::runtime_error("测试部位没有几何区域");return bounds.center();};
+    auto position=[&](int joint) {return head_test_positions_.at(joint);};
     auto project=[&](ir::Vec3 p) {const auto m=state.camera.matrix();p={p.x-m[3],p.y-m[7],p.z-m[11]};const float z=m[2]*p.x+m[6]*p.y+m[10]*p.z,e=std::tan(.4f);return QPoint(qRound((1+(m[0]*p.x+m[4]*p.y+m[8]*p.z)/z/e/std::max(1.f,float(state.width)/state.height))*state.width*.5f-.5f),qRound((1-(m[1]*p.x+m[5]*p.y+m[9]*p.z)/z/e/std::max(1.f,float(state.height)/state.width))*state.height*.5f-.5f));};
     auto move_probe=[&] {const int n=probe_index_++;const int x=n==0?0:((n-1)%21-10)*4,y=n==0?0:((n-1)/21-10)*4;probe_point_=probe_center_+QPoint(x,y);probe_point_.setX(std::clamp(probe_point_.x(),1,state.width-2));probe_point_.setY(std::clamp(probe_point_.y(),1,state.height-2));renderer_->pointer(probe_point_.x(),probe_point_.y());};
+    auto body_probe=[&] {const int n=probe_index_++;probe_point_={state.width/2+(n?((n-1)%21-10)*state.width/24:0),state.height/2+(n?((n-1)/21-10)*state.height/24:0)};renderer_->pointer(probe_point_.x(),probe_point_.y());};
     auto at_probe=[&] {return state.pointer_x==probe_point_.x()&&state.pointer_y==probe_point_.y();};
     auto click=[&] {workflow_click_=state.clicks;renderer_->pointer(probe_point_.x(),probe_point_.y(),true);};
     auto record=[&](const char *name) {hover_checks_.push_back({{"mode",name},{"selected_target",selected_},{"selected_joint",selected_joint_},{"hovered_joint",state.hovered_joint},{"highlight_triangles",state.hovered_triangles}});};
     auto lip=[&](int joint) {if(joint<0||size_t(joint)>=skin.joints.size()) return false;const auto &name=skin.joints[size_t(joint)].id;return name.find("LipUpper")!=std::string::npos||name.find("LipLower")!=std::string::npos;};
+    auto restore_accessories=[&] {if(head_test_occluders_.empty()) {finish_test(true);return;}for(auto t:head_test_occluders_) snapshot_.values[t].visible=true;send();test_stage_=104;};
+    if(test_stage_==104) {
+      for(auto t:head_test_occluders_) if(!state.visible.at(document_->catalog.targets[t].instance)) {finish_test(false,"测试附件可见性未恢复");return;}
+      record("accessory_visibility_restored");finish_test(true);return;
+    }
+    if(test_stage_>=100&&test_stage_<=102) {
+      const int joint=test_stage_==100?head_test_joint_:test_stage_==101?eye_test_joint_:lip_test_joint_;
+      if(state.selected_target!=workflow_target_||state.selected_joint!=joint) return;
+      if(state.selection_bounds.empty) {finish_test(false,"测试部位没有求值后的几何区域");return;}
+      head_test_positions_[joint]=state.selection_bounds.center();
+      if(test_stage_==102) test_stage_=0;
+      else {++test_stage_;choose(workflow_target_,test_stage_==101?eye_test_joint_:lip_test_joint_);return;}
+    }
     if(test_stage_==0) {
       head_test_skin_=0;workflow_target_=0;for(size_t t=0;t<document_->catalog.targets.size();++t) if(document_->catalog.targets[t].instance==skin.instance) workflow_target_=int(t);
       for(size_t j=0;j<skin.joints.size();++j) {const auto &id=skin.joints[j].id;if(id=="head") head_test_joint_=int(j);if(id=="lEye") eye_test_joint_=int(j);if(id=="LipUpperMiddle") lip_test_joint_=int(j);}
       if(head_test_joint_<0||eye_test_joint_<0||lip_test_joint_<0) {finish_test(false,"头部分级测试缺少头 / 眼 / 唇节点");return;}
+      // 保存的场景可含坐姿和体型；从渲染器求值后的区域定位，不能用未变形的绑定网格。
+      if(head_test_positions_.empty()) {choose(workflow_target_,head_test_joint_);test_stage_=100;return;}
       choose(-1);auto c=position(head_test_joint_);ir::Bounds face;face.add({c.x-.14f,c.y-.14f,c.z-.19f});face.add({c.x+.14f,c.y+.14f,c.z+.19f});head_test_epoch_=state.camera.epoch;renderer_->frame(face);
+      const auto mouth=position(lip_test_joint_);
+      renderer_->orbit((.3f-std::atan2(mouth.x-c.x,c.y-mouth.y))/.005f,0); // 由求值后的面部确定朝向，包含 Hip / Head 的保存姿势。
       test_evaluations_=state.evaluation.morph_evaluations;test_skin_evaluations_=state.skinning.evaluations;test_stage_=1;
     } else if(test_stage_==1) {
       if(state.camera.epoch==head_test_epoch_||state.selected_target!=-1) return;probe_center_=project(position(eye_test_joint_));probe_index_=0;move_probe();test_stage_=2;
     } else if(test_stage_==2) {
+      // 独立镜片仍应遮挡射线；记录这一行为，临时隐藏实际挡住眼睛的挂接附件后继续部位检查。
+      if(at_probe()&&state.hovered>=0&&state.hovered!=int(skin.instance)) for(size_t t=0;t<document_->catalog.targets.size();++t) {
+        const auto &target=document_->catalog.targets[t];if(int(target.instance)!=state.hovered||!snapshot_.values[t].visible) continue;
+        auto ancestors=target.ancestors;if(ancestors.empty()) ancestors.push_back(target.parent);bool attached=false;
+        for(const auto &a:ancestors) for(const auto &joint:skin.joints) attached|=!joint.scene_id.empty()&&a=="#"+joint.scene_id;
+        if(attached) {record("accessory_occludes_eye");head_test_occluders_.push_back(t);snapshot_.values[t].visible=false;send();probe_index_=0;move_probe();return;}
+      }
       if(!at_probe()) return;if(state.hovered_detail_joint!=eye_test_joint_) {if(probe_index_>441) {finish_test(false,"头部近景没有命中眼球");return;}move_probe();return;}
       if(state.hovered_joint!=-1) {finish_test(false,"第一次眼球射线没有预选角色整体");return;}record("eye_first_hit_figure");click();test_stage_=3;
     } else if(test_stage_==3) {
@@ -457,16 +495,16 @@ class Editor final:public QMainWindow {
     } else if(test_stage_==7) {
       if(state.clicks<=workflow_click_) return;if(selected_joint_!=lip_test_joint_) {finish_test(false,"嘴唇射线与场景树节点不一致");return;}
       record("lip_selected");int garment=-1;for(size_t t=0;t<document_->catalog.targets.size();++t) if(!document_->catalog.targets[t].conform_target.empty()) {garment=int(t);break;}
-      if(garment<0) {finish_test(true);return;}choose(garment);if(selected_!=garment) {finish_test(false,"绑定服装无法通过场景树选择");return;}
+      if(garment<0) {restore_accessories();return;}choose(garment);if(selected_!=garment) {finish_test(false,"绑定服装无法通过场景树选择");return;}
       record("bound_clothing_tree_selection");head_test_epoch_=state.camera.epoch;renderer_->frame(state.bounds.at(size_t(workflow_target_)));test_stage_=8;
     } else if(test_stage_==8) {
-      if(state.camera.epoch==head_test_epoch_) return;probe_point_={state.width/2,state.height/2};renderer_->pointer(probe_point_.x(),probe_point_.y());test_stage_=9;
+      if(state.camera.epoch==head_test_epoch_) return;probe_index_=0;body_probe();test_stage_=9;
     } else if(test_stage_==9) {
-      if(!at_probe()) return;if(state.hovered!=int(skin.instance)) {finish_test(false,"绑定服装阻挡了角色射线");return;}
+      if(!at_probe()) return;if(state.hovered!=int(skin.instance)) {if(probe_index_>441) {finish_test(false,"穿戴场景没有命中角色");return;}body_probe();return;}
       record("ray_through_bound_clothing");click();test_stage_=10;
     } else if(test_stage_==10) {
       if(state.clicks<=workflow_click_) return;if(selected_!=workflow_target_||selected_joint_!=-1) {finish_test(false,"点击穿戴区域没有选择角色");return;}
-      if(state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"分级选择触发了变形");return;}record("body_selected_through_clothing");finish_test(true);
+      if(state.evaluation.morph_evaluations!=test_evaluations_||state.skinning.evaluations!=test_skin_evaluations_) {finish_test(false,"分级选择触发了变形");return;}record("body_selected_through_clothing");restore_accessories();
     }
   }
   void lifecycle_tick(const RenderStatus &state) {
@@ -610,12 +648,127 @@ class Editor final:public QMainWindow {
     navigation_checks_.push_back({{"input",names[item]},{"preview_frame",state.last_preview_frame},{"full_size",{state.render_width,state.render_height}},{"full_samples",state.samples},{"focus_requests",state.focus_requests},{"selected_target",state.selected_target}});
     ++test_stage_;
   }
+  void interaction_boundaries(const RenderStatus &state,bool full) {
+    if(interaction_boundary_at_&&now()-interaction_boundary_at_>20) {finish_test(false,"停靠或持续编辑边界验证超时");return;}
+    auto *panel=findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"));
+    if(!panel) {finish_test(false,"找不到属性面板");return;}
+    if(interaction_boundary_==0) {
+      if(!full) return;interaction_layout_=saveState(1);interaction_boundary_before_=state;
+      panel->setFloating(true);panel->move(screen()->availableGeometry().topLeft()+QPoint(40,40));interaction_boundary_at_=now();++interaction_boundary_;
+    } else if(interaction_boundary_==1) {
+      if(!full||now()-interaction_boundary_at_<.5) return;
+      if(state.sessions!=interaction_boundary_before_.sessions) {finish_test(false,"浮动面板重建了会话");return;}
+      interaction_boundaries_.push_back({{"input","dock_float"},{"sessions_added",0}});interaction_boundary_before_=state;
+      panel->move(panel->pos()+QPoint(60,30));interaction_boundary_at_=now();++interaction_boundary_;
+    } else if(interaction_boundary_==2) {
+      if(now()-interaction_boundary_at_<.5) return;
+      if(!full||state.width!=interaction_boundary_before_.width||state.height!=interaction_boundary_before_.height||state.requested_epoch!=interaction_boundary_before_.requested_epoch) {finish_test(false,"只移动浮动面板触发了渲染重置");return;}
+      interaction_boundaries_.push_back({{"input","floating_panel_move"},{"render_resets",0}});
+      panel->setFloating(false);restoreState(interaction_layout_,1);interaction_boundary_at_=now();++interaction_boundary_;
+    } else if(interaction_boundary_==3) {
+      if(!full||now()-interaction_boundary_at_<.5) return;
+      interaction_boundaries_.push_back({{"input","dock_restore"},{"sessions_added",state.sessions-interaction_boundary_before_.sessions}});
+      renderer_->interaction(true);transform_[0]->setValue(1.25);interaction_boundary_at_=now();++interaction_boundary_;
+    } else if(interaction_boundary_==4) {
+      if(now()-interaction_boundary_at_<.7) return;
+      if(state.presented_revision!=snapshot_.revision||!state.preview||state.render_width!=std::max(1,state.width/4)||state.render_height!=std::max(1,state.height/4)) {finish_test(false,"持续编辑静止持有期间没有保持预览");return;}
+      interaction_boundaries_.push_back({{"input","edit_hold"},{"preview",true}});renderer_->interaction(false);interaction_boundary_at_=now();++interaction_boundary_;
+    } else if(interaction_boundary_==5) {
+      if(!full) return;interaction_boundaries_.push_back({{"input","edit_release"},{"full_resolution",true}});
+      transform_[0]->setValue(0);interaction_boundary_at_=now();++interaction_boundary_;
+    } else if(interaction_boundary_==6) {
+      if(!full) return;interaction_boundary_before_=state;interaction_options_=snapshot_.options;
+      auto &node=snapshot_.options.tonemapper;
+      for(size_t p=0;p<node.parameters.size();++p) if(node.parameters[p].id=="Exposure Value") {
+        renderer_->interaction(true);ir::set_option(node,p,0,node.parameters[p].value[0]+1);send();
+        interaction_boundary_at_=now();++interaction_boundary_;return;
+      }
+      interaction_boundary_=8;
+    } else if(interaction_boundary_==7) {
+      if(!full||now()-interaction_boundary_at_<.3) return;
+      if(state.requested_epoch!=interaction_boundary_before_.requested_epoch) {finish_test(false,"仅显示色调编辑重新启动了采样");return;}
+      interaction_boundaries_.push_back({{"input","tonemapper_drag"},{"render_resets",0}});renderer_->interaction(false);
+      snapshot_.options=interaction_options_;send();interaction_boundary_at_=now();++interaction_boundary_;
+    } else {
+      if(!full) return;screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"interaction-final.png").wstring()));
+      if(state.requested_epoch!=interaction_boundary_before_.requested_epoch) {finish_test(false,"恢复色调重新启动了采样");return;}
+      const bool restored=state.mesh_hashes==interaction_initial_.mesh_hashes&&state.instance_transforms==interaction_initial_.instance_transforms;
+      finish_test(restored,restored?"":"局部几何或实例变换未恢复");
+    }
+  }
+  void interaction_tick(const RenderStatus &state) {
+    static const char *names[]={"resize_minus_6","dock_splitter_60","camera_orbit","camera_pan","camera_zoom","figure_translate","figure_rotate","figure_restore","resize_grow_capacity","resize_shrink_capacity"};
+    if(now()-interaction_idle_>180&&interaction_begin_>0) {finish_test(false,"交互计时超时");return;}
+    if(!state.error.empty()||!state.edit_error.empty()) {finish_test(false,state.error+state.edit_error);return;}
+    if(!document_||state.generation!=document_->generation) return;
+    const bool full=state.frames>0&&!state.preview&&state.presented_epoch==state.requested_epoch&&state.presented_revision==snapshot_.revision&&state.render_width==state.width&&state.render_height==state.height&&!resize_at_;
+    if(interaction_case_==std::size(names)) {interaction_boundaries(state,full);return;}
+    const auto hwnd=FindWindowExW(reinterpret_cast<HWND>(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);
+    auto input=[&](UINT message,WPARAM w=0,LPARAM l=0) {SendMessageW(hwnd,message,w,l);};
+    auto record=[&] {std::ofstream(output_/"interaction-progress.json")<<nlohmann::json({{"case",interaction_case_},{"step",interaction_step_},{"begin",interaction_begin_},{"stop",interaction_stop_},{"checks",interaction_checks_}}).dump(2);};
+    if(interaction_begin_==0) {
+      if(!full) {interaction_idle_=now();return;}
+      if(now()-interaction_idle_<.6) return;
+      if(interaction_target_<0) {
+        interaction_initial_=state;
+        for(const auto &skin:document_->skeletons.skins) for(size_t t=0;t<document_->catalog.targets.size();++t) {
+          const auto &target=document_->catalog.targets[t];if(target.instance==skin.instance&&target.conform_target.empty()&&interaction_target_<0) interaction_target_=int(t);
+        }
+        if(interaction_target_<0&&!snapshot_.values.empty()) interaction_target_=0;
+        if(interaction_target_<0) {finish_test(false,"没有可移动的对象");return;}
+        choose(interaction_target_);
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"interaction-initial.png").wstring()));
+      }
+      // 短操作只发送到副屏原生视口或当前对象的编辑入口。
+      activateWindow();SetForegroundWindow(reinterpret_cast<HWND>(winId()));SetFocus(hwnd);
+      POINT cursor{220,210};ClientToScreen(hwnd,&cursor);SetCursorPos(cursor.x,cursor.y);
+      MSG pending{};while(PeekMessageW(&pending,hwnd,WM_MOUSEMOVE,WM_MOUSEMOVE,PM_REMOVE)) DispatchMessageW(&pending);
+      interaction_before_=state;interaction_begin_=now();interaction_stop_=interaction_first_=0;interaction_step_=0;
+      renderer_->trace(names[interaction_case_]);
+      if(interaction_case_==0) {resize(width()-6,height());interaction_stop_=now();}
+      else if(interaction_case_==1) {
+        auto *d=findChild<QDockWidget *>("Viewport");if(!d) {finish_test(false,"找不到视口停靠面板");return;}resizeDocks({d},{d->width()+60},Qt::Horizontal);interaction_stop_=now();
+      }
+      else if(interaction_case_==2||interaction_case_==3) input(interaction_case_==2?WM_RBUTTONDOWN:WM_MBUTTONDOWN,interaction_case_==2?MK_RBUTTON:MK_MBUTTON,MAKELPARAM(200,200));
+      else if(interaction_case_==7) {transform_[0]->setValue(0);transform_[4]->setValue(0);interaction_stop_=now();}
+      else if(interaction_case_==8||interaction_case_==9) {
+        auto *d=findChild<QDockWidget *>("Viewport");if(!d) {finish_test(false,"找不到视口停靠面板");return;}
+        // 主窗口变宽可能只分配给场景树；直接调整停靠分隔，确保测试输出缓冲扩容。
+        resizeDocks({d},{d->width()+(interaction_case_==8?320:-320)},Qt::Horizontal);interaction_stop_=now();
+      }
+      record();return;
+    }
+    if(!interaction_first_&&state.presented_epoch>interaction_before_.requested_epoch) interaction_first_=state.present_time;
+    if(!interaction_stop_) {
+      if(interaction_step_<8&&now()-interaction_begin_>=interaction_step_*.06) {
+        ++interaction_step_;
+        if(interaction_case_==2||interaction_case_==3) input(WM_MOUSEMOVE,interaction_case_==2?MK_RBUTTON:MK_MBUTTON,MAKELPARAM(200+interaction_step_*2,200+interaction_step_));
+        else if(interaction_case_==4) {POINT p{200,200};ClientToScreen(hwnd,&p);input(WM_MOUSEWHEEL,MAKEWPARAM(0,15),MAKELPARAM(p.x,p.y));}
+        else if(interaction_case_==5) transform_[0]->setValue(interaction_step_*1.25);
+        else if(interaction_case_==6) transform_[4]->setValue(interaction_step_*1.25);
+      }
+      if(interaction_step_==8&&now()-interaction_begin_>=.48) {
+        if(interaction_case_==2||interaction_case_==3) input(interaction_case_==2?WM_RBUTTONUP:WM_MBUTTONUP,0,MAKELPARAM(216,208));
+        interaction_stop_=now();renderer_->trace("interaction_stop");record();
+      }
+      return;
+    }
+    if(!full||state.presented_epoch<=interaction_before_.requested_epoch||state.present_time<interaction_stop_||state.camera.epoch!=renderer_->input_camera().epoch) return;
+    interaction_checks_.push_back({{"input",names[interaction_case_]},{"begin",interaction_begin_},{"stop",interaction_stop_},{"first_present",interaction_first_},{"full_present",state.present_time},
+      {"first_ms",(interaction_first_-interaction_begin_)*1000},{"restore_ms",(state.present_time-interaction_stop_)*1000},
+      {"before_epoch",interaction_before_.requested_epoch},{"final_epoch",state.presented_epoch},{"final_revision",snapshot_.revision},{"size",{state.width,state.height}},
+      {"sessions_added",state.sessions-interaction_before_.sessions},{"geometry_updates",state.adapter.geometry_updates-interaction_before_.adapter.geometry_updates},
+      {"instance_updates",state.adapter.instance_updates-interaction_before_.adapter.instance_updates},{"collision_evaluations",state.collision.evaluations-interaction_before_.collision.evaluations},
+      {"morph_evaluations",state.evaluation.morph_evaluations-interaction_before_.evaluation.morph_evaluations},{"skin_evaluations",state.skinning.evaluations-interaction_before_.skinning.evaluations}});
+    ++interaction_case_;interaction_begin_=0;interaction_idle_=now();record();
+  }
   void tick() {
     const auto focus_state=renderer_->status();if(focus_state.focus_requests!=focus_requests_||focus_pending_) {focus_requests_=focus_state.focus_requests;focus_selection();}
     const QSize size(qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()));
-    if(size!=viewport_size_) {viewport_size_=size;resize_at_=QDateTime::currentMSecsSinceEpoch()+180;}
+    if(size!=viewport_size_) {viewport_size_=size;renderer_->resize(size.width(),size.height());resize_at_=0;}
     if(resize_at_&&QDateTime::currentMSecsSinceEpoch()>=resize_at_) {resize_at_=0;renderer_->resize(size.width(),size.height());}
     const auto state=renderer_->status();
+    if(interaction_test_) {interaction_tick(state);return;}
     if(navigation_test_) {navigation_tick(state);return;}
     if(refresh_parameters_) refresh_parameters_->setEnabled(!loading_&&document_&&selected_>=0);
     if(retry_parameters_) retry_parameters_->setEnabled(document_&&!state.resource_error.empty());
@@ -1007,12 +1160,15 @@ public:
     for(auto *d:findChildren<QDockWidget *>()) if(d->isFloating()&&!available.intersects(d->frameGeometry())) d->move(available.topLeft()+QPoint(30,30));
     show();
     renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_,sampling);
+    parameters_->interaction_changed=[this](bool active){if(renderer_) renderer_->interaction(active);};
+    connect(qApp,&QGuiApplication::applicationStateChanged,this,[this](Qt::ApplicationState state){if(state!=Qt::ApplicationActive&&renderer_) renderer_->interaction(false);});
     auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this] {tick();});timer->start(50);
   }
   void closeEvent(QCloseEvent *event) override {if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));browser_->save();}QMainWindow::closeEvent(event);}
   ~Editor() override {loader_.request_stop();if(loader_.joinable()) loader_.join();renderer_.reset();}
   void options_test() {options_test_=self_test_=true;}
   void navigation_test() {navigation_test_=self_test_=true;}
+  void interaction_test() {interaction_test_=self_test_=true;for(auto *timer:findChildren<QTimer *>()) if(timer->interval()==50) timer->setInterval(16);}
   void keep_open_after_test() {keep_open_after_test_=true;}
   void attachment_test() {attachment_test_=self_test_=true;}
   void lazy_test() {lazy_test_=self_test_=true;}
@@ -1086,6 +1242,7 @@ int main(int argc,char **argv) {
   parser.addOption({"head-selection-test",QStringLiteral("验证三级头部选择及绑定服装射线后退出")});
   parser.addOption({"options-test",QStringLiteral("验证环境 / 色调参数及 F / WASDQE 导航后退出")});
   parser.addOption({"navigation-test",QStringLiteral("验证移动预览、第一人称转头与静止恢复后退出")});
+  parser.addOption({"interaction-test",QStringLiteral("副屏短操作：记录尺寸、停靠面板、相机及角色移动的延迟")});
   parser.addOption({"keep-open-after-test",QStringLiteral("导航验收完成后保留客户端供手动体验")});
   parser.addOption({"attachment-test",QStringLiteral("逐一验证 Head 附件的场景树父节点并截图")});
   parser.addOption({"capture-test",QStringLiteral("场景显示验证后截图退出")});
@@ -1108,6 +1265,7 @@ int main(int argc,char **argv) {
   std::filesystem::create_directories(output);
   try {
     SamplingSettings sampling;
+    sampling.interaction_probe=parser.isSet("interaction-test");
     if(parser.isSet("sampling-settings")) {nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
@@ -1119,11 +1277,12 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("lazy-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("options-test")) editor.options_test();
     if(parser.isSet("navigation-test")) editor.navigation_test();
+    if(parser.isSet("interaction-test")) editor.interaction_test();
     if(parser.isSet("keep-open-after-test")) editor.keep_open_after_test();
     if(parser.isSet("attachment-test")) editor.attachment_test();
     if(parser.isSet("lazy-test")) editor.lazy_test();

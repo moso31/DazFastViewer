@@ -6,14 +6,23 @@
 namespace dfv::runtime {
 struct Target;
 struct PickHit {int instance=-1,triangle=-1;float distance=std::numeric_limits<float>::max();};
+struct PickingStats {uint64_t mesh_builds=0,instance_updates=0;};
 class PickingScene {
   struct Face {ir::Vec3 a,b,c;int instance,triangle;};
   struct Branch {ir::Bounds bounds;int begin=0,end=0,left=-1,right=-1;};
-  std::vector<Face> faces_;
-  std::vector<Branch> branches_;
-  int build(int begin,int end);
+  struct MeshTree {std::vector<Face> faces;std::vector<Branch> branches;};
+  struct Instance {uint32_t mesh=0;ir::Transform inverse;ir::Bounds bounds;bool visible=false,pickable=true;};
+  std::vector<MeshTree> meshes_;
+  std::vector<Instance> instances_;
+  std::vector<uint8_t> used_meshes_;
+  PickingStats stats_;
+  int build(MeshTree &mesh,int begin,int end);
+  void mesh(const ir::Scene &scene,uint32_t index);
+  void instance(const ir::Scene &scene,uint32_t index);
 public:
   void update(const ir::Scene &scene,const std::vector<uint8_t> &pickable={});
+  void apply(const ir::Scene &scene,const ir::Delta &delta);
+  const auto &stats() const {return stats_;}
   PickHit ray(ir::Vec3 origin,ir::Vec3 direction) const;
   PickHit screen(const CameraState &camera,int x,int y,int width,int height) const;
 };

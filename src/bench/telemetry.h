@@ -25,6 +25,7 @@ public:
   std::atomic<uint64_t> produced{0}, submitted{0}, displayed_epoch{0}, readback_bytes{0}, skipped{0};
   std::atomic<int> displayed_samples{0};
   std::atomic<double> first_frame{-1}, measurement_start{-1}, measurement_end{-1};
+  std::atomic<double> last_present_time{0};
   std::atomic<uint64_t> measured_frames{0};
   explicit Telemetry(const std::filesystem::path &directory) {
     std::filesystem::create_directories(directory);
@@ -45,6 +46,7 @@ public:
            <<frame.width<<','<<frame.height<<','<<duration_ms<<'\n';
   }
   void present(const Frame &frame) {
+    last_present_time=now();
     submitted.fetch_add(1);
     if(first_frame.load()<0) first_frame.store(now());
     const auto previous=displayed_epoch.exchange(frame.epoch);

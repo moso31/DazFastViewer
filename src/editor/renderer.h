@@ -12,6 +12,7 @@ struct SamplingSettings {
   int samples=4096,min_bounces=0,transparent_min_bounces=0;
   float adaptive_threshold=.01f;
   bool blue_noise=true;
+  bool interaction_probe=false;
 };
 struct RenderStatus {
   uint64_t generation=0,applied_revision=0,presented_revision=0,frames=0;
@@ -39,6 +40,10 @@ struct RenderStatus {
   bool preview=false;
   int render_width=0,render_height=0;
   uint64_t last_preview_frame=0;
+  double present_time=0;
+  uint64_t sessions=0;
+  std::vector<uint64_t> mesh_hashes;
+  std::vector<std::array<float,12>> instance_transforms;
   std::string error;
   std::string edit_error;
   size_t pending_payloads=0;
@@ -57,6 +62,9 @@ class Renderer {
   int requested_width_=0,requested_height_=0;
   uint64_t selection_generation_=0;
   uint64_t retry_resources_=0;
+  bool edit_active_=false;
+  uint64_t interaction_revision_=0;
+  double edit_preview_until_=0,resize_preview_until_=0;
   int selected_target_=-1,selected_joint_=-1;
   void run(std::stop_token stop);
 public:
@@ -67,6 +75,7 @@ public:
   void pointer(int x,int y,bool click=false);
   void select(uint64_t generation,int target,int joint=-1);
   void edit(const Snapshot &snapshot);
+  void interaction(bool active);
   void retry_resources();
   RenderStatus status();
   CameraState input_camera();
@@ -74,5 +83,6 @@ public:
   void keyboard(int key,bool pressed);
   void frame(const ir::Bounds &bounds);
   void focus(const ir::Bounds &bounds);
+  void trace(const char *event) {telemetry_.event(event);}
 };
 }

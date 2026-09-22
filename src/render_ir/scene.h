@@ -8,7 +8,7 @@
 
 namespace dfv::ir {
 struct Vec2 {float x=0,y=0;};
-struct Vec3 {float x=0,y=0,z=0;};
+struct Vec3 {float x=0,y=0,z=0;bool operator==(const Vec3 &) const = default;};
 // 保存 DAZ 碰撞修改器的显式对象关系；距离统一为米。
 struct MeshSmoothing {
   bool enabled=false;

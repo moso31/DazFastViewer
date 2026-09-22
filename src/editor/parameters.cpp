@@ -108,6 +108,8 @@ void ParameterPanel::mount() {
       connect(combo,&QComboBox::currentIndexChanged,this,[this,i](int value){current_=i;controls_[i].write(value);update_rows();});
     } else {
       auto *slider=new NumericSlider;slider->setObjectName("valueSlider");slider->setEnabled(c.enabled);
+      connect(slider,&QSlider::sliderPressed,this,[this]{if(interaction_changed) interaction_changed(true);});
+      connect(slider,&QSlider::sliderReleased,this,[this]{if(interaction_changed) interaction_changed(false);});
       slider->setToolTip(QStringLiteral("左右拖动可越过标尺范围；Shift 精细调整。右侧可直接输入数值。"));
       auto *spin=new QDoubleSpinBox;spin->setObjectName("valueSpin");spin->setDecimals(6);spin->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());spin->setSingleStep(std::max(.000001,c.step));spin->setKeyboardTracking(false);spin->setFixedWidth(125);spin->setEnabled(c.enabled);
       line->addWidget(slider,1);line->addWidget(spin);spin->setValue(c.read());slider->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);

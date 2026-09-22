@@ -9,7 +9,7 @@
 namespace dfv {
 class Display final:public ccl::DisplayDriver {
   enum class State {idle,writing,ready,displaying,retiring};
-  struct Slot {GLuint texture=0;GLsync fence=nullptr;State state=State::idle;Frame frame;};
+  struct Slot {GLuint texture=0;int width=0,height=0;GLsync fence=nullptr;State state=State::idle;Frame frame;};
   Window &window_;
   Telemetry &telemetry_;
   std::atomic<uint64_t> &epoch_;
@@ -18,6 +18,9 @@ class Display final:public ccl::DisplayDriver {
   std::mutex slots_mutex_;
   int writing_=-1,current_=-1;
   GLuint pbo_=0,program_=0,font_=0;
+  GLuint retired_pbo_=0;
+  size_t pbo_bytes_=0;
+  bool interop_changed_=false;
   GLsync upload_=nullptr;
   bool allow_readback_;
   ir::RenderOptions options_;
@@ -25,7 +28,7 @@ class Display final:public ccl::DisplayDriver {
   uint64_t last_presented_=0;
   std::atomic<bool> failed_{false};
   std::string error_;
-  void allocate();
+  void allocate(int width,int height);
   void make_program();
 public:
   Display(Window &window,Telemetry &telemetry,std::atomic<uint64_t> &epoch,std::atomic<int> &samples,bool allow_readback);

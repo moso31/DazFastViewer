@@ -9,16 +9,23 @@ Display::~Display() {
   for(auto &s:slots_) {if(s.fence) glDeleteSync(s.fence);if(s.texture) glDeleteTextures(1,&s.texture);}
   if(upload_) glDeleteSync(upload_);
   if(pbo_) glDeleteBuffers(1,&pbo_);
+  if(retired_pbo_) glDeleteBuffers(1,&retired_pbo_);
   window_.render_context.deactivate();
 }
-void Display::allocate() {
-  if(pbo_) return;
-  glGenBuffers(1,&pbo_);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
-  glBufferData(GL_PIXEL_UNPACK_BUFFER,size_t(window_.width)*window_.height*sizeof(ccl::half4),nullptr,GL_DYNAMIC_DRAW);
-  glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
-  for(auto &s:slots_) {
-    glGenTextures(1,&s.texture);glBindTexture(GL_TEXTURE_2D,s.texture);
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA16F,window_.width,window_.height,0,GL_RGBA,GL_HALF_FLOAT,nullptr);
+void Display::allocate(int width,int height) {
+  // 只扩容，不随几个像素或预览 / 完整质量切换反复分配。
+  const size_t bytes=size_t((width+127)/128*128)*((height+127)/128*128)*sizeof(ccl::half4);
+  if(bytes>pbo_bytes_) {
+    retired_pbo_=pbo_;glGenBuffers(1,&pbo_);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER,bytes,nullptr,GL_DYNAMIC_DRAW);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+    pbo_bytes_=bytes;interop_changed_=true;
+  }
+  // 此槽已等到呈现 fence；其他槽继续显示旧图，不触碰正在使用的纹理。
+  auto &s=slots_[writing_];
+  if(width>s.width||height>s.height) {
+    s.width=std::max(s.width,(width+127)/128*128);s.height=std::max(s.height,(height+127)/128*128);
+    if(!s.texture) glGenTextures(1,&s.texture);glBindTexture(GL_TEXTURE_2D,s.texture);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA16F,s.width,s.height,0,GL_RGBA,GL_HALF_FLOAT,nullptr);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
   }
@@ -26,11 +33,11 @@ void Display::allocate() {
   if(glGetError()!=GL_NO_ERROR) throw std::runtime_error("分配 OpenGL 输出资源失败");
 }
 bool Display::update_begin(const Params &p,int width,int height) {
-  if(width<1 || height<1 || width>window_.width || height>window_.height || p.size.x!=width || p.size.y!=height) {
-    error_="渲染尺寸超出视口或与输出缓冲不一致";failed_=true;return false;
+  const auto begin=now();
+  if(width<1 || height<1 || p.size.x!=width || p.size.y!=height) {
+    error_="渲染尺寸与输出缓冲不一致";failed_=true;return false;
   }
   window_.render_context.activate();
-  allocate();
   {
     std::lock_guard lock(slots_mutex_);
     for(int i=0;i<3;++i) {
@@ -47,10 +54,15 @@ bool Display::update_begin(const Params &p,int width,int height) {
   }
   if(writing_<0) {telemetry_.skipped++;window_.render_context.deactivate();return false;}
   if(upload_) {glWaitSync(upload_,0,GL_TIMEOUT_IGNORED);glDeleteSync(upload_);upload_=nullptr;}
+  allocate(width,height);
   auto &s=slots_[writing_];s.frame={telemetry_.produced.fetch_add(1)+1,epoch_.load(),samples_.load(),width,height,now()};
+  telemetry_.event("display_begin",s.frame,(now()-begin)*1000);
   return true;
 }
 void Display::update_end() {
+  const auto begin=now();
+  // Cycles 在写入新 PBO 前已注销旧 CUDA 注册；现在才释放旧 GL 对象。
+  if(retired_pbo_) {glDeleteBuffers(1,&retired_pbo_);retired_pbo_=0;}
   auto &s=slots_[writing_];
   glBindTexture(GL_TEXTURE_2D,s.texture);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
   glTexSubImage2D(GL_TEXTURE_2D,0,0,0,s.frame.width,s.frame.height,GL_RGBA,GL_HALF_FLOAT,nullptr);
@@ -60,12 +72,12 @@ void Display::update_end() {
     std::lock_guard lock(slots_mutex_);
     s.fence=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);s.state=State::ready;
   }
-  glFlush();telemetry_.event("produced",s.frame);
+  glFlush();telemetry_.event("display_upload",s.frame,(now()-begin)*1000);telemetry_.event("produced",s.frame);
   writing_=-1;window_.render_context.deactivate();
 }
 ccl::half4 *Display::map_texture_buffer() {
   if(!allow_readback_) {error_="GPU interop 不可用；显式 --allow-readback 才允许诊断回读";failed_=true;return nullptr;}
-  telemetry_.readback_bytes+=size_t(window_.width)*window_.height*sizeof(ccl::half4);
+  telemetry_.readback_bytes+=size_t(slots_[writing_].frame.width)*slots_[writing_].frame.height*sizeof(ccl::half4);
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
   return static_cast<ccl::half4 *>(glMapBuffer(GL_PIXEL_UNPACK_BUFFER,GL_WRITE_ONLY));
 }
@@ -74,8 +86,9 @@ ccl::GraphicsInteropDevice Display::graphics_interop_get_device() {
   ccl::GraphicsInteropDevice device;device.type=ccl::GraphicsInteropDevice::OPENGL;return device;
 }
 void Display::graphics_interop_update_buffer() {
-  if(graphics_interop_buffer_.is_empty())
-    graphics_interop_buffer_.assign(ccl::GraphicsInteropDevice::OPENGL,pbo_,size_t(window_.width)*window_.height*sizeof(ccl::half4));
+  if(interop_changed_||graphics_interop_buffer_.is_empty()) {
+    graphics_interop_buffer_.assign(ccl::GraphicsInteropDevice::OPENGL,pbo_,pbo_bytes_);interop_changed_=false;
+  }
 }
 static GLuint shader(GLenum type,const char *source) {
   const GLuint id=glCreateShader(type);glShaderSource(id,1,&source,nullptr);glCompileShader(id);
@@ -139,7 +152,7 @@ void Display::draw(const Params &) {
   glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glUseProgram(program_);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,slot.texture);
   glUniform1i(glGetUniformLocation(program_,"beauty"),0);
-  glUniform2f(glGetUniformLocation(program_,"texture_scale"),float(slot.frame.width)/window_.width,float(slot.frame.height)/window_.height);
+  glUniform2f(glGetUniformLocation(program_,"texture_scale"),float(slot.frame.width)/slot.width,float(slot.frame.height)/slot.height);
   const auto &n=options_.tonemapper;const auto w=ir::color(n,"White Point");const auto ws=float(ir::number(n,"White Point Scale",1));
   glUniform1i(glGetUniformLocation(program_,"enabled"),!n.id.empty()&&ir::number(n,"Tone Mapping Enable",1));
   glUniform1i(glGetUniformLocation(program_,"per_component"),int(ir::number(n,"Burn Highlights Per Component",1)));

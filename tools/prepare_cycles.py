@@ -88,6 +88,9 @@ def main():
     replace("src/session/session.cpp", "  const bool reset_scene = update_scene(delayed_reset_.do_reset);", """  if (dfv_event && scene->need_reset(false)) dfv_event("scene_data_dirty", dfv_requested_epoch.load(), 0.0);
   const bool reset_scene = update_scene(delayed_reset_.do_reset);""")
     replace("src/session/session.cpp", "      path_trace_->render(render_work);", """      const double dfv_render_start = time_dt();
+      path_trace_->dfv_event = [this](const char *name, double ms) {
+        if (dfv_event) dfv_event(name, dfv_render_epoch.load(), ms);
+      };
       path_trace_->render(render_work);
       if (dfv_event) dfv_event("render_work_cpu", dfv_render_epoch.load(), (time_dt()-dfv_render_start)*1000.0);""")
     replace("src/session/session.cpp", "    scene->update_camera_resolution(progress, width, height);", """    scene->update_camera_resolution(progress, width, height);
@@ -100,10 +103,19 @@ def main():
     replace("src/integrator/path_trace.h", "  bool did_draw_after_reset_ = true;", "  std::atomic<bool> did_draw_after_reset_{true};")
     replace("src/integrator/path_trace_display.h", "    bool is_outdated = true;", "    std::atomic<bool> is_outdated{true};")
     replace("src/integrator/path_trace.cpp", "  did_draw_after_reset_ |= display_->draw();", "  if (display_->draw()) did_draw_after_reset_.store(true);")
+    # 区分实际追踪、工作缓冲和显示上传，避免把整个 render_work 当成 GPU 光照时间。
+    replace("src/integrator/path_trace.h", "  void render(const RenderWork &render_work);",
+            "  void render(const RenderWork &render_work);\n  std::function<void(const char *, double)> dfv_event;")
+    for call, name in (("render_init_kernel_execution()", "render_init"),
+                       ("init_render_buffers(render_work)", "render_buffers"),
+                       ("path_trace(render_work)", "path_trace"),
+                       ("update_display(render_work)", "display_update")):
+        replace("src/integrator/path_trace.cpp", f"  {call};",
+                f'  {{ const double start = time_dt(); {call}; if (dfv_event) dfv_event("{name}", (time_dt()-start)*1000.0); }}')
     for name, data in files.items():
         write_changed(destination / name, data)
     manifest = {"standalone_commit": STANDALONE, "blender_commit": BLENDER, "adopted_files": adopted,
-                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "atomic cross-thread display state"]}
+                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state"]}
     write_changed(destination / "dfv-source-manifest.json", json.dumps(manifest, indent=2) + "\n")
     print(f"Cycles 构建树已生成：{destination}；接入 {len(adopted)} 个 Blender 5.2.2 文件")
 

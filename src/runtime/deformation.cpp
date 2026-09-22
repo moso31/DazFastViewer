@@ -43,7 +43,7 @@ void set_parameter(const Target &target,Properties &values,size_t index,float va
   values.morphs.at(resolved)=value;if(p.value_type!="bool") values.unlimited_morphs.insert(target.morphs[resolved].id);sync_aliases(target,values);
 }
 DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs)
-  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs),collision_(scene,targets),scene_(scene) {
+  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs),collision_(scene,targets,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);}),scene_(scene) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("角色和公式图数量不一致");
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
   for(const auto &target:targets) {Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);sync_aliases(target,p);previous_.push_back(p);}
@@ -100,7 +100,13 @@ void DeformationRuntime::feed(const std::vector<Properties> &values,const std::v
     if(link&&g.skin>=0) for(size_t j=0;j<link->joints.size();++j) if(link->joints[j]>=0) resolved[size_t(g.skin)][j]=inherited[j];
   }
 }
+bool DeformationRuntime::same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const {
+  if(!evaluated_||values.size()!=previous_.size()||poses!=previous_poses_) return false;
+  for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs) return false;
+  return true;
+}
 PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry) {
+  if(same_shape(values,poses)) return {};
   std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> resolved;
   try {feed(values,poses,weights,resolved);}
   catch(...) {std::vector<std::vector<float>> rollback_weights;std::vector<std::vector<JointPose>> rollback_poses;feed(previous_,previous_poses_,rollback_weights,rollback_poses);throw;}
@@ -114,6 +120,13 @@ PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &value
   payload_leases_=std::move(leases);trim_morph_cache();return progress;
 }
 ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
+  if(same_shape(values,poses)) {
+    diagnostics::Scope scope("transform_only");
+    // 实例编辑不参与骨骼 / ERC 输入；沿已有依赖树传播矩阵即可。
+    for(const auto &p:values) validate_transform(p.transform);
+    for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);}
+    auto delta=follow_surfaces(collision_.evaluate(morph_.evaluate()));previous_=values;return delta;
+  }
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
     for(const auto &p:values) validate_transform(p.transform);
@@ -140,10 +153,15 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*moved*a.inverse_bind);
   }
   conform_.project(weights,morph_);
-  auto delta=collision_.evaluate(skin_.evaluate(morph_.evaluate()));
+  auto delta=follow_surfaces(collision_.evaluate(skin_.evaluate(morph_.evaluate())));
+  effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;evaluated_=true;return delta;
+}
+ir::Delta DeformationRuntime::follow_surfaces(ir::Delta delta) {
   for(const auto &a:surface_attachments_) {
     const auto &follow=targets_[a.target].rigid_follow;std::vector<ir::Vec3> points;
-    const auto &mesh=scene_.meshes.at(scene_.instances.at(targets_[a.source].instance).mesh);for(auto v:follow.vertices) points.push_back(mesh.positions.at(v));
+    const auto mesh_index=scene_.instances.at(targets_[a.source].instance).mesh;
+    if(evaluated_&&std::none_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==mesh_index;})) continue;
+    const auto &mesh=scene_.meshes.at(mesh_index);for(auto v:follow.vertices) points.push_back(mesh.positions.at(v));
     morph_.set_attachment(a.target,a.frame*fit_rigid(a.reference,points,follow.rotate)*ir::inverse(a.frame));
   }
   // 刚性附件有自身碰撞修改器时，必须在最终挂接位置重新检查。
@@ -156,7 +174,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     auto found=std::find_if(delta.instances.begin(),delta.instances.end(),[&](const auto &previous){return previous.index==edit.index;});
     if(found==delta.instances.end()) delta.instances.push_back(edit);else *found=edit;
   }
-  effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;return delta;
+  return delta;
 }
 FormulaStats DeformationRuntime::formula_stats() const {FormulaStats out;for(const auto &f:formulas_) {out.expressions+=f->stats().expressions;out.channels+=f->stats().channels;}return out;}
 }

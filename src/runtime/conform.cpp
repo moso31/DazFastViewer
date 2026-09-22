@@ -156,7 +156,8 @@ std::vector<JointPose> conform_pose(const ConformLink &link,const std::vector<Sk
     p.center_offset_cm=add(a.center_offset_cm,sub(b.center_offset_cm,base.center_offset_cm));p.end_offset_cm=add(a.end_offset_cm,sub(b.end_offset_cm,base.end_offset_cm));p.orientation_offset_degrees=add(a.orientation_offset_degrees,sub(b.orientation_offset_degrees,base.orientation_offset_degrees));
   }return result;
 }
-CollisionRuntime::CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets):scene_(scene) {
+CollisionRuntime::CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets,std::function<ir::Transform(uint32_t,uint32_t)> relative):scene_(scene),relative_(std::move(relative)) {
+  if(!relative_) relative_=[this](uint32_t source,uint32_t follower){return ir::inverse(scene_.instances.at(source).transform)*scene_.instances.at(follower).transform;};
   std::map<std::string,std::vector<uint32_t>> ids;
   for(const auto &t:targets) ids["#"+t.id.substr(0,t.id.rfind('/'))].push_back(t.instance);
   std::map<uint32_t,Binding> pending;
@@ -194,20 +195,21 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta) {
   for(auto &b:bindings_) for(const auto &e:delta.meshes) if(e.index==scene_.instances[b.follower].mesh) b.input=e.positions;
   for(auto &b:bindings_) {
     const auto &follower=scene_.instances[b.follower],&source=scene_.instances[b.source];
-    const auto relative=ir::inverse(source.transform)*follower.transform;
+    const auto relative=relative_(b.source,b.follower);
     bool graft_changed=false;
-    for(auto g:b.grafts) {
+    std::vector<ir::Transform> graft_relatives;graft_relatives.reserve(b.grafts.size());
+    for(size_t k=0;k<b.grafts.size();++k) {const auto g=b.grafts[k];graft_relatives.push_back(relative_(b.source,g));
       graft_changed|=changed.contains(scene_.instances[g].mesh);
-      for(const auto &e:delta.instances) graft_changed|=e.index==g||e.index==b.source;
+      graft_changed|=k>=b.graft_relatives.size()||graft_relatives.back().value!=b.graft_relatives[k].value;
       for(const auto &e:delta.visibility) graft_changed|=e.index==g;
     }
     if(b.initialized&&!graft_changed&&!changed.contains(follower.mesh)&&!changed.contains(source.mesh)&&relative.value==b.relative.value) continue;
-    b.initialized=true;b.relative=relative;
+    b.initialized=true;b.relative=relative;b.graft_relatives=std::move(graft_relatives);
     // 基础人体与可见附加网格分别施加外侧约束，避免最近面选到内层后漏碰撞。
     std::vector<ir::Mesh> surfaces{scene_.meshes[source.mesh]};
-    for(auto g:b.grafts) if(scene_.instances[g].visible) {
+    for(size_t k=0;k<b.grafts.size();++k) {const auto g=b.grafts[k];if(!scene_.instances[g].visible) continue;
       const auto &instance=scene_.instances[g];auto part=scene_.meshes[instance.mesh];
-      const auto matrix=ir::inverse(source.transform)*instance.transform;
+      const auto matrix=b.graft_relatives[k];
       for(auto &p:part.positions) p=matrix.point(p);surfaces.push_back(std::move(part));
     }
     std::vector<std::unique_ptr<SurfaceIndex>> indexes;

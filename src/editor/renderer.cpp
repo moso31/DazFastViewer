@@ -8,8 +8,10 @@
 #include "scene/integrator.h"
 #include "scene/pass.h"
 #include "session/session.h"
+#include "diagnostics/load_profile.h"
 #include <epoxy/wgl.h>
 #include <fstream>
+#include <bit>
 
 namespace dfv::editor {
 Renderer::Renderer(HWND host,int width,int height,const std::filesystem::path &output,SamplingSettings sampling):output_(output),sampling_(sampling),telemetry_(output) {
@@ -24,7 +26,7 @@ void Renderer::set_document(std::shared_ptr<const Document> document,const Snaps
 void Renderer::resize(int width,int height) {
   if(width<1||height<1) return;
   SetWindowPos(window_->hwnd,nullptr,0,0,width,height,SWP_NOZORDER|SWP_NOACTIVATE);
-  std::lock_guard lock(mutex_);requested_width_=width;requested_height_=height;
+  std::lock_guard lock(mutex_);requested_width_=width;requested_height_=height;resize_preview_until_=now()+.15;
 }
 void Renderer::pointer(int x,int y,bool click) {
   POINT point{x,y};ClientToScreen(window_->hwnd,&point);SetCursorPos(point.x,point.y);
@@ -41,7 +43,8 @@ void Renderer::focus(const ir::Bounds &bounds) {
   const auto dx=bounds.maximum.x-bounds.minimum.x,dy=bounds.maximum.y-bounds.minimum.y,dz=bounds.maximum.z-bounds.minimum.z;
   window_->camera.distance=std::max(.025f,.55f*std::sqrt(dx*dx+dy*dy+dz*dz)/std::sin(.4f));window_->publish();
 }
-void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) snapshot_=snapshot;}
+void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) {snapshot_=snapshot;edit_preview_until_=now()+.15;Frame f;f.id=snapshot.revision;telemetry_.event("edit_input",f);}}
+void Renderer::interaction(bool active) {std::lock_guard lock(mutex_);if(active&&!edit_active_) interaction_revision_=snapshot_.revision+1;edit_active_=active;}
 void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources_;}
 void Renderer::select(uint64_t generation,int target,int joint) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
@@ -67,6 +70,8 @@ void Renderer::run(std::stop_token stop) {
     }
   };
   RenderStatus state;
+  uint64_t sessions=0;
+  auto timing=[&](const char *name,double begin,uint64_t revision=0) {Frame f;f.epoch=state.requested_epoch;f.id=revision;telemetry_.event(name,f,(now()-begin)*1000);};
   try {
     DeviceInfo device;
     for(const auto &candidate:Device::available_devices()) if(candidate.type==DEVICE_OPTIX) {device=candidate;break;}
@@ -77,24 +82,26 @@ void Renderer::run(std::stop_token stop) {
     uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
     uint64_t retried=0;
     std::vector<std::vector<ir::Vec3>> previous_positions;
+    std::vector<double> displacements;
     SessionParams params;params.device=device;params.samples=sampling_.samples;params.pixel_size=1;params.background=false;
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
     bool preview=false;
+    int camera_width=0,camera_height=0;
     auto set_quality=[&](bool moving) {
       preview=moving;params.samples=moving?2:sampling_.samples;
       buffers.width=buffers.full_width=moving?std::max(1,window_->width.load()/4):window_->width.load();
       buffers.height=buffers.full_height=moving?std::max(1,window_->height.load()/4):window_->height.load();
     };
-    Snapshot desired;
+    Snapshot desired;bool edit_affects_render=false;
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;
       int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
-      {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;retry=retry_resources_;}
+      bool editing;double preview_until,resize_until;
+      {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;}
       const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
-        cleanup();window_->width=width;window_->height=height;
-        buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;
+        window_->width=width;window_->height=height;
       }
       if(!document) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
       if(current==document&&!state.error.empty()) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
@@ -107,7 +114,7 @@ void Renderer::run(std::stop_token stop) {
         attempted_revision=0;state.edit_error.clear();
       }
       if(current!=document||!session) {
-        cleanup();geometry_dirty=true;
+        cleanup();geometry_dirty=true;edit_affects_render=false;
         if(current!=document) {
           // 先销毁持有旧场景引用的求值器，再释放文档、顶点与射线缓存。
           runtime.reset();picking={};regions={};pickable={};render_scene={};
@@ -130,6 +137,7 @@ void Renderer::run(std::stop_token stop) {
         const auto initial_camera=window_->mailbox.latest();
         set_quality(initial_camera.navigating||now()<initial_camera.preview_until);
         session=std::make_unique<Session>(params,scene_params);
+        ++sessions;telemetry_.event("session_created");
         auto &scene=*session->scene;
         auto *pass=scene.create_node<Pass>();pass->set_name(ustring("combined"));pass->set_type(PASS_COMBINED);
         scene.integrator->set_seed(1337);scene.integrator->set_max_bounce(8);scene.integrator->set_max_diffuse_bounce(4);
@@ -139,33 +147,43 @@ void Renderer::run(std::stop_token stop) {
         scene.integrator->set_sampling_pattern(sampling_.blue_noise?SAMPLING_PATTERN_BLUE_NOISE_FIRST:SAMPLING_PATTERN_TABULATED_SOBOL);
         scene.integrator->set_min_bounce(sampling_.min_bounces);scene.integrator->set_transparent_min_bounce(sampling_.transparent_min_bounces);
         session->dfv_event=[&](const char *name,uint64_t epoch,double ms) {Frame frame;frame.epoch=epoch;telemetry_.event(name,frame,ms);};
-        auto camera=window_->mailbox.latest();render_scene.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;
-        adapter=std::make_unique<CyclesAdapter>(scene);adapter->load(render_scene);
+        auto camera=window_->mailbox.latest();render_scene.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
+        const auto load_begin=now();adapter=std::make_unique<CyclesAdapter>(scene);adapter->load(render_scene);timing("adapter_load",load_begin);
         auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
         display=driver.get();display->set_options(desired.options);session->set_display_driver(std::move(driver));session->dfv_requested_epoch=++epoch;
         applied_revision=attempted_revision=desired.revision;session->reset(params,buffers);session->start();
+        {Frame f;f.epoch=epoch;f.id=applied_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);}
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
       if(display->failed()) throw std::runtime_error(display->error());
       auto camera=window_->mailbox.latest();
-      const bool wanted_preview=camera.needs_preview(camera_epoch,now());
+      const bool size_changed=camera_width!=window_->width||camera_height!=window_->height;
+      const bool edit_pending=desired.generation==current->generation&&desired.revision!=attempted_revision;
+      const bool navigation_preview=camera.needs_preview(camera_epoch,now())||size_changed||now()<resize_until;
+      bool wanted_preview=navigation_preview||(edit_affects_render&&(editing||now()<preview_until))||
+        (edit_pending&&!state.pending_payloads&&state.resource_error.empty());
       const bool quality_changed=wanted_preview!=preview;
+      ir::Delta delta;bool new_render_edit=false;
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
-      if((quality_changed || camera.epoch!=camera_epoch || desired.revision!=attempted_revision) &&
+      if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending) &&
          ((wanted_preview&&!preview)||(telemetry_.displayed_epoch.load()>=epoch && session->ready_to_reset()))) {
-        ir::Delta delta;
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
           try {
+            const auto prepare_begin=now();
             const auto resources=runtime->prepare(desired.values,desired.poses,retry_payloads);
+            timing("edit_prepare",prepare_begin,desired.revision);
             retried=retry;
             state.pending_payloads=resources.pending;state.resource_error=resources.error;
             if(!resources.pending&&resources.error.empty()) {
-            attempted_revision=desired.revision;delta=runtime->evaluate(desired.values,desired.poses);
+            attempted_revision=desired.revision;const auto evaluate_begin=now();
+            diagnostics::LoadProfile profile;diagnostics::active=&profile;
+            try {delta=runtime->evaluate(desired.values,desired.poses);} catch(...) {diagnostics::active=nullptr;throw;}
+            diagnostics::active=nullptr;timing("edit_evaluate",evaluate_begin,desired.revision);
+            for(const auto &[name,value]:profile.timings) {Frame f;f.id=desired.revision;telemetry_.event(name.c_str(),f,value.seconds*1000);}
             if(!previous_positions.empty()) {
               std::erase_if(delta.meshes,[&](const auto &edit) {const auto &old=previous_positions.at(edit.index);return old.size()==edit.positions.size()&&std::equal(old.begin(),old.end(),edit.positions.begin(),[](auto a,auto b){return a.x==b.x&&a.y==b.y&&a.z==b.z;});});previous_positions.clear();
             }
-            geometry_dirty|=!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
             for(size_t l=0;l<desired.lights.size();++l) {
               const auto &a=desired.lights[l],&b=render_scene.lights[l];
               if(a.transform.value!=b.transform.value||a.power.x!=b.power.x||a.power.y!=b.power.y||a.power.z!=b.power.z||a.width!=b.width||a.height!=b.height) delta.lights.push_back({uint32_t(l),a});
@@ -175,18 +193,30 @@ void Renderer::run(std::stop_token stop) {
               if(render_scene.options.environment!=desired.options.environment||render_scene.options.environment_file!=desired.options.environment_file||render_scene.options.backdrop!=desired.options.backdrop) delta.options=desired.options;
               render_scene.options=desired.options;display->set_options(desired.options);
             }
-            applied_revision=desired.revision;state.edit_error.clear();}
+            new_render_edit=delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
+            edit_affects_render=new_render_edit;applied_revision=desired.revision;state.edit_error.clear();}
           }
           catch(const std::exception &e) {attempted_revision=desired.revision;state.edit_error=e.what();}
         }
-        if(camera.epoch!=camera_epoch) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;}
-        if(quality_changed||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
-          {thread_scoped_lock lock(session->scene->mutex);adapter->apply(delta);set_quality(wanted_preview);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
+        if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
+        // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
+        wanted_preview=navigation_preview||(edit_affects_render&&(editing||now()<preview_until||new_render_edit));
+        if(wanted_preview!=preview||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
+          {const auto begin=now();thread_scoped_lock lock(session->scene->mutex);timing("scene_lock",begin,applied_revision);const auto apply_begin=now();adapter->apply(delta);timing("adapter_apply",apply_begin,applied_revision);set_quality(wanted_preview);session->dfv_requested_epoch=++epoch;const auto reset_begin=now();session->reset(params,buffers);timing("session_reset",reset_begin,applied_revision);
+            Frame f;f.epoch=epoch;f.id=applied_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);}
         state.applied_revision=applied_revision;
       }
       window_->present_context.activate();
-      const bool bounds_dirty=geometry_dirty;
-      if(geometry_dirty) {overlay.update(render_scene,regions);picking.update(render_scene,pickable);geometry_dirty=false;}
+      const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
+      if(geometry_dirty) {auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
+      else if(bounds_dirty) {auto begin=now();overlay.apply(render_scene,regions,delta);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
+      if(sampling_.interaction_probe&&bounds_dirty) {
+        const bool all=state.mesh_hashes.size()!=render_scene.meshes.size();state.mesh_hashes.resize(render_scene.meshes.size());
+        for(size_t m=0;m<render_scene.meshes.size();++m) if(all||std::any_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==m;})) {
+          uint64_t hash=14695981039346656037ull;for(auto p:render_scene.meshes[m].positions) for(float v:{p.x,p.y,p.z}) {hash^=std::bit_cast<uint32_t>(v);hash*=1099511628211ull;}state.mesh_hashes[m]=hash;
+        }
+        state.instance_transforms.clear();for(const auto &instance:render_scene.instances) state.instance_transforms.push_back(instance.transform.value);
+      }
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
       session->draw();
       state.camera=camera;state.pointer_x=window_->pointer_x;state.pointer_y=window_->pointer_y;
@@ -236,26 +266,34 @@ void Renderer::run(std::stop_token stop) {
       if(!SwapBuffers(window_->dc)) {window_->present_context.deactivate();throw std::runtime_error("Qt 视口 SwapBuffers 失败");}
       display->after_swap();window_->present_context.deactivate();
       const auto shown=display->drawn_frame();
+      state.present_time=telemetry_.last_present_time;state.sessions=sessions;
       state.preview=preview;state.render_width=shown.width;state.render_height=shown.height;
       if(shown.id&&shown.width==std::max(1,window_->width.load()/4)&&shown.height==std::max(1,window_->height.load()/4)) state.last_preview_frame=shown.id;
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
       state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();
-      if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform) {
-        measured_evaluation=state.evaluation.morph_evaluations;measured_skinning=state.skinning.evaluations;measured_transform=state.evaluation.transform_evaluations;state.max_displacement=0;state.bounds.clear();state.head_bounds.clear();
-        for(const auto &target:current->catalog.targets) {
+      if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform||!delta.meshes.empty()) {
+        const auto diagnostic_begin=now();
+        const bool all=measured_evaluation==UINT64_MAX||state.bounds.size()!=current->catalog.targets.size();
+        measured_evaluation=state.evaluation.morph_evaluations;measured_skinning=state.skinning.evaluations;measured_transform=state.evaluation.transform_evaluations;
+        state.bounds.resize(current->catalog.targets.size());state.head_bounds.resize(current->catalog.targets.size());displacements.resize(current->catalog.targets.size());
+        for(size_t t=0;t<current->catalog.targets.size();++t) {const auto &target=current->catalog.targets[t];
         const auto mesh=render_scene.instances[target.instance].mesh;
+        const bool mesh_changed=all||std::any_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==mesh;});
+        if(!mesh_changed&&!std::any_of(delta.instances.begin(),delta.instances.end(),[&](const auto &e){return e.index==target.instance;})) continue;
         const auto &base=current->loaded.scene.meshes[mesh].positions;const auto &positions=render_scene.meshes[mesh].positions;
-        ir::Bounds bounds;for(const auto p:positions) bounds.add(render_scene.instances[target.instance].transform.point(p));state.bounds.push_back(bounds);
+        ir::Bounds bounds;for(const auto p:positions) bounds.add(render_scene.instances[target.instance].transform.point(p));state.bounds[t]=bounds;
         ir::Bounds head;const auto &region=regions[target.instance];
         if(region.head>=0) for(size_t t=0;t<region.body.size();++t) if(region.body[t]==region.head) for(auto v:render_scene.meshes[mesh].triangles[t].vertices) head.add(render_scene.instances[target.instance].transform.point(positions[v]));
-        state.head_bounds.push_back(head);
-        for(size_t v=0;v<base.size();++v) {
+        state.head_bounds[t]=head;
+        if(mesh_changed) {displacements[t]=0;for(size_t v=0;v<base.size();++v) {
           const double x=positions[v].x-base[v].x,y=positions[v].y-base[v].y,z=positions[v].z-base[v].z;
-          state.max_displacement=std::max(state.max_displacement,std::sqrt(x*x+y*y+z*z));
+          displacements[t]=std::max(displacements[t],std::sqrt(x*x+y*y+z*z));
+        }}
         }
-        }
+        state.max_displacement=displacements.empty()?0:*std::max_element(displacements.begin(),displacements.end());
+        timing("diagnostic_bounds",diagnostic_begin,applied_revision);
       }
       {std::lock_guard lock(mutex_);status_=state;}
       } catch(const std::exception &e) {
@@ -280,6 +318,6 @@ void Renderer::run(std::stop_token stop) {
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
     {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"},
     {"navigation_preview",{{"width_divisor",4},{"height_divisor",4},{"samples",2},{"idle_seconds",.15}}}};
-  report["sampling"]=sampling_report;std::ofstream(output_/"editor-render.json")<<report.dump(2);
+  report["sessions"]=sessions;report["sampling"]=sampling_report;std::ofstream(output_/"editor-render.json")<<report.dump(2);
 }
 }
