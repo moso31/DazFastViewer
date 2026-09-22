@@ -1,4 +1,5 @@
 #include "editor/parameters.h"
+#include "editor/numeric_slider.h"
 #include "runtime/picking.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -18,6 +19,7 @@
 #include <QToolButton>
 #include <QSettings>
 #include <algorithm>
+#include <limits>
 
 namespace dfv::editor {
 static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsizetype(s.size()));}
@@ -105,11 +107,13 @@ void ParameterPanel::mount() {
       if(auto *model=qobject_cast<QStandardItemModel *>(combo->model())) for(int index:c.disabled_choices) if(auto *item=model->item(index)) item->setEnabled(false);
       connect(combo,&QComboBox::currentIndexChanged,this,[this,i](int value){current_=i;controls_[i].write(value);update_rows();});
     } else {
-      auto *slider=new QSlider(Qt::Horizontal);slider->setObjectName("valueSlider");slider->setRange(0,1000);slider->setEnabled(c.enabled&&c.slider_maximum>c.slider_minimum);
-      auto *spin=new QDoubleSpinBox;spin->setObjectName("valueSpin");spin->setDecimals(4);spin->setRange(c.minimum,c.maximum);spin->setSingleStep(std::max(.0001,c.step));spin->setKeyboardTracking(false);spin->setMaximumWidth(105);spin->setEnabled(c.enabled);
-      line->addWidget(slider,1);line->addWidget(spin);spin->setValue(c.read());slider->setValue(c.slider_maximum>c.slider_minimum?qRound((c.read()-c.slider_minimum)/(c.slider_maximum-c.slider_minimum)*1000):0);
-      connect(slider,&QSlider::valueChanged,this,[this,i](int value){current_=i;const auto &c=controls_[i];c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();});
+      auto *slider=new NumericSlider;slider->setObjectName("valueSlider");slider->setEnabled(c.enabled);
+      slider->setToolTip(QStringLiteral("左右拖动可越过标尺范围；Shift 精细调整。右侧可直接输入数值。"));
+      auto *spin=new QDoubleSpinBox;spin->setObjectName("valueSpin");spin->setDecimals(6);spin->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());spin->setSingleStep(std::max(.000001,c.step));spin->setKeyboardTracking(false);spin->setFixedWidth(125);spin->setEnabled(c.enabled);
+      line->addWidget(slider,1);line->addWidget(spin);spin->setValue(c.read());slider->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);
+      slider->edited=[this,i](double value){current_=i;controls_[i].write(value);update_rows();};
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){current_=i;controls_[i].write(value);update_rows();});
+      connect(spin,&QDoubleSpinBox::editingFinished,this,[this,spin]{if(auto *line=spin->findChild<QLineEdit *>()) line->setModified(false);update_rows();});
     }
     widget->setToolTip(text(c.detail));tree_->setItemWidget(items_[size_t(i)],0,widget);mounted_[i]=widget;
   }
@@ -123,8 +127,12 @@ void ParameterPanel::update_rows() {
       if(size_t(c.morph)<effective_.size()) detail+=QStringLiteral("\n最终值：%1").arg(effective_[size_t(c.morph)]);
       if(auto *label=w->findChild<QLabel *>("valueLabel")) {label->setText(text(c.label)+status);label->setToolTip(detail);}w->setToolTip(detail);
     }
-    if(auto *spin=w->findChild<QDoubleSpinBox *>("valueSpin")) {QSignalBlocker block(spin);spin->setValue(c.read());}
-    if(auto *slider=w->findChild<QSlider *>("valueSlider")) {QSignalBlocker block(slider);slider->setValue(c.slider_maximum>c.slider_minimum?qRound((c.read()-c.slider_minimum)/(c.slider_maximum-c.slider_minimum)*1000):0);}
+    if(auto *spin=w->findChild<QDoubleSpinBox *>("valueSpin")) {
+      const auto *line=spin->findChild<QLineEdit *>();
+      // 后台渲染状态持续刷新时，不能覆盖尚未按 Enter / 失焦提交的输入文本。
+      if(!(spin->hasFocus()&&line&&line->isModified())&&spin->value()!=c.read()) {QSignalBlocker block(spin);spin->setValue(c.read());}
+    }
+    if(auto *slider=w->findChild<QSlider *>("valueSlider")) {QSignalBlocker block(slider);static_cast<NumericSlider *>(slider)->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);}
     if(auto *combo=w->findChild<QComboBox *>("valueChoice")) {QSignalBlocker block(combo);combo->setCurrentIndex(int(c.read()));}
   }
 }

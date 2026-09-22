@@ -22,6 +22,9 @@ class DeformationRuntime {
   std::vector<std::vector<JointPose>> effective_poses_;
   struct Attachment {size_t target,skin,joint;ir::Transform figure,inverse_bind;};
   std::vector<Attachment> attachments_;
+  struct SurfaceAttachment {size_t target,source;ir::Transform frame;std::vector<ir::Vec3> reference;};
+  std::vector<SurfaceAttachment> surface_attachments_;
+  ir::Scene &scene_;
   std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
 public:

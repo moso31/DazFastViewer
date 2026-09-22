@@ -88,7 +88,9 @@ static void bone_attachment() {
   for(uint32_t i=0;i<4;++i) {base.meshes.push_back(mesh);ir::Instance instance;instance.mesh=i;instance.materials={0};instance.transform=ir::Transform::translate({i==0?2.f:i==1?3.f:i==2?3.5f:8.f,0,0});base.instances.push_back(instance);}
   Target body;body.id="body/mesh";body.morphs={morph("head_size",{},false)};
   Target glasses;glasses.id="glasses/mesh";glasses.instance=1;glasses.parent="#head-instance";
+  glasses.parent="#empty-pivot";glasses.ancestors={"#empty-pivot","#head-instance","#body"};
   Target child;child.id="child/mesh";child.instance=2;child.parent="#glasses";
+  child.parent="#empty-child";child.ancestors={"#empty-child","#glasses","#empty-pivot","#head-instance","#body"};
   Target other;other.id="other/mesh";other.instance=3;
   std::vector<Target> targets={body,glasses,child,other};Skin skin;skin.id="body";
   Joint root,head;root.id="body";head.id="head";head.scene_id="head-instance";head.parent=0;skin.joints={root,head};skin.initial.resize(2);skin.weights={{{1,1}}};
@@ -132,6 +134,29 @@ static void root_follower_and_visibility() {
   values[0].transform={};runtime.evaluate(values,{});require(distance({scene.instances[1].transform.point({})},{{}})==0,"根层级 Fit To 重置产生漂移");
 }
 static void unit() {
+  {
+    const std::vector<ir::Vec3> a={{1,2,3},{2,2,3},{1,3,3},{2,3,3}},b={{-1,4,5},{-1,5,5},{-2,4,5},{-2,5,5}};
+    const auto fit=fit_rigid(a,b);for(size_t i=0;i<a.size();++i) require(distance({fit.point(a[i])},{b[i]})<1e-6,"平面参考组的刚性拟合旋转 / 位移错误");
+    ir::Scene scene;ir::Mesh mesh;mesh.positions=a;scene.meshes={mesh,mesh};scene.instances.resize(2);scene.instances[1].mesh=1;
+    Target source;source.id="surface/mesh";source.morphs={morph("move",{{0,{.5f,0,0}},{1,{.5f,0,0}},{2,{.5f,0,0}},{3,{.5f,0,0}}})};
+    Target follower;follower.id="accessory/mesh";follower.instance=1;follower.rigid_follow={"#surface",4,{0,1,2,3},true};
+    std::vector<Target> targets={source,follower};std::vector<Skin> skins;std::vector<FormulaGraph> graphs={graph(source,-1),graph(follower,-1)};
+    DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(2);values[0].morphs={1};runtime.evaluate(values,{});
+    require(distance({scene.instances[1].transform.point({})},{{.5f,0,0}})<1e-6,"表面 Morph 未带动刚性附件");
+    require(runtime.evaluate(values,{}).instances.empty(),"刚性跟随重复求值漂移");
+    values[0].transform.translation_cm.x=20;runtime.evaluate(values,{});require(distance({scene.instances[1].transform.point({})},{{.7f,0,0}})<1e-6,"表面跟随重复叠加实例位移");
+    values[0].transform={};values[0].morphs={0};runtime.evaluate(values,{});require(distance({scene.instances[1].transform.point({})},{{0,0,0}})<1e-6,"刚性表面跟随恢复失败");
+  }
+  {
+    ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,0}};scene.meshes={mesh};scene.instances.resize(1);
+    Target t;t.id="body/mesh";t.morphs={morph("shape",{{0,{1,0,0}}})};t.morphs[0].clamped=true;
+    std::vector<Target> targets={t};auto g=graph(t,-1);g.channels[0].clamped=true;g.channels[0].minimum=0;g.channels[0].maximum=1;
+    std::vector<FormulaGraph> graphs={g};std::vector<Skin> skins;DeformationRuntime runtime(scene,targets,skins,graphs);
+    std::vector<Properties> values(1);values[0].morphs={2};runtime.evaluate(values,{});require(scene.meshes[0].positions[0].x==1,"保存通道的 ERC 限幅语义改变");
+    set_parameter(t,values[0],0,12.5f);runtime.evaluate(values,{});require(scene.meshes[0].positions[0].x==12.5f&&runtime.effective()[0][0]==12.5f,"手动数值仍被 ERC / Morph 限幅");
+    set_parameter(t,values[0],0,-3);runtime.evaluate(values,{});require(scene.meshes[0].positions[0].x==-3,"负 Morph 输入被限幅");
+    values[0].unlimited_morphs.clear();values[0].morphs={2};runtime.evaluate(values,{});require(scene.meshes[0].positions[0].x==1,"重置未恢复原始通道语义");
+  }
   mesh_collision();
   root_follower_and_visibility();
   bone_attachment();

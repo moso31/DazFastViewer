@@ -339,6 +339,20 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     if(environment&&int(ir::number(options,"Environment Mode",0))==2) warn("environment_mode_unsupported",id,"Sun-Sky Only 参数已保留，太阳天空模型尚未实现；当前仅显示均匀环境。");
   }
   for(const auto &[id,node]:nodes) out.nodes.push_back({id,decode(node.value("parent",""))});
+  std::map<std::string,runtime::RigidFollow> rigid_groups;
+  for(const auto &[id,node]:nodes) for(const auto &e:node.value("extra",Json::array())) if(e.value("type","")=="studio/node/rigid_follow"&&e.contains("rigidity_group")) {
+    const auto &group=e.at("rigidity_group");runtime::RigidFollow follow;follow.vertex_count=e.value("vertex_count",size_t(0));
+    follow.vertices=values(group.at("reference_vertices")).get<std::vector<uint32_t>>();follow.rotate=group.value("rotation_mode","full")!="none";
+    bool supported=group.value("rotation_mode","full")=="full"||!follow.rotate;
+    for(const auto &mode:group.value("scale_modes",Json::array())) supported&=mode=="none";
+    if(!supported) {warn("rigid_follow_mode",id,"刚性跟随的轴向缩放模式尚未实现");continue;}
+    for(const auto &extra:node.value("extra",Json::array())) for(const auto &entry:extra.value("channels",Json::array())) {
+      const auto &c=entry.at("channel");if(c.value("id","")=="Follow Target"&&c.contains("node")&&c["node"].is_string()) follow.target=decode(c["node"].get<std::string>());
+    }
+    if(follow.target.empty()) {auto parent=decode(node.value("parent",""));while(parent.starts_with('#')&&nodes.contains(parent.substr(1))) {const auto &p=nodes.at(parent.substr(1));if(p.contains("geometries")) {follow.target=parent;break;}parent=decode(p.value("parent",""));}}
+    if(follow.vertices.empty()||!follow.target.starts_with('#')||!nodes.contains(follow.target.substr(1))) fail("刚性跟随的目标或参考顶点缺失: "+id);
+    rigid_groups[id]=std::move(follow);
+  }
   std::map<std::string,ir::Transform> transforms;std::set<std::string> visiting;
   std::function<ir::Transform(const std::string &)> world=[&](const std::string &id) {
     if(auto old=transforms.find(id);old!=transforms.end()) return old->second;
@@ -358,20 +372,24 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     visiting.erase(id);transforms.emplace(id,matrix);return matrix;
   };
   std::map<std::string,uint32_t> mesh_cache;
-  auto fitted_world=[&](const std::string &id) {
-    const auto original=world(id); // 同时先验证 parent 链，避免损坏文件的循环遍历。
-    auto terminal=id;std::set<std::string> seen;
-    while(nodes.at(terminal).contains("conform_target")&&nodes.at(terminal)["conform_target"].is_string()) {
-      if(!seen.insert(terminal).second) fail("Fit To 关系存在循环: "+id);
-      const auto ref=decode(nodes.at(terminal)["conform_target"].get<std::string>());
-      if(ref.empty()) break;
-      if(!ref.starts_with('#')||!nodes.contains(ref.substr(1))) fail("Fit To 目标不存在: "+ref);
-      terminal=ref.substr(1);
+  std::map<std::string,ir::Transform> fitted;std::set<std::string> fitting;
+  std::function<ir::Transform(const std::string &)> fitted_world=[&](const std::string &id) {
+    if(fitted.contains(id)) return fitted.at(id);
+    const auto original=world(id);if(!fitting.insert(id).second) fail("Fit To / parent 关系存在循环: "+id);
+    const auto &node=nodes.at(id);auto result=original;
+    const auto target=node.contains("conform_target")&&node["conform_target"].is_string()?decode(node["conform_target"].get<std::string>()):std::string{};
+    if(!target.empty()) {
+      if(!target.starts_with('#')||!nodes.contains(target.substr(1))) fail("Fit To 目标不存在: "+target);
+      // Fit To 替换 Figure 的世界变换；保存的穿戴前位移不能再叠加一次。
+      result=fitted_world(target.substr(1));
+    } else if(const auto parent=decode(node.value("parent",""));!parent.empty()) {
+      // 刚性跟随由参考表面的最终顶点求姿态，不能再继承挂接骨骼的保存姿态。
+      const auto owner=rigid_groups.contains(id)?rigid_groups.at(id).target.substr(1):parent.substr(1);
+      // Follow Target 使用节点原点坐标；网格矩阵已减去中心，嵌套挂接需补回。
+      const auto origin=rigid_groups.contains(id)?axes(nodes.at(owner),"center_point",{}):ir::Vec3{};
+      result=fitted_world(owner)*ir::Transform::translate(origin)*ir::inverse(world(parent.substr(1)))*original;
     }
-    auto root=id;bool already_inherited=root==terminal;
-    while(!nodes.at(root).value("parent","").empty()) {root=decode(nodes.at(root).at("parent").get<std::string>()).substr(1);already_inherited|=root==terminal;}
-    // 同一 Figure 下的服装已经含父变换。根层级穿戴物需继承目标的场景变换。
-    return terminal!=id&&!already_inherited?world(terminal)*original:original;
+    fitting.erase(id);fitted[id]=result;return result;
   };
   for(const auto &instance:source.value("nodes",Json::array())) {
     const auto id=instance.at("id").get<std::string>();const auto &node=nodes.at(id);
@@ -525,6 +543,19 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   for(auto &object:out.objects) {
     object.source_file=file;object.source_node=object.id;
     const auto &n=nodes.at(object.id);object.translation_cm=axes(n,"translation",{});object.rotation_degrees=axes(n,"rotation",{});object.scale=axes(n,"scale",{1,1,1});object.general_scale=number(n.value("general_scale",Json(1)),1);
+    const auto pivot=axes(n,"center_point",{}),t=object.translation_cm;
+    const auto orientation=rotation(axes(n,"orientation",{}),"XYZ");object.rotation_order=n.value("rotation_order","XYZ");
+    const auto world_rotation=rotation(object.rotation_degrees,object.rotation_order);
+    ir::Transform scale;scale.value[0]=object.scale.x*object.general_scale;scale.value[5]=object.scale.y*object.general_scale;scale.value[10]=object.scale.z*object.general_scale;
+    const auto local=ir::Transform::translate({pivot.x+t.x,pivot.y+t.y,pivot.z+t.z})*orientation*world_rotation*scale*transpose_rotation(orientation)*ir::Transform::translate({-pivot.x,-pivot.y,-pivot.z});
+    const auto parent=fitted_world(object.id)*ir::inverse(local);
+    object.translation_frame=render_transform(parent);
+    object.edit_frame=render_transform(parent*ir::Transform::translate({pivot.x+t.x,pivot.y+t.y,pivot.z+t.z})*orientation);
+    for(auto ancestor=object.id;!ancestor.empty();) {
+      if(rigid_groups.contains(ancestor)) {object.rigid_follow=rigid_groups.at(ancestor);break;}
+      if(ancestor!=object.id&&nodes.at(ancestor).contains("geometries")) break;
+      const auto ref=decode(nodes.at(ancestor).value("parent",""));ancestor=ref.starts_with('#')?ref.substr(1):std::string{};
+    }
     object.geometry_versions.push_back({object.geometry_file,file_version(object.geometry_file)});
     for(const auto &source:object.geometry_sources) object.geometry_versions.push_back({source.file,file_version(source.file)});
   }

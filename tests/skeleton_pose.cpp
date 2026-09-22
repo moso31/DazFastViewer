@@ -42,6 +42,8 @@ static void unit_tests() {
   skin.method=runtime::SkinMethod::dual_quaternion;pose[0].rotation_degrees.z=170;pose[1].rotation_degrees.z=-170;
   require(near(runtime::deform(skin,pose,{{1,0,0}})[0],{-1,0,0}),"DQS 未对齐四元数半球");
   auto invalid=pose;invalid[0].scale.x=0;rejects([&] {runtime::validate_pose(skin,invalid);},"零缩放不应应用");
+  skin=fixture();pose=skin.initial;pose[0].scale.x=-2;
+  require(near(runtime::deform(skin,pose,base)[0],{-4,0,0}),"负缩放镜像没有应用");
   invalid=pose;invalid[0].rotation_degrees.x=std::numeric_limits<float>::quiet_NaN();rejects([&] {runtime::validate_pose(skin,invalid);},"NaN 姿势未拒绝");
   auto bad=skin;bad.joints[0].parent=1;rejects([&] {runtime::validate_pose(bad,pose);},"循环或乱序骨架未拒绝");
   bad=skin;bad.weights[0][0].joint=999;rejects([&] {runtime::deform(bad,pose,{{1,0,0}});},"越界权重未拒绝");

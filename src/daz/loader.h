@@ -1,5 +1,6 @@
 #pragma once
 #include "render_ir/scene.h"
+#include "runtime/rigid_follow.h"
 #include <nlohmann/json.hpp>
 
 namespace dfv::daz {
@@ -19,6 +20,9 @@ struct AssetObject {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
   float general_scale=1;
   std::vector<std::pair<std::filesystem::path,std::string>> geometry_versions;
+  ir::Transform edit_frame,translation_frame;
+  std::string rotation_order="XYZ";
+  runtime::RigidFollow rigid_follow;
 };
 struct AssetNode {std::string id,parent;};
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;};

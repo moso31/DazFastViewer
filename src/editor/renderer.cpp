@@ -12,7 +12,7 @@
 #include <fstream>
 
 namespace dfv::editor {
-Renderer::Renderer(HWND host,int width,int height,const std::filesystem::path &output):output_(output),telemetry_(output) {
+Renderer::Renderer(HWND host,int width,int height,const std::filesystem::path &output,SamplingSettings sampling):output_(output),sampling_(sampling),telemetry_(output) {
   window_=std::make_unique<Window>(width,height,false,&telemetry_,2,host);
   thread_=std::jthread([this](std::stop_token stop) {run(stop);});
 }
@@ -51,10 +51,15 @@ void Renderer::run(std::stop_token stop) {
   using namespace ccl;
   std::unique_ptr<Session> session;Display *display=nullptr;
   std::unique_ptr<CyclesAdapter> adapter;
+  nlohmann::json sampling_report;
   HoverOverlay overlay;runtime::PickingScene picking;std::vector<runtime::JointRegions> regions;std::vector<uint8_t> pickable;bool geometry_dirty=true;uint64_t clicks=0;
   auto cleanup=[&] {
     if(session) {
       session->cancel(true);
+      const auto &integrator=*session->scene->integrator;const auto &background=session->scene->dscene.data.background;
+      sampling_report={{"denoise",integrator.get_use_denoise()},{"max_samples",sampling_.samples},{"adaptive_sampling",integrator.get_use_adaptive_sampling()},
+        {"adaptive_threshold",integrator.get_adaptive_threshold()},{"min_bounces",integrator.get_min_bounce()},{"transparent_min_bounces",integrator.get_transparent_min_bounce()},
+        {"sampling_pattern",sampling_.blue_noise?"blue_noise_first":"tabulated_sobol"},{"background_mis",background.use_mis},{"background_map_resolution",{background.map_res_x,background.map_res_y}}};
       window_->present_context.activate();overlay.release();if(display) display->release_present_resources();window_->present_context.deactivate();
       adapter.reset();
       session.reset();display=nullptr;
@@ -71,13 +76,14 @@ void Renderer::run(std::stop_token stop) {
     uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
     uint64_t retried=0;
     std::vector<std::vector<ir::Vec3>> previous_positions;
-    SessionParams params;params.device=device;params.samples=64;params.pixel_size=1;params.background=false;
+    SessionParams params;params.device=device;params.samples=sampling_.samples;params.pixel_size=1;params.background=false;
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
+    Snapshot desired;
     while(!stop.stop_requested()) {
-      std::shared_ptr<const Document> document;Snapshot desired;
+      std::shared_ptr<const Document> document;
       int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
-      {std::lock_guard lock(mutex_);document=document_;if(document) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;retry=retry_resources_;}
+      {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;retry=retry_resources_;}
       const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
         cleanup();window_->width=width;window_->height=height;
@@ -119,7 +125,11 @@ void Renderer::run(std::stop_token stop) {
         auto *pass=scene.create_node<Pass>();pass->set_name(ustring("combined"));pass->set_type(PASS_COMBINED);
         scene.integrator->set_seed(1337);scene.integrator->set_max_bounce(8);scene.integrator->set_max_diffuse_bounce(4);
         scene.integrator->set_max_glossy_bounce(4);scene.integrator->set_max_transmission_bounce(8);scene.integrator->set_transparent_max_bounce(32);
-        scene.integrator->set_use_denoise(false);scene.integrator->set_use_adaptive_sampling(false);
+        scene.integrator->set_use_denoise(false);
+        scene.integrator->set_use_adaptive_sampling(sampling_.adaptive_threshold>0);scene.integrator->set_adaptive_min_samples(32);scene.integrator->set_adaptive_threshold(sampling_.adaptive_threshold);
+        scene.integrator->set_sampling_pattern(sampling_.blue_noise?SAMPLING_PATTERN_BLUE_NOISE_FIRST:SAMPLING_PATTERN_TABULATED_SOBOL);
+        scene.integrator->set_min_bounce(sampling_.min_bounces);scene.integrator->set_transparent_min_bounce(sampling_.transparent_min_bounces);
+        session->dfv_event=[&](const char *name,uint64_t epoch,double ms) {Frame frame;frame.epoch=epoch;telemetry_.event(name,frame,ms);};
         auto camera=window_->mailbox.latest();render_scene.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;
         adapter=std::make_unique<CyclesAdapter>(scene);adapter->load(render_scene);
         auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
@@ -143,8 +153,15 @@ void Renderer::run(std::stop_token stop) {
               std::erase_if(delta.meshes,[&](const auto &edit) {const auto &old=previous_positions.at(edit.index);return old.size()==edit.positions.size()&&std::equal(old.begin(),old.end(),edit.positions.begin(),[](auto a,auto b){return a.x==b.x&&a.y==b.y&&a.z==b.z;});});previous_positions.clear();
             }
             geometry_dirty|=!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
-            for(size_t l=0;l<desired.lights.size();++l) delta.lights.push_back({uint32_t(l),desired.lights[l]});
-            if(render_scene.options!=desired.options) {delta.options=desired.options;render_scene.options=desired.options;display->set_options(desired.options);}
+            for(size_t l=0;l<desired.lights.size();++l) {
+              const auto &a=desired.lights[l],&b=render_scene.lights[l];
+              if(a.transform.value!=b.transform.value||a.power.x!=b.power.x||a.power.y!=b.power.y||a.power.z!=b.power.z||a.width!=b.width||a.height!=b.height) delta.lights.push_back({uint32_t(l),a});
+            }
+            render_scene.lights=desired.lights;
+            if(render_scene.options!=desired.options) {
+              if(render_scene.options.environment!=desired.options.environment||render_scene.options.environment_file!=desired.options.environment_file||render_scene.options.backdrop!=desired.options.backdrop) delta.options=desired.options;
+              render_scene.options=desired.options;display->set_options(desired.options);
+            }
             applied_revision=desired.revision;state.edit_error.clear();}
           }
           catch(const std::exception &e) {attempted_revision=desired.revision;state.edit_error=e.what();}
@@ -207,7 +224,7 @@ void Renderer::run(std::stop_token stop) {
       display->after_swap();window_->present_context.deactivate();
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
-      state.frames=telemetry_.submitted.load();state.samples=session->dfv_render_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
+      state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
       state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();
       if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform) {
         measured_evaluation=state.evaluation.morph_evaluations;measured_skinning=state.skinning.evaluations;measured_transform=state.evaluation.transform_evaluations;state.max_displacement=0;state.bounds.clear();state.head_bounds.clear();
@@ -246,6 +263,6 @@ void Renderer::run(std::stop_token stop) {
     {"formula_evaluations",state.formulas.expressions},{"formula_channels",state.formulas.channels},{"edit_error",state.edit_error},
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
     {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"}};
-  std::ofstream(output_/"editor-render.json")<<report.dump(2);
+  report["sampling"]=sampling_report;std::ofstream(output_/"editor-render.json")<<report.dump(2);
 }
 }

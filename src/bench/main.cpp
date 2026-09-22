@@ -26,7 +26,7 @@
 
 namespace {
 struct Options {
-  bool devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
+  bool raw_sampling=false,devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
   double seconds=60,warmup=10,refine=10,preview_seconds=0;
   std::string backend="OPTIX";
@@ -39,7 +39,8 @@ Options parse(int argc,char **argv) {
   for(int i=1;i<argc;++i) {
     const std::string arg=argv[i];
     auto value=[&]() {if(++i>=argc) throw std::runtime_error("参数缺少值: "+arg);return std::string(argv[i]);};
-    if(arg=="--devices") o.devices=true;
+    if(arg=="--raw-sampling") o.raw_sampling=true;
+    else if(arg=="--devices") o.devices=true;
     else if(arg=="--help") o.help=true;
     else if(arg=="--file") o.file=std::filesystem::u8path(value());
     else if(arg=="--content-root") o.content_roots.push_back(std::filesystem::u8path(value()));
@@ -124,7 +125,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
   if(o.file.empty()) render_scene=build_fixture(o.medium,"artifacts/assets/medium-v1");
   else {
     auto loaded=daz::load(o.file,{o.content_roots,o.strict});unsupported=loaded.report["warnings"].size();
-    loaded.report["studio_lighting_added"]=true;
+    loaded.report["studio_lighting_added"]=loaded.scene.options.environment.id.empty();
     save_json(o.output/"asset-report.json",loaded.report);render_scene=std::move(loaded.scene);
     std::cout<<"DAZ static preview: "<<render_scene.instances.size()<<" instances; "<<unsupported<<" compatibility diagnostics (asset-report.json)"<<std::endl;
   }
@@ -149,11 +150,19 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
   scene.integrator->set_max_bounce(8);scene.integrator->set_max_diffuse_bounce(4);
   scene.integrator->set_max_glossy_bounce(4);scene.integrator->set_max_transmission_bounce(8);
   scene.integrator->set_transparent_max_bounce(32);
-  scene.integrator->set_use_denoise(false);scene.integrator->set_use_adaptive_sampling(false);
+  const bool refined=!o.raw_sampling&&!o.benchmark;
+  scene.integrator->set_use_denoise(false);
+  scene.integrator->set_use_adaptive_sampling(refined);scene.integrator->set_adaptive_min_samples(32);scene.integrator->set_adaptive_threshold(.01f);
+  // 对齐 Blender 的自动选择；固定采样基准保留原来的序列以便对照。
+  const auto sampling_pattern=refined?(params.background?ccl::SAMPLING_PATTERN_BLUE_NOISE_PURE:ccl::SAMPLING_PATTERN_BLUE_NOISE_FIRST):ccl::SAMPLING_PATTERN_TABULATED_SOBOL;
+  scene.integrator->set_sampling_pattern(sampling_pattern);
   const auto start=now();
   CameraState initial=preview_camera(o,asset_bounds);
   render_scene.camera=render_camera(initial,o.width,o.height);
-  if(o.smoke || o.dump_shaders) save_json(o.output/"scene.json",scene_json(render_scene,o.samples));
+  if(o.smoke || o.dump_shaders) {
+    auto exported=scene_json(render_scene,o.samples);exported["render"]["adaptive_sampling"]=refined;
+    save_json(o.output/"scene.json",exported);
+  }
   CyclesAdapter adapter(scene);adapter.load(render_scene);const auto counts=adapter.stats();
   if(o.dump_shaders) {
     nlohmann::json materials=nlohmann::json::array();
@@ -203,8 +212,9 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
     <<",\n  \"input_file\": "<<std::quoted(utf8_path(o.file))<<", \"monitor_index\": "<<o.monitor
     <<", \"monitor_device\": "<<std::quoted(window?window->monitor_device:"")
     <<",\n  \"width\": "<<o.width<<", \"height\": "<<o.height<<",\n  \"pixel_size\": 1, \"resolution_divider\": false,"
-    <<"\n  \"denoise\": false, \"adaptive_sampling\": false, \"seed\": 1337,"
-    <<"\n  \"bounces\": {\"max\":8,\"diffuse\":4,\"glossy\":4,\"transmission\":8,\"transparent\":8},"
+    <<"\n  \"denoise\": false, \"adaptive_sampling\": "<<(refined?"true":"false")<<", \"seed\": 1337,"
+    <<"\n  \"sampling_pattern\": "<<std::quoted(refined?(params.background?"blue_noise_pure":"blue_noise_first"):"tabulated_sobol")<<","
+    <<"\n  \"bounces\": {\"max\":8,\"diffuse\":4,\"glossy\":4,\"transmission\":8,\"transparent\":32},"
     <<"\n  \"samples\": "<<o.samples<<", \"unique_triangles\": "<<counts.unique_triangles
     <<", \"instanced_triangles\": "<<counts.triangles<<", \"geometry_objects\": "<<counts.instances
     <<", \"materials\": "<<counts.materials<<", \"textures\": "<<counts.textures<<", \"area_lights\": "<<render_scene.lights.size()<<","
@@ -219,7 +229,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
   std::cout<<"Scene ready: "<<counts.triangles<<" triangles, "<<counts.textures<<" textures; "<<o.backend<<std::endl;
   if(o.smoke) {
     const auto path=std::filesystem::absolute(o.output/"smoke.png").string();
-    auto output=std::make_unique<Output>(o.output,!o.file.empty());auto *output_result=output.get();
+    auto output=std::make_unique<Output>(o.output,!o.file.empty(),render_scene.options);auto *output_result=output.get();
     session->set_output_driver(std::move(output));
     session->reset(params,buffers);session->start();session->wait();
     if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
@@ -234,7 +244,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
       const auto before_pixels=output_result->linear_pixels;
       std::vector<ccl::Geometry *> geometry_before;for(auto *geometry:scene.geometry) geometry_before.push_back(geometry);
       const auto after_directory=o.output/"material-delta";std::filesystem::create_directories(after_directory);
-      auto after=std::make_unique<Output>(after_directory);auto *after_result=after.get();
+      auto after=std::make_unique<Output>(after_directory,false,render_scene.options);auto *after_result=after.get();
       session->set_output_driver(std::move(after));
       ir::Delta delta;
       for(uint32_t i=0;i<render_scene.materials.size();++i) if(render_scene.materials[i].id!="preview-floor") {
@@ -405,6 +415,7 @@ int wmain(int argc,wchar_t **wide_argv) {
                <<"  --monitor 2 --width 1600 --height 900 --device OPTIX\n"
                <<"  --preview-seconds <seconds>  自动关闭预览；省略则保持交互窗口\n"
                <<"  --smoke  离线 PNG/EXR；--samples <count>；--output <directory>\n"
+               <<"  --raw-sampling  关闭自适应采样，用于等样本对照；所有模式均禁用降噪\n"
                <<"  --dump-shaders  导出材质图和绑定诊断，不创建窗口或执行渲染\n"
                <<"  --export-scene  无需 GPU 导出参考场景、相机、灯光及材质参数\n"
                <<"  --material-delta-check  与 --smoke --file 合用，检查同一 Session 的材质增量\n"

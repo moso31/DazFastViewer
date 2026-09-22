@@ -1,5 +1,6 @@
 #pragma once
 #include "session/output_driver.h"
+#include "render_ir/options.h"
 #include <OpenImageIO/imageio.h>
 #include <filesystem>
 #include <vector>
@@ -11,11 +12,12 @@ namespace dfv {
 class Output final: public ccl::OutputDriver {
   std::filesystem::path directory_;
   bool albedo_=false;
+  ir::RenderOptions options_;
 public:
   std::vector<float> linear_pixels;
   std::string error;
   bool written=false;
-  explicit Output(std::filesystem::path directory,bool albedo=false):directory_(std::move(directory)),albedo_(albedo) {}
+  explicit Output(std::filesystem::path directory,bool albedo=false,ir::RenderOptions options={}):directory_(std::move(directory)),albedo_(albedo),options_(std::move(options)) {}
   void write_render_tile(const Tile &tile) override {
     if(tile.size!=tile.full_size) {error="不支持分块输出";return;}
     const int w=tile.size.x,h=tile.size.y;
@@ -24,11 +26,11 @@ public:
     for(int y=0;y<h;++y) std::copy_n(linear.data()+size_t(y)*w*4,size_t(w)*4,flipped.data()+size_t(h-1-y)*w*4);
     linear_pixels=flipped;
     std::vector<unsigned char> srgb(flipped.size());
-    for(size_t i=0;i<flipped.size();++i) {
-      float v=flipped[i];
-      if(!std::isfinite(v)) {error="渲染结果存在 NaN/Inf";return;}
-      if(i%4!=3) v=v<=0.0031308f?12.92f*v:1.055f*std::pow(v,1/2.4f)-0.055f;
-      srgb[i]=static_cast<unsigned char>(std::clamp(v,0.0f,1.0f)*255+0.5f);
+    for(size_t i=0;i<flipped.size();i+=4) {
+      for(size_t k=0;k<4;++k) if(!std::isfinite(flipped[i+k])) {error="渲染结果存在 NaN/Inf";return;}
+      const auto rgb=ir::display_color(options_,{flipped[i],flipped[i+1],flipped[i+2]},(float((i/4)%w)+.5f)/w,(float(i/4/w)+.5f)/h,float(w)/h);
+      const float rgba[]={rgb.x,rgb.y,rgb.z,flipped[i+3]};
+      for(size_t k=0;k<4;++k) srgb[i+k]=static_cast<unsigned char>(std::clamp(rgba[k],0.0f,1.0f)*255+0.5f);
     }
     for(bool exr:{true,false}) {
       const auto path=(directory_/(exr?"smoke.exr":"smoke.png")).string();

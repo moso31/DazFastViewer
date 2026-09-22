@@ -7,6 +7,12 @@
 #include <thread>
 
 namespace dfv::editor {
+// 启动时固定的采样参数，诊断可覆盖；降噪始终关闭。
+struct SamplingSettings {
+  int samples=4096,min_bounces=0,transparent_min_bounces=0;
+  float adaptive_threshold=.01f;
+  bool blue_noise=true;
+};
 struct RenderStatus {
   uint64_t generation=0,applied_revision=0,presented_revision=0,frames=0;
   uint64_t requested_epoch=0,presented_epoch=0;
@@ -37,6 +43,7 @@ struct RenderStatus {
 };
 class Renderer {
   std::filesystem::path output_;
+  SamplingSettings sampling_;
   Telemetry telemetry_;
   std::unique_ptr<Window> window_;
   std::mutex mutex_;
@@ -50,7 +57,7 @@ class Renderer {
   int selected_target_=-1,selected_joint_=-1;
   void run(std::stop_token stop);
 public:
-  Renderer(HWND host,int width,int height,const std::filesystem::path &output);
+  Renderer(HWND host,int width,int height,const std::filesystem::path &output,SamplingSettings sampling={});
   ~Renderer();
   void set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene=true);
   void resize(int width,int height);

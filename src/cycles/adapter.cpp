@@ -148,6 +148,13 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
     auto *path=graph->create_node<LightPathNode>();auto *mix=graph->create_node<MixClosureNode>();graph->connect(surface,mix->input("Closure1"));graph->connect(back->output("Background"),mix->input("Closure2"));graph->connect(path->output("Is Camera Ray"),mix->input("Fac"));surface=mix->output("Closure");
   }
   graph->connect(surface,graph->output()->input("Surface"));scene_.default_background->set_graph(std::move(graph));scene_.default_background->tag_update(&scene_);
+  // 背景着色器负责求值，背景灯负责按 HDRI 亮度分布采样；缺少后者会遗漏直接环境采样。
+  if(!background_light_) {
+    background_light_=scene_.create_light_node<BackgroundLight>();
+    auto *object=scene_.create_node<Object>();object->set_geometry(background_light_);object->tag_update(&scene_);
+    array<Node *> shaders;shaders.push_back_slow(scene_.default_background);background_light_->set_used_shaders(shaders);
+  }
+  background_light_->set_use_mis(mode!=3);background_light_->set_map_resolution(0);background_light_->tag_update(&scene_);
   for(size_t i=0;i<lights_.size();++i) {lights_[i]->set_strength(ir::scene_lights(options)?vector(light_power_[i]):zero_float3());lights_[i]->tag_update(&scene_);}
 }
 void CyclesAdapter::load(const ir::Scene &source) {

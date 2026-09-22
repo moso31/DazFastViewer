@@ -88,6 +88,7 @@ int main() {
     rejected=false;try {dfv::ir::validate(material,0);} catch(const std::exception &) {rejected=true;}require(rejected,"非有限材质参数没有拒绝");
     auto fidelity=duf;
     fidelity["scene"]["nodes"][1]["conform_target"]="#one";
+    fidelity["scene"]["nodes"][1]["translation"]={{{"id","y"},{"current_value",12}}};
     fidelity["scene"]["nodes"][1]["extra"]=Json::parse(R"([{"type":"studio_node_channels","channels":[{"channel":{"id":"Visible","current_value":false}}]}])");
 
     fidelity["modifier_library"]=Json::parse(R"([{"id":"smooth","extra":[{"type":"studio/modifier/smoothing"},{"type":"studio_modifier_channels","channels":[{"channel":{"id":"Enable Smoothing","value":true}},{"channel":{"id":"Collision Iterations","value":5}},{"channel":{"id":"Collision Item","node":"#one"}}]}]}])");
@@ -97,6 +98,17 @@ int main() {
 
     require(!fitted.scene.instances[1].visible,"保存的 Visible=false 被丢失");
     require(std::abs(fitted.scene.instances[1].transform.value[3]-2)<1e-6f,"根层级 Fit To 未继承目标变换");
+    require(std::abs(fitted.scene.instances[1].transform.value[11])<1e-6f,"Fit To 叠加了旧位移");
+    auto rigid=duf;
+    rigid["scene"]["nodes"][0]["center_point"]={{{"id","y"},{"value",20}}};
+    rigid["scene"]["nodes"][1]["parent"]="#follow";
+    rigid["scene"]["nodes"][1]["translation"]={{{"id","y"},{"current_value",-70}}};
+    rigid["scene"]["nodes"].push_back(Json::parse(R"({"id":"follow","type":"node","parent":"#one","translation":[{"id":"y","current_value":50}],"extra":[{"type":"studio/node/rigid_follow","vertex_count":4,"rigidity_group":{"rotation_mode":"full","scale_modes":["none","none","none"],"reference_vertices":{"count":3,"values":[0,1,2]}}},{"type":"studio_node_channels","channels":[{"channel":{"id":"Follow Target","node":"#one"}}]}]})"));
+    write(path,rigid);const auto attached=dfv::daz::load(path);
+    require(attached.objects[1].rigid_follow.target=="#one"&&attached.objects[1].rigid_follow.vertices.size()==3,"刚性挂接信息没有传递到子网格");
+    const auto attachment_origin=attached.scene.instances[1].transform.point({});
+    require(std::abs(attachment_origin.x-2)<1e-6f&&std::abs(attachment_origin.z)<1e-6f,"刚性挂接未使用 Follow Target 节点原点");
+    write(path,fidelity);
     auto strands=asset;strands["geometry_library"][0]["polylist"]={{"count",0},{"values",Json::array()}};
     strands["geometry_library"][0]["polyline_list"]={{"count",1},{"values",{{0,0,0,1,2,3}}}};
     write(asset_path,strands);auto hair=dfv::daz::load(path);

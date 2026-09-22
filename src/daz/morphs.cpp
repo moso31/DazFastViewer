@@ -120,6 +120,13 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     }
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
     runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;target.smoothing=object.smoothing;
+    target.edit_frame=object.edit_frame;target.translation_frame=object.translation_frame;target.base_rotation_degrees=object.rotation_degrees;target.rotation_order=object.rotation_order;target.has_edit_frame=true;
+    target.rigid_follow=object.rigid_follow;
+    for(auto parent=object.parent;!parent.empty();) {
+      if(std::find(target.ancestors.begin(),target.ancestors.end(),parent)!=target.ancestors.end()) throw std::runtime_error("附件父节点链形成循环");
+      target.ancestors.push_back(parent);auto found=std::find_if(loaded.nodes.begin(),loaded.nodes.end(),[&](const auto &node){return "#"+node.id==parent;});
+      parent=found==loaded.nodes.end()?std::string{}:found->parent;
+    }
     const auto target_key=key(object.geometry_file)+"#"+object.geometry_id;
     auto apply_override=[&](runtime::Morph &m) {
       for(const auto &owner:{std::string{},"#"+object.id,"#"+object.geometry_instance_id}) if(auto it=overrides.find({owner,m.id});it!=overrides.end()) {

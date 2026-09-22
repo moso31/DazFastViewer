@@ -43,6 +43,7 @@
 #include <psapi.h>
 #include <fstream>
 #include <cctype>
+#include <limits>
 
 namespace {
 using namespace dfv;
@@ -60,7 +61,8 @@ class Editor final:public QMainWindow {
   QCheckBox *visible_=nullptr;
   QCheckBox *manual_morph_=nullptr;
   QPushButton *refresh_parameters_=nullptr,*apply_parameters_=nullptr,*retry_parameters_=nullptr;
-  std::map<std::pair<std::string,std::string>,float> pending_parameters_;
+  struct PendingParameter {float value;bool unlimited;};
+  std::map<std::pair<std::string,std::string>,PendingParameter> pending_parameters_;
   QLabel *pose_status_=nullptr;
   QAction *open_=nullptr;
   QAction *delete_=nullptr;
@@ -86,11 +88,13 @@ class Editor final:public QMainWindow {
   QPoint probe_center_,probe_point_;
   uint64_t head_test_epoch_=0;
   size_t head_test_triangles_=0;
-  bool options_test_=false;int options_wait_=0;CameraState options_camera_;size_t options_geometry_=0;
+  bool options_test_=false;int options_wait_=0;CameraState options_camera_;size_t options_geometry_=0;uint64_t options_epoch_=0;
   bool attachment_test_=false;std::vector<std::array<int,3>> attachment_cases_;nlohmann::json attachment_report_=nlohmann::json::array();
   bool capture_test_=false;
   bool capture_head_=false;
   int capture_samples_=16;
+  double capture_seconds_=0; qint64 capture_started_=0;bool capture_timed_=false;
+  nlohmann::json capture_records_=nlohmann::json::array();
   QString visibility_label_;
   int visibility_target_=-1;
   bool visibility_initial_=true;
@@ -134,7 +138,7 @@ class Editor final:public QMainWindow {
     auto submitted=snapshot_;
     if(document_&&!pending_parameters_.empty()) for(size_t t=0;t<document_->catalog.targets.size();++t) {
       const auto &target=document_->catalog.targets[t];for(size_t m=0;m<target.morphs.size();++m)
-        if(auto p=pending_parameters_.find({target.id,target.morphs[m].id});p!=pending_parameters_.end()) submitted.values[t].morphs[m]=p->second;
+        if(auto p=pending_parameters_.find({target.id,target.morphs[m].id});p!=pending_parameters_.end()) {submitted.values[t].morphs[m]=p->second.value;if(!p->second.unlimited) submitted.values[t].unlimited_morphs.erase(target.morphs[m].id);}
       runtime::sync_aliases(target,submitted.values[t]);
     }
     return submitted;
@@ -185,7 +189,12 @@ class Editor final:public QMainWindow {
         for(size_t j=0;j<skin.joints.size();++j) {const auto &joint=skin.joints[j];auto *bone=joint.parent<0?item:new QTreeWidgetItem(bones[size_t(joint.parent)],{text(joint.label)});if(joint.parent>=0) identify(bone,int(i),int(j));bones.push_back(bone);if(!joint.scene_id.empty()) objects.emplace(joint.scene_id,bone);}
       }
     }
-    for(size_t i=0;i<items.size();++i) {const auto &parent=document_->catalog.targets[i].parent;if(parent.starts_with('#')&&objects.contains(parent.substr(1))&&objects[parent.substr(1)]!=items[i]) {hierarchy_->takeTopLevelItem(hierarchy_->indexOfTopLevelItem(items[i]));objects[parent.substr(1)]->addChild(items[i]);}}
+    for(size_t i=0;i<items.size();++i) {
+      const auto &target=document_->catalog.targets[i];auto ancestors=target.ancestors;if(ancestors.empty()) ancestors.push_back(target.parent);
+      for(const auto &parent:ancestors) if(parent.starts_with('#')&&objects.contains(parent.substr(1))&&objects[parent.substr(1)]!=items[i]) {
+        hierarchy_->takeTopLevelItem(hierarchy_->indexOfTopLevelItem(items[i]));objects[parent.substr(1)]->addChild(items[i]);break;
+      }
+    }
     for(int option=0;option<2;++option) {const auto &node=option==0?snapshot_.options.environment:snapshot_.options.tonemapper;if(!node.id.empty()) {auto *item=new QTreeWidgetItem(hierarchy_,{text(node.label)});identify(item,option==0?-2:-3);}}
     for(size_t i=0;i<snapshot_.lights.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{QStringLiteral("灯光 · ")+text(snapshot_.lights[i].id)});identify(item,-1,-1,int(i));}
   }
@@ -296,10 +305,10 @@ class Editor final:public QMainWindow {
     if(current==next) return;
     const auto &target=document_->catalog.targets[size_t(selected_)];const auto canonical=target.morphs[morph].alias_morph>=0?size_t(target.morphs[morph].alias_morph):morph;
     const auto key=std::make_pair(target.id,target.morphs[canonical].id);
-    if(manual_morph_->isChecked()) pending_parameters_.try_emplace(key,snapshot_.values[size_t(selected_)].morphs[canonical]);
+    if(manual_morph_->isChecked()) pending_parameters_.try_emplace(key,PendingParameter{snapshot_.values[size_t(selected_)].morphs[canonical],snapshot_.values[size_t(selected_)].unlimited_morphs.contains(target.morphs[canonical].id)});
     runtime::set_parameter(target,snapshot_.values[size_t(selected_)],morph,next);
     parameters_->refresh(morph);
-    if(manual_morph_->isChecked()) {if(pending_parameters_.at(key)==snapshot_.values[size_t(selected_)].morphs[canonical]) pending_parameters_.erase(key);apply_parameters_->setEnabled(!pending_parameters_.empty());return;}
+    if(manual_morph_->isChecked()) {if(pending_parameters_.at(key).value==snapshot_.values[size_t(selected_)].morphs[canonical]) {if(!pending_parameters_.at(key).unlimited) snapshot_.values[size_t(selected_)].unlimited_morphs.erase(target.morphs[canonical].id);pending_parameters_.erase(key);}apply_parameters_->setEnabled(!pending_parameters_.empty());return;}
     send();
   }
   void select(int index,int joint=-1,int light=-1) {
@@ -316,7 +325,7 @@ class Editor final:public QMainWindow {
     }
     if(document_&&(index==-2||index==-3)) {
       auto *node=index==-2?&snapshot_.options.environment:&snapshot_.options.tonemapper;selection_->setText(text(node->label));
-      parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){ir::set_option(*node,p,c,v);send();});return;
+      parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
     }
     if(index<0 || !document_) {selection_->setText(QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
     const auto &target=document_->catalog.targets[size_t(index)];selection_->setText(text(target.label));
@@ -340,7 +349,7 @@ class Editor final:public QMainWindow {
   }
   void reset_selected() {
     if(selected_<0) return;
-    auto &value=snapshot_.values[size_t(selected_)];value.transform={};
+    auto &value=snapshot_.values[size_t(selected_)];value.transform={};value.unlimited_morphs.clear();
     const auto &target=document_->catalog.targets[size_t(selected_)];
     std::erase_if(pending_parameters_,[&](const auto &p){return p.first.first==target.id;});apply_parameters_->setEnabled(!pending_parameters_.empty());
     for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].evaluable||target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
@@ -352,7 +361,7 @@ class Editor final:public QMainWindow {
     if(workflow_test_) SetCursorPos(workflow_cursor_.x,workflow_cursor_.y);
     const auto status=renderer_->status();
     nlohmann::json report={{"status",pass?"PASS":"FAIL"},{"error",error},{"stage",test_stage_},
-      {"bone_attachments",attachment_report_},
+      {"bone_attachments",attachment_report_},{"displayed_samples",status.samples},{"denoise",false},{"sampling_report","editor-render.json"},
       {"render_options_test",options_test_},{"lazy_test",lazy_test_},{"asset_revision",document_?document_->asset_revision:0},
       {"mesh_creations",status.adapter.meshes},{"curves",status.adapter.curves},{"geometry_updates",status.adapter.geometry_updates},{"instance_updates",status.adapter.instance_updates},
       {"morph_evaluations",status.evaluation.morph_evaluations},{"max_displacement_m",status.max_displacement},
@@ -515,15 +524,16 @@ class Editor final:public QMainWindow {
       if(!document_||state.generation!=document_->generation||state.applied_revision!=snapshot_.revision||state.presented_revision!=snapshot_.revision||state.samples<8) return;
       if(test_stage_==0) {choose(-3);options_geometry_=state.adapter.geometry_updates;std::ofstream(output_/"render-options.json")<<ir::options_json(snapshot_.options).dump(2);++test_stage_;return;}
       if(test_stage_==1) {
+        options_epoch_=state.requested_epoch;
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"tonemapper-panel.png").wstring()));
         auto &node=snapshot_.options.tonemapper;for(size_t i=0;i<node.parameters.size();++i) if(node.parameters[i].id=="Exposure Value") {ir::set_option(node,i,0,node.parameters[i].value[0]+1);break;}send();++test_stage_;return;
       }
-      if(test_stage_==2) {if(state.adapter.geometry_updates!=options_geometry_) {finish_test(false,"色调编辑触发了几何更新");return;}choose(-2);++test_stage_;return;}
+      if(test_stage_==2) {if(state.adapter.geometry_updates!=options_geometry_||state.requested_epoch!=options_epoch_) {finish_test(false,"色调编辑触发了几何更新或重新采样");return;}choose(-2);++test_stage_;return;}
       if(test_stage_==3) {
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"environment-panel.png").wstring()));
         auto &node=snapshot_.options.environment;for(size_t i=0;i<node.parameters.size();++i) if(node.parameters[i].id=="Dome Rotation") {ir::set_option(node,i,0,node.parameters[i].value[0]+15);break;}send();++test_stage_;return;
       }
-      if(test_stage_==4) {if(state.adapter.geometry_updates!=options_geometry_) {finish_test(false,"环境编辑触发了几何更新");return;}choose(0);++test_stage_;return;}
+      if(test_stage_==4) {if(state.adapter.geometry_updates!=options_geometry_||state.requested_epoch<=options_epoch_) {finish_test(false,"环境编辑没有正确增量重新采样");return;}choose(0);++test_stage_;return;}
       if(test_stage_==5) {if(state.selected_target!=0||state.selection_bounds.empty) return;options_camera_=state.camera;renderer_->keyboard('F',true);renderer_->keyboard('F',false);++test_stage_;return;}
       if(test_stage_==6) {if(state.camera.epoch<=options_camera_.epoch) return;options_camera_=state.camera;renderer_->keyboard('W',true);options_wait_=0;++test_stage_;return;}
       if(test_stage_==8) {
@@ -594,12 +604,27 @@ class Editor final:public QMainWindow {
     }
     if(capture_test_) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"场景显示验证超时");return;}
-      if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=capture_samples_) {
+      if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=(capture_seconds_>0?1:capture_samples_)) {
         if(test_stage_==0&&!capture_targets_.empty()) {
           ir::Bounds bounds;size_t matched=0;
           for(size_t t=0;t<document_->catalog.targets.size();++t) if(capture_targets_.contains(text(document_->catalog.targets[t].label))) {const auto &b=capture_head_?state.head_bounds.at(t):state.bounds.at(t);if(b.empty) continue;bounds.add(b.minimum);bounds.add(b.maximum);++matched;}
           if(matched!=size_t(capture_targets_.size())) {finish_test(false,"截图目标未唯一匹配");return;}
-          choose(-1);renderer_->frame(bounds);if(capture_front_) {float yaw=3.14159265f;for(const auto &t:document_->catalog.targets) if(capture_targets_.contains(text(t.label))) {const auto &m=document_->loaded.scene.instances[t.instance].transform.value;yaw=std::atan2(-m[1],m[5]);break;}renderer_->orbit((.3f-yaw)/.005f,24.f);}test_stage_=1;return;
+          choose(-1);renderer_->frame(bounds);if(capture_front_) {float yaw=3.14159265f;for(const auto &t:document_->catalog.targets) if(capture_targets_.contains(text(t.label))) {const auto &m=document_->loaded.scene.instances[t.instance].transform.value;yaw=std::atan2(-m[1],m[5]);break;}renderer_->orbit((.3f-yaw)/.005f,24.f);}capture_started_=QDateTime::currentMSecsSinceEpoch();test_stage_=1;return;
+        }
+        if(capture_seconds_>0) {
+          if(!capture_started_) capture_started_=QDateTime::currentMSecsSinceEpoch();
+          const double elapsed=(QDateTime::currentMSecsSinceEpoch()-capture_started_)*.001;
+          auto save=[&](const char *name) {
+            const auto pixmap=screen()->grabWindow(winId());
+            pixmap.save(QString::fromStdWString((output_/(std::string(name)+"-window.png")).wstring()));
+            const auto ratio=pixmap.devicePixelRatio();const auto origin=host_->mapTo(this,QPoint{});
+            pixmap.copy(QRect(qRound(origin.x()*ratio),qRound(origin.y()*ratio),state.width,state.height)).save(QString::fromStdWString((output_/(std::string(name)+".png")).wstring()));
+            capture_records_.push_back({{"frame",name},{"seconds_after_camera_set",elapsed},{"displayed_samples",state.samples},{"epoch",state.presented_epoch},{"width",state.width},{"height",state.height}});
+            std::ofstream(output_/"convergence.json")<<capture_records_.dump(2);
+          };
+          if(!capture_timed_) {if(elapsed<capture_seconds_) return;save("timed");capture_timed_=true;}
+          if(state.samples<capture_samples_&&elapsed<capture_seconds_*4) return;
+          save("reference");
         }
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"scene.png").wstring()));finish_test(true);
       }return;
@@ -761,11 +786,11 @@ class Editor final:public QMainWindow {
 public:
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
-  void capture_test(QStringList targets={},bool front=false,bool head=false,int samples=16) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;capture_head_=head;capture_samples_=std::clamp(samples,1,64);}
+  void capture_test(QStringList targets={},bool front=false,bool head=false,int samples=16,double seconds=0) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;capture_head_=head;capture_samples_=std::clamp(samples,1,1<<20);capture_seconds_=seconds;}
   void visibility_test(QString label) {visibility_label_=std::move(label);self_test_=true;}
   void lifecycle_test(const std::filesystem::path &first,const std::filesystem::path &second,int rounds) {if(rounds<1||rounds>100) throw std::runtime_error("生命周期验证轮数应为 1 到 100");lifecycle_rounds_=rounds;lifecycle_test_=true;self_test_=true;lifecycle_first_=first;lifecycle_second_=second;}
   void test_parameters(const QStringList &names) {if(names.empty()) return;formula_names_.clear();for(const auto &name:names) formula_names_.push_back(name.toUtf8().toStdString());}
-  Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
+  Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false,SamplingSettings sampling={}):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
     setWindowTitle(QStringLiteral("DazFastViewer · 场景与形态编辑器"));setAttribute(Qt::WA_ShowWithoutActivating);
     setDockOptions(AnimatedDocks|AllowNestedDocks|AllowTabbedDocks);
     auto *central=new QWidget;auto *layout=new QVBoxLayout(central);layout->setContentsMargins(4,4,4,4);
@@ -786,7 +811,7 @@ public:
     auto *form=new QFormLayout;
     const QString names[]={QStringLiteral("位移 X（厘米）"),QStringLiteral("位移 Y（厘米）"),QStringLiteral("位移 Z（厘米）"),QStringLiteral("旋转 X（度）"),QStringLiteral("旋转 Y（度）"),QStringLiteral("旋转 Z（度）"),QStringLiteral("缩放 X（%）"),QStringLiteral("缩放 Y（%）"),QStringLiteral("缩放 Z（%）")};
     for(int i=0;i<9;++i) {
-      auto *spin=new QDoubleSpinBox;transform_[i]=spin;spin->setDecimals(2);spin->setRange(i>=6?.01:-10000,i>=6?10000:10000);spin->setValue(i>=6?100:0);
+      auto *spin=new QDoubleSpinBox;transform_[i]=spin;spin->setDecimals(6);spin->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());spin->setValue(i>=6?100:0);
       spin->setEnabled(false);spin->setKeyboardTracking(false);form->addRow(names[i],spin);
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this](double) {
         if(selected_light_>=0) {auto &light=snapshot_.lights[size_t(selected_light_)];runtime::TransformValues v;v.translation_cm={float(transform_[0]->value()),float(transform_[1]->value()),float(transform_[2]->value())};v.rotation_degrees={float(transform_[3]->value()),float(transform_[4]->value()),float(transform_[5]->value())};light.transform=runtime::make_transform(v)*light_base_;send();return;}
@@ -797,7 +822,7 @@ public:
       });
     }
     auto *legacy_transforms=new QWidget(panel);legacy_transforms->setLayout(form);legacy_transforms->hide();
-    light_power_=new QDoubleSpinBox;light_power_->setRange(0,10000000);light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
+    light_power_=new QDoubleSpinBox;light_power_->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
     connect(light_power_,&QDoubleSpinBox::valueChanged,this,[this](double value) {if(selected_light_<0) return;auto &p=snapshot_.lights[size_t(selected_light_)].power;const auto previous=std::max({p.x,p.y,p.z});const float ratio=previous>0?float(value)/previous:0;p=previous>0?ir::Vec3{p.x*ratio,p.y*ratio,p.z*ratio}:ir::Vec3{float(value),float(value),float(value)};send();});
     pose_status_=new QLabel(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
     auto *pose_details=new QPushButton(QStringLiteral("预设应用详情"));properties->addWidget(pose_details);
@@ -859,7 +884,7 @@ public:
     if(!available.contains(frameGeometry())) {resize(std::min(width(),available.width()),std::min(height(),available.height()));move(available.center()-QPoint(width()/2,height()/2));}
     for(auto *d:findChildren<QDockWidget *>()) if(d->isFloating()&&!available.intersects(d->frameGeometry())) d->move(available.topLeft()+QPoint(30,30));
     show();
-    renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_);
+    renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_,sampling);
     auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this] {tick();});timer->start(50);
   }
   void closeEvent(QCloseEvent *event) override {if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));}QMainWindow::closeEvent(event);}
@@ -905,7 +930,7 @@ public:
           for(const auto &target:document_->catalog.targets) {
             runtime::Properties values;values.visible=document_->loaded.scene.instances.at(target.instance).visible;for(const auto &m:target.morphs) values.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
             if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
-              values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;std::map<std::string,float> weights;
+              values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if((target.morphs[m].evaluable||target.morphs[m].unsupported.empty())&&weights.contains(target.morphs[m].id)) values.morphs[m]=weights[target.morphs[m].id];
             }
@@ -940,6 +965,8 @@ int main(int argc,char **argv) {
   parser.addOption({"capture-front",QStringLiteral("截图时从框选对象正面观察")});
   parser.addOption({"capture-head",QStringLiteral("截图时框选角色头部")});
   parser.addOption({"capture-samples",QStringLiteral("截图前累积样本数"),"count","16"});
+  parser.addOption({"capture-seconds",QStringLiteral("定时记录原始画面，再继续至目标样本或四倍时长"),"seconds","0"});
+  parser.addOption({"sampling-settings",QStringLiteral("采样诊断配置 JSON；降噪始终禁用"),"file"});
   parser.addOption({"visibility-test",QStringLiteral("验证指定对象的属性和层级可见性开关"),"label"});
   parser.addOption({"lifecycle-test",QStringLiteral("验证反复增删与替换场景，指定第二个测试 DUF"),"file"});
   parser.addOption({"lifecycle-rounds",QStringLiteral("生命周期验证轮数"),"count","8"});
@@ -952,19 +979,27 @@ int main(int argc,char **argv) {
   const auto output=parser.isSet("output")?file_path(parser.value("output")):std::filesystem::path("artifacts")/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
   std::filesystem::create_directories(output);
   try {
+    SamplingSettings sampling;
+    if(parser.isSet("sampling-settings")) {nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
+      sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
+      sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
+      if(sampling.samples<1||sampling.samples>(1<<20)||!std::isfinite(sampling.adaptive_threshold)||sampling.adaptive_threshold<0||sampling.adaptive_threshold>1||sampling.min_bounces<0||sampling.min_bounces>8||sampling.transparent_min_bounces<0||sampling.transparent_min_bounces>32) throw std::runtime_error("采样诊断参数无效");
+    }
+    bool capture_seconds_valid=false;const double capture_seconds=parser.value("capture-seconds").toDouble(&capture_seconds_valid);
+    if(!capture_seconds_valid||!std::isfinite(capture_seconds)||capture_seconds<0||capture_seconds>180) throw std::runtime_error("截图诊断时长无效");
     auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
     Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("lazy-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
-      parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"));
+      parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("options-test")) editor.options_test();
     if(parser.isSet("attachment-test")) editor.attachment_test();
     if(parser.isSet("lazy-test")) editor.lazy_test();
     if(parser.isSet("workflow-test")) editor.workflow_test();
     if(parser.isSet("head-selection-test")) editor.head_selection_test();
-    if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"),parser.isSet("capture-head"),parser.value("capture-samples").toInt());
+    if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"),parser.isSet("capture-head"),parser.value("capture-samples").toInt(),capture_seconds);
     if(parser.isSet("visibility-test")) editor.visibility_test(parser.value("visibility-test"));
     if(parser.isSet("lifecycle-test")) editor.lifecycle_test(file_path(parser.value("file")),file_path(parser.value("lifecycle-test")),parser.value("lifecycle-rounds").toInt());
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));

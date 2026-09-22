@@ -2,6 +2,10 @@
 
 更新：2026-09-22。
 
+最新原始采样复测：按用户要求关闭视口 / 离线降噪，采用蓝噪声采样；视口上限 4096，自适应阈值 0.01。15 秒原始画面有改善，用户要求的 Iray 无降噪收敛标准尚未验收，不能引用历史 3.43 秒降噪结果证明达标。13 项工程检查及离线输出通过，已部署，见[本轮记录](../Docs/raw_convergence_execution_cn.md)。
+
+此前 test.duf 复测：HDRI 直接光采样、离线 PNG 色调、Fit To 位移、刚性表面附件、自身轴心旋转及无固定范围的数值编辑已修复。13 项工程检查和真实 DUF 跟随 / 恢复验证通过；完整 Iray Golden 和严格 FPS Gate 仍未验收。见[执行记录](../Docs/test_scene_repair_execution_cn.md)。008 未开始。
+
 最新眼镜复查：补齐 Head 树层级、镜腿轴心及场景 Morph 限幅覆盖，修复 A 的 `Youth Morph=-0.2` 被错误截成 0 导致的头部 / 眼镜偏移。A / B 眼镜对用户新 DBZ 的 RMS 均约 0.0005 毫米，12 项回归和副屏层级 / 近景复核通过，已部署到 `out`，并按用户要求归档至本地 Git；详见[专项记录](../Docs/test3_glasses_followup_cn.md)。
 
 最新：test3 黑皮肤、眼镜挂接、拖鞋贴合修复及环境 / 色调选项、分类参数面板、F / WASDQE 已部署。12 项 CTest、原始场景选项导航和异步 Morph 界面检查通过。局部穿插与完整 Iray 等价尚未验收，见[本轮报告](../Docs/test3_scene_repair_execution_cn.md)。008 未开始。

@@ -1,6 +1,7 @@
 #pragma once
 #include "render_ir/scene.h"
 #include "runtime/morph_data.h"
+#include "runtime/rigid_follow.h"
 #include <set>
 
 namespace dfv::runtime {
@@ -31,14 +32,20 @@ struct Target {
   std::vector<Morph> morphs;
   std::string conform_target;
   ir::MeshSmoothing smoothing;
+  std::vector<std::string> ancestors;
+  ir::Transform edit_frame,translation_frame;
+  ir::Vec3 base_rotation_degrees{};
+  std::string rotation_order="XYZ";
+  bool has_edit_frame=false;
+  RigidFollow rigid_follow;
 };
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
   float general_scale=1;
 };
-struct Properties {std::vector<float> morphs;TransformValues transform;bool visible=true;};
+struct Properties {std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;};
 void validate_transform(const TransformValues &value);
-ir::Transform make_transform(const TransformValues &value);
+ir::Transform make_transform(const TransformValues &value,const std::string &rotation_order="XYZ");
 struct EvaluationStats {uint64_t morph_evaluations=0,offsets_visited=0,transform_evaluations=0;};
 // 单工作线程拥有；Qt 只发送属性快照，不访问求值中的网格。
 class MorphRuntime {
@@ -56,7 +63,7 @@ class MorphRuntime {
   void dirty_transform(size_t target);
 public:
   MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets);
-  bool set_morph(size_t target,size_t morph,float value);
+  bool set_morph(size_t target,size_t morph,float value,bool enforce_limits=true);
   bool set_transform(size_t target,const TransformValues &value);
   void set_visible(size_t target,bool visible);
   void bind_parent(size_t target,size_t parent);

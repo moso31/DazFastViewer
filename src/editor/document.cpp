@@ -74,8 +74,8 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   while(changed) {
     const auto count=removed.size();
     for(const auto &node:document.loaded.nodes) if(refers_to(node.parent,removed)) removed.insert(node.id);
-    for(const auto &object:document.loaded.objects) if(refers_to(object.parent,removed)||refers_to(object.conform_target,removed)) removed.insert(object.id);
-    for(const auto &t:document.catalog.targets) if(refers_to(t.parent,removed)||refers_to(t.conform_target,removed)) removed.insert(node_id(t));
+    for(const auto &object:document.loaded.objects) if(refers_to(object.parent,removed)||refers_to(object.conform_target,removed)||refers_to(object.rigid_follow.target,removed)) removed.insert(object.id);
+    for(const auto &t:document.catalog.targets) if(refers_to(t.parent,removed)||refers_to(t.conform_target,removed)||refers_to(t.rigid_follow.target,removed)) removed.insert(node_id(t));
     changed=removed.size()!=count;
   }
   std::vector<bool> instances(scene.instances.size(),true);
@@ -146,8 +146,8 @@ void append_document(Document &destination,Document source) {
   for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
   for(auto l:b.lights) {l.id=prefix+l.id;a.lights.push_back(std::move(l));}
   for(auto n:source.loaded.nodes) {n.id=prefix+n.id;if(n.parent.starts_with('#')) n.parent="#"+prefix+n.parent.substr(1);destination.loaded.nodes.push_back(std::move(n));}
-  for(auto o:source.loaded.objects) {o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);if(o.smoothing.collision_target.starts_with('#')) o.smoothing.collision_target="#"+prefix+o.smoothing.collision_target.substr(1);destination.loaded.objects.push_back(std::move(o));}
-  for(auto &t:source.catalog.targets) {t.instance+=instances;t.id=prefix+t.id;if(t.parent.starts_with('#')) t.parent="#"+prefix+t.parent.substr(1);if(t.conform_target.starts_with('#')) t.conform_target="#"+prefix+t.conform_target.substr(1);if(t.smoothing.collision_target.starts_with('#')) t.smoothing.collision_target="#"+prefix+t.smoothing.collision_target.substr(1);destination.catalog.targets.push_back(std::move(t));}
+  for(auto o:source.loaded.objects) {if(o.rigid_follow.target.starts_with('#')) o.rigid_follow.target="#"+prefix+o.rigid_follow.target.substr(1);o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);if(o.smoothing.collision_target.starts_with('#')) o.smoothing.collision_target="#"+prefix+o.smoothing.collision_target.substr(1);destination.loaded.objects.push_back(std::move(o));}
+  for(auto &t:source.catalog.targets) {if(t.rigid_follow.target.starts_with('#')) t.rigid_follow.target="#"+prefix+t.rigid_follow.target.substr(1);t.instance+=instances;t.id=prefix+t.id;if(t.parent.starts_with('#')) t.parent="#"+prefix+t.parent.substr(1);for(auto &ancestor:t.ancestors) if(ancestor.starts_with('#')) ancestor="#"+prefix+ancestor.substr(1);if(t.conform_target.starts_with('#')) t.conform_target="#"+prefix+t.conform_target.substr(1);if(t.smoothing.collision_target.starts_with('#')) t.smoothing.collision_target="#"+prefix+t.smoothing.collision_target.substr(1);destination.catalog.targets.push_back(std::move(t));}
   for(auto &s:source.skeletons.skins) {s.instance+=instances;s.id=prefix+s.id;for(auto &j:s.joints) if(!j.scene_id.empty()) j.scene_id=prefix+j.scene_id;destination.skeletons.skins.push_back(std::move(s));}
   for(auto &g:source.formulas.graphs) {if(g.skin>=0) g.skin+=skins;destination.formulas.graphs.push_back(std::move(g));}
   release_load_data(destination);

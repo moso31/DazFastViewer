@@ -23,6 +23,7 @@ class Telemetry {
   std::ofstream swaps_;
 public:
   std::atomic<uint64_t> produced{0}, submitted{0}, displayed_epoch{0}, readback_bytes{0}, skipped{0};
+  std::atomic<int> displayed_samples{0};
   std::atomic<double> first_frame{-1}, measurement_start{-1}, measurement_end{-1};
   std::atomic<uint64_t> measured_frames{0};
   explicit Telemetry(const std::filesystem::path &directory) {
@@ -47,6 +48,7 @@ public:
     submitted.fetch_add(1);
     if(first_frame.load()<0) first_frame.store(now());
     const auto previous=displayed_epoch.exchange(frame.epoch);
+    displayed_samples=frame.samples;
     const double begin=measurement_start.load(),end=measurement_end.load(),time=now();
     if(previous!=frame.epoch && begin>=0 && time>=begin && (end<0 || time<end)) measured_frames++;
     event("present_submitted",frame);

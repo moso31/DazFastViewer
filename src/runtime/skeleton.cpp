@@ -49,7 +49,7 @@ void validate_pose(const Skin &skin,const std::vector<JointPose> &pose) {
     if(j.parent>=int(i)||j.parent<-1) throw std::runtime_error("骨架必须按父节点在先排序，且不能成环");
     if(!finite(j.center_cm)||!finite(j.orientation_degrees)||!finite(p.translation_cm)||!finite(p.rotation_degrees)||!finite(p.scale)||!std::isfinite(p.general_scale)||!finite(p.center_offset_cm)||!finite(p.end_offset_cm)||!finite(p.orientation_offset_degrees)) throw std::runtime_error("骨骼参数包含非有限数值");
     auto order=j.rotation_order;std::sort(order.begin(),order.end());if(order!="XYZ") throw std::runtime_error("未知骨骼旋转顺序："+j.rotation_order);
-    if(p.scale.x<=0||p.scale.y<=0||p.scale.z<=0||p.general_scale<=0) throw std::runtime_error("骨骼缩放必须大于零");
+    if(p.scale.x==0||p.scale.y==0||p.scale.z==0||p.general_scale==0) throw std::runtime_error("骨骼缩放不能为零");
   }
 }
 static std::vector<Palette> build_palettes(const Skin &skin,const std::vector<JointPose> &pose) {

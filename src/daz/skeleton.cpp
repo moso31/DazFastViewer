@@ -108,6 +108,12 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     // 各轴与缩放图一致且每个顶点只属于一个关节时，Local 与刚性 Linear 变换等价。
     if(binding_mode=="Local") for(const auto &weights:skin.weights) if(!weights.empty()&&(weights.size()!=1||weights.front().weight!=1))
       throw std::runtime_error("非刚性局部权重尚需 TriAx 蒙皮："+object.id);
+    // 无权重的控制骨也可能挂着刚性饰品，不能只保留 skin 权重表里出现的骨骼。
+    for(const auto &[id,n]:nodes) if(!indices.contains(id)) {
+      auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
+      while(!parent.empty()&&parent!=root&&nodes.contains(parent)&&seen.insert(parent).second) parent=fragment(nodes.at(parent).value("parent",""));
+      if(parent==root) add(id);
+    }
     // 保存场景中的骨骼实例覆盖值只可作用于所属 Figure，不能按名称跨角色覆盖。
     for(const auto &[id,n]:instances) {
       if(id==object.id) {joint_channels(skin.joints[indices.at(root)],n);continue;}auto parent=fragment(n.value("parent",""));std::set<std::string> seen;

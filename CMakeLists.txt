@@ -35,7 +35,7 @@ set(WITH_STRICT_BUILD_OPTIONS ON CACHE BOOL "缺少能力时明确失败" FORCE)
 enable_testing()
 add_library(dfv_scene STATIC src/render_ir/scene.cpp src/daz/loader.cpp src/daz/morphs.cpp src/runtime/morph.cpp
   src/daz/skeleton.cpp src/daz/pose.cpp src/runtime/skeleton.cpp src/daz/formulas.cpp src/runtime/formula.cpp src/runtime/deformation.cpp
-  src/editor/document.cpp src/runtime/picking.cpp src/runtime/conform.cpp src/daz/documents.cpp src/runtime/morph_data.cpp)
+  src/editor/document.cpp src/runtime/picking.cpp src/runtime/conform.cpp src/runtime/rigid_follow.cpp src/daz/documents.cpp src/runtime/morph_data.cpp)
 target_include_directories(dfv_scene PUBLIC src third_party)
 target_compile_options(dfv_scene PRIVATE /utf-8)
 target_link_libraries(dfv_scene PRIVATE bf::dependencies::zlib)

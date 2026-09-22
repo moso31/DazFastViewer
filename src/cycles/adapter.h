@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace ccl {class Scene;class Shader;class Mesh;class Hair;class Object;class Light;}
+namespace ccl {class Scene;class Shader;class Mesh;class Hair;class Object;class Light;class BackgroundLight;}
 namespace dfv {
 struct AdapterStats {size_t meshes=0,instances=0,materials=0,textures=0,unique_triangles=0,triangles=0,camera_updates=0,material_updates=0,geometry_updates=0,instance_updates=0,curves=0;};
 class CyclesAdapter {
@@ -17,6 +17,7 @@ class CyclesAdapter {
   std::vector<std::vector<ccl::Object *>> objects_;
   std::vector<ccl::Object *> light_objects_;
   std::vector<ccl::Light *> lights_;
+  ccl::BackgroundLight *background_light_=nullptr;
   AdapterStats stats_;
   ir::RenderOptions options_;
   ir::Vec3 environment_;

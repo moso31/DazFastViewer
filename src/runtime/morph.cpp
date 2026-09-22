@@ -14,7 +14,10 @@ static bool same(ir::Vec3 a,ir::Vec3 b) {return a.x==b.x && a.y==b.y && a.z==b.z
 MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):scene_(scene),targets_(targets) {
   diagnostics::Scope scope("morph_construct");
   parents_.resize(targets.size(),-1);follow_offsets_.resize(targets.size());attachments_.resize(targets.size());
-  for(size_t i=0;i<targets.size();++i) if(targets[i].parent.starts_with('#')) for(size_t j=0;j<targets.size();++j) if(i!=j&&targets[j].id.substr(0,targets[j].id.rfind('/'))==targets[i].parent.substr(1)) parents_[i]=int(j);
+  for(size_t i=0;i<targets.size();++i) {
+    auto ancestors=targets[i].ancestors;if(ancestors.empty()) ancestors.push_back(targets[i].parent);
+    for(const auto &parent:ancestors) {for(size_t j=0;j<targets.size();++j) if(i!=j&&parent=="#"+targets[j].id.substr(0,targets[j].id.rfind('/'))) {parents_[i]=int(j);break;}if(parents_[i]>=0) break;}
+  }
   for(size_t i=0;i<parents_.size();++i) {std::set<int> seen;for(int p=int(i);p>=0;p=parents_[size_t(p)]) if(!seen.insert(p).second) throw std::runtime_error("编辑对象的父子关系存在循环");}
   std::set<uint32_t> used_meshes;
   for(const auto &target:targets) {
@@ -38,11 +41,11 @@ MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):
     for(size_t m=0;m<target.morphs.size();++m) if(target.morphs[m].unsupported.empty()||target.morphs[m].evaluable) set_morph(index,m,target.morphs[m].initial);
   }
 }
-bool MorphRuntime::set_morph(size_t target,size_t index,float value) {
+bool MorphRuntime::set_morph(size_t target,size_t index,float value,bool enforce_limits) {
   const auto &m=targets_.at(target).morphs.at(index);auto &current=values_.at(target).morphs.at(index);
   if(!m.unsupported.empty()&&!m.evaluable) throw std::runtime_error(m.unsupported);
   if(!std::isfinite(value)) throw std::runtime_error("Morph 权重必须为有限数值");
-  if(m.clamped) value=std::clamp(value,m.minimum,m.maximum);
+  if(enforce_limits&&m.clamped) value=std::clamp(value,m.minimum,m.maximum);
   if(current==value) return false;
   current=value;
   if(value==0) active_[target].erase(index);else active_[target].insert(index);
@@ -50,14 +53,15 @@ bool MorphRuntime::set_morph(size_t target,size_t index,float value) {
 }
 void validate_transform(const TransformValues &v) {
   finite(v.translation_cm);finite(v.rotation_degrees);finite(v.scale);
-  if(!std::isfinite(v.general_scale)||v.general_scale<=0) throw std::runtime_error("总体缩放必须为正数");
-  if(v.scale.x<=0 || v.scale.y<=0 || v.scale.z<=0) throw std::runtime_error("缩放必须大于零");
+  if(!std::isfinite(v.general_scale)||v.general_scale==0) throw std::runtime_error("总体缩放必须为有限非零值");
+  if(v.scale.x==0 || v.scale.y==0 || v.scale.z==0) throw std::runtime_error("缩放不能为零");
 }
-ir::Transform make_transform(const TransformValues &v) {
+ir::Transform make_transform(const TransformValues &v,const std::string &order) {
   validate_transform(v);
     ir::Transform scale;scale.value[0]=v.scale.x*v.general_scale;scale.value[5]=v.scale.y*v.general_scale;scale.value[10]=v.scale.z*v.general_scale;
     ir::Transform rotation;
-    for(int axis=0;axis<3;++axis) {
+    for(char c:order) {
+      const int axis=c-'X';if(axis<0||axis>2) throw std::runtime_error("无效旋转顺序");
       const float angle=(axis==0?v.rotation_degrees.x:axis==1?v.rotation_degrees.y:v.rotation_degrees.z)*std::numbers::pi_v<float>/180;
       ir::Transform r;const int j=(axis+1)%3,k=(axis+2)%3;
       r.value[j*4+j]=r.value[k*4+k]=std::cos(angle);r.value[j*4+k]=-std::sin(angle);r.value[k*4+j]=std::sin(angle);rotation=r*rotation;
@@ -120,7 +124,15 @@ ir::Delta MorphRuntime::evaluate() {
   }
   std::function<ir::Transform(size_t)> edit_transform=[&](size_t target) {
     const auto &v=values_[target].transform;
-    auto result=attachments_[target]*make_transform(v);
+    auto result=attachments_[target];
+    if(!same(v.translation_cm,{})||!same(v.rotation_degrees,{})||!same(v.scale,{1,1,1})||v.general_scale!=1) {
+    const auto &t=targets_[target];auto rotation=v;rotation.translation_cm={};
+    rotation.rotation_degrees={v.rotation_degrees.x+t.base_rotation_degrees.x,v.rotation_degrees.y+t.base_rotation_degrees.y,v.rotation_degrees.z+t.base_rotation_degrees.z};
+    TransformValues base;base.rotation_degrees=t.base_rotation_degrees;
+    const auto frame=t.has_edit_frame?t.edit_frame:ir::Transform::translate(transforms_[target].point({}));
+    TransformValues translation;translation.translation_cm=v.translation_cm;
+    result=result*t.translation_frame*make_transform(translation)*ir::inverse(t.translation_frame)*frame*make_transform(rotation,t.rotation_order)*ir::inverse(make_transform(base,t.rotation_order))*ir::inverse(frame);
+    }
     if(parents_[target]>=0) result=edit_transform(size_t(parents_[target]))*result;
     return result;
   };
