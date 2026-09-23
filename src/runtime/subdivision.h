@@ -1,0 +1,17 @@
+#pragma once
+#include "render_ir/scene.h"
+#include <memory>
+#include <span>
+
+namespace dfv::runtime {
+// 缓存细分模板和 UV；Morph / Skinning 只重新插值位置，相机更新不接触细分。
+class Subdivision {
+  struct Data;
+  std::shared_ptr<const Data> data_;
+public:
+  Subdivision(const ir::Mesh &mesh,bool final_render=false);
+  std::vector<ir::Vec3> evaluate(std::span<const ir::Vec3> cage) const;
+  const std::vector<ir::Triangle> &triangles() const;
+  bool active() const {return bool(data_);}
+};
+}

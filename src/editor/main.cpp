@@ -81,11 +81,134 @@ class Editor final:public QMainWindow {
   bool pose_test_=false,frame_pending_=false;
   uint64_t focus_requests_=0;
   bool focus_pending_=false;
+  bool edit_regression_test_=false;
+  uint64_t regression_epoch_=0,regression_clicks_=0,regression_triangles_=0,regression_updates_=0;
+  nlohmann::json regression_checks_=nlohmann::json::array();
+  bool joint_selection_test_=false;
+  std::array<int,2> finger_joints_{-1,-1};
+  std::array<ir::Bounds,2> finger_bounds_;
+  void joint_selection_tick(const RenderStatus &state) {
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000) {finish_test(false,"同角色骨骼多选验证超时");return;}
+    if(loading_||!document_||state.generation!=document_->generation||state.applied_revision!=snapshot_.revision||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.preview||state.samples<4||state.selections!=tree_selection(hierarchy_)) return;
+    auto check=[&](bool ok,const char *message) {if(!ok) finish_test(false,message);return ok;};
+    auto same_point=[](auto a,auto b) {return std::abs(a.x-b.x)+std::abs(a.y-b.y)+std::abs(a.z-b.z)<1e-5;};
+    auto focused=[&](const ir::Bounds &bounds) {return !state.selection_bounds.empty&&same_point(state.selection_bounds.minimum,bounds.minimum)&&same_point(state.selection_bounds.maximum,bounds.maximum)&&same_point(state.camera.target,bounds.center());};
+    auto record=[&](const char *name) {regression_checks_.push_back({{"input",name},{"selected",state.selections},{"focus",{state.camera.target.x,state.camera.target.y,state.camera.target.z}}});};
+    const Selection left{0,finger_joints_[0],-1},right{0,finger_joints_[1],-1},other{1,-1,-1};
+    if(test_stage_==0) {
+      if(!check(document_->catalog.targets.size()==2&&!document_->skeletons.skins.empty(),"骨骼多选夹具需要两个角色")) return;
+      const auto &skin=document_->skeletons.skins.front();
+      if(!check(skin.instance==document_->catalog.targets[0].instance,"夹具首个角色未绑定骨架")) return;
+      for(size_t j=0;j<skin.joints.size();++j) {if(skin.joints[j].id=="lMid3") finger_joints_[0]=int(j);if(skin.joints[j].id=="rMid3") finger_joints_[1]=int(j);}
+      if(!check(finger_joints_[0]>=0&&finger_joints_[1]>=0,"夹具缺少左右中指末节")) return;
+      choose(0,finger_joints_[0]);++test_stage_;return;
+    }
+    if(test_stage_==1||test_stage_==2) {
+      if(!check(!state.selection_bounds.empty,"指尖没有独立的聚焦范围")) return;
+      finger_bounds_[size_t(test_stage_-1)]=state.selection_bounds;
+      if(test_stage_==1) choose(0,finger_joints_[1]);
+      else {choose(0,finger_joints_[0]);regression_epoch_=state.camera.epoch;renderer_->frame(finger_bounds_[1]);}
+      ++test_stage_;return;
+    }
+    if(test_stage_==3||test_stage_==7) {
+      if(state.camera.epoch<=regression_epoch_) return;
+      renderer_->keyboard(VK_CONTROL,true);renderer_->pointer(state.width/2,state.height/2,false,true);++test_stage_;return;
+    }
+    if(test_stage_==4||test_stage_==8) {
+      const int joint=finger_joints_[test_stage_==4?1:0];
+      if(state.pointer_x!=state.width/2||state.pointer_y!=state.height/2||state.hovered_detail_joint!=joint) return;
+      // SetCursorPos 生成的系统鼠标消息带物理按键状态；等定位完成后再模拟 Ctrl。
+      if(!state.hover_toggle) {renderer_->keyboard(VK_CONTROL,true);return;}
+      if(!check(state.hovered_joint==joint,"Ctrl 悬停退回角色整体或命中错误骨骼")) return;
+      regression_clicks_=state.clicks;renderer_->pointer(state.width/2,state.height/2,true,true);++test_stage_;return;
+    }
+    if(test_stage_==5) {
+      if(state.clicks<=regression_clicks_) return;
+      if(!check(state.selections==std::vector<Selection>{left,right},"Ctrl 右手指尖没有保留左手指尖")) return;
+      record("viewport-ctrl-add-right-fingertip");renderer_->keyboard(VK_CONTROL,false);
+      regression_epoch_=state.camera.epoch;renderer_->keyboard('F',true);renderer_->keyboard('F',false);++test_stage_;return;
+    }
+    if(test_stage_==6) {
+      if(state.camera.epoch<=regression_epoch_) return;
+      auto merged=finger_bounds_[0];merged.add(finger_bounds_[1].minimum);merged.add(finger_bounds_[1].maximum);
+      if(!check(focused(merged),"F 没有使用两侧指尖的范围并集")) return;
+      record("focus-both-fingertips");screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"joint-multi-focus.png").wstring()));
+      choose(1,-1,true);regression_epoch_=state.camera.epoch;renderer_->frame(finger_bounds_[0]);++test_stage_;return;
+    }
+    if(test_stage_==9) {
+      if(state.clicks<=regression_clicks_) return;
+      if(!check(state.selections==std::vector<Selection>{right,other},"跨角色激活后 Ctrl 取消左指尖丢失其余选择")) return;
+      record("remove-left-fingertip-with-another-active-figure");renderer_->keyboard(VK_CONTROL,false);choose(1,-1,true);
+      regression_epoch_=state.camera.epoch;renderer_->keyboard('F',true);renderer_->keyboard('F',false);++test_stage_;return;
+    }
+    if(test_stage_==10) {
+      if(state.camera.epoch<=regression_epoch_) return;
+      if(!check(state.selections==std::vector<Selection>{right}&&focused(finger_bounds_[1]),"取消左指尖后聚焦没有缩小到右指尖")) return;
+      record("focus-remaining-right-fingertip");finish_test(true);
+    }
+  }
+  void edit_regression_tick(const RenderStatus &state) {
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000) {finish_test(false,"多选 / 细分 / 缩放验证超时");return;}
+    if(loading_||!document_||state.generation!=document_->generation||state.applied_revision!=snapshot_.revision||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.preview||state.samples<4) return;
+    auto check=[&](bool ok,const char *message) {if(!ok) finish_test(false,message);return ok;};
+    auto spin=[&](const char *id)->QDoubleSpinBox * {for(auto *s:parameters_->findChildren<QDoubleSpinBox *>()) if(s->property("parameterId").toString()==id) return s;return nullptr;};
+    auto focused=[&] {const auto center=state.selection_bounds.center();return !state.selection_bounds.empty&&std::abs(center.x-state.camera.target.x)+std::abs(center.y-state.camera.target.y)+std::abs(center.z-state.camera.target.z)<1e-5;};
+    if(test_stage_==0) {
+      if(!check(document_->catalog.targets.size()==2&&state.effective_roots.size()==2,"回归夹具需要两个带 ERC 的立方体")) return;
+      choose(0);parameters_->query(QStringLiteral("Scale（%）"));auto *s=spin("transform/general_scale");
+      if(!check(s&&std::abs(s->value()-1)<1e-5,"属性面板没有显示 ERC 求值后的 1% 缩放")) return;
+      regression_checks_.push_back({{"input","saved-2-percent-minus-ERC-1-percent"},{"display",s->value()}});
+      choose(1,-1,true);regression_epoch_=state.camera.epoch;focus_selection();++test_stage_;return;
+    }
+    if(test_stage_==1) {
+      if(state.selections.size()!=2||state.camera.epoch<=regression_epoch_) return;
+      if(!check(focused()&&state.selection_bounds.minimum.x<.1f&&state.selection_bounds.maximum.x>2.5f,"多选聚焦未合并两个对象的范围")) return;
+      regression_checks_.push_back({{"input","tree-multi-focus"},{"selected",state.selections.size()}});
+      choose(1);regression_epoch_=state.camera.epoch;renderer_->frame(state.bounds.at(0));++test_stage_;return;
+    }
+    if(test_stage_==2||test_stage_==5) {
+      if(state.camera.epoch<=regression_epoch_) return;
+      regression_clicks_=state.clicks;renderer_->pointer(state.width/2,state.height/2,true,true);++test_stage_;return;
+    }
+    if(test_stage_==3) {
+      if(state.clicks<=regression_clicks_||state.selections.size()!=2) return;
+      if(!check(tree_selection(hierarchy_).size()==2,"视口 Ctrl 增选未同步层级树")) return;
+      regression_epoch_=state.camera.epoch;renderer_->keyboard('F',true);renderer_->keyboard('F',false);++test_stage_;return;
+    }
+    if(test_stage_==4) {
+      if(state.camera.epoch<=regression_epoch_) return;
+      if(!check(focused(),"视口 F 未聚焦完整多选范围")) return;
+      regression_checks_.push_back({{"input","viewport-ctrl-add-and-F"},{"selected",state.selections.size()}});
+      regression_epoch_=state.camera.epoch;renderer_->frame(state.bounds.at(0));++test_stage_;return;
+    }
+    if(test_stage_==6) {
+      if(state.clicks<=regression_clicks_||state.selections.size()!=1) return;
+      if(!check(selected_==1,"Ctrl 取消选中后活动对象错误")) return;
+      regression_checks_.push_back({{"input","viewport-ctrl-remove"},{"selected",state.selections.size()}});
+      choose(0);parameters_->query("SubDivision Level");auto *s=spin("SubDIALevel");if(!check(s!=nullptr,"未显示 DAZ 细分控件")) return;
+      regression_triangles_=state.adapter.unique_triangles;s->setValue(2);++test_stage_;return;
+    }
+    if(test_stage_==7) {
+      if(!check(state.adapter.unique_triangles==regression_triangles_+144,"细分级别 1 → 2 未真正更新渲染拓扑")) return;
+      regression_checks_.push_back({{"input","subdivision-level-1-to-2"},{"triangles_before",regression_triangles_},{"triangles_after",state.adapter.unique_triangles}});
+      const auto &morphs=document_->catalog.targets[0].morphs;size_t a=0;while(a<morphs.size()&&morphs[a].channel_id!="A") ++a;
+      if(!check(a<morphs.size(),"缺少形变参数 A")) return;regression_updates_=state.adapter.geometry_updates;set_morph(a,.5);++test_stage_;return;
+    }
+    if(test_stage_==8) {
+      if(!check(state.adapter.geometry_updates>regression_updates_,"细分后 Morph 未更新渲染顶点")) return;
+      regression_checks_.push_back({{"input","morph-after-subdivision"},{"geometry_updates",state.adapter.geometry_updates}});
+      parameters_->query(QStringLiteral("Scale（%）"));auto *s=spin("transform/general_scale");if(!check(s!=nullptr,"找不到缩放控件")) return;s->setValue(100.01);++test_stage_;return;
+    }
+    if(test_stage_==9) {
+      auto *s=spin("transform/general_scale");if(!check(s&&s->text()=="100.01"&&std::abs(root_scale()*snapshot_.values[0].transform.general_scale*.02*100-100.01)<.00003,"ERC 缩放写入或数值精度错误")) return;
+      regression_checks_.push_back({{"input","absolute-scale-entry-after-ERC"},{"display",s->text().toStdString()}});
+      screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"edit-regression.png").wstring()));finish_test(true);
+    }
+  }
   void focus_selection() {
     if(!renderer_||!document_) return;
-    if(selected_light_>=0) {ir::Bounds b;const auto &m=snapshot_.lights.at(size_t(selected_light_)).transform;b.add(m.point({-.1f,-.1f,-.1f}));b.add(m.point({.1f,.1f,.1f}));renderer_->focus(b);focus_pending_=false;return;}
     const auto state=renderer_->status();
-    focus_pending_=state.selection_generation!=document_->generation||state.selected_target!=selected_||state.selected_joint!=selected_joint_;
+    focus_pending_=state.selection_generation!=document_->generation||state.selected_target!=selected_||state.selected_joint!=selected_joint_||state.selections!=tree_selection(hierarchy_)||state.applied_revision!=snapshot_.revision;
     if(!focus_pending_) renderer_->focus(state.selection_bounds);
   }
   bool formula_test_=false;
@@ -207,14 +330,19 @@ class Editor final:public QMainWindow {
     });
   }
   void progress(const QString &message) {QMetaObject::invokeMethod(this,[this,message] {statusBar()->showMessage(message);},Qt::QueuedConnection);}
-  void choose(int target,int joint=-1) {
+  void sync_selection() {
+    auto *item=active_selection(hierarchy_);
+    select(item?item->data(0,Qt::UserRole).toInt():-1,item?item->data(0,Qt::UserRole+1).toInt():-1,item?item->data(0,Qt::UserRole+2).toInt():-1);
+  }
+  void choose(int target,int joint=-1,bool toggle=false) {
     for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==target&&(*it)->data(0,Qt::UserRole+1).toInt()==joint&&(*it)->data(0,Qt::UserRole+2).toInt()<0) {
-      for(auto *p=(*it)->parent();p;p=p->parent()) p->setExpanded(true);hierarchy_->setCurrentItem(*it);hierarchy_->scrollToItem(*it);if(selected_!=target||selected_joint_!=joint) select(target,joint);return;
+      {QSignalBlocker block(hierarchy_);for(auto *p=(*it)->parent();p;p=p->parent()) p->setExpanded(true);choose_item(hierarchy_,*it,toggle);hierarchy_->scrollToItem(*it);}sync_selection();return;
     }
-    hierarchy_->setCurrentItem(nullptr);select(-1);
+    {QSignalBlocker block(hierarchy_);choose_item(hierarchy_,nullptr,toggle);}sync_selection();
   }
   void rebuild_hierarchy() {
     QSignalBlocker block(hierarchy_);hierarchy_->clear();
+    if(renderer_) renderer_->select(document_?document_->generation:0,-1,-1,{});
     std::map<std::string,QTreeWidgetItem *> objects;
     std::set<std::string> containers;
     auto identify=[](QTreeWidgetItem *item,int target,int joint=-1,int light=-1) {item->setData(0,Qt::UserRole,target);item->setData(0,Qt::UserRole+1,joint);item->setData(0,Qt::UserRole+2,light);};
@@ -387,11 +515,31 @@ class Editor final:public QMainWindow {
     if(manual_morph_->isChecked()) {if(pending_parameters_.at(key).value==snapshot_.values[size_t(selected_)].morphs[canonical]) {if(!pending_parameters_.at(key).unlimited) snapshot_.values[size_t(selected_)].unlimited_morphs.erase(target.morphs[canonical].id);pending_parameters_.erase(key);}apply_parameters_->setEnabled(!pending_parameters_.empty());return;}
     send();
   }
+  void set_subdivision(size_t target,int field,int value) {
+    if(loading_||!document_) return;
+    auto next=std::make_shared<Document>(*document_);
+    auto &mesh=next->loaded.scene.meshes.at(next->loaded.scene.instances.at(next->catalog.targets.at(target).instance).mesh);
+    auto &settings=mesh.subdivision;
+    if(field==0) settings.enabled=value!=0;
+    else if(field==1) settings.level=value;
+    else if(field==2) settings.render_level=value;
+    else if(field==3) settings.algorithm=value;
+    else if(field==4) settings.edge_interpolation=value;
+    else settings.normal_smoothing=value;
+    document_=next;++snapshot_.revision;renderer_->set_document(document_,submitted_snapshot(),false);
+    QTimer::singleShot(0,this,[this]{select(selected_,selected_joint_,selected_light_);});
+  }
+  std::vector<runtime::JointPose> effective_roots_;
+  uint64_t effective_generation_=0;
+  double root_scale(int axis=-1) const {
+    if(!document_||effective_generation_!=document_->generation||selected_<0||size_t(selected_)>=effective_roots_.size()) return 1;
+    const auto &p=effective_roots_[size_t(selected_)];return axis<0?p.general_scale:axis==0?p.scale.x:axis==1?p.scale.y:p.scale.z;
+  }
   void select(int index,int joint=-1,int light=-1) {
     {QSignalBlocker block(visible_);visible_->setEnabled(document_&&index>=0&&joint<0&&light<0);visible_->setChecked(document_&&index>=0?snapshot_.values.at(size_t(index)).visible:false);}
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
-    if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint);
+    if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_));
     if(light>=0&&document_) {
       const auto &l=snapshot_.lights.at(size_t(light));light_base_=l.transform;light_base_.value[3]=light_base_.value[7]=light_base_.value[11]=0;selection_->setText(text(l.id));parameters_->bind(nullptr,nullptr);
       const float data[]={l.transform.value[3]*100,l.transform.value[11]*100,-l.transform.value[7]*100,0,0,0,100,100,100};
@@ -403,7 +551,7 @@ class Editor final:public QMainWindow {
       auto *node=index==-2?&snapshot_.options.environment:&snapshot_.options.tonemapper;selection_->setText(text(node->label));
       parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
     }
-    if(index<0 || !document_) {selection_->setText(index<=-4&&hierarchy_->currentItem()?hierarchy_->currentItem()->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
+    if(index<0 || !document_) {auto *item=active_selection(hierarchy_);selection_->setText(index<=-4&&item?item->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
     const auto &target=document_->catalog.targets[size_t(index)];selection_->setText(text(target.label));
     const auto &values=snapshot_.values[size_t(index)];
     const auto &t=values.transform;
@@ -416,10 +564,23 @@ class Editor final:public QMainWindow {
     const daz::AssetObject *asset=nullptr;for(const auto &o:document_->loaded.objects) if(o.instance==target.instance) {asset=&o;break;}
     const float saved[]={asset?asset->translation_cm.x:0,asset?asset->translation_cm.y:0,asset?asset->translation_cm.z:0,asset?asset->rotation_degrees.x:0,asset?asset->rotation_degrees.y:0,asset?asset->rotation_degrees.z:0,asset?asset->scale.x:1,asset?asset->scale.y:1,asset?asset->scale.z:1};
     if(joint<0) {
-      ParameterControl general;general.id="transform/general_scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.read=[this,initial]{return initial*snapshot_.values[size_t(selected_)].transform.general_scale*100;};general.write=[this,initial](double value){snapshot_.values[size_t(selected_)].transform.general_scale=float(value/(initial*100));send();};controls.push_back(std::move(general));
-      for(int i=0;i<9;++i) {ParameterControl c;c.id="transform/"+std::to_string(i);c.label=std::string(1,"XYZ"[i%3])+std::string(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.minimum=transform_[i]->minimum();c.maximum=transform_[i]->maximum();c.step=.1;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;const float base=saved[i];c.read=[this,i,base]{return i<6?transform_[i]->value()+base:transform_[i]->value()*base;};c.write=[this,i,base](double v){transform_[i]->setValue(i<6?v-base:v/base);};controls.push_back(std::move(c));}
+      ParameterControl general;general.id="transform/general_scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.float_backed=true;general.read=[this,initial]{return double(initial)*root_scale()*snapshot_.values[size_t(selected_)].transform.general_scale*100;};general.write=[this,initial](double value){const double base=double(initial)*root_scale()*100;if(base!=0) {snapshot_.values[size_t(selected_)].transform.general_scale=float(value/base);send();}};controls.push_back(std::move(general));
+      for(int i=0;i<9;++i) {ParameterControl c;c.id="transform/"+std::to_string(i);c.label=std::string(1,"XYZ"[i%3])+std::string(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.float_backed=true;c.minimum=transform_[i]->minimum();c.maximum=transform_[i]->maximum();c.step=.1;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;const float base=saved[i];c.read=[this,i,base]{return i<6?transform_[i]->value()+base:transform_[i]->value()*base*root_scale(i-6);};c.write=[this,i,base](double v){const double scale=double(base)*(i>=6?root_scale(i-6):1);if(i<6||scale!=0) transform_[i]->setValue(i<6?v-base:v/scale);};controls.push_back(std::move(c));}
     } else if(const int skin=selected_skin();skin>=0) {
       for(int i=0;i<9;++i) {ParameterControl c;c.id="joint/"+std::to_string(i);c.label=std::string(1,"XYZ"[i%3])+(i<3?" Translate":i<6?" Rotate":" Scale");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.enabled=false;c.detail="已保存的骨骼通道；当前通过姿势预设 / ERC 编辑";c.read=[this,skin,joint,i]{const auto &p=snapshot_.poses[size_t(skin)][size_t(joint)];const auto v=i<3?p.translation_cm:i<6?p.rotation_degrees:p.scale;return double(i%3==0?v.x:i%3==1?v.y:v.z);};controls.push_back(std::move(c));}
+    }
+    if(joint<0&&!document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(target.instance).mesh).polygons.empty()) {
+      const char *ids[]={"ResolutionLevel","SubDIALevel","SubDRenderLevel","SubDAlgorithmControl","SubDEdgeInterpolateLevel","SubDNormalSmoothing"};
+      const char *labels[]={"Resolution Level（分辨率）","SubDivision Level（视口细分级别）","Render SubD Level (Minimum)（渲染最低级别）","SubDivision Algorithm（细分算法）","Edge Interpolation（边界插值）","SubDivision Normals（细分法线）"};
+      for(int field=0;field<6;++field) {
+        ParameterControl c;c.id=ids[field];c.label=labels[field];c.group="/General/Mesh Resolution";c.minimum=0;c.maximum=6;c.step=1;c.enforce_limits=true;c.slider_minimum=0;c.slider_maximum=4;
+        if(field==0) c.choices={"Base（基础）","High Resolution（高分辨率）"};
+        if(field==3) {c.choices={"Catmark","Bilinear","Loop","Catmull-Clark (Legacy，近似)"};c.detail="Legacy 使用 OpenSubdiv Catmark 近似；不包含 DAZ HD Morph。";}
+        if(field==4) c.choices={"Soft Corners and Edges","Sharp Edges and Corners","Sharp Edges"};
+        if(field==5) {c.choices={"Smoothed","Preserve Cage（待支持）"};c.disabled_choices={1};c.detail="保留文件原值；Preserve Cage 的分裂法线尚未完整实现。";}
+        c.read=[this,index,field] {const auto &scene=document_->loaded.scene;const auto &s=scene.meshes.at(scene.instances.at(document_->catalog.targets.at(size_t(index)).instance).mesh).subdivision;return double(field==0?int(s.enabled):field==1?s.level:field==2?s.render_level:field==3?s.algorithm:field==4?s.edge_interpolation:s.normal_smoothing);};
+        c.write=[this,index,field](double value) {set_subdivision(size_t(index),field,int(value));};controls.push_back(std::move(c));
+      }
     }
     parameters_->set_extra(std::move(controls));parameters_->bind(&target,&values,node);
   }
@@ -434,7 +595,7 @@ class Editor final:public QMainWindow {
     select(selected_);send();
   }
   void finish_test(bool pass,const std::string &error={}) {
-    if(workflow_test_) SetCursorPos(workflow_cursor_.x,workflow_cursor_.y);
+    if(workflow_test_||joint_selection_test_) SetCursorPos(workflow_cursor_.x,workflow_cursor_.y);
     const auto status=renderer_->status();
     nlohmann::json report={{"status",pass?"PASS":"FAIL"},{"error",error},{"stage",test_stage_},
       {"bone_attachments",attachment_report_},{"displayed_samples",status.samples},{"denoise",false},{"sampling_report","editor-render.json"},
@@ -453,6 +614,8 @@ class Editor final:public QMainWindow {
       report["local_geometry_restored"]=status.mesh_hashes==interaction_initial_.mesh_hashes;report["instance_transforms_restored"]=status.instance_transforms==interaction_initial_.instance_transforms;report["boundaries"]=interaction_boundaries_;}
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
+    if(edit_regression_test_) {report["scope"]="multi-selection-focus-subdivision-ERC-scale";report["checks"]=regression_checks_;}
+    if(joint_selection_test_) {report["scope"]="same-figure-joint-ctrl-selection-and-focus";report["checks"]=regression_checks_;}
     if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;report["checks"]=visibility_checks_;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
     report["hierarchy"]=hierarchy_report();report["options"]=ir::options_json(snapshot_.options);
@@ -954,10 +1117,10 @@ class Editor final:public QMainWindow {
       for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==-4) (*it)->setExpanded(true);
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"reopened-scene.png").wstring()));finish_test(true);return;
     }
-    if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint);}
+    if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint,state.hit_toggle);}
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
-    if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);
+    if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision) {effective_roots_=state.effective_roots;effective_generation_=state.generation;if(selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);}
     if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
     else if(!state.resource_error.empty()) statusBar()->showMessage(QStringLiteral("Morph 未应用：")+text(state.resource_error)+QStringLiteral("；可重试加载或刷新参数目录"));
     else if(state.pending_payloads) statusBar()->showMessage(QStringLiteral("正在异步载入 %1 项 Morph 数据，完成后应用最新输入…").arg(state.pending_payloads));
@@ -965,6 +1128,8 @@ class Editor final:public QMainWindow {
     else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4 · 发丝 %5").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations).arg(state.adapter.curves));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
+    if(edit_regression_test_) {edit_regression_tick(state);return;}
+    if(joint_selection_test_) {joint_selection_tick(state);return;}
     if(!selection_test_labels_.empty()) {selection_tick(state);return;}
     if(lazy_test_) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000) {finish_test(false,"Morph 异步界面验证超时");return;}
@@ -1201,6 +1366,8 @@ class Editor final:public QMainWindow {
     }
   }
 public:
+  void edit_regression_test() {edit_regression_test_=self_test_=true;}
+  void joint_selection_test() {joint_selection_test_=self_test_=true;GetCursorPos(&workflow_cursor_);}
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
   void capture_test(QStringList targets={},bool front=false,bool head=false,int samples=16,double seconds=0) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;capture_head_=head;capture_samples_=std::clamp(samples,1,1<<20);capture_seconds_=seconds;}
@@ -1221,7 +1388,7 @@ public:
     layout->addWidget(host_,1);auto *viewport_dock=dock(QStringLiteral("视口"),central,Qt::RightDockWidgetArea);viewport_dock->setObjectName("Viewport");
     browser_=new ContentBrowser;browser_->open_asset=[this](const QString &file){open_asset(file_path(file));};update_libraries();
     auto *explorer_dock=dock(QStringLiteral("内容浏览器"),browser_,Qt::LeftDockWidgetArea);
-    hierarchy_=new QTreeWidget;hierarchy_->setHeaderLabel(QStringLiteral("场景对象"));hierarchy_->setMinimumWidth(240);hierarchy_->setIndentation(12);hierarchy_->header()->setStretchLastSection(false);hierarchy_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    hierarchy_=new QTreeWidget;hierarchy_->setSelectionMode(QAbstractItemView::ExtendedSelection);hierarchy_->setHeaderLabel(QStringLiteral("场景对象"));hierarchy_->setMinimumWidth(240);hierarchy_->setIndentation(12);hierarchy_->header()->setStretchLastSection(false);hierarchy_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     auto *hierarchy_dock=dock(QStringLiteral("场景层次"),hierarchy_,Qt::LeftDockWidgetArea);tabifyDockWidget(explorer_dock,hierarchy_dock);hierarchy_dock->raise();
     auto *panel=new QWidget;auto *properties=new QVBoxLayout(panel);panel->setMinimumWidth(380);
     selection_=new QLabel(QStringLiteral("请先加载并选择对象"));selection_->setWordWrap(true);properties->addWidget(selection_);
@@ -1290,7 +1457,8 @@ public:
     connect(create->addAction(QStringLiteral("面光源")),&QAction::triggered,this,[this] {add_light();});
     auto *view=menuBar()->addMenu(QStringLiteral("视图"));for(auto *d:findChildren<QDockWidget *>()) view->addAction(d->toggleViewAction());
     connect(view->addAction(QStringLiteral("框选当前对象")),&QAction::triggered,this,[this] {frame_pending_=true;});
-    connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item) {select(item?item->data(0,Qt::UserRole).toInt():-1,item?item->data(0,Qt::UserRole+1).toInt():-1,item?item->data(0,Qt::UserRole+2).toInt():-1);});
+    connect(hierarchy_,&QTreeWidget::itemSelectionChanged,this,[this] {sync_selection();});
+    connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this] {sync_selection();});
     connect(view->addAction(QStringLiteral("恢复默认布局")),&QAction::triggered,this,[this] {restoreState(default_layout_,1);});
     QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens()) if(screen!=QGuiApplication::primaryScreen()) {secondary=screen;break;}
     if(!secondary) throw std::runtime_error("缺少第二屏，编辑器不会在主屏启动");
@@ -1383,6 +1551,8 @@ int main(int argc,char **argv) {
   parser.addOption({"content-root",QStringLiteral("内容库目录，可重复"),"directory"});parser.addOption({"output",QStringLiteral("输出目录"),"directory"});
   parser.addOption({"project",QStringLiteral("项目设置文件"),"file"});
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
+  parser.addOption({"edit-regression-test",QStringLiteral("副屏验证多选聚焦、细分及 ERC 缩放")});
+  parser.addOption({"joint-selection-test",QStringLiteral("副屏验证同角色左右指尖 Ctrl 多选及聚焦")});
   parser.addOption({"workflow-test",QStringLiteral("验证射线、部位 Morph 与视口缩放后退出")});
   parser.addOption({"head-selection-test",QStringLiteral("验证三级头部选择及绑定服装射线后退出")});
   parser.addOption({"options-test",QStringLiteral("验证环境 / 色调参数及 F / WASDQE 导航后退出")});
@@ -1429,6 +1599,8 @@ int main(int argc,char **argv) {
     Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
+    if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
+    if(parser.isSet("joint-selection-test")) editor.joint_selection_test();
     if(parser.isSet("options-test")) editor.options_test();
     if(parser.isSet("navigation-test")) editor.navigation_test();
     if(parser.isSet("interaction-test")) editor.interaction_test();

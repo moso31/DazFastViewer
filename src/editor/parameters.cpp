@@ -2,6 +2,7 @@
 #include <QDateEdit>
 #include <QTimeEdit>
 #include "editor/numeric_slider.h"
+#include "editor/numeric_spinbox.h"
 #include "runtime/picking.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -47,7 +48,7 @@ void ParameterPanel::bind(const runtime::Target *target,const runtime::Propertie
       const auto &m=target_->morphs[i];if(!runtime::parameter_on_node(m.owner,m.group,node_)) continue;
       ParameterControl c;c.morph=int(i);c.id=m.source+"#"+m.id;c.label=m.label;c.group=m.group.empty()?"/Morphs":m.group;c.detail=m.source+"\n"+m.unsupported+"\n"+m.limitation;
       c.minimum=m.clamped?std::min(m.minimum,values_->morphs[i]):std::min(-100.f,m.minimum);c.maximum=m.clamped?std::max(m.maximum,values_->morphs[i]):std::max(100.f,m.maximum);c.slider_minimum=m.minimum;c.slider_maximum=m.maximum;c.step=m.step;c.initial=m.initial;c.visible=m.visible;c.enabled=m.unsupported.empty()&&!m.locked;
-      c.read=[this,i]{return double(values_->morphs.at(i));};c.write=[this,i](double v){if(changed) changed(i,v);};
+      c.float_backed=true;c.read=[this,i]{return double(values_->morphs.at(i));};c.write=[this,i](double v){if(changed) changed(i,v);};
       if(m.value_type=="bool") c.choices={"关闭","开启"};morph_rows_[i]=int(controls_.size());controls_.push_back(std::move(c));
     }
   }
@@ -120,9 +121,10 @@ void ParameterPanel::mount() {
       connect(slider,&QSlider::sliderPressed,this,[this]{if(interaction_changed) interaction_changed(true);});
       connect(slider,&QSlider::sliderReleased,this,[this]{if(interaction_changed) interaction_changed(false);});
       slider->setToolTip(QStringLiteral("左右拖动可越过标尺范围；Shift 精细调整。右侧可直接输入数值。"));
-      auto *spin=new QDoubleSpinBox;spin->setObjectName("valueSpin");spin->setDecimals(6);spin->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());spin->setSingleStep(std::max(.000001,c.step));spin->setKeyboardTracking(false);spin->setFixedWidth(125);spin->setEnabled(c.enabled);
-      line->addWidget(slider,1);line->addWidget(spin);spin->setValue(c.read());slider->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);
-      slider->edited=[this,i](double value){current_=i;controls_[i].write(value);update_rows();};
+      auto *spin=new NumericSpinBox(c.float_backed);spin->setObjectName("valueSpin");spin->setDecimals(c.enforce_limits&&c.step==1?0:6);spin->setRange(c.enforce_limits?c.minimum:-std::numeric_limits<float>::max(),c.enforce_limits?c.maximum:std::numeric_limits<float>::max());spin->setSingleStep(std::max(.000001,c.step));spin->setKeyboardTracking(false);spin->setFixedWidth(125);spin->setEnabled(c.enabled);
+      spin->setProperty("parameterId",text(c.id));
+      line->addWidget(slider,1);line->addWidget(spin);spin->sync(c.read());slider->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);
+      slider->edited=[this,i](double value){current_=i;const auto &c=controls_[i];if(c.enforce_limits) value=std::clamp(std::round(value/c.step)*c.step,c.minimum,c.maximum);c.write(value);update_rows();};
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){current_=i;controls_[i].write(value);update_rows();});
       connect(spin,&QDoubleSpinBox::editingFinished,this,[this,spin]{if(auto *line=spin->findChild<QLineEdit *>()) line->setModified(false);update_rows();});
     }
@@ -141,7 +143,7 @@ void ParameterPanel::update_rows() {
     if(auto *spin=w->findChild<QDoubleSpinBox *>("valueSpin")) {
       const auto *line=spin->findChild<QLineEdit *>();
       // 后台渲染状态持续刷新时，不能覆盖尚未按 Enter / 失焦提交的输入文本。
-      if(!(spin->hasFocus()&&line&&line->isModified())&&spin->value()!=c.read()) {QSignalBlocker block(spin);spin->setValue(c.read());}
+      if(!(spin->hasFocus()&&line&&line->isModified())&&spin->value()!=c.read()) {QSignalBlocker block(spin);static_cast<NumericSpinBox *>(spin)->sync(c.read());}
     }
     if(auto *slider=w->findChild<QSlider *>("valueSlider")) {QSignalBlocker block(slider);static_cast<NumericSlider *>(slider)->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);}
     if(auto *combo=w->findChild<QComboBox *>("valueChoice")) {QSignalBlocker block(combo);combo->setCurrentIndex(int(c.read()));}

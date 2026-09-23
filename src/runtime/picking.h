@@ -2,6 +2,7 @@
 #include "runtime/skeleton.h"
 #include "bench/camera.h"
 #include <limits>
+#include <span>
 
 namespace dfv::runtime {
 struct Target;
@@ -44,5 +45,6 @@ struct InstanceGroups {
 };
 struct HoverRegion {int instance=-1,joint=-1;};
 HoverRegion hover_region(const PickHit &hit,int selected_instance,int selected_joint,const std::vector<JointRegions> &regions);
+HoverRegion selection_region(const PickHit &hit,HoverRegion active,std::span<const HoverRegion> selections,const std::vector<JointRegions> &regions,bool toggle);
 bool parameter_on_node(const std::string &owner,const std::string &group,const std::string &node);
 }

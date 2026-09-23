@@ -27,7 +27,7 @@
 
 namespace {
 struct Options {
-  bool displacement_check=false;
+  bool displacement_check=false,render_subdivision=false;
   bool raw_sampling=false,devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
   double seconds=60,warmup=10,refine=10,preview_seconds=0;
@@ -41,7 +41,8 @@ Options parse(int argc,char **argv) {
   for(int i=1;i<argc;++i) {
     const std::string arg=argv[i];
     auto value=[&]() {if(++i>=argc) throw std::runtime_error("参数缺少值: "+arg);return std::string(argv[i]);};
-    if(arg=="--raw-sampling") o.raw_sampling=true;
+    if(arg=="--render-subdivision") o.render_subdivision=true;
+    else if(arg=="--raw-sampling") o.raw_sampling=true;
     else if(arg=="--devices") o.devices=true;
     else if(arg=="--help") o.help=true;
     else if(arg=="--file") o.file=std::filesystem::u8path(value());
@@ -166,7 +167,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
     auto exported=scene_json(render_scene,o.samples);exported["render"]["adaptive_sampling"]=refined;
     save_json(o.output/"scene.json",exported);
   }
-  CyclesAdapter adapter(scene);adapter.load(render_scene);const auto counts=adapter.stats();
+  CyclesAdapter adapter(scene,o.smoke||o.render_subdivision);adapter.load(render_scene);const auto counts=adapter.stats();
   if(o.dump_shaders) {
     nlohmann::json materials=nlohmann::json::array();
     for(const auto &m:render_scene.materials)

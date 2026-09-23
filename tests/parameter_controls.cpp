@@ -1,4 +1,5 @@
 #include "editor/parameters.h"
+#include "editor/selection.h"
 #include <QApplication>
 #include <QDoubleSpinBox>
 #include <QSlider>
@@ -27,6 +28,33 @@ int main(int argc,char **argv) {
     require(!interacting&&released==1,"释放没有结束交互状态");
     QTest::mousePress(slider,Qt::LeftButton,Qt::NoModifier,center);QEvent lost(QEvent::UngrabMouse);QApplication::sendEvent(slider,&lost);require(!interacting,"捕获丢失未结束交互状态");
     QTest::mousePress(slider,Qt::LeftButton,Qt::NoModifier,center);QFocusEvent unfocus(QEvent::FocusOut);QApplication::sendEvent(slider,&unfocus);require(!interacting,"失焦未结束交互状态");
+    float stored=0;c.float_backed=true;c.read=[&]{return double(stored);};c.write=[&](double v){stored=float(v);};
+    panel.bind_controls({c});app.processEvents();spin=panel.findChild<QDoubleSpinBox *>("valueSpin");
+    spin->setFocus();spin->selectAll();QTest::keyClicks(spin,"100.01");QTest::keyClick(spin,Qt::Key_Return);panel.evaluated({});
+    require(spin->text()=="100.01"&&stored==100.01f,"Enter 后暴露 float 尾数");
+    panel.bind_controls({c});app.processEvents();spin=panel.findChild<QDoubleSpinBox *>("valueSpin");require(spin->text()=="100.01","切换对象后尾数重新出现");
+    spin->setFocus();spin->selectAll();QTest::keyClicks(spin,"0.123456");QTest::keyClick(spin,Qt::Key_Tab);panel.evaluated({});require(spin->text()=="0.123456","精细输入被过度舍入");
+    QTreeWidget hierarchy;hierarchy.setSelectionMode(QAbstractItemView::ExtendedSelection);hierarchy.resize(300,250);
+    auto item=[&](int key) {auto *i=new QTreeWidgetItem(&hierarchy,{QString::number(key)});i->setData(0,Qt::UserRole,key);i->setData(0,Qt::UserRole+1,-1);i->setData(0,Qt::UserRole+2,-1);return i;};
+    auto *first=item(0),*second=item(1);hierarchy.show();app.processEvents();
+    auto click=[&](QTreeWidgetItem *i,Qt::KeyboardModifiers modifiers) {QTest::mouseClick(hierarchy.viewport(),Qt::LeftButton,modifiers,hierarchy.visualItemRect(i).center());};
+    click(first,Qt::NoModifier);click(second,Qt::ControlModifier);require(dfv::editor::tree_selection(&hierarchy).size()==2,"树 Ctrl 左键未增选");
+    click(second,Qt::ControlModifier);require(dfv::editor::tree_selection(&hierarchy).size()==1&&dfv::editor::active_selection(&hierarchy)==first,"取消当前项后主选项失效");
+    dfv::editor::choose_item(&hierarchy,second,true);require(dfv::editor::tree_selection(&hierarchy).size()==2,"视口增选没有同步树");
+    dfv::editor::choose_item(&hierarchy,nullptr,true);require(dfv::editor::tree_selection(&hierarchy).size()==2,"Ctrl 空白误清除多选");
+    dfv::editor::choose_item(&hierarchy,first);require(dfv::editor::tree_selection(&hierarchy).size()==1,"普通单击没有替换选择");
+    auto *group=item(-4);auto *child=item(-7);hierarchy.takeTopLevelItem(hierarchy.indexOfTopLevelItem(child));group->addChild(child);
+    dfv::editor::choose_item(&hierarchy,group);dfv::editor::choose_item(&hierarchy,first,true);
+    const auto keys=dfv::editor::tree_selection(&hierarchy);require(keys.size()==2&&keys[0][0]==-7&&keys[1][0]==0,"组和实例混选丢失聚焦目标");
+    auto bone=[&](int joint) {auto *i=new QTreeWidgetItem(first,{QString::number(joint)});i->setData(0,Qt::UserRole,0);i->setData(0,Qt::UserRole+1,joint);i->setData(0,Qt::UserRole+2,-1);return i;};
+    auto *left=bone(1),*right=bone(2);first->setExpanded(true);app.processEvents();
+    click(left,Qt::NoModifier);click(right,Qt::ControlModifier);
+    const std::vector<dfv::editor::Selection> fingers={{0,1,-1},{0,2,-1}};
+    require(dfv::editor::tree_selection(&hierarchy)==fingers,"同一角色的不同骨骼被合并成整体选择");
+    dfv::editor::choose_item(&hierarchy,second,true);dfv::editor::choose_item(&hierarchy,second,true);
+    require(dfv::editor::tree_selection(&hierarchy)==fingers,"跨角色切换丢失同一角色的骨骼多选");
+    dfv::editor::choose_item(&hierarchy,left,true);
+    require(dfv::editor::tree_selection(&hierarchy)==std::vector<dfv::editor::Selection>{{0,2,-1}}&&dfv::editor::active_selection(&hierarchy)==right,"取消左手指尖没有保留右手指尖和活动项");
     dfv::ir::OptionNode options;options.id="environment";
     dfv::ir::Option mode;mode.id=mode.label="Environment Mode";mode.type="enum";mode.value={2};mode.maximum=3;mode.supported=true;mode.choices={"Dome and Scene","Dome Only","Sun-Sky Only","Scene Only"};
     auto day=mode;day.id=day.label="SS Day";day.type="float";day.value={double(QDate(2024,2,29).toJulianDay())};day.choices.clear();

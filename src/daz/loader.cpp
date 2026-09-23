@@ -1,4 +1,5 @@
 #include "daz/loader.h"
+#include "daz/subdivision.h"
 #include "render_ir/options_json.h"
 #include "render_ir/options.h"
 #include "daz/documents.h"
@@ -226,7 +227,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   if(repo.roots.empty()) fail("不能推断内容库；请使用 --content-root");
   const auto &document=repo.document(file);if(!document.contains("scene")) fail("文件中没有 scene");
   const auto &source=document.at("scene");LoadedScene out;auto &scene=out.scene;
-  Json warnings=Json::array(),material_reports=Json::array(),geometry_reports=Json::array();
+  Json warnings=Json::array(),material_reports=Json::array(),geometry_reports=Json::array(),subdivision_reports=Json::array();
   auto warn=[&](const std::string &code,const std::string &asset,const std::string &detail) {warnings.push_back({{"code",code},{"asset",asset},{"detail",detail}});};
   std::map<std::pair<std::string,ir::ColorSpace>,int> textures;
   auto texture=[&](const Json &channel,ir::ColorSpace colorspace,const fs::path &owner)->int {
@@ -560,6 +561,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     for(const auto &geometry_instance:instance.value("geometries",Json::array())) {
       const auto uri=geometry_instance.at("url").get<std::string>();const auto [geometry_file,gptr]=repo.asset(uri,file,"geometry_library");const auto &g=*gptr;
       ir::Mesh mesh;mesh.id=uri;
+      mesh.subdivision=subdivision_settings(g,geometry_instance);
       if(g.contains("graft")&&g["graft"].contains("vertex_count")) {
         mesh.graft_target_vertices=g["graft"]["vertex_count"].get<uint32_t>();
         mesh.graft_target_polygons=g["graft"].value("poly_count",0u);
@@ -584,6 +586,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
         material_indices.push_back(binding->second.material);uv_refs.push_back(binding->second.uv.empty()?g.value("default_uv_set",""):binding->second.uv);
       }
       std::string key=uri;for(const auto &uv:uv_refs) key+='\n'+uv;
+      const auto &subd=mesh.subdivision;key+='\n'+Json({subd.enabled,subd.level,subd.render_level,subd.algorithm,subd.edge_interpolation,subd.normal_smoothing}).dump();
       uint32_t mesh_index;
       if(auto cached=mesh_cache.find(key);cached!=mesh_cache.end()) mesh_index=cached->second;
       else {
@@ -620,6 +623,12 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
           const auto &polygon=polygons[p];if(polygon.size()<5 || polygon.size()>6) fail("仅支持 DSON 三角形和四边形");
           const auto slot=polygon[1].get<uint32_t>();if(slot>=mesh.material_slots.size()) fail("多边形材质组索引越界");
           const auto &uv=uv_cache.at(uv_refs.at(slot));
+          ir::Polygon face;face.material_slot=slot;face.polygon_group=polygon[0].get<uint32_t>();
+          for(size_t c=2;c<polygon.size();++c) {
+            const auto v=polygon[c].get<uint32_t>();const auto seam=uv.seams.find({uint32_t(p),v});const auto ui=seam==uv.seams.end()?v:seam->second;
+            if(v>=mesh.positions.size()||ui>=uv.values.size()) fail("细分多边形或 UV 索引越界");face.vertices.push_back(v);face.uv.push_back(uv.values[ui]);
+          }
+          mesh.polygons.push_back(std::move(face));
           for(size_t k=3;k+1<polygon.size();++k) {
             ir::Triangle triangle;triangle.material_slot=slot;
             triangle.polygon_group=polygon[0].get<uint32_t>();
@@ -653,7 +662,10 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
         out.objects.back().geometry_sources.push_back({source_file,source_id});owner=source_file;derived=base;
       }
       scene.instances.push_back(std::move(render_instance));
-      if(geometry_instance.value("type",g.value("type",""))=="subdivision_surface") warn("subdivision",geometry_id,"当前显示基础笼形网格；未应用 SubD/HD 细分");
+      const auto &subdivision=scene.meshes.at(mesh_index).subdivision;
+      subdivision_reports.push_back({{"id",geometry_id},{"subdivision",{{"enabled",subdivision.enabled},{"level",subdivision.level},{"render_level",subdivision.render_level},{"algorithm",subdivision.algorithm},{"edge_interpolation",subdivision.edge_interpolation},{"normal_smoothing",subdivision.normal_smoothing}}}});
+      if(subdivision.enabled&&subdivision.algorithm==3) warn("subdivision_legacy",geometry_id,"Legacy Catmull-Clark 当前由 OpenSubdiv Catmark 近似，未验证 DAZ 旧版逐点等价");
+      if(subdivision.enabled&&subdivision.normal_smoothing!=0) warn("subdivision_normals",geometry_id,"已保留 Preserve Cage 设置；当前没有完整的 DAZ 基础网格分裂法线，使用网格平滑法线");
     }
   }
   // 普通实例和 UltraScatter 的打包实例均引用源对象的完整子树。
@@ -757,7 +769,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   apply_graft_masks(out);
   scene.validate();const auto bounds=scene.bounds();
   out.report={{"input",utf8(file)},{"mode","static-base-mesh-preview"},{"content_roots",Json::array()},
-              {"dependencies",repo.dependencies},{"parsed_documents",repo.documents.size()},{"geometries",geometry_reports},{"materials",material_reports},
+              {"dependencies",repo.dependencies},{"parsed_documents",repo.documents.size()},{"geometries",geometry_reports},{"subdivision",subdivision_reports},{"materials",material_reports},
               {"instances",scene.instances.size()},{"textures",scene.textures.size()},{"warnings",warnings},{"fully_supported",warnings.empty()},
               {"bounds_m",{{"min",{bounds.minimum.x,bounds.minimum.y,bounds.minimum.z}},{"max",{bounds.maximum.x,bounds.maximum.y,bounds.maximum.z}}}},
               {"coordinate_conversion","DAZ centimeters Y-up to meters Z-up: (x,-z,y)/100"}};

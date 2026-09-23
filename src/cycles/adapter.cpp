@@ -266,6 +266,7 @@ void CyclesAdapter::load(const ir::Scene &source) {
     if(pixels[t.file]>0) bump_distances_[i]=float(2*std::sqrt(world_area[i]/(uv_area[i]*pixels[t.file])));
   }
   meshes_.resize(source.meshes.size());hairs_.resize(source.meshes.size());for(const auto &m:source.meshes) vertex_counts_.push_back(m.positions.size());
+  for(const auto &mesh:source.meshes) subdivisions_.emplace_back(mesh,final_render_);
   for(size_t i=0;i<source.materials.size();++i) {auto *shader=scene_.create_node<Shader>();material(*shader,source.materials[i],bump_distances_[i]);shaders_.push_back(shader);++stats_.materials;}
   std::map<std::pair<uint32_t,std::vector<uint32_t>>,Mesh *> meshes;
   std::map<std::pair<uint32_t,std::vector<uint32_t>>,Hair *> hairs;
@@ -275,12 +276,16 @@ void CyclesAdapter::load(const ir::Scene &source) {
     std::vector<Geometry *> geometries;
     if(!data.triangles.empty()) {
     if(found==meshes.end()) {
-      const auto visible=std::count_if(data.triangles.begin(),data.triangles.end(),[&](const auto &t){return data.draws(t);});
-      mesh=scene_.create_node<Mesh>();mesh->resize_mesh(int(data.positions.size()),int(visible));
+      const auto &subdivision=subdivisions_.at(instance.mesh);
+      const auto &triangles=subdivision.active()?subdivision.triangles():data.triangles;
+      const auto refined=subdivision.active()?subdivision.evaluate(data.positions):std::vector<ir::Vec3>{};
+      const auto &points=subdivision.active()?refined:data.positions;
+      const auto visible=std::count_if(triangles.begin(),triangles.end(),[&](const auto &t){return data.draws(t);});
+      mesh=scene_.create_node<Mesh>();mesh->resize_mesh(int(points.size()),int(visible));
       auto *positions=mesh->get_position_for_write();
-      for(size_t i=0;i<data.positions.size();++i) positions[i]=vector(data.positions[i]);
+      for(size_t i=0;i<points.size();++i) positions[i]=vector(points[i]);
       auto *uv=mesh->attributes.add(ATTR_STD_UV,ustring("UVMap"))->data_for_write<float2>();
-      size_t i=0;for(const auto &t:data.triangles) {if(!data.draws(t)) continue;
+      size_t i=0;for(const auto &t:triangles) {if(!data.draws(t)) continue;
         for(size_t k=0;k<3;++k) {mesh->get_triangles()[i*3+k]=int(t.vertices[k]);uv[i*3+k]=make_float2(t.uv[k].x,t.uv[k].y);}
         mesh->get_shader()[i]=t.material_slot;mesh->get_smooth()[i]=data.smooth;
         ++i;
@@ -388,9 +393,12 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     auto *object=light_objects_[edit.index];object->set_tfm(transform(edit.value.transform));object->tag_update(&scene_);
   }
   for(const auto &edit:delta.meshes) {
+    const auto &subdivision=subdivisions_.at(edit.index);
+    const auto refined=subdivision.active()?subdivision.evaluate(edit.positions):std::vector<ir::Vec3>{};
+    const auto &points=subdivision.active()?refined:edit.positions;
     for(auto *mesh:meshes_[edit.index]) {
       auto *positions=mesh->get_position_for_write();
-      for(size_t i=0;i<edit.positions.size();++i) positions[i]=vector(edit.positions[i]);
+      for(size_t i=0;i<points.size();++i) positions[i]=vector(points[i]);
       for(auto attribute:{ccl::ATTR_STD_VERTEX_NORMAL,ccl::ATTR_STD_POSITION_UNDISPLACED,ccl::ATTR_STD_NORMAL_UNDISPLACED,ccl::ATTR_STD_UV_TANGENT_UNDISPLACED,ccl::ATTR_STD_UV_TANGENT_SIGN_UNDISPLACED}) mesh->attributes.remove(attribute);
       mesh->tag_position_modified();
       mesh->compute_bounds();mesh->tag_update(&scene_,false);

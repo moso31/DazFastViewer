@@ -94,6 +94,17 @@ struct Curve {
   uint32_t material_slot=0;
   Vec2 uv;
 };
+struct SubdivisionSettings {
+  bool enabled=false;
+  int level=0,render_level=0;
+  int algorithm=0,edge_interpolation=2,normal_smoothing=0;
+  bool operator==(const SubdivisionSettings &) const = default;
+};
+struct Polygon {
+  std::vector<uint32_t> vertices;
+  std::vector<Vec2> uv;
+  uint32_t material_slot=0,polygon_group=0;
+};
 struct Mesh {
   // GeoGraft 的目标基础拓扑；用于把附加表面纳入服装碰撞。
   uint32_t graft_target_vertices=0;
@@ -106,6 +117,12 @@ struct Mesh {
   std::string id;
   std::vector<Vec3> positions;
   std::vector<Triangle> triangles;
+  // 细分必须使用原始四边面，不能对绘制用的三角化结果做 Catmark。
+  std::vector<Polygon> polygons;
+  SubdivisionSettings subdivision;
+  struct Crease {uint32_t a,b;float weight;};
+  std::vector<Crease> creases;
+  std::vector<std::pair<uint32_t,float>> corners;
   std::vector<std::string> material_slots;
   std::vector<std::string> polygon_groups;
   bool smooth=true;

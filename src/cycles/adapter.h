@@ -1,5 +1,6 @@
 #pragma once
 #include "render_ir/scene.h"
+#include "runtime/subdivision.h"
 #include <cstddef>
 #include <vector>
 
@@ -15,6 +16,8 @@ class CyclesAdapter {
   struct HairBinding {ccl::Hair *hair;std::vector<uint32_t> vertices;};
   std::vector<std::vector<HairBinding>> hairs_;
   std::vector<size_t> vertex_counts_;
+  std::vector<runtime::Subdivision> subdivisions_;
+  bool final_render_=false;
   std::vector<std::vector<ccl::Object *>> objects_;
   std::vector<ccl::Object *> light_objects_;
   std::vector<ccl::Light *> lights_;
@@ -27,7 +30,7 @@ class CyclesAdapter {
   bool loaded_=false;
   void material(ccl::Shader &shader,const ir::Material &value,float texel_distance=0);
 public:
-  explicit CyclesAdapter(ccl::Scene &scene):scene_(scene) {}
+  explicit CyclesAdapter(ccl::Scene &scene,bool final_render=false):scene_(scene),final_render_(final_render) {}
   void load(const ir::Scene &scene);
   // 调用者持有 Cycles Scene 锁；只同步 Delta 中声明的对象。
   void apply(const ir::Delta &delta);

@@ -150,4 +150,16 @@ HoverRegion hover_region(const PickHit &hit,int selected_instance,int selected_j
   const auto t=size_t(hit.triangle);const int joint=parts.body[t]==parts.head&&!parts.within_head(selected_joint)?parts.body[t]:parts.detail[t];
   return joint<0?HoverRegion{}:HoverRegion{hit.instance,joint};
 }
+HoverRegion selection_region(const PickHit &hit,HoverRegion active,std::span<const HoverRegion> selections,const std::vector<JointRegions> &regions,bool toggle) {
+  if(!toggle) return hover_region(hit,active.instance,active.joint,regions);
+  if(hit.instance<0||size_t(hit.instance)>=regions.size()) return {};
+  // Ctrl 沿用命中角色已有的骨骼选择层级；活动项可能属于另一个角色。
+  // 只有整体选择时仍切换整个角色，头部细选上下文与多选集合的顺序无关。
+  int joint=-1;
+  for(const auto &selected:selections) if(selected.instance==hit.instance&&selected.joint>=0) {
+    joint=selected.joint;
+    if(regions[size_t(hit.instance)].within_head(joint)) break;
+  }
+  return hover_region(hit,joint>=0?hit.instance:-1,joint,regions);
+}
 }

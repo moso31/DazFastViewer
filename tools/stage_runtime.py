@@ -70,6 +70,11 @@ license_dir.mkdir(parents=True, exist_ok=True)
 for name in ("LICENSE.MIT", "SOURCE.md"):
     shutil.copy2(root / "third_party/nlohmann" / name, license_dir / name)
 source_files = [root / "CMakeLists.txt"]
+subdiv_license = out / "licenses/opensubdiv"
+subdiv_license.mkdir(parents=True, exist_ok=True)
+for item in (root / "third_party/opensubdiv").iterdir():
+    if item.is_file():
+        shutil.copy2(item, subdiv_license / item.name)
 for base in ("src", "cmake", "tools", "tests", "third_party"):
     source_files.extend(p for p in (root/base).rglob("*")
                         if p.is_file() and "__pycache__" not in p.parts)

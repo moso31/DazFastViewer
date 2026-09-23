@@ -46,6 +46,14 @@ int main() {
     require(std::abs(mesh.triangles[0].uv[1].x-.25f)<1e-6f && std::abs(mesh.triangles[0].uv[1].y-.75f)<1e-6f,"UV 接缝没有按几何顶点索引覆盖");
     require(std::abs(mesh.positions[2].x-1)<1e-6f && std::abs(mesh.positions[2].z-1)<1e-6f,"单位或坐标系转换错误");
     require(std::abs(loaded.scene.instances[0].transform.point({0,0,0}).x-2)<1e-6f,"实例 current_value 变换没有应用");
+    auto subdivided=duf;
+    auto &shape=subdivided["scene"]["nodes"][0]["geometries"][0];shape["type"]="subdivision_surface";shape["current_subdivision_level"]=2;
+    shape["edge_interpolation_mode"]="edges_and_corners";
+    const auto subdivided_path=directory/"subdivided.duf";write(subdivided_path,subdivided);const auto subd=dfv::daz::load(subdivided_path,{{directory},true});
+    require(subd.scene.meshes.size()==2,"细分设置不同的同源对象错误地共享设置");
+    const auto &subd_mesh=subd.scene.meshes[subd.scene.instances[0].mesh];
+    require(subd_mesh.subdivision.enabled&&subd_mesh.subdivision.level==2&&subd_mesh.subdivision.edge_interpolation==1,"场景细分属性丢失");
+    require(subd_mesh.polygons.size()==1&&subd_mesh.polygons[0].vertices.size()==4&&subd_mesh.polygons[0].uv[1].x==.25f,"原始四边面或 UV 接缝丢失");
     const auto gzpath=directory/"compressed.duf";const auto bytes=duf.dump();
     auto gzip=gzopen(gzpath.string().c_str(),"wb");require(gzip!=nullptr,"gzip fixture 创建失败");
     require(gzwrite(gzip,bytes.data(),unsigned(bytes.size()))==int(bytes.size()),"gzip fixture 写失败");require(gzclose(gzip)==Z_OK,"gzip fixture 关闭失败");

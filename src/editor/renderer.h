@@ -1,5 +1,6 @@
 #pragma once
 #include "editor/document.h"
+#include "editor/selection.h"
 #include "cycles/adapter.h"
 #include "viewport/window.h"
 #include "bench/telemetry.h"
@@ -24,6 +25,7 @@ struct RenderStatus {
   runtime::ConformStats conform;
   runtime::CollisionStats collision;
   std::vector<std::vector<float>> effective;
+  std::vector<runtime::JointPose> effective_roots;
   std::vector<ir::Bounds> bounds;
   std::vector<ir::Bounds> head_bounds;
   std::vector<bool> visible;
@@ -33,6 +35,8 @@ struct RenderStatus {
   size_t hovered_triangles=0;
   uint64_t selection_generation=0;
   int selected_target=-1,selected_joint=-1;
+  std::vector<Selection> selections;
+  bool hit_toggle=false,hover_toggle=false;
   CameraState camera;
   int pointer_x=-1,pointer_y=-1,hovered_detail_joint=-1;
   double max_displacement=0;
@@ -67,14 +71,15 @@ class Renderer {
   uint64_t interaction_revision_=0;
   double edit_preview_until_=0,resize_preview_until_=0;
   int selected_target_=-1,selected_joint_=-1;
+  std::vector<Selection> selections_;
   void run(std::stop_token stop);
 public:
   Renderer(HWND host,int width,int height,const std::filesystem::path &output,SamplingSettings sampling={});
   ~Renderer();
   void set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene=true);
   void resize(int width,int height);
-  void pointer(int x,int y,bool click=false);
-  void select(uint64_t generation,int target,int joint=-1);
+  void pointer(int x,int y,bool click=false,bool toggle=false);
+  void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={});
   void camera_view(const std::array<float,6> &view);
   void edit(const Snapshot &snapshot);
   void interaction(bool active);

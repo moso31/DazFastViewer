@@ -107,24 +107,28 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
   if(!self) return DefWindowProcW(hwnd,msg,w,l);
   switch(msg) {
     case WM_LBUTTONDOWN:self->back_click_=false;SetFocus(hwnd);return 0;
-    case WM_LBUTTONUP:self->click_x=GET_X_LPARAM(l);self->click_y=GET_Y_LPARAM(l);++self->clicks;return 0;
+    case WM_LBUTTONUP:self->click_x=GET_X_LPARAM(l);self->click_y=GET_Y_LPARAM(l);self->pointer_toggle=self->click_toggle=(w&MK_CONTROL)!=0;++self->clicks;return 0;
     case WM_MOUSELEAVE:self->back_click_=false;self->pointer_x=-1;self->pointer_y=-1;return 0;
     case WM_CLOSE:self->close=true;return 0;
     case WM_KEYDOWN:
       self->back_click_=false;
+      if(w==VK_CONTROL) self->pointer_toggle=true;
       if(w==VK_ESCAPE&&!self->embedded) self->close=true;
       if(w=='F'&&!self->back_pressed_&&!(l&(1LL<<30))) ++self->focus_requests;
       for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=true;
       self->update_navigation();return 0;
     case WM_KEYUP:
+      if(w==VK_CONTROL) self->pointer_toggle=false;
       for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=false;
       self->update_navigation();return 0;
     case WM_SYSKEYDOWN:self->back_click_=false;break;
     case WM_MOUSEHWHEEL:self->back_click_=false;return 0;
+    case WM_SETFOCUS:self->pointer_toggle=(GetKeyState(VK_CONTROL)&0x8000)!=0;return 0;
     case WM_KILLFOCUS:
     case WM_CANCELMODE:
       if(self->telemetry_) self->telemetry_->event(msg==WM_KILLFOCUS?"viewport_focus_lost":"viewport_cancel_input");
       std::fill(std::begin(self->keys_),std::end(self->keys_),false);
+      self->pointer_toggle=false;
       self->dragging_=self->middle_dragging_=self->back_pressed_=self->back_dragging_=self->back_click_=false;
       self->camera.preview_until=0;self->update_navigation();
       if(GetCapture()==hwnd) ReleaseCapture();return 0;
@@ -164,6 +168,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     }
     case WM_MOUSEMOVE:
       self->pointer_x=GET_X_LPARAM(l);self->pointer_y=GET_Y_LPARAM(l);
+      self->pointer_toggle=(w&MK_CONTROL)!=0;
       {TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT),TME_LEAVE,hwnd,0};TrackMouseEvent(&track);}
       if(self->dragging_||self->middle_dragging_||self->back_pressed_) {
         const int x=GET_X_LPARAM(l),y=GET_Y_LPARAM(l);

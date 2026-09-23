@@ -28,10 +28,10 @@ void Renderer::resize(int width,int height) {
   SetWindowPos(window_->hwnd,nullptr,0,0,width,height,SWP_NOZORDER|SWP_NOACTIVATE);
   std::lock_guard lock(mutex_);requested_width_=width;requested_height_=height;resize_preview_until_=now()+.15;
 }
-void Renderer::pointer(int x,int y,bool click) {
+void Renderer::pointer(int x,int y,bool click,bool toggle) {
   POINT point{x,y};ClientToScreen(window_->hwnd,&point);SetCursorPos(point.x,point.y);
-  PostMessageW(window_->hwnd,WM_MOUSEMOVE,0,MAKELPARAM(x,y));
-  if(click) PostMessageW(window_->hwnd,WM_LBUTTONUP,0,MAKELPARAM(x,y));
+  PostMessageW(window_->hwnd,WM_MOUSEMOVE,toggle?MK_CONTROL:0,MAKELPARAM(x,y));
+  if(click) PostMessageW(window_->hwnd,WM_LBUTTONUP,toggle?MK_CONTROL:0,MAKELPARAM(x,y));
 }
 void Renderer::frame(const ir::Bounds &bounds) {
   if(bounds.empty) return;const auto c=bounds.center();
@@ -46,7 +46,7 @@ void Renderer::focus(const ir::Bounds &bounds) {
 void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) {snapshot_=snapshot;edit_preview_until_=now()+.15;Frame f;f.id=snapshot.revision;telemetry_.event("edit_input",f);}}
 void Renderer::interaction(bool active) {std::lock_guard lock(mutex_);if(active&&!edit_active_) interaction_revision_=snapshot_.revision+1;edit_active_=active;}
 void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources_;}
-void Renderer::select(uint64_t generation,int target,int joint) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;}
+void Renderer::select(uint64_t generation,int target,int joint,std::vector<Selection> selections) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;selections_=std::move(selections);}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
 CameraState Renderer::input_camera() {return window_->mailbox.latest();}
 void Renderer::camera_view(const std::array<float,6> &v) {window_->camera.target={v[0],v[1],v[2]};window_->camera.distance=v[3];window_->camera.yaw=v[4];window_->camera.pitch=v[5];window_->publish();}
@@ -99,9 +99,9 @@ void Renderer::run(std::stop_token stop) {
     Snapshot desired;bool edit_affects_render=false;
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;
-      int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
+      std::vector<Selection> selections;int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
       bool editing;double preview_until,resize_until;
-      {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;}
+      {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;}
       const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
         window_->width=width;window_->height=height;
@@ -230,33 +230,52 @@ void Renderer::run(std::stop_token stop) {
       bool editable=hover.instance>=0&&render_scene.instances.at(size_t(hover.instance)).prototype>=0;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
       if(!editable) hover={};
       state.hovered_detail_joint=hover.instance>=0&&hover.triangle>=0&&size_t(hover.triangle)<regions[size_t(hover.instance)].detail.size()?regions[size_t(hover.instance)].detail[size_t(hover.triangle)]:-1;
-      const bool selection_dirty=state.selection_generation!=selection_generation||state.selected_target!=selected_target||state.selected_joint!=selected_joint;
+      const bool selection_dirty=state.selection_generation!=selection_generation||state.selected_target!=selected_target||state.selected_joint!=selected_joint||state.selections!=selections;
       state.selection_generation=selection_generation;state.selected_target=selection_generation==current->generation?selected_target:-1;
-      state.selected_joint=state.selected_target>=0?selected_joint:-1;
+      state.selected_joint=state.selected_target>=0?selected_joint:-1;state.selections=selection_generation==current->generation?selections:std::vector<Selection>{};
       const int instance_key=state.selected_target>=0&&size_t(state.selected_target)<current->catalog.targets.size()?int(current->catalog.targets[size_t(state.selected_target)].instance):state.selected_target<=-5?-5-state.selected_target:-1;
       const int selected_instance=instance_key>=0&&size_t(instance_key)<render_scene.instances.size()?instance_key:-1;
       state.focus_requests=window_->focus_requests;
       if(bounds_dirty||selection_dirty) {state.selection_bounds={};
-      if(selected_instance>=0) {
+      for(const auto &selection:state.selections) {
+        if(selection[2]>=0&&size_t(selection[2])<render_scene.lights.size()) {
+          const auto &m=render_scene.lights[size_t(selection[2])].transform;
+          for(int x:{-1,1}) for(int y:{-1,1}) for(int z:{-1,1}) state.selection_bounds.add(m.point({x*.1f,y*.1f,z*.1f}));continue;
+        }
+        const int key=selection[0];const int selected_joint=selection[1];
+        const int selected_instance=key>=0&&size_t(key)<current->catalog.targets.size()?int(current->catalog.targets[size_t(key)].instance):key<=-5?-5-key:-1;
+        if(selected_instance<0||size_t(selected_instance)>=render_scene.instances.size()) continue;
+        ir::Bounds member_bounds;
+      {
         const auto &instance=render_scene.instances.at(size_t(selected_instance));const auto &mesh=render_scene.meshes.at(instance.mesh);
-        if(selected_joint<0) state.selection_bounds=instance_groups->bounds(render_scene,uint32_t(selected_instance));
+        if(selected_joint<0) member_bounds=instance_groups->bounds(render_scene,uint32_t(selected_instance));
         else {
           const auto &r=regions.at(size_t(selected_instance));
           for(size_t f=0;f<mesh.triangles.size();++f) {
             int j=f<r.detail.size()?r.detail[f]:-1;bool selected=j==selected_joint;
             for(int depth=0;j>=0&&size_t(j)<r.parents.size()&&depth<256;++depth) {selected|=j==selected_joint;j=r.parents[size_t(j)];}
-            if(selected) for(auto v:mesh.triangles[f].vertices) state.selection_bounds.add(instance.transform.point(mesh.positions[v]));
+            if(selected&&mesh.draws(mesh.triangles[f])) for(auto v:mesh.triangles[f].vertices) member_bounds.add(instance.transform.point(mesh.positions[v]));
           }
         }
-        if(state.selection_bounds.empty&&selected_joint>=0) for(size_t s=0;s<current->skeletons.skins.size();++s) {
+        if(member_bounds.empty&&selected_joint>=0) for(size_t s=0;s<current->skeletons.skins.size();++s) {
           const auto &skin=current->skeletons.skins[s];if(skin.instance!=uint32_t(selected_instance)||size_t(selected_joint)>=skin.joints.size()) continue;
           const auto &pose=runtime->effective_poses()[s];const auto &j=skin.joints[size_t(selected_joint)];const auto &p=pose[size_t(selected_joint)];const auto matrices=runtime::joint_transforms(skin,pose);
           auto center=matrices[size_t(selected_joint)].point({(j.center_cm.x+p.center_offset_cm.x)*.01f,-(j.center_cm.z+p.center_offset_cm.z)*.01f,(j.center_cm.y+p.center_offset_cm.y)*.01f});center=instance.transform.point(center);
-          state.selection_bounds.add({center.x-.01f,center.y-.01f,center.z-.01f});state.selection_bounds.add({center.x+.01f,center.y+.01f,center.z+.01f});break;
+          member_bounds.add({center.x-.01f,center.y-.01f,center.z-.01f});member_bounds.add({center.x+.01f,center.y+.01f,center.z+.01f});break;
         }
       }
+      if(!member_bounds.empty) {state.selection_bounds.add(member_bounds.minimum);state.selection_bounds.add(member_bounds.maximum);}
       }
-      auto region=runtime::hover_region(hover,selected_instance,state.selected_joint,regions);
+      }
+      std::vector<runtime::HoverRegion> selected_regions;
+      for(const auto &selection:state.selections) {
+        const int target=selection[0];
+        if(selection[2]<0&&target>=0&&size_t(target)<current->catalog.targets.size())
+          selected_regions.push_back({int(current->catalog.targets[size_t(target)].instance),selection[1]});
+      }
+      const runtime::HoverRegion active_region{selected_instance,state.selected_joint};
+      state.hover_toggle=window_->pointer_toggle;
+      auto region=runtime::selection_region(hover,active_region,selected_regions,regions,state.hover_toggle);
       if(region.instance>=0&&render_scene.instances[size_t(region.instance)].prototype>=0) region={int(instance_groups->roots[size_t(region.instance)]),-1};
       state.hovered=region.instance;state.hovered_joint=region.joint;state.hovered_triangles=overlay.triangle_count(region.instance,region.joint);
       const auto *members=region.instance>=0&&region.joint<0?&instance_groups->members[size_t(region.instance)]:nullptr;
@@ -265,10 +284,10 @@ void Renderer::run(std::stop_token stop) {
       if(presented&&!preview) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members);
       if(presented&&window_->clicks.load()!=clicks) {
         clicks=window_->clicks.load();const auto hit=picking.screen(camera,window_->click_x,window_->click_y,window_->width,window_->height);
-        state.clicks=clicks;state.hit_target=-1;state.hit_joint=-1;
+        state.clicks=clicks;state.hit_target=-1;state.hit_joint=-1;state.hit_toggle=window_->click_toggle;
         if(hit.instance>=0&&render_scene.instances.at(size_t(hit.instance)).prototype>=0) state.hit_target=runtime::instance_selection(instance_groups->roots[size_t(hit.instance)]);
         for(size_t t=0;t<current->catalog.targets.size();++t) if(int(current->catalog.targets[t].instance)==hit.instance) {
-          const auto selected=runtime::hover_region(hit,selected_instance,state.selected_joint,regions);
+          const auto selected=runtime::selection_region(hit,active_region,selected_regions,regions,state.hit_toggle);
           if(selected.instance>=0) {state.hit_target=int(t);state.hit_joint=selected.joint;}
         }
       }
@@ -284,6 +303,9 @@ void Renderer::run(std::stop_token stop) {
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
       state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();state.graft_seams=runtime->graft_seams();
+      state.effective_roots.assign(current->catalog.targets.size(),{});
+      for(size_t t=0;t<current->catalog.targets.size();++t) for(size_t s=0;s<current->skeletons.skins.size();++s)
+        if(current->catalog.targets[t].instance==current->skeletons.skins[s].instance&&!runtime->effective_poses()[s].empty()) state.effective_roots[t]=runtime->effective_poses()[s][0];
       if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform||!delta.meshes.empty()) {
         const auto diagnostic_begin=now();
         const bool all=measured_evaluation==UINT64_MAX||state.bounds.size()!=current->catalog.targets.size();

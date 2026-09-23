@@ -44,6 +44,7 @@ public:
   GLContext present_context,render_context;
   std::atomic<bool> close{false},minimized{false},size_changed{false};
   std::atomic<int> pointer_x{-1},pointer_y{-1},click_x{-1},click_y{-1};
+  std::atomic<bool> click_toggle{false},pointer_toggle{false};
   std::atomic<uint64_t> clicks{0},focus_requests{0};
   CameraState camera;
   CameraMailbox mailbox;
