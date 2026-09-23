@@ -10,6 +10,7 @@ class CyclesAdapter {
   ccl::Scene &scene_;
   std::vector<ccl::Shader *> shaders_;
   std::vector<ir::Texture> textures_;
+  std::vector<float> bump_distances_;
   std::vector<std::vector<ccl::Mesh *>> meshes_;
   struct HairBinding {ccl::Hair *hair;std::vector<uint32_t> vertices;};
   std::vector<std::vector<HairBinding>> hairs_;
@@ -24,7 +25,7 @@ class CyclesAdapter {
   std::vector<ir::Vec3> light_power_;
   void environment(const ir::RenderOptions &options);
   bool loaded_=false;
-  void material(ccl::Shader &shader,const ir::Material &value);
+  void material(ccl::Shader &shader,const ir::Material &value,float texel_distance=0);
 public:
   explicit CyclesAdapter(ccl::Scene &scene):scene_(scene) {}
   void load(const ir::Scene &scene);

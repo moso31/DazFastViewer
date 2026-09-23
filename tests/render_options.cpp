@@ -1,6 +1,7 @@
 #include "editor/document.h"
 #include "render_ir/options_json.h"
 #include "bench/camera.h"
+#include "render_ir/sun_sky.h"
 #include <fstream>
 #include <iostream>
 using namespace dfv;
@@ -43,6 +44,10 @@ int main() {try {
   const auto count=loaded.scene.lights.size();ir::add_studio(loaded.scene);require(loaded.scene.lights.size()==count,"覆盖了保存的环境光照");
   editor::Document document;document.loaded=loaded;auto snapshot=editor::initial_snapshot(document);require(snapshot.options==o,"快照未继承渲染选项");editor::collect_resources(document);require(document.loaded.scene.options==o,"资源回收丢失环境");
   CameraState camera;camera.yaw=0;camera.pitch=0;camera.target={};camera.distance=2;camera.move(1,0,0,1);require(std::abs(camera.target.y-1.2f)<1e-6f&&camera.distance==2,"W 位移错误");camera.move(-1,0,0,1);require(std::abs(camera.target.y)<1e-6f,"S 恢复错误");camera.move(0,1,1,1);require(camera.target.x>0&&camera.target.z>0,"DE 移动方向错误");
+  camera.distance=320000;camera.dolly(1);require(camera.distance>280000&&camera.distance<320000,"大场景聚焦后滚轮突然跳回 2000 米");
+  ir::OptionNode solar;for(const auto &[id,value]:std::vector<std::pair<std::string,double>>{{"SS Day",2458929},{"SS Time",43200},{"SS UTC Offset",0},{"SS Latitude",0},{"SS Longitude",0}}) {ir::Option p;p.id=id;p.value={value};solar.parameters.push_back(p);}
+  const auto noon=ir::solar_direction(solar);require(noon.z>.998f,"春分赤道正午太阳方向错误");solar.parameters[1].value={0};require(ir::solar_direction(solar).z<-.998f,"午夜太阳方向错误");
+  solar.parameters[1].value={43200};solar.parameters[4].value={90};require(std::abs(ir::solar_direction(solar).z)<.05f,"经度没有改变太阳时角");
   runtime::TransformValues transform;transform.general_scale=2;require(runtime::make_transform(transform).point({1,0,0}).x==2,"总体缩放未应用");
   std::cout<<"render options / persistence / exposure / camera: PASS\n";return 0;
 } catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}}

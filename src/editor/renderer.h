@@ -43,6 +43,7 @@ struct RenderStatus {
   double present_time=0;
   uint64_t sessions=0;
   std::vector<uint64_t> mesh_hashes;
+  std::vector<runtime::GraftSeam> graft_seams;
   std::vector<std::array<float,12>> instance_transforms;
   std::string error;
   std::string edit_error;
@@ -74,6 +75,7 @@ public:
   void resize(int width,int height);
   void pointer(int x,int y,bool click=false);
   void select(uint64_t generation,int target,int joint=-1);
+  void camera_view(const std::array<float,6> &view);
   void edit(const Snapshot &snapshot);
   void interaction(bool active);
   void retry_resources();

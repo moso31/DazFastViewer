@@ -41,7 +41,7 @@ void PickingScene::update(const ir::Scene &scene,const std::vector<uint8_t> &pic
 void PickingScene::mesh(const ir::Scene &scene,uint32_t index) {
   auto &tree=meshes_.at(index);tree.faces.clear();tree.branches.clear();const auto &mesh=scene.meshes.at(index);
   tree.faces.reserve(mesh.triangles.size());
-  for(size_t t=0;t<mesh.triangles.size();++t) {const auto &v=mesh.triangles[t].vertices;tree.faces.push_back({mesh.positions[v[0]],mesh.positions[v[1]],mesh.positions[v[2]],-1,int(t)});}
+  for(size_t t=0;t<mesh.triangles.size();++t) {if(!mesh.draws(mesh.triangles[t])) continue;const auto &v=mesh.triangles[t].vertices;tree.faces.push_back({mesh.positions[v[0]],mesh.positions[v[1]],mesh.positions[v[2]],-1,int(t)});}
   if(!tree.faces.empty()) build(tree,0,int(tree.faces.size()));++stats_.mesh_builds;
 }
 void PickingScene::instance(const ir::Scene &scene,uint32_t index) {
@@ -120,9 +120,26 @@ JointRegions joint_regions(const ir::Mesh &mesh,const Skin &skin) {
     result.detail.push_back(detail);result.body.push_back(head?result.head:detail);
   }return result;
 }
-std::vector<uint8_t> viewport_pick_mask(size_t instances,const std::vector<Target> &targets) {
-  std::vector<uint8_t> result(instances,1);
-  for(const auto &target:targets) if(!target.conform_target.empty()) result.at(target.instance)=0;
+std::vector<uint8_t> viewport_pick_mask(const ir::Scene &scene,const std::vector<Target> &targets) {
+  std::vector<uint8_t> result(scene.instances.size(),1);
+  for(const auto &target:targets) if(!target.conform_target.empty()&&!scene.meshes.at(scene.instances.at(target.instance).mesh).graft_target_vertices) result.at(target.instance)=0;
+  return result;
+}
+InstanceGroups::InstanceGroups(const ir::Scene &scene):roots(scene.instances.size()),members(scene.instances.size()) {
+  std::map<std::string,uint32_t> groups;
+  for(uint32_t i=0;i<scene.instances.size();++i) {
+    const auto &v=scene.instances[i];uint32_t root=i;
+    if(v.prototype>=0&&!v.instance_group.empty()) root=groups.emplace(v.instance_group,i).first->second;
+    roots[i]=root;members[root].push_back(i);
+  }
+}
+ir::Bounds InstanceGroups::bounds(const ir::Scene &scene,uint32_t instance) const {
+  ir::Bounds result;
+  for(auto i:members.at(roots.at(instance))) {const auto &v=scene.instances.at(i);if(!v.visible) continue;
+    const auto &mesh=scene.meshes.at(v.mesh);
+    for(const auto &t:mesh.triangles) if(mesh.draws(t)) for(auto p:t.vertices) result.add(v.transform.point(mesh.positions.at(p)));
+    for(const auto &c:mesh.curves) for(auto p:c.vertices) result.add(v.transform.point(mesh.positions.at(p)));
+  }
   return result;
 }
 HoverRegion hover_region(const PickHit &hit,int selected_instance,int selected_joint,const std::vector<JointRegions> &regions) {

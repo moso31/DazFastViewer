@@ -1,23 +1,27 @@
 #include "viewport/overlay.h"
+#include <set>
 
 namespace dfv {
-void HoverOverlay::release() {for(auto id:lists_) if(id) glDeleteLists(id,1);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) glDeleteLists(part.first,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();}
+void HoverOverlay::release() {std::set<GLuint> unique;for(auto id:lists_) if(id) unique.insert(id);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) unique.insert(part.first);for(auto id:unique) glDeleteLists(id,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();}
 void HoverOverlay::update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions) {
   release();
   const auto size=scene.instances.size();lists_.resize(size);parts_.resize(size);triangle_counts_.resize(size);transforms_.resize(size);visible_.resize(size);
   for(size_t i=0;i<size;++i) {transforms_[i]=scene.instances[i].transform;visible_[i]=scene.instances[i].visible;rebuild(scene,regions,i);}
 }
 void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i) {
-    const auto &instance=scene.instances[i];if(lists_[i]) glDeleteLists(lists_[i],1);
+    const auto &instance=scene.instances[i];
+    if(instance.prototype>=0) {const auto p=size_t(instance.prototype);lists_[i]=lists_[p];parts_[i]=parts_[p];triangle_counts_[i]=triangle_counts_[p];return;}
+    if(lists_[i]) glDeleteLists(lists_[i],1);
     for(const auto &[joint,part]:parts_[i]) glDeleteLists(part.first,1);parts_[i].clear();
     const auto id=glGenLists(1);lists_[i]=id;glNewList(id,GL_COMPILE);glBegin(GL_TRIANGLES);
     const auto &mesh=scene.meshes[instance.mesh];
     auto triangle=[&](const ir::Triangle &face) {for(auto v:face.vertices) {const auto p=mesh.positions[v];glVertex3f(p.x,p.y,p.z);}};
-    for(const auto &face:mesh.triangles) triangle(face);
+    size_t count=0;for(const auto &face:mesh.triangles) if(mesh.draws(face)) {triangle(face);++count;}
     glEnd();glEndList();
-    triangle_counts_[i]=mesh.triangles.size();
+    triangle_counts_[i]=count;
     std::map<int,std::vector<size_t>> by_joint;
     if(i<regions.size()) for(size_t t=0;t<regions[i].detail.size();++t) {
+      if(!mesh.draws(mesh.triangles[t])) continue;
       const auto &region=regions[i];const int detail=region.detail[t];if(detail>=0) by_joint[detail].push_back(t);
       if(region.head>=0&&region.body[t]==region.head&&detail!=region.head) by_joint[region.head].push_back(t);
     }
@@ -35,14 +39,15 @@ size_t HoverOverlay::triangle_count(int hovered,int joint) const {
   if(hovered<0||size_t(hovered)>=lists_.size()) return 0;
   if(joint<0) return triangle_counts_[size_t(hovered)];const auto found=parts_[size_t(hovered)].find(joint);return found==parts_[size_t(hovered)].end()?0:found->second.second;
 }
-void HoverOverlay::draw(const CameraState &camera,int width,int height,int hovered,int joint) {
-  if(hovered<0||size_t(hovered)>=lists_.size()||!visible_[size_t(hovered)]) return;
+void HoverOverlay::draw(const CameraState &camera,int width,int height,int hovered,int joint,const std::vector<uint32_t> *members) {
+  if(hovered<0||size_t(hovered)>=lists_.size()||(!members&&!visible_[size_t(hovered)])) return;
   auto highlight=lists_[size_t(hovered)];
   if(joint>=0) {const auto found=parts_[size_t(hovered)].find(joint);if(found==parts_[size_t(hovered)].end()) return;highlight=found->second.first;}
   glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_CULL_FACE);
   glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadIdentity();
-  const double e=std::tan(.4)*.01,x=e*std::max(1.,double(width)/height),y=e*std::max(1.,double(height)/width);
-  glFrustum(-x,x,-y,y,.01,10000);
+  const double near=std::max(.00001,double(camera.distance)*1e-5),far=std::max(10000.,double(camera.distance)*4);
+  const double e=std::tan(.4)*near,x=e*std::max(1.,double(width)/height),y=e*std::max(1.,double(height)/width);
+  glFrustum(-x,x,-y,y,near,far);
   const auto m=camera.matrix();const float view[]={m[0],m[1],-m[2],0,m[4],m[5],-m[6],0,m[8],m[9],-m[10],0,
     -(m[0]*m[3]+m[4]*m[7]+m[8]*m[11]),-(m[1]*m[3]+m[5]*m[7]+m[9]*m[11]),m[2]*m[3]+m[6]*m[7]+m[10]*m[11],1};
   glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadMatrixf(view);
@@ -50,7 +55,9 @@ void HoverOverlay::draw(const CameraState &camera,int width,int height,int hover
   auto draw_instance=[&](size_t i,GLuint list) {const auto &m=transforms_[i].value;const float matrix[]={m[0],m[4],m[8],0,m[1],m[5],m[9],0,m[2],m[6],m[10],0,m[3],m[7],m[11],1};glPushMatrix();glMultMatrixf(matrix);glCallList(list);glPopMatrix();};
   for(size_t i=0;i<lists_.size();++i) if(visible_[i]) draw_instance(i,lists_[i]);
   glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_FALSE);glDepthFunc(GL_EQUAL);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
-  glColor4f(1.f,.88f,.32f,.22f);draw_instance(size_t(hovered),highlight);
+  glColor4f(1.f,.88f,.32f,.22f);
+  if(members) {for(auto i:*members) if(visible_[i]) draw_instance(i,lists_[i]);}
+  else draw_instance(size_t(hovered),highlight);
   glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
 }
 }

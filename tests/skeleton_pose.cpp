@@ -24,6 +24,9 @@ static void unit_tests() {
   auto skin=fixture();auto pose=skin.initial;const std::vector<ir::Vec3> base={{2,0,0}};
   require(near(runtime::deform(skin,pose,base)[0],base[0],0),"零姿势必须逐位恢复原顶点");
   pose[1].rotation_degrees.z=90;require(near(runtime::deform(skin,pose,base)[0],{1,0,1}),"骨骼枢轴或厘米 / Z 向上转换错误");
+  skin.separate_scale_weights=true;require(near(runtime::deform(skin,pose,base)[0],{1,0,1}),"未使用的缩放权重阻止刚性旋转");
+  auto scaled=pose;scaled[1].scale.x=2;rejects([&]{runtime::deform(skin,scaled,base);},"独立缩放权重被静默忽略");skin.separate_scale_weights=false;
+  skin.static_local_weights=true;require(near(runtime::deform(skin,skin.initial,base)[0],base[0]),"未激活的 TriAx 阻塞基础几何");rejects([&]{runtime::deform(skin,pose,base);},"TriAx 变换被静默忽略");skin.static_local_weights=false;
   pose[0].translation_cm={100,200,300};require(near(runtime::deform(skin,pose,base)[0],{2,-3,3}),"骨骼父节点平移错误");
   pose=skin.initial;pose[0].rotation_degrees.z=90;require(near(runtime::deform(skin,pose,base)[0],{0,0,2}),"子骨骼未继承父节点旋转与枢轴位移");
   pose=skin.initial;skin.joints[1].orientation_degrees={0,0,90};pose[1].rotation_degrees.x=90;
@@ -92,7 +95,8 @@ static void unit_tests() {
   auto posed=rigid.skins[0].initial;posed[1].rotation_degrees.z=90;require(near(runtime::deform(rigid.skins[0],posed,{{1,0,0}})[0],{0,0,1}),"刚性 Local 绑定的实际旋转错误");
   weight["local_weights"]["y"]["values"][0][1]=.5;std::ofstream(dsf)<<local.dump();rejects([&] {daz::load_skeletons(input);},"不同轴权重被误当作刚性 General");
   auto scale=asset;scale["modifier_library"][0]["skin"]["joints"][0]["scale_weights"]=map;std::ofstream(dsf)<<scale.dump();require(daz::load_skeletons(input).skins.size()==2,"相同缩放图使 General 绑定失败");
-  scale["modifier_library"][0]["skin"]["joints"][0]["scale_weights"]["values"][0][1]=.5;std::ofstream(dsf)<<scale.dump();rejects([&] {daz::load_skeletons(input);},"独立缩放图被静默忽略");
+  scale["modifier_library"][0]["skin"]["joints"][0]["scale_weights"]["values"][0][1]=.5;std::ofstream(dsf)<<scale.dump();auto limited=daz::load_skeletons(input);require(limited.skins[0].separate_scale_weights,"独立缩放图能力边界丢失");
+  auto unsupported=limited.skins[0].initial;unsupported[1].scale.x=2;rejects([&]{runtime::deform(limited.skins[0],unsupported,{{1,0,0}});},"激活的独立缩放权重没有拒绝");
   asset["modifier_library"][0]["skin"]["joints"][0]["node_weights"]["count"]=2;std::ofstream(dsf)<<asset.dump();rejects([&] {daz::load_skeletons(input);},"权重 count 不一致未拒绝");
   asset["modifier_library"][0]["skin"]["joints"][0]["node_weights"]["count"]=1;asset["node_library"][0]["parent"]="#missing";std::ofstream(dsf)<<asset.dump();rejects([&] {daz::load_skeletons(input);},"缺失父骨骼未拒绝");
 }

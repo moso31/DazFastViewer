@@ -17,7 +17,7 @@ class HoverOverlay {
 public:
   void update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions);
   void apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta);
-  void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1);
+  void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1,const std::vector<uint32_t> *members=nullptr);
   size_t triangle_count(int hovered,int joint=-1) const;
   void release();
 };

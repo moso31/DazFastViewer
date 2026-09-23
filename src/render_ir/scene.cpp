@@ -20,7 +20,9 @@ Transform operator*(const Transform &a,const Transform &b) {
 }
 Transform inverse(const Transform &m) {
   const auto &a=m.value;const double determinant=double(a[0])*(double(a[5])*a[10]-double(a[6])*a[9])-double(a[1])*(double(a[4])*a[10]-double(a[6])*a[8])+double(a[2])*(double(a[4])*a[9]-double(a[5])*a[8]);
-  if(!std::isfinite(determinant)||std::abs(determinant)<1e-15) throw std::runtime_error("Fit To 的绑定矩阵不可逆");
+  const double volume=std::hypot(double(a[0]),double(a[4]),double(a[8]))*std::hypot(double(a[1]),double(a[5]),double(a[9]))*std::hypot(double(a[2]),double(a[6]),double(a[10]));
+  // 小比例城市/散布对象的可逆矩阵可以有很小的行列式，应按轴长判定退化。
+  if(!std::isfinite(determinant)||!std::isfinite(volume)||volume==0||std::abs(determinant)<=1e-14*volume) throw std::runtime_error("变换矩阵不可逆");
   ir::Transform result;auto &r=result.value;
   r[0]=float((double(a[5])*a[10]-double(a[6])*a[9])/determinant);r[1]=float((double(a[2])*a[9]-double(a[1])*a[10])/determinant);r[2]=float((double(a[1])*a[6]-double(a[2])*a[5])/determinant);
   r[4]=float((double(a[6])*a[8]-double(a[4])*a[10])/determinant);r[5]=float((double(a[0])*a[10]-double(a[2])*a[8])/determinant);r[6]=float((double(a[2])*a[4]-double(a[0])*a[6])/determinant);
@@ -45,12 +47,13 @@ void validate(const Camera &camera) {
   for(float f:camera.transform.value) if(!std::isfinite(f)) throw std::runtime_error("IR: 相机矩阵包含非有限值");
 }
 void validate(const Material &m,size_t texture_count) {
+  for(float f:{m.displacement_strength,m.displacement_min,m.displacement_max}) if(!std::isfinite(f)) throw std::runtime_error("IR: 置换参数含非有限值");
   for(float f:{m.base_color.x,m.base_color.y,m.base_color.z,m.roughness,m.metallic,m.opacity,m.transmission,m.ior,m.normal_strength,m.bump_strength,m.bump_distance})
     if(!std::isfinite(f)) throw std::runtime_error("IR: 无效材质参数");
   for(float f:{m.specular,m.anisotropy,m.anisotropy_rotation,m.translucency,m.subsurface,m.subsurface_anisotropy,m.coat,m.coat_roughness,m.coat_ior,
       m.dual_weight,m.dual_ratio,m.dual_roughness1,m.dual_roughness2,m.dual_specular,m.hair_root_radius,m.hair_tip_radius,m.hair_radial_roughness,m.hair_melanin,m.hair_redness,m.uv_scale.x,m.uv_scale.y,m.uv_offset.x,m.uv_offset.y})
     if(!std::isfinite(f)) throw std::runtime_error("IR: 扩展材质参数无效");
-  for(auto v:{m.subsurface_radius,m.translucency_color,m.coat_color,m.specular_color,m.hair_tip_color}) for(float f:{v.x,v.y,v.z})
+  for(auto v:{m.subsurface_radius,m.subsurface_color,m.translucency_color,m.coat_color,m.specular_color,m.hair_tip_color}) for(float f:{v.x,v.y,v.z})
     if(!std::isfinite(f)||f<0) throw std::runtime_error("IR: 材质颜色或散射半径无效");
   if(m.hair_root_radius<0||m.hair_tip_radius<0) throw std::runtime_error("IR: 发丝半径不能为负");
   if(m.bump_strength<0 || m.bump_distance<0) throw std::runtime_error("IR: 凹凸强度或距离不能为负");
@@ -78,6 +81,7 @@ void Scene::validate() const {
     }
   }
   for(const auto &i:instances) {
+    require(i.prototype>=-1&&(i.prototype<0||(size_t(i.prototype)<instances.size()&&instances[size_t(i.prototype)].prototype<0)),"IR: 实例原型引用无效");
     require(i.mesh<meshes.size(),"IR: 实例网格索引越界");
     require(i.materials.size()==meshes[i.mesh].material_slots.size(),"IR: 实例材质槽数量不匹配");
     for(auto m:i.materials) require(m<materials.size(),"IR: 实例材质索引越界");

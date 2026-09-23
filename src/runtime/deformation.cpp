@@ -50,6 +50,16 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
   for(const auto &skin:skins) previous_poses_.push_back(skin.initial);
   // Fit To 决定变换继承，包含父层级与适配关系方向不同的头发 / 头皮链。
   for(size_t t:conform_.order()) if(const auto *link=conform_.link(t)) morph_.bind_parent(t,link->source);
+  // Fit To 的拓扑顺序也保证嵌套插件先对齐宿主，再对齐自己的附件。
+  for(size_t t:conform_.order()) {
+    const auto follower=targets[t].instance;const auto &mesh=scene.meshes.at(scene.instances.at(follower).mesh);
+    if(mesh.graft_vertex_pairs.empty()||targets[t].conform_target.empty()) continue;
+    const auto *link=conform_.link(t);if(!link) throw std::runtime_error("GeoGraft 缺少 Fit To 绑定");
+    const auto source=targets[link->source].instance;const auto &host=scene.meshes.at(scene.instances.at(source).mesh);
+    if(host.positions.size()!=mesh.graft_target_vertices||(mesh.graft_target_polygons&&host.source_polygon_count!=mesh.graft_target_polygons)) throw std::runtime_error("GeoGraft 目标拓扑不匹配");
+    for(const auto &pair:mesh.graft_vertex_pairs) if(pair[0]>=mesh.positions.size()||pair[1]>=host.positions.size()) throw std::runtime_error("GeoGraft 顶点对越界");
+    grafts_.push_back({follower,source});
+  }
   for(size_t t=0;t<targets.size();++t) if(!targets[t].rigid_follow.target.empty()) {
     const auto &follow=targets[t].rigid_follow;size_t source=0;
     while(source<targets.size()&&follow.target!="#"+targets[source].id.substr(0,targets[source].id.rfind('/'))) ++source;
@@ -125,7 +135,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     // 实例编辑不参与骨骼 / ERC 输入；沿已有依赖树传播矩阵即可。
     for(const auto &p:values) validate_transform(p.transform);
     for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);}
-    auto delta=follow_surfaces(collision_.evaluate(morph_.evaluate()));previous_=values;return delta;
+    auto delta=weld_grafts(follow_surfaces(collision_.evaluate(morph_.evaluate())));previous_=values;return delta;
   }
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
@@ -153,8 +163,26 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*moved*a.inverse_bind);
   }
   conform_.project(weights,morph_);
-  auto delta=follow_surfaces(collision_.evaluate(skin_.evaluate(morph_.evaluate())));
+  auto delta=weld_grafts(follow_surfaces(collision_.evaluate(skin_.evaluate(morph_.evaluate()))));
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;evaluated_=true;return delta;
+}
+ir::Delta DeformationRuntime::weld_grafts(ir::Delta delta) {
+  for(auto &g:grafts_) {
+    const auto mesh_index=scene_.instances[g.follower].mesh,host_index=scene_.instances[g.source].mesh;
+    // 消去共同祖先变换，整体移动角色时不重复修改几何或引入舍入漂移。
+    const auto relative=morph_.relative_transform(g.follower,g.source);
+    if(g.initialized&&relative.value==g.relative.value&&std::none_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==mesh_index||e.index==host_index;})) continue;
+    g.initialized=true;g.relative=relative;
+    auto &mesh=scene_.meshes[mesh_index];const auto &host=scene_.meshes[host_index];bool changed=false;
+    for(const auto &pair:mesh.graft_vertex_pairs) {
+      const auto point=relative.point(host.positions[pair[1]]);auto &p=mesh.positions[pair[0]];
+      changed|=p.x!=point.x||p.y!=point.y||p.z!=point.z;p=point;
+    }
+    if(!changed) continue;
+    auto found=std::find_if(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==mesh_index;});
+    if(found==delta.meshes.end()) delta.meshes.push_back({mesh_index,mesh.positions});else found->positions=mesh.positions;
+  }
+  return delta;
 }
 ir::Delta DeformationRuntime::follow_surfaces(ir::Delta delta) {
   for(const auto &a:surface_attachments_) {
@@ -175,6 +203,19 @@ ir::Delta DeformationRuntime::follow_surfaces(ir::Delta delta) {
     if(found==delta.instances.end()) delta.instances.push_back(edit);else *found=edit;
   }
   return delta;
+}
+std::vector<GraftSeam> DeformationRuntime::graft_seams() const {
+  std::vector<GraftSeam> result;
+  for(const auto &g:grafts_) {
+    const auto &follower=scene_.instances[g.follower],&source=scene_.instances[g.source];
+    const auto &mesh=scene_.meshes[follower.mesh],&host=scene_.meshes[source.mesh];GraftSeam seam{g.follower,g.source,mesh.graft_vertex_pairs.size()};
+    for(const auto &pair:mesh.graft_vertex_pairs) {
+      const auto a=follower.transform.point(mesh.positions[pair[0]]),b=source.transform.point(host.positions[pair[1]]);
+      const double x=double(a.x)-b.x,y=double(a.y)-b.y,z=double(a.z)-b.z;seam.max_gap_m=std::max(seam.max_gap_m,std::sqrt(x*x+y*y+z*z));
+    }
+    result.push_back(seam);
+  }
+  return result;
 }
 FormulaStats DeformationRuntime::formula_stats() const {FormulaStats out;for(const auto &f:formulas_) {out.expressions+=f->stats().expressions;out.channels+=f->stats().channels;}return out;}
 }

@@ -16,6 +16,8 @@ struct ParameterControl {
   double slider_minimum=0,slider_maximum=1;
   int morph=-1;
   bool enabled=true,visible=true;
+  enum class Format {number,date,time};
+  Format format=Format::number;
   std::vector<std::string> choices;
   std::set<int> disabled_choices;
   std::function<double()> read;

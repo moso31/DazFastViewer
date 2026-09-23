@@ -7,6 +7,7 @@
 
 namespace dfv::runtime {
 struct PayloadProgress {size_t pending=0;std::string error;};
+struct GraftSeam {uint32_t follower=0,source=0;size_t pairs=0;double max_gap_m=0;};
 class DeformationRuntime {
   const std::vector<Target> &targets_;
   const std::vector<Skin> &skins_;
@@ -24,11 +25,14 @@ class DeformationRuntime {
   std::vector<Attachment> attachments_;
   struct SurfaceAttachment {size_t target,source;ir::Transform frame;std::vector<ir::Vec3> reference;};
   std::vector<SurfaceAttachment> surface_attachments_;
+  struct Graft {uint32_t follower,source;ir::Transform relative;bool initialized=false;};
+  std::vector<Graft> grafts_;
   ir::Scene &scene_;
   std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
   bool evaluated_=false;
   bool same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const;
   ir::Delta follow_surfaces(ir::Delta delta);
+  ir::Delta weld_grafts(ir::Delta delta);
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
 public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs);
@@ -42,6 +46,7 @@ public:
   const auto &conform_links() const {return conform_.links();}
   const auto &effective() const {return effective_;}
   const auto &effective_poses() const {return effective_poses_;}
+  std::vector<GraftSeam> graft_seams() const;
   const auto &formula_values(size_t target) const {return formulas_.at(target)->values();}
 };
 // Alias 与原参数共享编辑值；渲染后的 ERC 结果另行显示，不写回用户输入。

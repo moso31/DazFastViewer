@@ -55,7 +55,8 @@ bool Display::update_begin(const Params &p,int width,int height) {
   if(writing_<0) {telemetry_.skipped++;window_.render_context.deactivate();return false;}
   if(upload_) {glWaitSync(upload_,0,GL_TIMEOUT_IGNORED);glDeleteSync(upload_);upload_=nullptr;}
   allocate(width,height);
-  auto &s=slots_[writing_];s.frame={telemetry_.produced.fetch_add(1)+1,epoch_.load(),samples_.load(),width,height,now()};
+  auto &s=slots_[writing_];const auto samples=samples_.load();
+  s.frame={samples>0?telemetry_.produced.fetch_add(1)+1:0,epoch_.load(),samples,width,height,now()};
   telemetry_.event("display_begin",s.frame,(now()-begin)*1000);
   return true;
 }
@@ -64,6 +65,12 @@ void Display::update_end() {
   // Cycles 在写入新 PBO 前已注销旧 CUDA 注册；现在才释放旧 GL 对象。
   if(retired_pbo_) {glDeleteBuffers(1,&retired_pbo_);retired_pbo_=0;}
   auto &s=slots_[writing_];
+  // 收敛/取消后的空工作会更新显示缓冲，但不能覆盖最后有效帧。
+  // 正常完成驱动回调，避免把主动丢弃误报为 interop 初始化失败。
+  if(s.frame.samples<=0) {
+    {std::lock_guard lock(slots_mutex_);s.state=State::idle;}
+    telemetry_.skipped++;writing_=-1;window_.render_context.deactivate();return;
+  }
   glBindTexture(GL_TEXTURE_2D,s.texture);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
   glTexSubImage2D(GL_TEXTURE_2D,0,0,0,s.frame.width,s.frame.height,GL_RGBA,GL_HALF_FLOAT,nullptr);
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);glBindTexture(GL_TEXTURE_2D,0);

@@ -119,17 +119,26 @@ class Editor final:public QMainWindow {
   nlohmann::json navigation_checks_=nlohmann::json::array();
   bool attachment_test_=false;std::vector<std::array<int,3>> attachment_cases_;nlohmann::json attachment_report_=nlohmann::json::array();
   bool capture_test_=false;
+  QStringList selection_test_labels_;bool focus_only_test_=false;size_t selection_test_case_=0;
+  int selection_test_key_=-1,selection_test_instance_=-1,selection_probe_=0;
+  uint64_t selection_test_epoch_=0,selection_test_clicks_=0;QPoint selection_probe_point_;
+  nlohmann::json selection_checks_=nlohmann::json::array();
   bool capture_head_=false;
   int capture_samples_=16;
   double capture_seconds_=0; qint64 capture_started_=0;bool capture_timed_=false;
   nlohmann::json capture_records_=nlohmann::json::array();
   QString visibility_label_;
+  QStringList visibility_labels_;int visibility_case_=0;
+  nlohmann::json visibility_checks_=nlohmann::json::array();
   int visibility_target_=-1;
   bool visibility_initial_=true;
   size_t visibility_geometry_updates_=0;
   QStringList capture_targets_;
   bool capture_front_=false;
+  std::optional<std::array<float,6>> capture_view_;
   bool lifecycle_test_=false;
+  std::filesystem::path scene_reopen_file_;
+  nlohmann::json scene_reopen_checks_=nlohmann::json::array();
   std::filesystem::path lifecycle_first_,lifecycle_second_;
   std::weak_ptr<const Document> retired_document_;
   nlohmann::json lifecycle_samples_=nlohmann::json::array();
@@ -207,14 +216,42 @@ class Editor final:public QMainWindow {
   void rebuild_hierarchy() {
     QSignalBlocker block(hierarchy_);hierarchy_->clear();
     std::map<std::string,QTreeWidgetItem *> objects;
+    std::set<std::string> containers;
     auto identify=[](QTreeWidgetItem *item,int target,int joint=-1,int light=-1) {item->setData(0,Qt::UserRole,target);item->setData(0,Qt::UserRole+1,joint);item->setData(0,Qt::UserRole+2,light);};
     std::vector<QTreeWidgetItem *> items;
+    for(const auto &node:document_->loaded.nodes) if(node.group) {
+      auto *item=new QTreeWidgetItem(hierarchy_,{text(node.label.empty()?node.id:node.label)});identify(item,-4);objects[node.id]=item;
+      item->setToolTip(0,QStringLiteral("场景组"));
+      containers.insert(node.id);
+    }
     for(size_t i=0;i<document_->catalog.targets.size();++i) {
       const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(0,snapshot_.values[i].visible?Qt::Checked:Qt::Unchecked);items.push_back(item);
       for(const auto &object:document_->loaded.objects) if(object.instance==target.instance) objects[object.id]=item;
       for(const auto &skin:document_->skeletons.skins) if(skin.instance==target.instance) {
         std::vector<QTreeWidgetItem *> bones;
         for(size_t j=0;j<skin.joints.size();++j) {const auto &joint=skin.joints[j];auto *bone=joint.parent<0?item:new QTreeWidgetItem(bones[size_t(joint.parent)],{text(joint.label)});if(joint.parent>=0) identify(bone,int(i),int(j));bones.push_back(bone);if(!joint.scene_id.empty()) objects.emplace(joint.scene_id,bone);}
+      }
+    }
+    const runtime::InstanceGroups instance_groups(document_->loaded.scene);
+    for(uint32_t i=0;i<document_->loaded.scene.instances.size();++i) {
+      const auto &instance=document_->loaded.scene.instances[i];if(instance.prototype<0) continue;
+      if(instance_groups.roots[i]!=i) continue;
+      auto &parent=objects[instance.instance_node];
+      if(!parent) {
+        auto n=std::find_if(document_->loaded.nodes.begin(),document_->loaded.nodes.end(),[&](const auto &n){return n.id==instance.instance_node;});
+        parent=new QTreeWidgetItem(hierarchy_,{text(n==document_->loaded.nodes.end()?instance.instance_node:n->label)});identify(parent,-4);containers.insert(instance.instance_node);
+      }
+      auto *item=instance.instance_group==instance.instance_node?parent:new QTreeWidgetItem(parent,{text(instance.instance_label)});
+      identify(item,runtime::instance_selection(i));item->setData(0,Qt::UserRole+3,text(instance.instance_group));item->setToolTip(0,QStringLiteral("Instance · ")+text(instance.instance_label));
+    }
+    // 组自身也要挂在原父组下；先建全体节点，再连接，避免依赖文件顺序。
+    for(const auto &[id,item]:objects) item->setData(0,Qt::UserRole+3,text(id));
+    for(const auto &node:document_->loaded.nodes) if(containers.contains(node.id)) {
+      auto parent=node.parent;std::set<std::string> visited{node.id};
+      while(parent.starts_with('#')&&visited.insert(parent.substr(1)).second) {
+        const auto id=parent.substr(1);
+        if(objects.contains(id)) {auto *item=objects.at(node.id);hierarchy_->takeTopLevelItem(hierarchy_->indexOfTopLevelItem(item));objects.at(id)->addChild(item);break;}
+        auto found=std::find_if(document_->loaded.nodes.begin(),document_->loaded.nodes.end(),[&](const auto &n){return n.id==id;});if(found==document_->loaded.nodes.end()) break;parent=found->parent;
       }
     }
     for(size_t i=0;i<items.size();++i) {
@@ -225,6 +262,14 @@ class Editor final:public QMainWindow {
     }
     for(int option=0;option<2;++option) {const auto &node=option==0?snapshot_.options.environment:snapshot_.options.tonemapper;if(!node.id.empty()) {auto *item=new QTreeWidgetItem(hierarchy_,{text(node.label)});identify(item,option==0?-2:-3);}}
     for(size_t i=0;i<snapshot_.lights.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{QStringLiteral("灯光 · ")+text(snapshot_.lights[i].id)});identify(item,-1,-1,int(i));}
+  }
+  nlohmann::json hierarchy_report() const {
+    auto rows=nlohmann::json::array();
+    for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) {
+      auto *item=*it;rows.push_back({{"id",item->data(0,Qt::UserRole+3).toString().toStdString()},{"label",item->text(0).toStdString()},
+        {"parent",item->parent()?item->parent()->data(0,Qt::UserRole+3).toString().toStdString():""},{"target",item->data(0,Qt::UserRole).toInt()}});
+    }
+    return rows;
   }
   void set_visible(size_t target,bool visible) {
     if(loading_||!document_||snapshot_.values.at(target).visible==visible) return;
@@ -358,7 +403,7 @@ class Editor final:public QMainWindow {
       auto *node=index==-2?&snapshot_.options.environment:&snapshot_.options.tonemapper;selection_->setText(text(node->label));
       parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
     }
-    if(index<0 || !document_) {selection_->setText(QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
+    if(index<0 || !document_) {selection_->setText(index<=-4&&hierarchy_->currentItem()?hierarchy_->currentItem()->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
     const auto &target=document_->catalog.targets[size_t(index)];selection_->setText(text(target.label));
     const auto &values=snapshot_.values[size_t(index)];
     const auto &t=values.transform;
@@ -406,9 +451,13 @@ class Editor final:public QMainWindow {
     if(navigation_test_) {report["scope"]="navigation-preview-and-refinement";report["checks"]=navigation_checks_;}
     if(interaction_test_) {report["scope"]="interaction-latency";report["checks"]=interaction_checks_;report["sessions"]=status.sessions;
       report["local_geometry_restored"]=status.mesh_hashes==interaction_initial_.mesh_hashes;report["instance_transforms_restored"]=status.instance_transforms==interaction_initial_.instance_transforms;report["boundaries"]=interaction_boundaries_;}
-    if(capture_test_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
-    if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;}
+    if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
+    if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
+    if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;report["checks"]=visibility_checks_;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
+    report["hierarchy"]=hierarchy_report();report["options"]=ir::options_json(snapshot_.options);
+    report["graft_seams"]=nlohmann::json::array();for(const auto &g:status.graft_seams) report["graft_seams"].push_back({{"follower",document_->loaded.scene.instances.at(g.follower).id},{"source",document_->loaded.scene.instances.at(g.source).id},{"pairs",g.pairs},{"max_gap_m",g.max_gap_m}});
+    if(!scene_reopen_file_.empty()) {report["scope"]="open-new-empty-open-from-content-browser";report["checks"]=scene_reopen_checks_;}
     if(!reload_file_.empty()) report["scope"]="background-scene-replacement-generation-isolation";
     if(pose_test_) report["scope"]="pose-apply-reset-camera-no-skin-evaluation";
     if(formula_test_) {report["scope"]="parameter-slider-regression-with-ERC-JCM";report["parameter_checks"]=parameter_checks_;}
@@ -427,6 +476,58 @@ class Editor final:public QMainWindow {
       statusBar()->showMessage(pass?QStringLiteral("导航验收通过，可以直接体验。") : text(error));return;
     }
     QApplication::exit(pass?0:1);
+  }
+  void selection_tick(const RenderStatus &state) {
+    std::ofstream(output_/"selection-progress.json")<<nlohmann::json({{"stage",test_stage_},{"target",selection_test_key_},{"instance",selection_test_instance_},{"selected",state.selected_target},{"hovered",state.hovered},{"probe",selection_probe_},{"camera_epoch",state.camera.epoch},{"samples",state.samples}}).dump();
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"选取 / 聚焦验证超时");return;}
+    if(!document_||loading_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<4) return;
+    const auto &scene=document_->loaded.scene;
+    const auto hwnd=FindWindowExW(reinterpret_cast<HWND>(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);
+    auto save=[&](const std::string &name) {screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(name+".png")).wstring()));};
+    if(test_stage_==0) {
+      const auto label=selection_test_labels_.at(qsizetype(selection_test_case_));selection_test_key_=-1;
+      for(size_t t=0;t<document_->catalog.targets.size();++t) if(text(document_->catalog.targets[t].label)==label) {selection_test_key_=int(t);selection_test_instance_=int(document_->catalog.targets[t].instance);break;}
+      if(selection_test_key_==-1) for(size_t i=0;i<scene.instances.size();++i) if(scene.instances[i].prototype>=0&&text(scene.instances[i].id).contains(label)) {const runtime::InstanceGroups groups(scene);selection_test_instance_=int(groups.roots[i]);selection_test_key_=runtime::instance_selection(uint32_t(selection_test_instance_));break;}
+      if(selection_test_key_==-1) {finish_test(false,"找不到选取验证对象："+label.toStdString());return;}
+      choose(selection_test_key_);if(selected_!=selection_test_key_) {finish_test(false,"场景树缺少实例 / 插件选择项");return;}test_stage_=1;return;
+    }
+    if(test_stage_==1) {
+      if(state.selected_target!=selection_test_key_||state.selection_bounds.empty) return;
+      selection_test_epoch_=state.camera.epoch;options_geometry_=state.adapter.geometry_updates;
+      if(focus_only_test_) {SendMessageW(hwnd,WM_KEYDOWN,'F',0);SendMessageW(hwnd,WM_KEYUP,'F',0);test_stage_=5;return;}
+      const auto center=state.selection_bounds.center();const auto &m=scene.instances.at(size_t(selection_test_instance_)).transform.value;
+      renderer_->camera_view({center.x,center.y,center.z,std::max(.01f,state.selection_bounds.extent()*2),std::atan2(-m[1],m[5]),.15f});choose(-1);selection_probe_=0;test_stage_=2;return;
+    }
+    if(test_stage_==2) {
+      if(state.camera.epoch<=selection_test_epoch_||state.selected_target!=-1) return;
+      if(selection_probe_&&state.pointer_x==selection_probe_point_.x()&&state.pointer_y==selection_probe_point_.y()&&state.hovered==selection_test_instance_) {
+        selection_test_clicks_=state.clicks;renderer_->pointer(state.pointer_x,state.pointer_y,true);test_stage_=3;return;
+      }
+      if(selection_probe_&&!(state.pointer_x==selection_probe_point_.x()&&state.pointer_y==selection_probe_point_.y())) {renderer_->pointer(selection_probe_point_.x(),selection_probe_point_.y());return;}
+      if(selection_probe_>225) {finish_test(false,"聚焦后射线未命中验证对象："+scene.instances.at(size_t(selection_test_instance_)).id);return;}
+      const int n=selection_probe_++;selection_probe_point_={n?state.width*(2+(n-1)%15)/18:state.width/2,n?state.height*(2+(n-1)/15)/18:state.height/2};renderer_->pointer(selection_probe_point_.x(),selection_probe_point_.y());return;
+    }
+    if(test_stage_==3) {
+      if(state.clicks<=selection_test_clicks_||state.selected_target!=selection_test_key_) return;
+      if(selected_!=selection_test_key_||!hierarchy_->currentItem()||hierarchy_->currentItem()->data(0,Qt::UserRole).toInt()!=selection_test_key_||state.selection_bounds.empty) {finish_test(false,"点击后的树选择和包围盒不一致");return;}
+      selection_checks_.push_back({{"id",scene.instances.at(size_t(selection_test_instance_)).id},{"target",selection_test_key_},{"ray_hit",state.hovered},{"tree_selected",true},{"highlight_triangles",state.hovered_triangles}});save("selected-"+std::to_string(selection_test_case_));
+      if(state.adapter.geometry_updates!=options_geometry_) {finish_test(false,"选择对象触发了网格重建");return;}
+      if(++selection_test_case_<size_t(selection_test_labels_.size())) {test_stage_=0;return;}finish_test(true);return;
+    }
+    if(test_stage_==5||test_stage_==6) {
+      if(state.camera.epoch<=selection_test_epoch_) return;
+      if(state.camera.distance<100000||state.adapter.geometry_updates!=options_geometry_) {finish_test(false,"大型对象聚焦距离错误或触发几何更新");return;}
+      const auto pixmap=screen()->grabWindow(winId());const auto origin=host_->mapTo(this,QPoint{});const auto pixels=pixmap.copy(QRect(origin,QSize(state.width,state.height))).toImage();
+      int colored=0;for(int y=0;y<pixels.height();y+=4) for(int x=0;x<pixels.width();x+=4) {const auto c=pixels.pixelColor(x,y);colored+=std::max({c.red(),c.green(),c.blue()})>30;}
+      if(colored<100) {finish_test(false,"超远距离聚焦得到黑图");return;}
+      selection_checks_.push_back({{"input",test_stage_==5?"F":"XBUTTON1"},{"distance_m",state.camera.distance},{"nonblack_probes",colored},{"geometry_updates",state.adapter.geometry_updates}});save(test_stage_==5?"focus-F":"focus-side");
+      if(test_stage_==6) {finish_test(true);return;}
+      renderer_->orbit(10,0);selection_test_epoch_=state.camera.epoch;test_stage_=7;return;
+    }
+    if(test_stage_==7&&state.camera.epoch>selection_test_epoch_) {
+      selection_test_epoch_=state.camera.epoch;const auto point=MAKELPARAM(200,200);
+      SendMessageW(hwnd,WM_XBUTTONDOWN,MAKEWPARAM(0,XBUTTON1),point);SendMessageW(hwnd,WM_XBUTTONUP,MAKEWPARAM(0,XBUTTON1),point);test_stage_=6;
+    }
   }
   void head_selection_tick(const RenderStatus &state) {
     auto &skin=document_->skeletons.skins.at(size_t(std::max(0,head_test_skin_)));
@@ -740,14 +841,17 @@ class Editor final:public QMainWindow {
     }
     if(!interaction_first_&&state.presented_epoch>interaction_before_.requested_epoch) interaction_first_=state.present_time;
     if(!interaction_stop_) {
-      if(interaction_step_<8&&now()-interaction_begin_>=interaction_step_*.06) {
+      // 连续两秒相机输入，避免八次离散输入把大场景导航测量限制在 16 Hz。
+      const bool camera_sweep=interaction_case_==2;
+      const int steps=camera_sweep?120:8;const double period=camera_sweep?1.0/60:.06;
+      if(interaction_step_<steps&&now()-interaction_begin_>=interaction_step_*period) {
         ++interaction_step_;
-        if(interaction_case_==2||interaction_case_==3) input(WM_MOUSEMOVE,interaction_case_==2?MK_RBUTTON:MK_MBUTTON,MAKELPARAM(200+interaction_step_*2,200+interaction_step_));
+        if(interaction_case_==2||interaction_case_==3) {const int offset=camera_sweep?int(16*std::sin(interaction_step_*3.14159265/60)):interaction_step_*2;input(WM_MOUSEMOVE,interaction_case_==2?MK_RBUTTON:MK_MBUTTON,MAKELPARAM(200+offset,200+offset/2));}
         else if(interaction_case_==4) {POINT p{200,200};ClientToScreen(hwnd,&p);input(WM_MOUSEWHEEL,MAKEWPARAM(0,15),MAKELPARAM(p.x,p.y));}
         else if(interaction_case_==5) transform_[0]->setValue(interaction_step_*1.25);
         else if(interaction_case_==6) transform_[4]->setValue(interaction_step_*1.25);
       }
-      if(interaction_step_==8&&now()-interaction_begin_>=.48) {
+      if(interaction_step_==steps&&now()-interaction_begin_>=steps*period) {
         if(interaction_case_==2||interaction_case_==3) input(interaction_case_==2?WM_RBUTTONUP:WM_MBUTTONUP,0,MAKELPARAM(216,208));
         interaction_stop_=now();renderer_->trace("interaction_stop");record();
       }
@@ -823,6 +927,33 @@ class Editor final:public QMainWindow {
       }return;
     }
     if(lifecycle_test_) {lifecycle_tick(state);return;}
+    if(!scene_reopen_file_.empty()) {
+      if(QDateTime::currentMSecsSinceEpoch()-test_started_>600000) {finish_test(false,"新建后重新打开场景验证超时");return;}
+      if(!state.error.empty()||!state.edit_error.empty()||!state.resource_error.empty()) {finish_test(false,state.error+state.edit_error+state.resource_error);return;}
+      if(loading_||!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<8) return;
+      if(test_stage_==0) {
+        scene_reopen_checks_.push_back({{"stage","first_scene"},{"objects",document_->loaded.scene.instances.size()},{"options",ir::options_json(snapshot_.options)}});clear_scene();++test_stage_;return;
+      }
+      if(test_stage_==1) {
+        if(!document_->loaded.scene.instances.empty()||!snapshot_.options.environment.id.empty()||!snapshot_.options.tonemapper.id.empty()) {finish_test(false,"新建空场景残留旧数据");return;}
+        scene_reopen_checks_.push_back({{"stage","new_empty"},{"objects",0}});open_asset(scene_reopen_file_);++test_stage_;return;
+      }
+      if(ir::options_json(snapshot_.options)!=ir::options_json(document_->loaded.scene.options)||snapshot_.options.environment.id.empty()||snapshot_.options.tonemapper.id.empty()) {finish_test(false,"新建后打开没有采用源场景的环境与色调设置");return;}
+      std::map<std::string,QTreeWidgetItem *> by_id;for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) {const auto id=(*it)->data(0,Qt::UserRole+3).toString().toStdString();if(!id.empty()) by_id[id]=*it;}
+      for(const auto &node:document_->loaded.nodes) {
+        if(node.group&&!by_id.contains(node.id)) {finish_test(false,"场景树缺少 Group："+node.id);return;}
+        if(!by_id.contains(node.id)) continue;
+        auto parent=node.parent;std::set<std::string> visited{node.id};QTreeWidgetItem *expected=nullptr;
+        while(parent.starts_with('#')&&visited.insert(parent.substr(1)).second) {
+          const auto id=parent.substr(1);if(by_id.contains(id)&&by_id.at(id)!=by_id.at(node.id)) {expected=by_id.at(id);break;}
+          auto p=std::find_if(document_->loaded.nodes.begin(),document_->loaded.nodes.end(),[&](const auto &n){return n.id==id;});if(p==document_->loaded.nodes.end()) break;parent=p->parent;
+        }
+        if(by_id.at(node.id)->parent()!=expected) {finish_test(false,"场景树父节点不匹配："+node.id);return;}
+      }
+      scene_reopen_checks_.push_back({{"stage","reopened"},{"objects",document_->loaded.scene.instances.size()},{"hierarchy_valid",true},{"source_options_restored",true}});
+      for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==-4) (*it)->setExpanded(true);
+      screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"reopened-scene.png").wstring()));finish_test(true);return;
+    }
     if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint);}
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
@@ -834,6 +965,7 @@ class Editor final:public QMainWindow {
     else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4 · 发丝 %5").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations).arg(state.adapter.curves));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
+    if(!selection_test_labels_.empty()) {selection_tick(state);return;}
     if(lazy_test_) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000) {finish_test(false,"Morph 异步界面验证超时");return;}
       if(!load_error_.isEmpty()||!state.resource_error.empty()) {finish_test(false,load_error_.toStdString()+state.resource_error);return;}
@@ -867,11 +999,12 @@ class Editor final:public QMainWindow {
     if(!visibility_label_.isEmpty()) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>360000) {finish_test(false,"可见性界面验证超时");return;}
       if(!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<8) return;
+      const auto prefix=visibility_labels_.size()>1?"visible-"+std::to_string(visibility_case_):std::string("visible");
       if(test_stage_==0) {
         for(size_t t=0;t<document_->catalog.targets.size();++t) if(text(document_->catalog.targets[t].label)==visibility_label_) visibility_target_=int(t);
         if(visibility_target_<0) {finish_test(false,"可见性测试对象缺失");return;}
         choose(visibility_target_);visibility_initial_=snapshot_.values[size_t(visibility_target_)].visible;visibility_geometry_updates_=state.adapter.geometry_updates;
-        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"visible-initial.png").wstring()));
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(prefix+"-initial.png")).wstring()));
         visible_->setChecked(!visibility_initial_);test_stage_=1;return;
       }
       const auto instance=document_->catalog.targets[size_t(visibility_target_)].instance;
@@ -879,13 +1012,16 @@ class Editor final:public QMainWindow {
       if(state.visible.at(instance)!=expected||visible_->isChecked()!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)||state.adapter.geometry_updates!=visibility_geometry_updates_) {
         finish_test(false,"树、属性和渲染可见性不同步，或切换触发了几何重建");return;
       }
-      screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(test_stage_==1?"visible-toggled.png":"visible-restored.png")).wstring()));
+      screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(prefix+(test_stage_==1?"-toggled.png":"-restored.png"))).wstring()));
       if(test_stage_==1) {hierarchy_->currentItem()->setCheckState(0,visibility_initial_?Qt::Checked:Qt::Unchecked);test_stage_=2;return;}
+      visibility_checks_.push_back({{"label",visibility_label_.toStdString()},{"instance",instance},{"toggle_restore",true},{"geometry_updates",state.adapter.geometry_updates-visibility_geometry_updates_}});
+      if(++visibility_case_<visibility_labels_.size()) {visibility_label_=visibility_labels_[visibility_case_];visibility_target_=-1;test_stage_=0;return;}
       finish_test(true);return;
     }
     if(capture_test_) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"场景显示验证超时");return;}
       if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=(capture_seconds_>0?1:capture_samples_)) {
+        if(test_stage_==0&&capture_view_) {choose(-1);renderer_->camera_view(*capture_view_);capture_started_=QDateTime::currentMSecsSinceEpoch();test_stage_=1;return;}
         if(test_stage_==0&&!capture_targets_.empty()) {
           ir::Bounds bounds;size_t matched=0;
           for(size_t t=0;t<document_->catalog.targets.size();++t) if(capture_targets_.contains(text(document_->catalog.targets[t].label))) {const auto &b=capture_head_?state.head_bounds.at(t):state.bounds.at(t);if(b.empty) continue;bounds.add(b.minimum);bounds.add(b.maximum);++matched;}
@@ -1068,8 +1204,14 @@ public:
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
   void capture_test(QStringList targets={},bool front=false,bool head=false,int samples=16,double seconds=0) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;capture_head_=head;capture_samples_=std::clamp(samples,1,1<<20);capture_seconds_=seconds;}
-  void visibility_test(QString label) {visibility_label_=std::move(label);self_test_=true;}
+  void selection_test(QStringList labels,bool focus_only=false) {self_test_=true;selection_test_labels_=std::move(labels);focus_only_test_=focus_only;}
+  void capture_view(const QString &value) {const auto parts=value.split(',');if(parts.size()!=6) throw std::runtime_error("capture-view 需要 x,y,z,distance,yaw,pitch 六个数值（米/弧度）");std::array<float,6> view;
+    for(int i=0;i<6;++i) {bool ok=false;view[i]=parts[i].toFloat(&ok);if(!ok||!std::isfinite(view[i])) throw std::runtime_error("capture-view 数值无效");}
+    if(view[3]<=0||std::abs(view[5])>=1.56f) throw std::runtime_error("capture-view 距离或俯仰无效");capture_view_=view;
+  }
+  void visibility_test(QStringList labels) {visibility_labels_=std::move(labels);visibility_label_=visibility_labels_.front();self_test_=true;}
   void lifecycle_test(const std::filesystem::path &first,const std::filesystem::path &second,int rounds) {if(rounds<1||rounds>100) throw std::runtime_error("生命周期验证轮数应为 1 到 100");lifecycle_rounds_=rounds;lifecycle_test_=true;self_test_=true;lifecycle_first_=first;lifecycle_second_=second;}
+  void scene_reopen_test(const std::filesystem::path &file) {scene_reopen_file_=file;self_test_=true;}
   void test_parameters(const QStringList &names) {if(names.empty()) return;formula_names_.clear();for(const auto &name:names) formula_names_.push_back(name.toUtf8().toStdString());}
   Editor(const std::filesystem::path &output,ProjectSettings project,bool self_test,std::filesystem::path reload_file,std::filesystem::path pose_file={},bool pose_test=false,bool formula_test=false,SamplingSettings sampling={}):project_(std::move(project)),output_(output),reload_file_(std::move(reload_file)),pose_file_(std::move(pose_file)),pose_test_(pose_test),formula_test_(formula_test),self_test_(self_test||pose_test||formula_test) {
     setWindowTitle(QStringLiteral("DazFastViewer · 场景与形态编辑器"));setAttribute(Qt::WA_ShowWithoutActivating);
@@ -1175,7 +1317,9 @@ public:
   void load(const std::filesystem::path &file,bool preserve=false,bool append=false) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
     loading_=true;load_error_.clear();open_->setEnabled(false);project_action_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在后台解析场景与参数依赖…"));
-    const auto generation=++generation_;const auto roots=roots_;const auto previous_document=append?document_:nullptr;
+    // 新建产生有效 Document，但它还不是需要保留环境的已有场景。
+    const bool empty=!document_||(document_->loaded.nodes.empty()&&document_->loaded.scene.instances.empty()&&snapshot_.lights.empty()&&snapshot_.options.environment.id.empty()&&snapshot_.options.tonemapper.id.empty()&&snapshot_.options.environment_file.empty());
+    const auto generation=++generation_;const auto roots=roots_;const auto previous_document=append&&!empty?document_:nullptr;
     loader_=std::jthread([this,file,roots,generation,preserve,previous_document](std::stop_token stop) {
       try {
         auto document=std::make_shared<Document>();document->generation=generation;document->loaded=daz::load(file,{roots,false});
@@ -1219,6 +1363,7 @@ public:
           }
           rebuild_hierarchy();
           renderer_->set_document(document_,submitted_snapshot(),!previous_document);select(-1);
+          if(capture_view_) renderer_->camera_view(*capture_view_);
           const auto first=previous_document?previous_document->catalog.targets.size():0;
           if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
           if(!self_test_&&!preserve) browser_->record_use(QString::fromStdWString(file.wstring()),category);
@@ -1246,8 +1391,11 @@ int main(int argc,char **argv) {
   parser.addOption({"keep-open-after-test",QStringLiteral("导航验收完成后保留客户端供手动体验")});
   parser.addOption({"attachment-test",QStringLiteral("逐一验证 Head 附件的场景树父节点并截图")});
   parser.addOption({"capture-test",QStringLiteral("场景显示验证后截图退出")});
+  parser.addOption({"selection-test",QStringLiteral("验证指定标签或实例 ID 的射线点击与树选择，可重复"),"label"});
+  parser.addOption({"focus-test",QStringLiteral("验证大型对象的 F 与侧键聚焦"),"label"});
   parser.addOption({"capture-target",QStringLiteral("截图时框选的对象标签，可重复"),"label"});
   parser.addOption({"capture-front",QStringLiteral("截图时从框选对象正面观察")});
+  parser.addOption({"capture-view",QStringLiteral("截图固定视角 x,y,z,distance,yaw,pitch（米/弧度）"),"view"});
   parser.addOption({"capture-head",QStringLiteral("截图时框选角色头部")});
   parser.addOption({"capture-samples",QStringLiteral("截图前累积样本数"),"count","16"});
   parser.addOption({"capture-seconds",QStringLiteral("定时记录原始画面，再继续至目标样本或四倍时长"),"seconds","0"});
@@ -1255,6 +1403,7 @@ int main(int argc,char **argv) {
   parser.addOption({"visibility-test",QStringLiteral("验证指定对象的属性和层级可见性开关"),"label"});
   parser.addOption({"lifecycle-test",QStringLiteral("验证反复增删与替换场景，指定第二个测试 DUF"),"file"});
   parser.addOption({"lifecycle-rounds",QStringLiteral("生命周期验证轮数"),"count","8"});
+  parser.addOption({"scene-reopen-test",QStringLiteral("验证打开、新建空场景、从内容库再次打开指定场景"),"file"});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
@@ -1277,7 +1426,7 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("options-test")) editor.options_test();
@@ -1289,8 +1438,12 @@ int main(int argc,char **argv) {
     if(parser.isSet("workflow-test")) editor.workflow_test();
     if(parser.isSet("head-selection-test")) editor.head_selection_test();
     if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"),parser.isSet("capture-head"),parser.value("capture-samples").toInt(),capture_seconds);
-    if(parser.isSet("visibility-test")) editor.visibility_test(parser.value("visibility-test"));
+    if(parser.isSet("selection-test")) editor.selection_test(parser.values("selection-test"));
+    if(parser.isSet("focus-test")) editor.selection_test(parser.values("focus-test"),true);
+    if(parser.isSet("capture-view")) editor.capture_view(parser.value("capture-view"));
+    if(parser.isSet("visibility-test")) editor.visibility_test(parser.values("visibility-test"));
     if(parser.isSet("lifecycle-test")) editor.lifecycle_test(file_path(parser.value("file")),file_path(parser.value("lifecycle-test")),parser.value("lifecycle-rounds").toInt());
+    if(parser.isSet("scene-reopen-test")) editor.scene_reopen_test(file_path(parser.value("scene-reopen-test")));
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

@@ -122,6 +122,13 @@ static void lifecycle() {
   require(scene.meshes.size()==1&&scene.materials.size()==1&&scene.textures.size()==1&&scene.textures[0].id=="b"&&scene.materials[0].color_texture==0,"删除后仍持有孤立资源");
   auto rendered=scene;runtime::DeformationRuntime runtime(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
   auto source=document;source.generation=0;
+  {
+    auto copies=source;auto copy=copies.loaded.scene.instances.front();copy.prototype=0;copy.id="copy/part";copy.instance_group=copy.instance_node="copy";copy.instance_label="Copy";copies.loaded.scene.instances.push_back(copy);copies.loaded.nodes.push_back({"copy",""});
+    auto appended=copies;appended.generation=2;editor::append_document(appended,copies);
+    const runtime::InstanceGroups groups(appended.loaded.scene);
+    require(groups.roots[1]!=groups.roots[3]&&groups.members[1].size()==1&&groups.members[3].size()==1,"追加相同场景后 Instance 选择错误合并");
+    const auto &added=appended.loaded.scene.instances[3];require(added.instance_group==added.instance_node&&added.instance_label=="Copy","追加实例丢失节点级选择身份");
+  }
   auto lamp=document;auto lamp_snapshot=snapshot;ir::AreaLight light;light.id="lamp";lamp_snapshot.lights={light};lamp.loaded.nodes.push_back({"lamp",""});lamp.loaded.nodes[0].parent="#lamp";
   require(editor::remove_light(lamp,lamp_snapshot,0)==1&&lamp.loaded.nodes.empty()&&lamp_snapshot.lights.empty()&&lamp.loaded.scene.meshes.empty(),"删除灯光保留了节点或子对象");
   for(int iteration=0;iteration<64;++iteration) {
@@ -136,7 +143,33 @@ static void lifecycle() {
   editor::remove_target(document,snapshot,0);require(scene.instances.empty()&&scene.meshes.empty()&&scene.materials.empty()&&scene.textures.empty()&&document.catalog.targets.empty()&&document.skeletons.skins.empty()&&document.formulas.graphs.empty(),"删除最后一个对象未释放全部资源");
   rendered=scene;runtime::DeformationRuntime empty(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);empty.evaluate(snapshot.values,snapshot.poses);
 }
+static void graft_seams() {
+  editor::Document document;auto &scene=document.loaded.scene;
+  ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,0,1}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};mesh.source_polygon_count=1;
+  scene.meshes={mesh,mesh,mesh};scene.instances.resize(3);
+  for(uint32_t i=0;i<3;++i) {scene.instances[i].mesh=i;scene.instances[i].id="node"+std::to_string(i)+"/mesh";}
+  scene.instances[0].transform.value={2,0,0,.3f,0,1,0,-.2f,0,0,.5f,.7f};
+  scene.instances[1].transform.value={0,1,0,-.4f,-1,0,0,.2f,0,0,2,.1f};
+  for(uint32_t i=1;i<3;++i) {auto &m=scene.meshes[i];m.positions[0].x+=.07f;m.graft_target_vertices=3;m.graft_target_polygons=1;m.graft_vertex_pairs={{0,0},{1,1}};}
+  // 故意逆序：嵌套插件先出现在目录中，仍必须按宿主依赖求值。
+  for(uint32_t i:{2u,1u,0u}) {runtime::Target t;t.instance=i;t.id=scene.instances[i].id;if(i) t.conform_target="#node"+std::to_string(i-1);document.catalog.targets.push_back(t);document.formulas.graphs.emplace_back();}
+  runtime::Morph morph;morph.id=morph.channel_id="shape";morph.evaluable=true;morph.offsets={{0,{.1f,.2f,.3f}}};document.catalog.targets[2].morphs={morph};
+  auto &graph=document.formulas.graphs[2];graph.channels.emplace_back();graph.morph_channels={0};graph.prepare();
+  runtime::Skin skin;skin.instance=0;skin.joints.emplace_back();skin.initial.resize(1);skin.weights={{{0,1}},{{0,1}},{{0,1}}};document.skeletons.skins={skin};graph.skin=0;
+  auto snapshot=editor::initial_snapshot(document);runtime::DeformationRuntime runtime(scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);
+  auto check=[&] {const auto seams=runtime.graft_seams();require(seams.size()==2,"嵌套接缝未绑定");for(const auto &s:seams) require(s.pairs==2&&s.max_gap_m<1e-5,"最终世界坐标的 GeoGraft 接缝存在缝隙");};
+  auto delta=runtime.evaluate(snapshot.values,snapshot.poses);check();require(delta.meshes.size()>=2,"初始接缝未提交网格 Delta");
+  snapshot.values[2].morphs[0]=.7f;snapshot.poses[0][0].rotation_degrees.z=27;runtime.evaluate(snapshot.values,snapshot.poses);check();
+  snapshot.values[2].transform.translation_cm={70,-15,23};snapshot.values[2].transform.rotation_degrees.y=36;
+  delta=runtime.evaluate(snapshot.values,snapshot.poses);check();require(delta.meshes.empty(),"共同祖先移动不应重写接缝几何");
+  snapshot.values[1].transform.translation_cm.x=9;delta=runtime.evaluate(snapshot.values,snapshot.poses);check();require(!delta.meshes.empty(),"插件相对变换没有重新锁定接缝");
+  snapshot.values[1].visible=false;delta=runtime.evaluate(snapshot.values,snapshot.poses);check();require(delta.meshes.empty()&&!delta.visibility.empty(),"隐藏插件重写几何或丢失可见性");
+  snapshot=editor::initial_snapshot(document);snapshot.values[2].transform={};snapshot.values[1].transform={};
+  runtime.evaluate(snapshot.values,snapshot.poses);check();
+  for(int repeat=0;repeat<8;++repeat) {delta=runtime.evaluate(snapshot.values,snapshot.poses);check();require(delta.meshes.empty(),"静止接缝反复求值或累积漂移");}
+}
 static void unit() {
+  graft_seams();
   {
     ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};scene.meshes={mesh};scene.instances.resize(2);
     scene.instances[1].transform.value={2,0,0,-.2f,0,3,0,-.3f,0,0,.5f,2};
@@ -178,8 +211,9 @@ static void unit() {
   require(runtime::hover_region({0,1},0,3,regions).joint==0&&runtime::hover_region({1,1},0,1,regions).joint==-1,"头部细选上下文泄漏到手部或其他角色");
   auto worn_scene=scene;worn_scene.instances[0].transform={};worn_scene.instances[1].transform=ir::Transform::translate({0,1,0});
   runtime::Target garment;garment.instance=0;garment.id="garment/mesh";garment.conform_target="#person";runtime::Target person;person.instance=1;person.id="person/mesh";
-  picking.update(worn_scene,runtime::viewport_pick_mask(2,{garment,person}));require(picking.ray({0,-2,0},{0,1,0}).instance==1,"绑定服装仍遮挡射线，无法命中身后角色");
-  garment.conform_target.clear();garment.parent="#person";picking.update(worn_scene,runtime::viewport_pick_mask(2,{garment,person}));require(picking.ray({0,-2,0},{0,1,0}).instance==0,"未绑定的服装不可选，或普通 parent 被误当 Fit To");
+  picking.update(worn_scene,runtime::viewport_pick_mask(worn_scene,{garment,person}));require(picking.ray({0,-2,0},{0,1,0}).instance==1,"绑定服装仍遮挡射线，无法命中身后角色");
+  worn_scene.meshes[0].graft_target_vertices=3;picking.update(worn_scene,runtime::viewport_pick_mask(worn_scene,{garment,person}));require(picking.ray({0,-2,0},{0,1,0}).instance==0,"GeoGraft 被服装穿透掩码误排除");worn_scene.meshes[0].graft_target_vertices=0;
+  garment.conform_target.clear();garment.parent="#person";picking.update(worn_scene,runtime::viewport_pick_mask(worn_scene,{garment,person}));require(picking.ray({0,-2,0},{0,1,0}).instance==0,"未绑定的服装不可选，或普通 parent 被误当 Fit To");
   require(runtime::parameter_on_node("head","/Pose Controls","head"),"头部别名不可见");require(!runtime::parameter_on_node("lHand","/Actor/Hands","head"),"头部混入手部控制器");
   editor::Document first;first.generation=2;first.loaded.scene=scene;editor::Document second=first;
   runtime::Target target;target.instance=0;target.id="figure";second.catalog.targets={target};second.skeletons.skins={skin};runtime::FormulaGraph graph;graph.skin=0;second.formulas.graphs={graph};
@@ -210,7 +244,7 @@ static void actual_selection(const std::filesystem::path &file,const std::filesy
   const std::vector<std::filesystem::path> roots={L"H:/G1",L"H:/G3",L"C:/Users/Public/Documents/My DAZ 3D Library",L"C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"};
   const auto loaded=daz::load(file,{roots,false});const auto skeletons=daz::load_skeletons(loaded);const auto &scene=loaded.scene;
   std::vector<runtime::Target> targets;for(const auto &object:loaded.objects) {runtime::Target t;t.instance=object.instance;t.id=scene.instances[t.instance].id;t.conform_target=object.conform_target;targets.push_back(t);}
-  const auto mask=runtime::viewport_pick_mask(scene.instances.size(),targets);runtime::PickingScene all,filtered;all.update(scene);filtered.update(scene,mask);
+  const auto mask=runtime::viewport_pick_mask(scene,targets);runtime::PickingScene all,filtered;all.update(scene);filtered.update(scene,mask);
   nlohmann::json report={{"status","PASS"},{"head",nlohmann::json::array()},{"garments",nlohmann::json::array()}};
   for(const auto &skin:skeletons.skins) {if(!mask[skin.instance]) continue;const auto &mesh=scene.meshes[scene.instances[skin.instance].mesh];const auto regions=runtime::joint_regions(mesh,skin);if(regions.head<0) continue;
     const auto head_count=std::count(regions.body.begin(),regions.body.end(),regions.head);require(head_count>0,"真实角色没有完整头部区域");bool eye=false,lip=false;

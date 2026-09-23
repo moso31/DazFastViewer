@@ -24,11 +24,13 @@ struct AssetObject {
   std::string rotation_order="XYZ";
   runtime::RigidFollow rigid_follow;
 };
-struct AssetNode {std::string id,parent;};
+struct AssetNode {std::string id,parent,label;bool group=false;};
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;};
 struct DufContents {bool instantiate=false,materials=false,properties=false;};
 DufContents inspect_contents(const nlohmann::json &document);
 LoadedScene load(const std::filesystem::path &file,const LoadOptions &options={});
+void apply_graft_masks(LoadedScene &loaded);
+void sync_instance_meshes(ir::Scene &scene);
 nlohmann::json read_document_file(const std::filesystem::path &file);
 std::string decode_uri(const std::string &uri);
 }

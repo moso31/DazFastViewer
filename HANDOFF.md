@@ -1,5 +1,21 @@
 # 交接记录
 
+## 最新：材质贴图、置换与 Instance 一级选取
+
+补齐 tiny_02 的 LIE 图像库引用、皮肤 SSS 模式／透光颜色贴图和凹凸尺度，接入 Iray／旧 DAZ 置换贴图及带符号的厘米高度范围。Cycles 使用真实置换与凹凸组合，材质和 Morph 编辑不会累加置换；尚未加入 DAZ 自适应细分。场景树仅展示 Instance 一级，点击、高亮、聚焦聚合全部零件，追加相同场景时保留独立身份。GeoGraft 可点击，Base_Circle 超远聚焦、Sun-sky Only UI 和年月日／时分秒控件已修复。
+
+14 项工程测试、9 阶段 OptiX 置换顶点验证、坦克整组选取、四插件选取及 F／侧键聚焦通过。用户已验收坦克和桌椅 instancing，并确认手动调整机位／曝光后渲染效果正常；不将这些调整视作故障或同机位性能对照。最终发布包和源码清单位于 `out`，原始记录在 `artifacts/material-picking-followup/`，详见[本轮报告](Docs/material_picking_focus_followup_cn.md)。资产只读，008 未开始。本批场景兼容性修复、测试与文档按用户要求以中文说明归档至本地 Git，记录见 `git log`。
+
+## 最新：接缝、Group 与新建后环境设置
+
+已补齐 GeoGraft `vertex_pairs` 的最终形变接缝对齐、场景树的 Group 标签和父子关系，以及空 Document 被误当已有场景追加、丢失源环境选项的问题。14 项 CTest 通过；发布包在副屏按 `test7 → 新建 → 内容库打开 14` 检查通过。Golden Palace 44 对接缝误差为 0，四插件共 228 对最大世界坐标误差约 6.664×10⁻⁸ 米；实际 Visible 切换／恢复无几何更新。程序已部署到 `out`，证据在 `artifacts/scene-followup/`，详见[执行记录](Docs/scene_followup_seams_groups_environment_cn.md)。Group 当前恢复层级展示，未新增组级变换／批量显隐。008 未开始，资产只读，本轮未创建 Git 提交。
+
+## 最新：test5／test6／test7／14 场景兼容修复
+
+本轮修复加载、GPU 实例、GeoGraft 遮盖、父组可见性与材质通道遗漏，接入 Sun-sky Only 的 Cycles 近似。四个插件在实际 `test7` 中的关闭／恢复检查已通过，宿主隐藏面保持剔除；`14` 的暗图还追踪到保存为隐藏的走廊组被错误绘制，现已继承父组可见性。实例与阴影图像必须用最终形变后的编辑器核验，不能用仅加载基础笼的 inspect 代替。逐项实测、构建日志、待校准材质边界见[执行记录](Docs/scene_5_6_7_14_repair_cn.md)。用户资产未改动，测试均在副屏，008 未开始；本轮未创建 Git 提交。
+
+最终 `out` 已部署，14 项工程测试及同一发布包的四场景检查均通过。`test5` 连续导航提交约 24.81 帧/秒（189×209 预览、完整视口 758×836），约 37／55 毫秒首响应／恢复；不是物理 Visible FPS 证明。最终原始证据目录为 `artifacts/scene-repair/{test5-release,test6-release,test7-release,14-release}`，源码／二进制清单及命令、计数汇总也在该目录。Sun-sky 亮度和复杂材质仍未通过 Iray Golden，热切换时的缓冲忙日志见执行记录。
+
 ## 最新：视口与角色移动性能优化
 
 最终验证与部署已完成：14 项工程检查、32 项导航、异步／手动 Morph、真实 `test3.duf` 性能及 11 条选取／高亮／附件可见性检查通过，`out/DazFastViewer.exe` 已更新。曝光等仅显示编辑继续保留累计采样。旧头部自测对保存姿势和眼镜遮挡的假设也已修正；见下方执行记录。性能数据只代表 `test3.duf`，此前 `6.duf` 的剩余渲染等待未继续复测。

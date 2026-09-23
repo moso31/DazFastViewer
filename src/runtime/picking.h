@@ -33,7 +33,15 @@ struct JointRegions {
   bool within_head(int joint) const;
 };
 JointRegions joint_regions(const ir::Mesh &mesh,const Skin &skin);
-std::vector<uint8_t> viewport_pick_mask(size_t instances,const std::vector<Target> &targets);
+std::vector<uint8_t> viewport_pick_mask(const ir::Scene &scene,const std::vector<Target> &targets);
+// 场景树中实例使用独立选择键，不进入需要独立网格的 Morph 目录。
+inline int instance_selection(uint32_t instance) {return -5-int(instance);}
+struct InstanceGroups {
+  std::vector<uint32_t> roots;
+  std::vector<std::vector<uint32_t>> members;
+  explicit InstanceGroups(const ir::Scene &scene);
+  ir::Bounds bounds(const ir::Scene &scene,uint32_t instance) const;
+};
 struct HoverRegion {int instance=-1,joint=-1;};
 HoverRegion hover_region(const PickHit &hit,int selected_instance,int selected_joint,const std::vector<JointRegions> &regions);
 bool parameter_on_node(const std::string &owner,const std::string &group,const std::string &node);

@@ -2,6 +2,11 @@
 #include <QApplication>
 #include <QDoubleSpinBox>
 #include <QSlider>
+#include <QDateEdit>
+#include <QTimeEdit>
+#include <QComboBox>
+#include <QStandardItemModel>
+#include "render_ir/options.h"
 #include <QTest>
 #include <iostream>
 #include <stdexcept>
@@ -22,6 +27,16 @@ int main(int argc,char **argv) {
     require(!interacting&&released==1,"释放没有结束交互状态");
     QTest::mousePress(slider,Qt::LeftButton,Qt::NoModifier,center);QEvent lost(QEvent::UngrabMouse);QApplication::sendEvent(slider,&lost);require(!interacting,"捕获丢失未结束交互状态");
     QTest::mousePress(slider,Qt::LeftButton,Qt::NoModifier,center);QFocusEvent unfocus(QEvent::FocusOut);QApplication::sendEvent(slider,&unfocus);require(!interacting,"失焦未结束交互状态");
-    std::cout<<"Numeric text / focus commit / unbounded slider: PASS\n";return 0;
+    dfv::ir::OptionNode options;options.id="environment";
+    dfv::ir::Option mode;mode.id=mode.label="Environment Mode";mode.type="enum";mode.value={2};mode.maximum=3;mode.supported=true;mode.choices={"Dome and Scene","Dome Only","Sun-Sky Only","Scene Only"};
+    auto day=mode;day.id=day.label="SS Day";day.type="float";day.value={double(QDate(2024,2,29).toJulianDay())};day.choices.clear();
+    auto time=day;time.id=time.label="SS Time";time.value={13*3600+24*60+56};options.parameters={mode,day,time};
+    panel.bind_options(&options,[&](size_t p,size_t k,double value){dfv::ir::set_option(options,p,k,value);});app.processEvents();QTest::qWait(50);
+    auto *choice=panel.findChild<QComboBox *>("valueChoice");auto *date=panel.findChild<QDateEdit *>("valueDate");auto *clock=panel.findChild<QTimeEdit *>("valueTime");
+    require(choice&&date&&clock,"太阳天空没有建立日期 / 时间控件");
+    require(qobject_cast<QStandardItemModel *>(choice->model())->item(2)->isEnabled()&&!choice->itemText(2).contains(QStringLiteral("待支持")),"Sun-Sky Only 仍被禁用");
+    require(date->date()==QDate(2024,2,29)&&clock->time()==QTime(13,24,56),"儒略日或当地秒数转换错误");
+    date->setDate(QDate(2026,9,23));clock->setTime(QTime(23,59,59));require(options.parameters[1].value[0]==QDate(2026,9,23).toJulianDay()&&options.parameters[2].value[0]==86399,"年月日 / 时分秒没有写回原通道");
+    std::cout<<"Numeric text / focus commit / unbounded slider / sun-sky date-time: PASS\n";return 0;
   }catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}
 }

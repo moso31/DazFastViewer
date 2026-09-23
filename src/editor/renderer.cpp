@@ -49,6 +49,7 @@ void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources
 void Renderer::select(uint64_t generation,int target,int joint) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
 CameraState Renderer::input_camera() {return window_->mailbox.latest();}
+void Renderer::camera_view(const std::array<float,6> &v) {window_->camera.target={v[0],v[1],v[2]};window_->camera.distance=v[3];window_->camera.yaw=v[4];window_->camera.pitch=v[5];window_->publish();}
 void Renderer::keyboard(int key,bool pressed) {SetFocus(window_->hwnd);PostMessageW(window_->hwnd,pressed?WM_KEYDOWN:WM_KEYUP,WPARAM(key),0);}
 void Renderer::orbit(float x,float y) {window_->camera.orbit(x,y);window_->publish();}
 void Renderer::run(std::stop_token stop) {
@@ -56,7 +57,9 @@ void Renderer::run(std::stop_token stop) {
   std::unique_ptr<Session> session;Display *display=nullptr;
   std::unique_ptr<CyclesAdapter> adapter;
   nlohmann::json sampling_report;
+  std::ofstream progress_log(output_/"cycles-progress.log");std::string last_progress;
   HoverOverlay overlay;runtime::PickingScene picking;std::vector<runtime::JointRegions> regions;std::vector<uint8_t> pickable;bool geometry_dirty=true;uint64_t clicks=0;
+  std::optional<runtime::InstanceGroups> instance_groups;
   auto cleanup=[&] {
     if(session) {
       session->cancel(true);
@@ -120,7 +123,7 @@ void Renderer::run(std::stop_token stop) {
           runtime.reset();picking={};regions={};pickable={};render_scene={};
           current=document;state={};previous_positions.clear();render_scene=current->loaded.scene;
           regions.clear();regions.resize(render_scene.instances.size());
-          pickable=runtime::viewport_pick_mask(render_scene.instances.size(),current->catalog.targets);
+          pickable=runtime::viewport_pick_mask(render_scene,current->catalog.targets);
           for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene.meshes.at(render_scene.instances.at(skin.instance).mesh),skin);
           runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
         }
@@ -156,6 +159,9 @@ void Renderer::run(std::stop_token stop) {
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
+      std::string progress,detail;session->progress.get_status(progress,detail);
+      progress+=" | "+detail;
+      if(progress!=last_progress) {progress_log<<now()<<" "<<progress<<std::endl;last_progress=progress;}
       if(display->failed()) throw std::runtime_error(display->error());
       auto camera=window_->mailbox.latest();
       const bool size_changed=camera_width!=window_->width||camera_height!=window_->height;
@@ -208,7 +214,7 @@ void Renderer::run(std::stop_token stop) {
       }
       window_->present_context.activate();
       const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
-      if(geometry_dirty) {auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
+      if(geometry_dirty) {instance_groups.emplace(render_scene);auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
       else if(bounds_dirty) {auto begin=now();overlay.apply(render_scene,regions,delta);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
       if(sampling_.interaction_probe&&bounds_dirty) {
         const bool all=state.mesh_hashes.size()!=render_scene.meshes.size();state.mesh_hashes.resize(render_scene.meshes.size());
@@ -221,18 +227,19 @@ void Renderer::run(std::stop_token stop) {
       session->draw();
       state.camera=camera;state.pointer_x=window_->pointer_x;state.pointer_y=window_->pointer_y;
       auto hover=preview?runtime::PickHit{}:picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
-      bool editable=false;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
+      bool editable=hover.instance>=0&&render_scene.instances.at(size_t(hover.instance)).prototype>=0;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
       if(!editable) hover={};
       state.hovered_detail_joint=hover.instance>=0&&hover.triangle>=0&&size_t(hover.triangle)<regions[size_t(hover.instance)].detail.size()?regions[size_t(hover.instance)].detail[size_t(hover.triangle)]:-1;
       const bool selection_dirty=state.selection_generation!=selection_generation||state.selected_target!=selected_target||state.selected_joint!=selected_joint;
       state.selection_generation=selection_generation;state.selected_target=selection_generation==current->generation?selected_target:-1;
       state.selected_joint=state.selected_target>=0?selected_joint:-1;
-      const int selected_instance=state.selected_target>=0&&size_t(state.selected_target)<current->catalog.targets.size()?int(current->catalog.targets[size_t(state.selected_target)].instance):-1;
+      const int instance_key=state.selected_target>=0&&size_t(state.selected_target)<current->catalog.targets.size()?int(current->catalog.targets[size_t(state.selected_target)].instance):state.selected_target<=-5?-5-state.selected_target:-1;
+      const int selected_instance=instance_key>=0&&size_t(instance_key)<render_scene.instances.size()?instance_key:-1;
       state.focus_requests=window_->focus_requests;
       if(bounds_dirty||selection_dirty) {state.selection_bounds={};
       if(selected_instance>=0) {
         const auto &instance=render_scene.instances.at(size_t(selected_instance));const auto &mesh=render_scene.meshes.at(instance.mesh);
-        if(selected_joint<0) {for(auto p:mesh.positions) state.selection_bounds.add(instance.transform.point(p));}
+        if(selected_joint<0) state.selection_bounds=instance_groups->bounds(render_scene,uint32_t(selected_instance));
         else {
           const auto &r=regions.at(size_t(selected_instance));
           for(size_t f=0;f<mesh.triangles.size();++f) {
@@ -249,13 +256,17 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       }
-      const auto region=runtime::hover_region(hover,selected_instance,state.selected_joint,regions);
+      auto region=runtime::hover_region(hover,selected_instance,state.selected_joint,regions);
+      if(region.instance>=0&&render_scene.instances[size_t(region.instance)].prototype>=0) region={int(instance_groups->roots[size_t(region.instance)]),-1};
       state.hovered=region.instance;state.hovered_joint=region.joint;state.hovered_triangles=overlay.triangle_count(region.instance,region.joint);
+      const auto *members=region.instance>=0&&region.joint<0?&instance_groups->members[size_t(region.instance)]:nullptr;
+      if(members) {state.hovered_triangles=0;for(auto i:*members) state.hovered_triangles+=overlay.triangle_count(int(i));}
       const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;
-      if(presented&&!preview) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint);
+      if(presented&&!preview) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members);
       if(presented&&window_->clicks.load()!=clicks) {
         clicks=window_->clicks.load();const auto hit=picking.screen(camera,window_->click_x,window_->click_y,window_->width,window_->height);
         state.clicks=clicks;state.hit_target=-1;state.hit_joint=-1;
+        if(hit.instance>=0&&render_scene.instances.at(size_t(hit.instance)).prototype>=0) state.hit_target=runtime::instance_selection(instance_groups->roots[size_t(hit.instance)]);
         for(size_t t=0;t<current->catalog.targets.size();++t) if(int(current->catalog.targets[t].instance)==hit.instance) {
           const auto selected=runtime::hover_region(hit,selected_instance,state.selected_joint,regions);
           if(selected.instance>=0) {state.hit_target=int(t);state.hit_joint=selected.joint;}
@@ -272,7 +283,7 @@ void Renderer::run(std::stop_token stop) {
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
-      state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();
+      state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();state.graft_seams=runtime->graft_seams();
       if(state.evaluation.morph_evaluations!=measured_evaluation||state.skinning.evaluations!=measured_skinning||state.evaluation.transform_evaluations!=measured_transform||!delta.meshes.empty()) {
         const auto diagnostic_begin=now();
         const bool all=measured_evaluation==UINT64_MAX||state.bounds.size()!=current->catalog.targets.size();
@@ -309,7 +320,7 @@ void Renderer::run(std::stop_token stop) {
     std::lock_guard lock(mutex_);status_=state;
   }
   nlohmann::json report={{"generation",state.generation},{"applied_revision",state.applied_revision},{"presented_revision",state.presented_revision},
-    {"mesh_creations",state.adapter.meshes},{"curves",state.adapter.curves},{"geometry_updates",state.adapter.geometry_updates},{"instance_updates",state.adapter.instance_updates},
+    {"mesh_creations",state.adapter.meshes},{"instances",state.adapter.instances},{"unique_triangles",state.adapter.unique_triangles},{"instanced_triangles",state.adapter.triangles},{"curves",state.adapter.curves},{"geometry_updates",state.adapter.geometry_updates},{"instance_updates",state.adapter.instance_updates},
     {"camera_updates",state.adapter.camera_updates},{"morph_evaluations",state.evaluation.morph_evaluations},{"offsets_visited",state.evaluation.offsets_visited},
     {"skin_evaluations",state.skinning.evaluations},{"skin_vertices",state.skinning.vertices},
     {"conform_bound_vertices",state.conform.bindings},{"conform_authored_morphs",state.conform.authored_morphs},{"conform_evaluations",state.conform.evaluations},

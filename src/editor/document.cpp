@@ -59,9 +59,9 @@ void collect_resources(Document &document) {
   for(const auto &instance:scene.instances) {meshes.at(instance.mesh)=true;for(auto m:instance.materials) materials.at(m)=true;}
   const auto mesh_map=retain(scene.meshes,meshes),material_map=retain(scene.materials,materials);
   for(auto &instance:scene.instances) {instance.mesh=uint32_t(mesh_map.at(instance.mesh));for(auto &m:instance.materials) m=uint32_t(material_map.at(m));}
-  std::vector<ir::Texture> textures;std::map<std::pair<std::filesystem::path,ir::ColorSpace>,int> texture_map;
+  std::vector<ir::Texture> textures;std::map<std::pair<std::string,ir::ColorSpace>,int> texture_map;
   for(auto &material:scene.materials) for(auto *index:ir::texture_indices(material)) if(*index>=0) {
-    const auto &texture=scene.textures.at(size_t(*index));const auto key=std::make_pair(texture.file,texture.colorspace);
+    const auto &texture=scene.textures.at(size_t(*index));const auto key=std::make_pair(texture.id,texture.colorspace);
     auto [found,inserted]=texture_map.emplace(key,int(textures.size()));if(inserted) textures.push_back(texture);*index=found->second;
   }
   scene.textures=std::move(textures);scene.validate();
@@ -81,10 +81,12 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   std::vector<bool> instances(scene.instances.size(),true);
   for(const auto &object:document.loaded.objects) if(removed.contains(object.id)) instances.at(object.instance)=false;
   for(const auto &t:document.catalog.targets) if(removed.contains(node_id(t))) instances.at(t.instance)=false;
+  for(size_t i=0;i<scene.instances.size();++i) {const auto &v=scene.instances[i];if(v.prototype>=0&&(!instances.at(size_t(v.prototype))||removed.contains(v.instance_node))) instances[i]=false;}
   std::vector<bool> targets,skins;
   for(const auto &t:document.catalog.targets) targets.push_back(instances.at(t.instance));
   for(const auto &s:document.skeletons.skins) skins.push_back(instances.at(s.instance));
   const auto instance_map=retain(scene.instances,instances),skin_map=retain(document.skeletons.skins,skins);
+  for(auto &i:scene.instances) if(i.prototype>=0) i.prototype=instance_map.at(size_t(i.prototype));
   retain(snapshot.poses,skins);retain(document.catalog.targets,targets);retain(snapshot.values,targets);retain(document.formulas.graphs,targets);
   for(auto &t:document.catalog.targets) {t.instance=uint32_t(instance_map.at(t.instance));if(refers_to(t.smoothing.collision_target,removed)) t.smoothing.collision_target.clear();}
   for(auto &s:document.skeletons.skins) s.instance=uint32_t(instance_map.at(s.instance));
@@ -93,7 +95,7 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   for(auto &o:document.loaded.objects) {o.instance=uint32_t(instance_map.at(o.instance));if(refers_to(o.smoothing.collision_target,removed)) o.smoothing.collision_target.clear();}
   std::erase_if(document.loaded.nodes,[&](const auto &n) {return removed.contains(n.id);});
   std::erase_if(snapshot.lights,[&](const auto &l) {return removed.contains(l.id);});scene.lights=snapshot.lights;
-  collect_resources(document);release_load_data(document);++snapshot.revision;
+  daz::apply_graft_masks(document.loaded);collect_resources(document);release_load_data(document);++snapshot.revision;
   return std::count(targets.begin(),targets.end(),false);
 }
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target) {
@@ -143,7 +145,7 @@ void append_document(Document &destination,Document source) {
     a.materials.push_back(std::move(m));
   }
   for(auto &m:b.meshes) {m.id=prefix+m.id;a.meshes.push_back(std::move(m));}
-  for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
+  for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;if(i.prototype>=0) i.prototype+=int(instances);if(!i.instance_node.empty()) i.instance_node=prefix+i.instance_node;if(!i.instance_group.empty()) i.instance_group=prefix+i.instance_group;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
   for(auto l:b.lights) {l.id=prefix+l.id;a.lights.push_back(std::move(l));}
   for(auto n:source.loaded.nodes) {n.id=prefix+n.id;if(n.parent.starts_with('#')) n.parent="#"+prefix+n.parent.substr(1);destination.loaded.nodes.push_back(std::move(n));}
   for(auto o:source.loaded.objects) {if(o.rigid_follow.target.starts_with('#')) o.rigid_follow.target="#"+prefix+o.rigid_follow.target.substr(1);o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);if(o.smoothing.collision_target.starts_with('#')) o.smoothing.collision_target="#"+prefix+o.smoothing.collision_target.substr(1);destination.loaded.objects.push_back(std::move(o));}

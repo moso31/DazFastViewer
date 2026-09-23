@@ -53,7 +53,7 @@ struct CameraState {
     const float length=std::sqrt(forward*forward+right*right+up*up);
     if(length>0) target=target+(f*forward+r*right+Vec3{0,0,up})*(std::max(.05f,distance*.6f)*seconds*(fast?4.f:1.f)/length);
   }
-  void dolly(float ticks) { distance=std::clamp(distance*std::exp(-ticks*0.12f),0.01f,2000.0f); }
+  void dolly(float ticks) { distance=float(std::clamp(double(distance)*std::exp(-double(ticks)*.12),.01,1e12)); }
 };
 class CameraMailbox {
   std::mutex mutex_;

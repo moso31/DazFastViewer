@@ -1,4 +1,6 @@
 #include "editor/parameters.h"
+#include <QDateEdit>
+#include <QTimeEdit>
 #include "editor/numeric_slider.h"
 #include "runtime/picking.h"
 #include <QCheckBox>
@@ -57,7 +59,8 @@ void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t
     for(size_t k=0;k<p.value.size();++k) {
       ParameterControl c;c.id=node->id+"/"+p.id+std::to_string(k);c.label=p.label+(p.value.size()==3?std::string(" ")+"RGB"[k]:"");c.group=p.group;c.minimum=p.minimum;c.maximum=p.maximum;c.slider_minimum=p.minimum;c.slider_maximum=std::min(p.maximum,std::max(2.0,p.value[k]*2));c.step=p.step;c.initial=p.value[k];c.visible=p.visible;c.enabled=p.supported;c.choices=p.choices;
       if(p.type=="bool") c.choices={"关闭","开启"};c.detail=p.image_uri+(!p.supported?"\n已保留原值，此参数尚未参与渲染":"");
-      if(p.id=="Environment Mode"&&c.choices.size()>2) {c.choices[2]+="（待支持）";c.disabled_choices.insert(2);c.detail+="\nSun-Sky Only 参数已保留；太阳天空模型尚未实现。";}
+      if(p.id=="SS Day") {c.format=ParameterControl::Format::date;c.label="SS Day（年月日）";}
+      if(p.id=="SS Time") {c.format=ParameterControl::Format::time;c.label="SS Time（时分秒）";}
       c.read=[node,i,k]{return node->parameters.at(i).value.at(k);};c.write=[this,callback,i,k](double v){callback(i,k,v);update_rows();};controls_.push_back(std::move(c));
     }
   }
@@ -102,7 +105,13 @@ void ParameterPanel::mount() {
     auto *favorite=new QToolButton;favorite->setText(favorites_.contains(c.id)?QStringLiteral("★"):QStringLiteral("☆"));favorite->setAutoRaise(true);favorite->setToolTip(QStringLiteral("收藏参数"));title->addWidget(favorite);layout->addLayout(title);
     connect(favorite,&QToolButton::clicked,this,[this,i,favorite]{const auto key=controls_[i].id;if(favorites_.contains(key)) favorites_.erase(key);else favorites_.insert(key);favorite->setText(favorites_.contains(key)?QStringLiteral("★"):QStringLiteral("☆"));QStringList ids;for(const auto &v:favorites_) ids<<text(v);QSettings().setValue("parameters/favorites",ids);});
     auto *line=new QHBoxLayout;line->setSpacing(4);layout->addLayout(line);
-    if(!c.choices.empty()) {
+    if(c.format==ParameterControl::Format::date) {
+      auto *date=new QDateEdit;date->setObjectName("valueDate");date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setDateRange(QDate(1,1,1),QDate(9999,12,31));date->setDate(QDate::fromJulianDay(qRound64(c.read())));date->setKeyboardTracking(false);date->setEnabled(c.enabled);line->addWidget(date);
+      connect(date,&QDateEdit::dateChanged,this,[this,i](QDate value){current_=i;controls_[i].write(double(value.toJulianDay()));update_rows();});
+    } else if(c.format==ParameterControl::Format::time) {
+      auto *time=new QTimeEdit;time->setObjectName("valueTime");time->setDisplayFormat("HH:mm:ss");time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)));time->setKeyboardTracking(false);time->setEnabled(c.enabled);line->addWidget(time);
+      connect(time,&QTimeEdit::timeChanged,this,[this,i](QTime value){current_=i;controls_[i].write(QTime(0,0).secsTo(value));update_rows();});
+    } else if(!c.choices.empty()) {
       auto *combo=new QComboBox;combo->setObjectName("valueChoice");for(const auto &choice:c.choices) combo->addItem(text(choice));combo->setCurrentIndex(int(c.read()));combo->setEnabled(c.enabled);line->addWidget(combo);
       if(auto *model=qobject_cast<QStandardItemModel *>(combo->model())) for(int index:c.disabled_choices) if(auto *item=model->item(index)) item->setEnabled(false);
       connect(combo,&QComboBox::currentIndexChanged,this,[this,i](int value){current_=i;controls_[i].write(value);update_rows();});
@@ -136,6 +145,8 @@ void ParameterPanel::update_rows() {
     }
     if(auto *slider=w->findChild<QSlider *>("valueSlider")) {QSignalBlocker block(slider);static_cast<NumericSlider *>(slider)->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);}
     if(auto *combo=w->findChild<QComboBox *>("valueChoice")) {QSignalBlocker block(combo);combo->setCurrentIndex(int(c.read()));}
+    if(auto *date=w->findChild<QDateEdit *>("valueDate");date&&!date->hasFocus()) {QSignalBlocker block(date);date->setDate(QDate::fromJulianDay(qRound64(c.read())));}
+    if(auto *time=w->findChild<QTimeEdit *>("valueTime");time&&!time->hasFocus()) {QSignalBlocker block(time);time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)));}
   }
 }
 void ParameterPanel::refresh(size_t) {update_rows();}

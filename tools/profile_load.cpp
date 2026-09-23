@@ -64,7 +64,20 @@ int main(int argc,char **argv) {
     std::unique_ptr<runtime::DeformationRuntime> runtime;
     stage("deformation_construct",[&] {runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);});
     stage("initial_deformation",[&] {runtime->evaluate(snapshot.values,snapshot.poses);});
-    runtime::PickingScene picking;stage("picking_index",[&] {picking.update(render_scene,runtime::viewport_pick_mask(render_scene.instances.size(),document.catalog.targets));});
+    result["graft_seams"]=Json::array();for(const auto &g:runtime->graft_seams()) {
+      result["graft_seams"].push_back({{"follower",render_scene.instances[g.follower].id},{"source",render_scene.instances[g.source].id},{"pairs",g.pairs},{"max_gap_m",g.max_gap_m}});
+      if(g.max_gap_m>1e-5) throw std::runtime_error("GeoGraft 最终接缝误差超过 0.01 毫米");
+    }
+    Json placements=Json::array();size_t clones=0;for(size_t i=0;i<render_scene.instances.size();++i) {
+      const auto &instance=render_scene.instances[i];const auto &mesh=render_scene.meshes.at(instance.mesh);ir::Bounds b;
+      for(auto p:mesh.positions) b.add(instance.transform.point(p));
+      auto vec=[](ir::Vec3 p){return Json::array({p.x,p.y,p.z});};
+      placements.push_back({{"id",instance.id},{"mesh",instance.mesh},{"prototype",instance.prototype},{"visible",instance.visible},{"min",vec(b.minimum)},{"max",vec(b.maximum)},
+        {"vertices",mesh.positions.size()},{"triangles",mesh.triangles.size()},{"hidden_polygons",mesh.hidden_polygons.size()}});
+      if(instance.prototype>=0) {++clones;if(instance.mesh!=render_scene.instances.at(size_t(instance.prototype)).mesh) throw std::runtime_error("实例没有共享源对象最终形变网格");}
+    }
+    std::ofstream(output/"placements.json")<<placements.dump(2);result["shared_instances"]=clones;
+    runtime::PickingScene picking;stage("picking_index",[&] {picking.update(render_scene,runtime::viewport_pick_mask(render_scene,document.catalog.targets));});
     result["total_seconds"]=elapsed();result["status"]="PASS";
     result["conform_bindings"]=runtime->conform_stats().bindings;result["offsets_visited"]=runtime->morph_stats().offsets_visited;
     size_t payloads=0,ready=0,resident_bytes=0;std::set<runtime::MorphPayload *> shared;

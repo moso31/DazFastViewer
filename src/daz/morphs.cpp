@@ -380,6 +380,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     out.targets.push_back(std::move(target));
     formula_source.interned.clear();formula_source.interned.rehash(0);out.formulas.push_back(std::move(formula_source));
   }
+  sync_instance_meshes(loaded.scene);
   return out;
 }
 }

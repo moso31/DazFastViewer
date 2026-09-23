@@ -98,16 +98,16 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       if(binding_mode=="Local") {
         const auto &local=w.at("local_weights");weights=weight_map(local.at("x"));
         if(weight_map(local.at("y"))!=weights||weight_map(local.at("z"))!=weights||!w.contains("scale_weights"))
-          throw std::runtime_error("局部轴权重不同，尚需 TriAx 蒙皮："+object.id);
+          skin.static_local_weights=true;
       } else if(w.contains("node_weights")) weights=weight_map(w.at("node_weights"));
       if(binding_mode=="General"&&w.contains("local_weights")) for(const auto &axis:w.at("local_weights"))
-        if(weight_map(axis)!=weights) throw std::runtime_error("独立局部权重与绑定权重不同："+object.id);
-      if(w.contains("scale_weights")&&weight_map(w.at("scale_weights"))!=weights) throw std::runtime_error("独立缩放权重与绑定权重不同："+object.id);
+        if(weight_map(axis)!=weights) skin.static_local_weights=true;
+      if(w.contains("scale_weights")&&weight_map(w.at("scale_weights"))!=weights) skin.separate_scale_weights=true;
       for(const auto &[vertex,value]:weights) {skin.weights[vertex].push_back({uint32_t(index),value});++weight_count;}
     }
     // 各轴与缩放图一致且每个顶点只属于一个关节时，Local 与刚性 Linear 变换等价。
     if(binding_mode=="Local") for(const auto &weights:skin.weights) if(!weights.empty()&&(weights.size()!=1||weights.front().weight!=1))
-      throw std::runtime_error("非刚性局部权重尚需 TriAx 蒙皮："+object.id);
+      skin.static_local_weights=true;
     // 无权重的控制骨也可能挂着刚性饰品，不能只保留 skin 权重表里出现的骨骼。
     for(const auto &[id,n]:nodes) if(!indices.contains(id)) {
       auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
@@ -129,6 +129,8 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     Json formulas=Json::array();
     for(const auto &joint:skin.joints) for(const auto &formula:nodes.at(joint.id).value("formulas",Json::array())) formulas.push_back(formula);
     catalog.report["skins"].back()["node_formulas"]=formulas.size();
+    if(skin.separate_scale_weights) catalog.report["skins"].back()["limitation"]="独立缩放权重未求值；当前所有骨骼缩放为单位值，平移与刚性旋转可正常应用；拒绝后续非单位骨骼缩放";
+    if(skin.static_local_weights) catalog.report["skins"].back()["limitation"]="TriAx 轴权重未求值；当前没有骨骼变换，保留静态/Morph 几何；拒绝后续需要 TriAx 的骨骼姿势";
     catalog.node_formulas.push_back(std::move(formulas));catalog.skins.push_back(std::move(skin));
   }
   return catalog;

@@ -29,6 +29,8 @@ struct Skin {
   std::vector<std::vector<Influence>> weights;
   // 实例矩阵已包含 Figure 的保存缩放；ERC 在原通道空间求值后再换算为相对值。
   float root_general_scale=1;
+  bool separate_scale_weights=false;
+  bool static_local_weights=false;
 };
 struct SkinStats {uint64_t evaluations=0,vertices=0,joints=0;};
 // 姿势在 DAZ 厘米 / Y 向上坐标内求值；几何输入输出均使用 Render IR 坐标。

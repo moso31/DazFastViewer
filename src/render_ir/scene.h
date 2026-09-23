@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -32,7 +33,20 @@ struct Bounds {
   float extent() const;
 };
 enum class ColorSpace {srgb,linear};
-struct Texture {std::string id;std::filesystem::path file;ColorSpace colorspace=ColorSpace::srgb;};
+struct ImageLayer {
+  std::filesystem::path file;
+  std::string operation="alpha_blend";
+  Vec3 color{0,0,0};
+  float opacity=1,rotation=0;
+  Vec2 scale{1,1},offset;
+  bool invert=false,mirror_x=false,mirror_y=false;
+};
+struct Texture {
+  std::string id;std::filesystem::path file;ColorSpace colorspace=ColorSpace::srgb;
+  // LIE 在图像编码空间叠加，最后统一转换到工作空间；源资产保持只读。
+  std::vector<ImageLayer> layers;
+  float gamma=0;
+};
 struct Material {
   std::string id;
   Vec3 base_color{0.5f,0.5f,0.5f};
@@ -41,10 +55,14 @@ struct Material {
   float bump_strength=0,bump_distance=.001f;
   int color_texture=-1,roughness_texture=-1,opacity_texture=-1,normal_texture=-1;
   int bump_texture=-1;
+  int displacement_texture=-1;
+  float displacement_strength=0,displacement_min=-.001f,displacement_max=.001f;
   bool thin_walled=false,hair=false,roughness_from_glossiness=false,weighted_glossy=false;
   float specular=.5f,anisotropy=0,anisotropy_rotation=0,translucency=0;
   float subsurface=0,subsurface_anisotropy=0;
   Vec3 subsurface_radius{.001f,.001f,.001f},translucency_color{1,1,1};
+  Vec3 subsurface_color{1,1,1};
+  bool separate_subsurface_color=false;
   float coat=0,coat_roughness=.1f,coat_ior=1.5f;
   int coat_mode=2;float coat_normal=.04f,coat_grazing=1,coat_exponent=5;
   Vec3 coat_color{1,1,1},specular_color{1,1,1};
@@ -55,11 +73,13 @@ struct Material {
   Vec2 uv_scale{1,1},uv_offset;
   int specular_texture=-1,translucency_texture=-1,translucency_color_texture=-1;
   int coat_texture=-1,coat_roughness_texture=-1,dual_texture=-1,metallic_texture=-1,transmission_texture=-1;
+  int specular_color_texture=-1,coat_color_texture=-1;
+  bool bump_invert=false,bump_from_texel_density=false;
 };
 template<class M> auto texture_indices(M &m) {
   return std::array{&m.color_texture,&m.roughness_texture,&m.opacity_texture,&m.normal_texture,&m.bump_texture,
     &m.specular_texture,&m.translucency_texture,&m.translucency_color_texture,&m.coat_texture,&m.coat_roughness_texture,
-    &m.dual_texture,&m.metallic_texture,&m.transmission_texture};
+    &m.dual_texture,&m.metallic_texture,&m.transmission_texture,&m.specular_color_texture,&m.coat_color_texture,&m.displacement_texture};
 }
 struct Triangle {
   std::array<uint32_t,3> vertices{};
@@ -77,7 +97,12 @@ struct Curve {
 struct Mesh {
   // GeoGraft 的目标基础拓扑；用于把附加表面纳入服装碰撞。
   uint32_t graft_target_vertices=0;
+  uint32_t graft_target_polygons=0,source_polygon_count=0;
   std::vector<uint32_t> graft_hidden_polygons;
+  // DSON 顺序：插件顶点、宿主顶点；最终形变后锁定接缝。
+  std::vector<std::array<uint32_t,2>> graft_vertex_pairs;
+  // 原拓扑供 Morph/蒙皮核对；遮盖仅影响绘制和选取，Visible 不恢复宿主面。
+  std::vector<uint32_t> hidden_polygons;
   std::string id;
   std::vector<Vec3> positions;
   std::vector<Triangle> triangles;
@@ -85,6 +110,7 @@ struct Mesh {
   std::vector<std::string> polygon_groups;
   bool smooth=true;
   std::vector<Curve> curves;
+  bool draws(const Triangle &t) const {return !std::binary_search(hidden_polygons.begin(),hidden_polygons.end(),t.source_polygon);}
 };
 struct Instance {
   std::string id;
@@ -92,6 +118,11 @@ struct Instance {
   Transform transform;
   std::vector<uint32_t> materials;
   bool visible=true;
+  // DAZ 实例复用最终形变网格；不为散布条目重复发现参数或蒙皮。
+  int prototype=-1;
+  std::string instance_node;
+  // 一个 DAZ Instance / 散布条目的所有渲染零件共用此键。
+  std::string instance_group,instance_label;
 };
 enum class LightKind {area,point,spot,distant};
 struct AreaLight {
