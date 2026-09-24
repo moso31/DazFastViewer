@@ -152,6 +152,13 @@ void ParameterPanel::update_rows() {
   }
 }
 void ParameterPanel::refresh(size_t) {update_rows();}
+bool ParameterPanel::edit_control(const std::string &id,double value) {
+  auto found=std::find_if(controls_.begin(),controls_.end(),[&](const auto &c){return c.id==id;});if(found==controls_.end()||!found->enabled) return false;
+  hidden_->setChecked(true);search_->clear();groups_->setCurrentItem(groups_->topLevelItem(0));filter();current_=int(found-controls_.begin());tree_->setCurrentItem(items_[current_]);tree_->scrollToItem(items_[current_]);mount();
+  const auto row=mounted_.find(current_);if(row==mounted_.end()) return false;
+  if(auto *spin=row->second->findChild<QDoubleSpinBox *>("valueSpin")) {spin->setValue(value);return true;}
+  if(auto *combo=row->second->findChild<QComboBox *>("valueChoice")) {combo->setCurrentIndex(int(value));return true;}return false;
+}
 void ParameterPanel::query(const QString &value) {search_->setText(value);}
 void ParameterPanel::select_parameter(size_t index) {if(index<morph_rows_.size()&&morph_rows_[index]>=0) {current_=morph_rows_[index];auto *item=items_[size_t(current_)];tree_->setCurrentItem(item);tree_->scrollToItem(item);mount();}}
 void ParameterPanel::set_slider(int value) {if(current_>=0) {const auto &c=controls_.at(size_t(current_));c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();}}

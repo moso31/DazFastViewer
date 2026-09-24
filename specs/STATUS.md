@@ -1,6 +1,10 @@
 # 实施状态
 
-更新：2026-09-23。
+更新：2026-09-25。
+
+008 追加：默认关闭的角度固定及 ERC 提交校准已部署，位置和角度可独立或同时固定。保留完整碰撞质量，松手恢复实测高细分 2.51 s、发丝专项 1.86 s（原约 6.93／4.05 s）；18 项回归和两组副屏 stage 27 检查通过。最新状态以 [追加记录](008-fk-ik/refinement-report.md) 为准。
+
+最新：008 FK／IK 已实现并部署。骨骼属性遵循实际 DSF／DUF 通道、锁定和限位；仅已有单选本角色时支持左键 IK，增加位置固定与 Esc 取消。复杂场景拖动使用独立灰模代理，松手恢复完整服装／发丝／细分。18 项工程测试、G8／G8.1 真实通道与副屏高细分／StrandBasedHair 操作通过，详见 [008 执行记录](008-fk-ik/execution-report.md)。以下“008 未开始”保留为历史状态。
 
 本轮交付已更新 `out`；32 项导航、异步／手动 Morph 和真实场景 11 条选取／高亮／附件可见性检查均通过。以下交互性能结论仅针对 `test3.duf`，`6.duf` 剩余渲染等待未继续复测。
 
@@ -47,7 +51,7 @@
 | Spec 006 Skeleton / Skinning / Pose | **已中文提交 `aa8fbc7`** | [执行报告](006-skeleton-skinning/execution-report.md)；G8 / G8.1 各 40 姿势、独立数学与副屏验证通过 |
 | Spec 007 Formula / ERC / JCM | **基线已中文提交 `da5d4f8`，后续两批兼容性修复已部署并按授权中文归档** | [兼容性报告](007-erc-jcm/compatibility-report.md)；Ren Yao / BGM 已修复；DAZ Studio Golden 待完成 |
 | 已穿戴物 FitTo / AutoFollow | 007 后插入修复：原生 Morph、表面转移和骨骼跟随 | [跟随报告](../Docs/conform_follow_execution_cn.md)；跨代 AutoFit、平滑 / 碰撞另行实现 |
-| FK / IK | 008 未开始 | [长期规划](../Docs/editor_and_genesis8_roadmap_cn.md)；G8.1 旧眼睛空覆盖保留，不强行套用 G8 控制器 |
+| FK / IK | **008 及本轮追加已实现并部署** | [追加记录](008-fk-ik/refinement-report.md)；原生 FK、单选左键 IK、独立位置／角度固定、复杂场景代理与恢复提速；完整 Golden 仍未验收 |
 | License / 发布依赖审计 | 部分完成 | 新增 JSON 为 MIT、已保留许可；整体发布审计仍未完成 |
 
 用户要求停止重复性能测试，demo 只能在第二屏。本轮仅围绕实际资产和具体显示缺陷验证，不重跑整套基准；`tests/runtime_checks.py` 完整流程仍未执行。

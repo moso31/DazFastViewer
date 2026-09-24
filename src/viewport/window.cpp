@@ -94,6 +94,7 @@ void Window::release_navigation_capture() {
   update_navigation();
   if(!dragging_&&!middle_dragging_&&!back_pressed_&&GetCapture()==hwnd) ReleaseCapture();
 }
+void Window::cancel_pose() {std::lock_guard lock(pose_mutex_);if(pose_pointer_.held) {pose_pointer_.held=false;pose_pointer_.cancelled=true;++pose_pointer_.revision;}}
 void Window::poll() {
   MSG msg{};
   while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)) {TranslateMessage(&msg);DispatchMessageW(&msg);}
@@ -106,11 +107,23 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
   }
   if(!self) return DefWindowProcW(hwnd,msg,w,l);
   switch(msg) {
-    case WM_LBUTTONDOWN:self->back_click_=false;SetFocus(hwnd);return 0;
-    case WM_LBUTTONUP:self->click_x=GET_X_LPARAM(l);self->click_y=GET_Y_LPARAM(l);self->pointer_toggle=self->click_toggle=(w&MK_CONTROL)!=0;++self->clicks;return 0;
-    case WM_MOUSELEAVE:self->back_click_=false;self->pointer_x=-1;self->pointer_y=-1;return 0;
+    case WM_LBUTTONDOWN: {
+      self->back_click_=false;if(!self->automated_pointer) {SetFocus(hwnd);SetCapture(hwnd);}
+      std::lock_guard lock(self->pose_mutex_);auto &p=self->pose_pointer_;++p.serial;++p.revision;p.selection=self->pose_selection;
+      p.start_x=p.x=GET_X_LPARAM(l);p.start_y=p.y=GET_Y_LPARAM(l);p.held=true;p.moved=p.cancelled=false;
+      p.input_seconds=now();
+      p.modified=(w&(MK_CONTROL|MK_SHIFT|MK_RBUTTON|MK_MBUTTON))||(GetKeyState(VK_MENU)&0x8000);return 0;
+    }
+    case WM_LBUTTONUP: {
+      bool cancelled;{std::lock_guard lock(self->pose_mutex_);auto &p=self->pose_pointer_;p.x=GET_X_LPARAM(l);p.y=GET_Y_LPARAM(l);p.held=false;cancelled=p.cancelled;++p.revision;}
+      self->click_x=GET_X_LPARAM(l);self->click_y=GET_Y_LPARAM(l);self->pointer_toggle=self->click_toggle=(w&MK_CONTROL)!=0;if(!cancelled) ++self->clicks;
+      if(GetCapture()==hwnd) ReleaseCapture();return 0;
+    }
+    case WM_MOUSELEAVE:if(!self->automated_pointer) {self->back_click_=false;self->pointer_x=-1;self->pointer_y=-1;}return 0;
     case WM_CLOSE:self->close=true;return 0;
     case WM_KEYDOWN:
+      if(w==VK_ESCAPE) self->cancel_pose();
+      if(w==VK_CONTROL||w==VK_SHIFT||w==VK_MENU) self->cancel_pose();
       self->back_click_=false;
       if(w==VK_CONTROL) self->pointer_toggle=true;
       if(w==VK_ESCAPE&&!self->embedded) self->close=true;
@@ -121,11 +134,12 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
       if(w==VK_CONTROL) self->pointer_toggle=false;
       for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=false;
       self->update_navigation();return 0;
-    case WM_SYSKEYDOWN:self->back_click_=false;break;
+    case WM_SYSKEYDOWN:self->cancel_pose();self->back_click_=false;break;
     case WM_MOUSEHWHEEL:self->back_click_=false;return 0;
     case WM_SETFOCUS:self->pointer_toggle=(GetKeyState(VK_CONTROL)&0x8000)!=0;return 0;
     case WM_KILLFOCUS:
     case WM_CANCELMODE:
+      self->cancel_pose();
       if(self->telemetry_) self->telemetry_->event(msg==WM_KILLFOCUS?"viewport_focus_lost":"viewport_cancel_input");
       std::fill(std::begin(self->keys_),std::end(self->keys_),false);
       self->pointer_toggle=false;
@@ -133,6 +147,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
       self->camera.preview_until=0;self->update_navigation();
       if(GetCapture()==hwnd) ReleaseCapture();return 0;
     case WM_CAPTURECHANGED:
+      self->cancel_pose();
       if(self->telemetry_) self->telemetry_->event("viewport_capture_changed");
       self->dragging_=self->middle_dragging_=self->back_pressed_=self->back_dragging_=self->back_click_=false;
       self->update_navigation();return 0;
@@ -144,6 +159,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     }
     case WM_RBUTTONDOWN:
     case WM_MBUTTONDOWN:
+      self->cancel_pose();
       self->back_click_=false;
       if(!self->inside(GET_X_LPARAM(l),GET_Y_LPARAM(l))) return 0;
       SetFocus(hwnd);if(msg==WM_RBUTTONDOWN) self->dragging_=true;else self->middle_dragging_=true;
@@ -167,6 +183,10 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
       if(click) ++self->focus_requests;return TRUE;
     }
     case WM_MOUSEMOVE:
+      {std::lock_guard lock(self->pose_mutex_);auto &p=self->pose_pointer_;if(p.held) {
+        p.x=GET_X_LPARAM(l);p.y=GET_Y_LPARAM(l);p.input_seconds=now();++p.revision;
+        p.moved|=std::abs(p.x-p.start_x)>=GetSystemMetrics(SM_CXDRAG)||std::abs(p.y-p.start_y)>=GetSystemMetrics(SM_CYDRAG);
+      }}
       self->pointer_x=GET_X_LPARAM(l);self->pointer_y=GET_Y_LPARAM(l);
       self->pointer_toggle=(w&MK_CONTROL)!=0;
       {TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT),TME_LEAVE,hwnd,0};TrackMouseEvent(&track);}

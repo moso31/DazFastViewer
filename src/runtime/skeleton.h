@@ -1,6 +1,7 @@
 #pragma once
 #include "render_ir/scene.h"
 #include <set>
+#include <array>
 
 namespace dfv::runtime {
 struct JointPose {
@@ -8,6 +9,12 @@ struct JointPose {
   float general_scale=1;
   ir::Vec3 center_offset_cm{},end_offset_cm{},orientation_offset_degrees{};
   bool operator==(const JointPose &) const = default;
+};
+// 原生 DSF 定义叠加 DUF 实例覆盖；不从显示名称猜测旋转轴。
+struct JointChannel {
+  std::string label,group;
+  float minimum=-10000,maximum=10000,step=.1f,initial=0;
+  bool present=false,visible=true,locked=false,clamped=false,percent=false;
 };
 struct Joint {
   std::string id,name,label,rotation_order="XYZ";
@@ -17,6 +24,7 @@ struct Joint {
   int parent=-1;
   ir::Vec3 center_cm{},end_cm{},orientation_degrees{};
   bool inherits_scale=true;
+  std::array<JointChannel,10> channels; // translation XYZ, rotation XYZ, scale XYZ, general_scale。
 };
 struct Influence {uint32_t joint=0;double weight=0;};
 enum class SkinMethod {linear,dual_quaternion};
@@ -35,7 +43,7 @@ struct Skin {
 struct SkinStats {uint64_t evaluations=0,vertices=0,joints=0;};
 // 姿势在 DAZ 厘米 / Y 向上坐标内求值；几何输入输出均使用 Render IR 坐标。
 void validate_pose(const Skin &skin,const std::vector<JointPose> &pose);
-std::vector<ir::Transform> joint_transforms(const Skin &skin,const std::vector<JointPose> &pose);
+std::vector<ir::Transform> joint_transforms(const Skin &skin,const std::vector<JointPose> &pose,std::vector<ir::Transform> *rotations=nullptr);
 std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose,const std::vector<ir::Vec3> &source);
 class SkinningRuntime {
   ir::Scene &scene_;
@@ -50,5 +58,6 @@ public:
   // 接收 Morph 输出，缓存蒙皮前顶点；绝不以上一次蒙皮结果作为输入。
   ir::Delta evaluate(ir::Delta before={});
   const auto &stats() const {return stats_;}
+  const auto &source(size_t skin) const {return sources_.at(skin);}
 };
 }

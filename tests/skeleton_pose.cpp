@@ -80,11 +80,15 @@ static void unit_tests() {
   const auto dsf=folder/L"骨架.dsf",duf=folder/L"双角色.duf";
   Json asset={{"node_library",Json::array({{{"id","oldId"},{"name","Bend"},{"parent","#root"}},{{"id","root"},{"name","Figure"}}})},
     {"modifier_library",Json::array({{{"skin",{{"node","#root"},{"geometry","#geometry"},{"vertex_count",1},{"joints",Json::array({{{"node","#oldId"},{"node_weights",{{"count",1},{"values",{{0,1}}}}}}})}}}}})}};
+  asset["node_library"][0]["rotation"]={{{"id","z"},{"label","Bend"},{"min",-60},{"max",60},{"clamped",true},{"step_size",.5}}};
   std::ofstream(dsf)<<asset.dump();
   Json saved={{"scene",{{"nodes",Json::array({{{"id","figure-a"}},{{"id","bone-a"},{"url","#oldId"},{"parent","#figure-a"},{"rotation",Json::array({{{"id","z"},{"current_value",90}}})}}})}}}};
   std::ofstream(duf)<<saved.dump();daz::LoadedScene input;input.scene.meshes={mesh,mesh};input.scene.instances={a,b};input.report["input"]=utf8(duf);
   input.objects={{0,"figure-a","A","","geometry",dsf,true},{1,"figure-b","B","","geometry",dsf,true}};
   auto catalog=daz::load_skeletons(input);require(catalog.skins.size()==2&&catalog.skins[0].initial[1].rotation_degrees.z==90&&catalog.skins[1].initial[1].rotation_degrees.z==0,"载入姿势跨 Figure 污染或骨架未拓扑排序");
+  require(catalog.skins[0].joints[1].channels[5].label=="Bend"&&catalog.skins[0].joints[1].channels[5].clamped&&catalog.skins[0].joints[1].channels[5].step==.5f,"骨骼通道元数据未继承");
+  saved["scene"]["nodes"][1]["rotation"][0]["min"]=-100;saved["scene"]["nodes"][1]["rotation"][0]["locked"]=true;std::ofstream(duf)<<saved.dump();catalog=daz::load_skeletons(input);
+  require(catalog.skins[0].joints[1].channels[5].minimum==-100&&catalog.skins[0].joints[1].channels[5].locked&&catalog.skins[1].joints[1].channels[5].minimum==-60&&!catalog.skins[1].joints[1].channels[5].locked,"DUF 骨骼通道覆盖缺失或跨角色污染");
   require(catalog.skins[0].joints[1].scene_id=="bone-a"&&catalog.skins[1].joints[1].scene_id.empty(),"骨骼实例身份没有按所属 Figure 保存");
   saved["scene"]["nodes"].push_back({{"id","garment"},{"parent","#figure-a"},{"preview",{{"type","figure"}}}});
   saved["scene"]["nodes"].push_back({{"id","garment-bone"},{"parent","#garment"},{"url","#oldId"},{"rotation",{{{"id","z"},{"current_value",-45}}}}});

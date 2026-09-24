@@ -81,14 +81,16 @@ static std::vector<Palette> build_palettes(const Skin &skin,const std::vector<Jo
   }
   return palettes;
 }
-std::vector<ir::Transform> joint_transforms(const Skin &skin,const std::vector<JointPose> &pose) {
+std::vector<ir::Transform> joint_transforms(const Skin &skin,const std::vector<JointPose> &pose,std::vector<ir::Transform> *rotations) {
   std::vector<ir::Transform> result;
+  if(rotations) rotations->clear();
   for(const auto &p:build_palettes(skin,pose)) {
     ir::Transform transform;
     const int axes[]={0,2,1};const double signs[]={1,-1,1};
     for(int r=0;r<3;++r) for(int c=0;c<3;++c) transform.value[r*4+c]=float(signs[r]*signs[c]*p.matrix.a[axes[r]][axes[c]]);
     transform.value[3]=float(p.translation.x*.01);transform.value[7]=float(-p.translation.z*.01);transform.value[11]=float(p.translation.y*.01);
     result.push_back(transform);
+    if(rotations) {ir::Transform rotation;for(int r=0;r<3;++r) for(int c=0;c<3;++c) rotation.value[r*4+c]=float(signs[r]*signs[c]*p.rotation.a[axes[r]][axes[c]]);rotations->push_back(rotation);}
   }
   return result;
 }

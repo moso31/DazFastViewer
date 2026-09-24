@@ -22,6 +22,22 @@ void pose_channels(runtime::JointPose &p,const Json &node) {
   if(node.contains("general_scale")) p.general_scale=number(node.at("general_scale"),p.general_scale);
 }
 void joint_channels(runtime::Joint &joint,const Json &node) {
+  const char *keys[]={"translation","rotation","scale","general_scale"};
+  const char *groups[]={"/General/Transforms/Translation","/General/Transforms/Rotation","/General/Transforms/Scale","/General/Transforms/Scale"};
+  for(int kind=0;kind<4;++kind) if(node.contains(keys[kind])) {
+    auto read=[&](const Json &c) {
+      const auto id=c.value("id",kind==3?"general_scale":"");
+      const int axis=kind==3?0:id=="x"?0:id=="y"?1:id=="z"?2:-1;if(axis<0) return;
+      auto &channel=joint.channels[kind*3+axis];
+      if(!channel.present) {channel.initial=kind>=2?1.f:0.f;channel.label=kind==3?"Scale":std::string(1,"XYZ"[axis])+(kind==0?" Translate":kind==1?" Rotate":" Scale");channel.group=groups[kind];}
+      channel.present=true;channel.label=c.value("label",channel.label);channel.group=c.value("group",channel.group);
+      channel.minimum=c.value("min",channel.minimum);channel.maximum=c.value("max",channel.maximum);channel.step=c.value("step_size",channel.step);
+      channel.initial=c.value("value",channel.initial);channel.visible=c.value("visible",channel.visible);channel.locked=c.value("locked",channel.locked);
+      channel.clamped=c.value("clamped",channel.clamped);channel.percent=c.value("display_as_percent",channel.percent);
+      if(!std::isfinite(channel.minimum)||!std::isfinite(channel.maximum)||channel.minimum>channel.maximum) throw std::runtime_error("无效骨骼通道范围："+joint.id+" / "+channel.label);
+    };
+    if(kind==3) read(node.at(keys[kind]));else for(const auto &c:node.at(keys[kind])) read(c);
+  }
   // 场景可以重新定义附件的铰链与局部轴；preview 仅为缓存，不能当输入。
   joint.center_cm=vector(node,"center_point",joint.center_cm);
   joint.end_cm=vector(node,"end_point",joint.end_cm);
@@ -71,6 +87,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       runtime::Joint j;j.id=id;j.name=n.value("name",id);j.label=n.value("label",j.name);j.parent=parent;j.rotation_order=n.value("rotation_order","XYZ");
       j.center_cm=vector(n,"center_point");j.end_cm=vector(n,"end_point");j.orientation_degrees=vector(n,"orientation");
       j.inherits_scale=n.value("inherits_scale",parent<0||skin.joints[parent].parent<0);
+      joint_channels(j,n);
       j.aliases=n.value("name_aliases",std::vector<std::string>{});runtime::JointPose pose;
       if(id!=root) pose_channels(pose,n); // Figure 的初始世界变换已由静态 Loader 写入实例。
       const size_t index=skin.joints.size();skin.joints.push_back(j);skin.initial.push_back(pose);indices[id]=index;visiting.erase(id);return index;

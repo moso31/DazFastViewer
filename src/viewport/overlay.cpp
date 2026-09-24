@@ -2,6 +2,24 @@
 #include <set>
 
 namespace dfv {
+void HoverOverlay::draw_pose(const CameraState &camera,int width,int height,const ir::Mesh &proxy,const ir::Transform &world,
+  const std::vector<std::pair<ir::Vec3,ir::Vec3>> &bones,ir::Vec3 goal) {
+  glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_CULL_FACE);glDisable(GL_BLEND);
+  glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);glClearColor(.055f,.065f,.08f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);
+  glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadIdentity();const double near=std::max(.00001,double(camera.distance)*1e-5),far=std::max(10000.,double(camera.distance)*4);
+  const double e=std::tan(.4)*near,x=e*std::max(1.,double(width)/height),y=e*std::max(1.,double(height)/width);glFrustum(-x,x,-y,y,near,far);
+  const auto m=camera.matrix();const float view[]={m[0],m[1],-m[2],0,m[4],m[5],-m[6],0,m[8],m[9],-m[10],0,
+    -(m[0]*m[3]+m[4]*m[7]+m[8]*m[11]),-(m[1]*m[3]+m[5]*m[7]+m[9]*m[11]),m[2]*m[3]+m[6]*m[7]+m[10]*m[11],1};
+  glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadMatrixf(view);glBegin(GL_TRIANGLES);
+  for(const auto &t:proxy.triangles) {
+    const auto a=world.point(proxy.positions[t.vertices[0]]),b=world.point(proxy.positions[t.vertices[1]]),c=world.point(proxy.positions[t.vertices[2]]);
+    const auto n=normalized(cross({b.x-a.x,b.y-a.y,b.z-a.z},{c.x-a.x,c.y-a.y,c.z-a.z}));const float shade=.35f+.55f*std::abs(n.x*.3f+n.y*-.5f+n.z*.8f);glColor3f(shade*.72f,shade*.82f,shade);
+    for(auto p:{a,b,c}) glVertex3f(p.x,p.y,p.z);
+  }
+  glEnd();glDisable(GL_DEPTH_TEST);glLineWidth(3);glColor3f(1,.75f,.18f);glBegin(GL_LINES);for(const auto &[a,b]:bones) {glVertex3f(a.x,a.y,a.z);glVertex3f(b.x,b.y,b.z);}glEnd();
+  glPointSize(9);glColor3f(.25f,1,.45f);glBegin(GL_POINTS);glVertex3f(goal.x,goal.y,goal.z);glEnd();
+  glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
+}
 void HoverOverlay::release() {std::set<GLuint> unique;for(auto id:lists_) if(id) unique.insert(id);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) unique.insert(part.first);for(auto id:unique) glDeleteLists(id,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();}
 void HoverOverlay::update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions) {
   release();

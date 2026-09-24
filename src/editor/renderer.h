@@ -17,6 +17,14 @@ struct SamplingSettings {
   bool rebuild_probe=false;
 };
 struct RenderStatus {
+  uint64_t pose_commit=0,pose_revision=0,pose_generation=0,pose_previews=0;
+  int pose_skin=-1,pose_joint=-1;
+  bool pose_dragging=false,pose_restoring=false;
+  double pose_solve_ms=0,pose_error=0,pose_latency_ms=0,pose_angle_error=0;
+  std::vector<runtime::JointPose> pose_input;
+  std::vector<std::vector<runtime::JointPose>> effective_poses;
+  std::vector<std::vector<runtime::JointPose>> input_poses;
+  std::vector<ir::Transform> skin_world;
   uint64_t generation=0,applied_revision=0,presented_revision=0,frames=0;
   uint64_t requested_epoch=0,presented_epoch=0;
   AdapterStats adapter;
@@ -69,10 +77,12 @@ class Renderer {
   uint64_t selection_generation_=0;
   uint64_t retry_resources_=0;
   bool edit_active_=false;
+  std::vector<runtime::PosePin> pose_pins_;
   uint64_t interaction_revision_=0;
   double edit_preview_until_=0,resize_preview_until_=0;
   int selected_target_=-1,selected_joint_=-1;
   std::vector<Selection> selections_;
+  bool ik_allowed_=false;
   void run(std::stop_token stop);
 public:
   Renderer(HWND host,int width,int height,const std::filesystem::path &output,SamplingSettings sampling={});
@@ -80,10 +90,12 @@ public:
   void set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene=true);
   void resize(int width,int height);
   void pointer(int x,int y,bool click=false,bool toggle=false);
-  void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={});
+  void automated_pointer() {window_->automated_pointer=true;}
+  void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={},bool ik_allowed=false);
   void camera_view(const std::array<float,6> &view);
   void edit(const Snapshot &snapshot);
   void interaction(bool active);
+  void pose_pins(std::vector<runtime::PosePin> pins) {std::lock_guard lock(mutex_);pose_pins_=std::move(pins);++window_->pose_selection;}
   void retry_resources();
   RenderStatus status();
   CameraState input_camera();

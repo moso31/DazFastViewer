@@ -118,6 +118,9 @@ bool DeformationRuntime::same_shape(const std::vector<Properties> &values,const 
   for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs) return false;
   return true;
 }
+std::vector<std::vector<JointPose>> DeformationRuntime::resolve_poses(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
+  std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> result;feed(values,poses,weights,result);return result;
+}
 PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry) {
   if(same_shape(values,poses)) return {};
   std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> resolved;

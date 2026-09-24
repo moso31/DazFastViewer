@@ -57,6 +57,7 @@ using namespace dfv::editor;
 static std::filesystem::path file_path(const QString &s) {return std::filesystem::path(s.toStdWString());}
 static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsizetype(s.size()));}
 class Editor final:public QMainWindow {
+  #include "editor/pose_test.inl"
   QWidget *host_=nullptr;
   ParameterPanel *parameters_=nullptr;
   ContentBrowser *browser_=nullptr;
@@ -82,6 +83,29 @@ class Editor final:public QMainWindow {
   std::filesystem::path reload_file_;
   std::filesystem::path pose_file_;
   bool pose_test_=false,frame_pending_=false;
+  uint64_t pose_commit_=0;
+  uint64_t pins_generation_=0;
+  std::vector<runtime::PosePin> pose_pins_;
+  void pin_joint(int skin,int joint,bool enabled,bool angle=false) {
+    const auto state=renderer_->status();if(!document_||state.generation!=document_->generation||state.applied_revision!=snapshot_.revision||size_t(skin)>=state.effective_poses.size()) return;
+    auto found=std::find_if(pose_pins_.begin(),pose_pins_.end(),[&](const auto &p){return p.skin==skin&&p.joint==joint;});
+    if(found==pose_pins_.end()) {if(!enabled) return;pose_pins_.push_back({skin,joint,{},false,false});found=std::prev(pose_pins_.end());}
+    const auto &s=document_->skeletons.skins.at(skin);const auto &pose=state.effective_poses.at(skin);const auto &world=state.skin_world.at(skin);
+    if(angle) {found->angle=enabled;if(enabled) found->world_orientation=runtime::rotation_frame(world)*runtime::joint_orientation(s,pose,joint);}
+    else {found->position=enabled;if(enabled) found->world=world.point(runtime::joint_point(s,pose,joint,true));}
+    std::erase_if(pose_pins_,[](const auto &p){return !p.position&&!p.angle;});
+    pins_generation_=document_->generation;renderer_->pose_pins(pose_pins_);
+  }
+  void constrain_pins(int skin) {
+    if(pose_pins_.empty()) return;const auto state=renderer_->status();if(!document_||state.generation!=document_->generation||size_t(skin)>=state.effective_poses.size()) return;
+    auto effective=state.effective_poses[skin];const auto &before=state.input_poses.at(skin);const auto &input=snapshot_.poses.at(skin);std::vector<int> chain;std::vector<runtime::IkGoal> goals;
+    for(size_t j=0;j<effective.size();++j) {auto add=[](ir::Vec3 a,ir::Vec3 b,ir::Vec3 c){return ir::Vec3{a.x+b.x-c.x,a.y+b.y-c.y,a.z+b.z-c.z};};effective[j].rotation_degrees=add(effective[j].rotation_degrees,input[j].rotation_degrees,before[j].rotation_degrees);effective[j].translation_cm=add(effective[j].translation_cm,input[j].translation_cm,before[j].translation_cm);}
+    const auto &s=document_->skeletons.skins.at(skin);auto limits=runtime::ik_limits(s,input,effective);
+    goals=runtime::pin_goals(pose_pins_,skin,state.skin_world.at(skin));
+    for(const auto &g:goals) for(int j:runtime::ik_chain(s,g.joint)) if(std::find(chain.begin(),chain.end(),j)==chain.end()) chain.push_back(j);
+    if(goals.empty()) return;auto solved=effective;const auto result=runtime::solve_ik(limits,solved,chain,goals,48);snapshot_.poses.at(skin)=runtime::ik_input(input,effective,solved);
+    if(result.error>.005||result.angle_error_degrees>.5) pose_status_->setText(QStringLiteral("固定位置／角度受关节限位或可达范围限制，已保留最接近的姿势。"));
+  }
   uint64_t focus_requests_=0;
   bool focus_pending_=false;
   bool edit_regression_test_=false;
@@ -500,6 +524,7 @@ class Editor final:public QMainWindow {
     }
   }
   void reset_pose() {
+    pose_pins_.clear();renderer_->pose_pins({});
     if(loading_) return;const auto index=selected_skin();if(index<0) return;
     snapshot_.poses[size_t(index)]=document_->skeletons.skins[size_t(index)].initial;send();frame_pending_=true;
     pose_status_->setText(QStringLiteral("已恢复载入时的骨骼姿势；Morph 保持当前值。"));pose_report_=nullptr;
@@ -696,7 +721,7 @@ class Editor final:public QMainWindow {
     {QSignalBlocker block(visible_);visible_->setEnabled(document_&&index>=0&&joint<0&&light<0);visible_->setChecked(document_&&index>=0?snapshot_.values.at(size_t(index)).visible:false);}
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
-    if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_));
+    if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1);
     if(light>=0&&document_) {
       const auto &l=snapshot_.lights.at(size_t(light));light_base_=l.transform;light_base_.value[3]=light_base_.value[7]=light_base_.value[11]=0;selection_->setText(text(l.id));parameters_->bind(nullptr,nullptr);
       const float data[]={l.transform.value[3]*100,l.transform.value[11]*100,-l.transform.value[7]*100,0,0,0,100,100,100};
@@ -724,7 +749,18 @@ class Editor final:public QMainWindow {
       ParameterControl general;general.id="transform/general_scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.float_backed=true;general.read=[this,initial]{return double(initial)*root_scale()*snapshot_.values[size_t(selected_)].transform.general_scale*100;};general.write=[this,initial](double value){const double base=double(initial)*root_scale()*100;if(base!=0) {snapshot_.values[size_t(selected_)].transform.general_scale=float(value/base);send();}};controls.push_back(std::move(general));
       for(int i=0;i<9;++i) {ParameterControl c;c.id="transform/"+std::to_string(i);c.label=std::string(1,"XYZ"[i%3])+std::string(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.float_backed=true;c.minimum=transform_[i]->minimum();c.maximum=transform_[i]->maximum();c.step=.1;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;const float base=saved[i];c.read=[this,i,base]{return i<6?transform_[i]->value()+base:transform_[i]->value()*base*root_scale(i-6);};c.write=[this,i,base](double v){const double scale=double(base)*(i>=6?root_scale(i-6):1);if(i<6||scale!=0) transform_[i]->setValue(i<6?v-base:v/scale);};controls.push_back(std::move(c));}
     } else if(const int skin=selected_skin();skin>=0) {
-      for(int i=0;i<9;++i) {ParameterControl c;c.id="joint/"+std::to_string(i);c.label=std::string(1,"XYZ"[i%3])+(i<3?" Translate":i<6?" Rotate":" Scale");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.enabled=false;c.detail="已保存的骨骼通道；当前通过姿势预设 / ERC 编辑";c.read=[this,skin,joint,i]{const auto &p=snapshot_.poses[size_t(skin)][size_t(joint)];const auto v=i<3?p.translation_cm:i<6?p.rotation_degrees:p.scale;return double(i%3==0?v.x:i%3==1?v.y:v.z);};controls.push_back(std::move(c));}
+      const auto &skeleton=document_->skeletons.skins[size_t(skin)];
+      for(int i=0;i<10;++i) {const auto &channel=skeleton.joints[size_t(joint)].channels[i];if(!channel.present) continue;
+        const double factor=channel.percent?100.:1.;ParameterControl c;c.id="joint/"+std::to_string(i);c.label=channel.label+(channel.percent?"（%）":i>=3&&i<6?"（度）":"");c.group=channel.group;
+        c.enabled=runtime::editable_channel(skeleton,size_t(joint),i);c.visible=channel.visible;c.float_backed=true;c.minimum=channel.minimum*factor;c.maximum=channel.maximum*factor;
+        c.slider_minimum=c.minimum;c.slider_maximum=c.maximum;const double saved_value=runtime::joint_value(snapshot_.poses.at(skin).at(joint),i)*factor;c.minimum=std::min(c.minimum,saved_value);c.maximum=std::max(c.maximum,saved_value);c.step=std::max(.000001,double(channel.step)*factor);c.initial=channel.initial*factor;c.enforce_limits=channel.clamped;
+        c.detail=skeleton.joints[size_t(joint)].id+" / "+channel.label+(channel.locked?"\n资产锁定此通道":skeleton.static_local_weights?"\n此资产需要尚未支持的 TriAx 轴权重":i>=6&&skeleton.separate_scale_weights?"\n此资产需要尚未支持的独立缩放权重":"\n编辑骨骼输入，联动 ERC、JCM 和穿戴物");
+        c.read=[this,skin,joint,i,factor]{return runtime::joint_value(snapshot_.poses.at(skin).at(joint),i)*factor;};
+        c.write=[this,skin,joint,i,factor](double v) {try {runtime::set_joint_value(document_->skeletons.skins.at(skin),snapshot_.poses.at(skin),size_t(joint),i,float(v/factor));constrain_pins(skin);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}};
+        controls.push_back(std::move(c));}
+      for(bool angle:{false,true}) {ParameterControl pin;pin.id=angle?"pose/pin-angle":"pose/pin";pin.label=angle?"固定角度（IK）":"固定位置（IK）";pin.group="/Pose/IK";pin.choices={"关闭","固定"};pin.enabled=!runtime::ik_chain(skeleton,joint).empty();
+        pin.detail=angle?"固定开启时的世界朝向；仍可拖动位置。与固定位置独立，可同时开启。":"固定开启时的世界位置；与固定角度独立。";
+        pin.read=[this,skin,joint,angle]{return std::any_of(pose_pins_.begin(),pose_pins_.end(),[&](const auto &p){return p.skin==skin&&p.joint==joint&&(angle?p.angle:p.position);})?1.:0.;};pin.write=[this,skin,joint,angle](double v){pin_joint(skin,joint,v!=0,angle);};controls.push_back(std::move(pin));}
     }
     if(joint<0&&!document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(target.instance).mesh).polygons.empty()) {
       ParameterControl c;c.id="SubDRenderLevel";c.label="渲染细分等级";c.group="/General/Mesh Resolution";
@@ -736,6 +772,7 @@ class Editor final:public QMainWindow {
     parameters_->set_extra(std::move(controls));parameters_->bind(&target,&values,node);
   }
   void reset_selected() {
+    pose_pins_.clear();renderer_->pose_pins({});
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};value.unlimited_morphs.clear();
     const auto &target=document_->catalog.targets[size_t(selected_)];
@@ -765,6 +802,7 @@ class Editor final:public QMainWindow {
       report["local_geometry_restored"]=status.mesh_hashes==interaction_initial_.mesh_hashes;report["instance_transforms_restored"]=status.instance_transforms==interaction_initial_.instance_transforms;report["boundaries"]=interaction_boundaries_;}
     if(!rebuild_test_file_.empty()) {report["scope"]="scene-rebuild-latency";report["checks"]=rebuild_checks_;report["sessions"]=status.sessions;report["initial_subdivision_level"]=rebuild_level_;report["initial_render_subdivision_level"]=rebuild_render_level_;}
     if(subdivision_stress_test_) {report["scope"]="subdivision-repeat-coalesce-budget-and-restore";report["checks"]=subdivision_checks_;report["sessions"]=status.sessions;}
+    if(pose_edit_test_) {report["scope"]="native-FK-left-button-IK-selection-proxy-full-quality-cancel";report["checks"]=pose_checks_;}
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
     if(edit_regression_test_) {report["scope"]="multi-selection-focus-subdivision-ERC-scale";report["checks"]=regression_checks_;}
@@ -1184,11 +1222,20 @@ class Editor final:public QMainWindow {
     ++interaction_case_;interaction_begin_=0;interaction_idle_=now();record();
   }
   void tick() {
+    if(document_&&pins_generation_!=document_->generation) {pose_pins_.clear();renderer_->pose_pins({});pins_generation_=document_->generation;}
     const auto focus_state=renderer_->status();if(focus_state.focus_requests!=focus_requests_||focus_pending_) {focus_requests_=focus_state.focus_requests;focus_selection();}
     const QSize size(qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()));
     if(size!=viewport_size_) {viewport_size_=size;renderer_->resize(size.width(),size.height());resize_at_=0;}
     if(resize_at_&&QDateTime::currentMSecsSinceEpoch()>=resize_at_) {resize_at_=0;renderer_->resize(size.width(),size.height());}
     const auto state=renderer_->status();
+    if(state.pose_commit!=pose_commit_) {
+      pose_commit_=state.pose_commit;
+      if(document_&&state.pose_generation==document_->generation&&state.pose_revision==snapshot_.revision&&state.pose_skin>=0&&size_t(state.pose_skin)<snapshot_.poses.size()) {
+        snapshot_.poses[size_t(state.pose_skin)]=state.pose_input;send();select(selected_,selected_joint_,selected_light_);
+        pose_status_->setText(state.pose_angle_error>.5?QStringLiteral("固定角度受关节限位或可达范围限制，已保留最接近的姿势（残差 %1 度）。").arg(state.pose_angle_error,0,'f',2):QStringLiteral("IK 姿势已应用。"));
+      }
+    }
+    if(pose_edit_test_) {pose_edit_tick(state);return;}
     if(!rebuild_test_file_.empty()) {rebuild_tick(state);return;}
     if(subdivision_stress_test_) {subdivision_stress_tick(state);return;}
     if(interaction_test_) {interaction_tick(state);return;}
@@ -1277,7 +1324,9 @@ class Editor final:public QMainWindow {
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision) {effective_roots_=state.effective_roots;effective_generation_=state.generation;if(selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);}
-    if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
+    if(state.pose_dragging) statusBar()->showMessage(QStringLiteral("IK 拖动 · 基础网格预览 · 松开后更新服装、头发和完整质量 · Esc 取消 · %1 ms").arg(state.pose_solve_ms,0,'f',1));
+    else if(state.pose_restoring) statusBar()->showMessage(QStringLiteral("正在恢复 IK 完整形变、服装、头发和渲染质量…"));
+    else if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
     else if(!state.resource_error.empty()) statusBar()->showMessage(QStringLiteral("Morph 未应用：")+text(state.resource_error)+QStringLiteral("；可重试加载或刷新参数目录"));
     else if(state.pending_payloads) statusBar()->showMessage(QStringLiteral("正在异步载入 %1 项 Morph 数据，完成后应用最新输入…").arg(state.pending_payloads));
     else if(!pending_parameters_.empty()) statusBar()->showMessage(QStringLiteral("有 %1 项参数更改待应用").arg(pending_parameters_.size()));
@@ -1558,6 +1607,7 @@ class Editor final:public QMainWindow {
   }
 public:
   void edit_regression_test() {edit_regression_test_=self_test_=true;}
+  void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
   void joint_selection_test() {joint_selection_test_=self_test_=true;GetCursorPos(&workflow_cursor_);}
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
@@ -1793,6 +1843,8 @@ int main(int argc,char **argv) {
   parser.addOption({"subdivision-stress-test",QStringLiteral("副屏验证细分反复切换、快速输入及预算限制")});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
+  parser.addOption({"pose-edit-test",QStringLiteral("副屏验证原生 FK 参数、左键 IK、选择门槛、预览和取消")});
+  parser.addOption({"pose-test-level",QStringLiteral("FK / IK 验证时使用的宿主细分等级"),"level","-1"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
   parser.addOption({"lazy-test",QStringLiteral("验证异步 Morph、手动应用和参数目录刷新后退出")});
   parser.addOption({"test-parameter",QStringLiteral("指定滑块验证参数，可重复，与 --formula-test 配合"),"name"});
@@ -1818,6 +1870,7 @@ int main(int argc,char **argv) {
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
+    if(parser.isSet("pose-edit-test")) editor.pose_edit_test(parser.value("pose-test-level").toInt());
     if(parser.isSet("joint-selection-test")) editor.joint_selection_test();
     if(parser.isSet("options-test")) editor.options_test();
     if(parser.isSet("navigation-test")) editor.navigation_test();

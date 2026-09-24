@@ -20,5 +20,7 @@ public:
   void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1,const std::vector<uint32_t> *members=nullptr);
   size_t triangle_count(int hovered,int joint=-1) const;
   void release();
+  void draw_pose(const CameraState &camera,int width,int height,const ir::Mesh &proxy,const ir::Transform &world,
+    const std::vector<std::pair<ir::Vec3,ir::Vec3>> &bones,ir::Vec3 goal);
 };
 }

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <chrono>
 
 using namespace dfv;
 using namespace dfv::runtime;
@@ -29,6 +30,15 @@ static void mesh_collision() {
   std::vector<Target> targets={a,b};CollisionRuntime runtime(scene,targets);auto d=runtime.evaluate({});
   require(d.meshes.size()==1,"初始碰撞未输出服装更新");for(auto p:scene.meshes[1].positions) require(p.z>=.00049f,"穿入平面的服装未推出");
   const auto baseline=scene.meshes[1].positions;
+  {
+    auto grid=scene;auto &surface=grid.meshes[1];surface.positions.clear();surface.triangles.clear();
+    for(int y=0;y<33;++y) for(int x=0;x<33;++x) surface.positions.push_back({(x-16)*.03f,(y-16)*.03f,-.01f});
+    for(uint32_t y=0;y<32;++y) for(uint32_t x=0;x<32;++x) {const auto v=y*33+x;surface.triangles.push_back({{v,v+1,v+34}});surface.triangles.push_back({{v,v+34,v+33}});}
+    auto serial=grid;CollisionRuntime reference(serial,targets),optimized(grid,targets);reference.evaluate({},false);optimized.evaluate({});
+    require(grid.meshes[1].positions==serial.meshes[1].positions,"并行碰撞改变了顺序修正结果");
+    for(auto &p:grid.meshes[0].positions) p.z=.02f;serial.meshes[0]=grid.meshes[0];ir::Delta moved;moved.meshes.push_back({0,grid.meshes[0].positions});
+    reference.evaluate(moved,false);optimized.evaluate(moved);require(grid.meshes[1].positions==serial.meshes[1].positions,"并行碰撞在姿势更新后产生不同结果");
+  }
   {
     auto rebuilt=scene;rebuilt.meshes[1]=cloth;CollisionRuntime cached(rebuilt,targets);cached.reuse(runtime);cached.evaluate({});
     require(cached.stats().evaluations==0&&cached.stats().cache_hits==1&&rebuilt.meshes[1].positions==baseline,"相同场景重建未复用碰撞结果");
@@ -210,6 +220,10 @@ static void unit() {
   std::vector<FormulaGraph> graphs={graph(follower,0),graph(source,1),graph(unrelated,-1)};
   std::vector<Properties> values(3);values[0].morphs={0};values[1].morphs=values[2].morphs={0,0,0};std::vector<std::vector<JointPose>> poses={skins[0].initial,skins[1].initial};
   DeformationRuntime runtime(scene,targets,skins,graphs);runtime.evaluate(values,poses);
+  {const auto before=scene.meshes;const auto evaluations=runtime.skin_stats().evaluations,collisions=runtime.collision_stats().evaluations;auto candidate=poses;candidate[1][1].rotation_degrees.z=25;
+    const auto resolved=runtime.resolve_poses(values,candidate);require(resolved[1][1].rotation_degrees.z==25&&resolved[0][1].rotation_degrees.z==25,"骨架预求值没有保留角色和服装的公式依赖");
+    require(runtime.skin_stats().evaluations==evaluations&&runtime.collision_stats().evaluations==collisions&&runtime.input_poses()==poses,"IK 校准触发了完整形变或改写输入");
+    for(size_t m=0;m<scene.meshes.size();++m) require(scene.meshes[m].positions==before[m].positions,"IK 校准改变了场景顶点");}
   require(runtime.conform_links().size()==1,"没有按显式 conform_target 建立关系");
   values[1].morphs={1,1,1};runtime.evaluate(values,poses);auto expected=cloth.positions;
   expected[0].x+=.2f;expected[1].x+=.2f;expected[2].x+=.2f;expected[0].z+=.1f;expected[1].z+=.2f;expected[2].z+=.1f;
@@ -281,7 +295,10 @@ static void cached_collision(const std::filesystem::path &input,const std::files
     t.smoothing.enabled=o.value("collision_enabled",false);t.smoothing.collision_target=o.value("collision_target","");
     targets.push_back(std::move(t));scene.instances.push_back(instance);scene.meshes.push_back(std::move(mesh));
   }
-  CollisionRuntime runtime(scene,targets);runtime.evaluate({});require(runtime.evaluate({}).meshes.empty(),"缓存碰撞重复求值发生漂移");
+  auto reference=scene;CollisionRuntime runtime(scene,targets),serial(reference,targets);const auto begin=std::chrono::steady_clock::now();runtime.evaluate({});const auto middle=std::chrono::steady_clock::now();serial.evaluate({},false);const auto end=std::chrono::steady_clock::now();
+  for(size_t i=0;i<scene.meshes.size();++i) require(scene.meshes[i].positions==reference.meshes[i].positions,"真实缓存碰撞与串行参考不一致");
+  data["collision_comparison"]={{"exact_match",true},{"optimized_ms",std::chrono::duration<double,std::milli>(middle-begin).count()},{"serial_ms",std::chrono::duration<double,std::milli>(end-middle).count()}};
+  require(runtime.evaluate({}).meshes.empty(),"缓存碰撞重复求值发生漂移");
   for(size_t i=0;i<targets.size();++i) {auto &world=data["objects"][i]["world"];world=Json::array();for(auto p:scene.meshes[i].positions) {p=scene.instances[i].transform.point(p);world.push_back({p.x,p.y,p.z});}}
   std::ofstream(output)<<data.dump();std::cout<<"Cached collision: PASS\n";
 }

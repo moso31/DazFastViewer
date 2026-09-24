@@ -10,6 +10,7 @@ struct SurfaceBinding {
   ir::Vec3 edge1,edge2,normal,offset_coordinates;
   float distance=0;
   uint32_t polygon=0;
+  size_t triangle=SIZE_MAX;
 };
 struct ConformLink {
   uint64_t geometry_key=0;
@@ -64,7 +65,7 @@ class CollisionRuntime {
   std::function<ir::Transform(uint32_t,uint32_t)> relative_;
 public:
   CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets,std::function<ir::Transform(uint32_t,uint32_t)> relative={});
-  ir::Delta evaluate(ir::Delta delta);
+  ir::Delta evaluate(ir::Delta delta,bool parallel=true);
   void reuse(const CollisionRuntime &previous);
   const auto &stats() const {return stats_;}
 };

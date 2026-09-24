@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 #include "bench/camera.h"
+#include "runtime/pose_edit.h"
 
 namespace dfv {
 class Telemetry;
@@ -38,7 +39,13 @@ class Window {
   bool inside(int x,int y) const;
   bool side_combo(WPARAM buttons) const;
   void release_navigation_capture();
+  std::mutex pose_mutex_;
+  runtime::PosePointer pose_pointer_;
+  void cancel_pose();
 public:
+  std::atomic<uint64_t> pose_selection{0};
+  std::atomic<bool> automated_pointer{false}; // 仅诊断入口：不抢占用户系统光标。
+  runtime::PosePointer pose_pointer() {std::lock_guard lock(pose_mutex_);return pose_pointer_;}
   HWND hwnd{},hidden{};
   HDC dc{},render_dc{};
   GLContext present_context,render_context;

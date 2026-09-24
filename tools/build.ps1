@@ -6,9 +6,9 @@ Push-Location $projectRoot
 try {
     & $cmake -S . -B build -G 'Visual Studio 17 2022' -A x64
     if($LASTEXITCODE -ne 0) {throw 'CMake 配置失败'}
-    & $cmake --build build --config $Configuration --target CyclesViewportBench DazFastViewer CameraMailboxTest SceneIRTest MorphRuntimeTest MorphCatalogTest MorphCompatibilityTest ProjectSettingsTest SkeletonPoseTest FormulaRuntimeTest SceneWorkflowTest ConformRuntimeTest AttachmentWorkflowTest LazyMorphTest RenderOptionsTest ParameterControlsTest ContentBrowserTest SubdivisionTest GraftSurfaceTest --parallel 6
+    & $cmake --build build --config $Configuration --target CyclesViewportBench DazFastViewer CameraMailboxTest SceneIRTest MorphRuntimeTest MorphCatalogTest MorphCompatibilityTest ProjectSettingsTest SkeletonPoseTest PoseEditTest FormulaRuntimeTest SceneWorkflowTest ConformRuntimeTest AttachmentWorkflowTest LazyMorphTest RenderOptionsTest ParameterControlsTest ContentBrowserTest SubdivisionTest GraftSurfaceTest --parallel 6
     if($LASTEXITCODE -ne 0) {throw '编译失败'}
-    & (Join-Path (Split-Path $cmake) 'ctest.exe') --test-dir build -C $Configuration -R '^(camera_mailbox|scene_ir_dson|morph_runtime|morph_catalog|morph_compatibility|project_settings|skeleton_pose|formula_runtime|scene_workflow|conform_runtime|attachment_workflow|lazy_morph|render_options|parameter_controls|content_browser|subdivision|graft_surface)$' --output-on-failure
+    & (Join-Path (Split-Path $cmake) 'ctest.exe') --test-dir build -C $Configuration -R '^(camera_mailbox|scene_ir_dson|morph_runtime|morph_catalog|morph_compatibility|project_settings|skeleton_pose|pose_edit|formula_runtime|scene_workflow|conform_runtime|attachment_workflow|lazy_morph|render_options|parameter_controls|content_browser|subdivision|graft_surface)$' --output-on-failure
     if($LASTEXITCODE -ne 0) {throw '相机回归测试失败'}
     if($Configuration -eq 'Release') {
         python tools/stage_runtime.py

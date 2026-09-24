@@ -39,6 +39,8 @@ public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
   PayloadProgress prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry=false);
+  // 仅求公式与骨架，供 IK 提交校准；不载入差值、不蒙皮、不执行碰撞。
+  std::vector<std::vector<JointPose>> resolve_poses(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
   const auto &morph_stats() const {return morph_.stats();}
   const auto &skin_stats() const {return skin_.stats();}
   FormulaStats formula_stats() const;
@@ -47,6 +49,8 @@ public:
   const auto &conform_links() const {return conform_.links();}
   const auto &effective() const {return effective_;}
   const auto &effective_poses() const {return effective_poses_;}
+  const auto &input_poses() const {return previous_poses_;}
+  const auto &skin_source(size_t skin) const {return skin_.source(skin);}
   std::vector<GraftSeam> graft_seams() const;
   const auto &formula_values(size_t target) const {return formulas_.at(target)->values();}
 };

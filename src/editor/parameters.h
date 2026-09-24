@@ -56,6 +56,7 @@ public:
   void query(const QString &text);
   void select_parameter(size_t index);
   void set_slider(int value);
+  bool edit_control(const std::string &id,double value);
   void evaluated(const std::vector<float> &values);
   void resource_states();
 };
