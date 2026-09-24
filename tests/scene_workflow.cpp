@@ -22,6 +22,8 @@ static void embedded_geometry() {
     const auto id="person"+std::to_string(i),shape="shape"+std::to_string(i);
     duf["scene"]["nodes"].push_back({{"id",id},{"url","/data/Test/figure.dsf#figure"},{"geometries",{{{"id",shape},{"url","#embedded"}}}}});
     duf["scene"]["nodes"].push_back({{"id","bone"+std::to_string(i)},{"parent","#"+id},{"url","/data/Test/figure.dsf#bone"},{"rotation",{{{"id","z"},{"current_value",i?0:90}}}}});
+    duf["scene"]["nodes"][i*2]["extra"]={{{"type","studio_node_channels"},{"favorites",i?J::array():J::array({"Raise/Value"})}}};
+    duf["scene"]["nodes"].back()["extra"]={{{"type","studio_node_channels"},{"favorites",{i?"YRotate":"ZRotate"}}}};
     duf["scene"]["materials"].push_back({{"id","mat"+std::to_string(i)},{"geometry","#"+shape},{"groups",{"Skin"}}});
     duf["scene"]["modifiers"].push_back({{"url","/data/Test/Morphs/raise.dsf#Raise"},{"parent","#"+id},{"channel",{{"current_value",i?.1:.5}}}});
   }
@@ -34,6 +36,7 @@ static void embedded_geometry() {
   auto appended=document;appended.generation=5;editor::append_document(appended,document);
   auto refreshed=editor::refresh_parameters(appended,2,{folder});
   require(refreshed->catalog.targets.size()==4&&refreshed->catalog.targets[2].id==appended.catalog.targets[2].id&&refreshed->catalog.targets[2].morphs[0].initial==.5f&&refreshed->formulas.graphs[2].skin==2,"追加角色刷新丢失来源、场景覆盖或蒙皮映射");
+  require(refreshed->catalog.targets[2].favorites==document.catalog.targets[0].favorites&&refreshed->catalog.targets[3].favorites==document.catalog.targets[1].favorites&&refreshed->catalog.targets[2].favorites.at("bone").contains("ZRotate"),"追加后刷新丢失或混用了源场景收藏");
   duf["geometry_library"][0]["polylist"]["values"][0][3]=2;duf["geometry_library"][0]["polylist"]["values"][0][4]=1;std::ofstream(file)<<duf.dump();auto incompatible=daz::load(file,{{folder},false});
   require(incompatible.objects[0].geometry_sources.empty()&&!incompatible.report["warnings"].empty(),"不同拓扑错误继承了权重索引");
   duf["geometry_library"][0]["source"]="#embedded";std::ofstream(file)<<duf.dump();bool rejected=false;try {daz::load(file,{{folder},false});} catch(const std::exception &) {rejected=true;}require(rejected,"派生几何循环没有拒绝");

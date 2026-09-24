@@ -7,14 +7,29 @@
 #include <QTimeEdit>
 #include <QComboBox>
 #include <QStandardItemModel>
+#include <QSettings>
+#include <QTemporaryDir>
+#include <QToolButton>
+#include <QTreeWidgetItemIterator>
+#include <QScrollBar>
+#include <QLabel>
+#include <QLineEdit>
+#include <QWheelEvent>
+#include "daz/morphs.h"
+#include <fstream>
 #include "render_ir/options.h"
 #include <QTest>
 #include <iostream>
 #include <stdexcept>
 static void require(bool value,const char *message) {if(!value) throw std::runtime_error(message);}
+#include "parameter_favorites.inl"
+#include "parameter_wheel.inl"
 int main(int argc,char **argv) {
   QApplication app(argc,argv);
   try {
+    QTemporaryDir settings;require(settings.isValid(),"测试设置目录创建失败");
+    QCoreApplication::setOrganizationName("DazFastViewerTests");QCoreApplication::setApplicationName("ParameterControls");
+    QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settings.path());
     double value=.5;dfv::editor::ParameterControl c;c.id="test";c.label="数值";c.minimum=0;c.maximum=1;c.read=[&]{return value;};c.write=[&](double v){value=v;};
     dfv::editor::ParameterPanel panel;panel.resize(380,480);panel.bind_controls({c});panel.show();app.processEvents();QTest::qWait(180);
     auto *spin=panel.findChild<QDoubleSpinBox *>("valueSpin");auto *slider=panel.findChild<QSlider *>("valueSlider");require(spin&&slider,"参数行未创建");
@@ -65,6 +80,8 @@ int main(int argc,char **argv) {
     require(qobject_cast<QStandardItemModel *>(choice->model())->item(2)->isEnabled()&&!choice->itemText(2).contains(QStringLiteral("待支持")),"Sun-Sky Only 仍被禁用");
     require(date->date()==QDate(2024,2,29)&&clock->time()==QTime(13,24,56),"儒略日或当地秒数转换错误");
     date->setDate(QDate(2026,9,23));clock->setTime(QTime(23,59,59));require(options.parameters[1].value[0]==QDate(2026,9,23).toJulianDay()&&options.parameters[2].value[0]==86399,"年月日 / 时分秒没有写回原通道");
-    std::cout<<"Numeric text / focus commit / unbounded slider / sun-sky date-time: PASS\n";return 0;
+    parameter_favorites(app);
+    parameter_wheel(app);
+    std::cout<<"Numeric text / focus commit / unbounded slider / sun-sky date-time / DUF favorites: PASS\n";return 0;
   }catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}
 }

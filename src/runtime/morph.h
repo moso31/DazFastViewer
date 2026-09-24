@@ -3,6 +3,7 @@
 #include "runtime/morph_data.h"
 #include "runtime/rigid_follow.h"
 #include <set>
+#include <map>
 
 namespace dfv::runtime {
 struct Morph {
@@ -12,6 +13,7 @@ struct Morph {
   std::string value_type="float",intrinsic_error;
   std::string limitation;
   bool evaluable=false,locked=false;
+  bool scene_channel=false;
   int alias_morph=-1;
   size_t formula_count=0,missing_dependencies=0;
   // 部分商业资源用 -1 表示没有声明目标总数，不能转换成 size_t。
@@ -28,6 +30,9 @@ struct Morph {
 };
 struct Target {
   std::string id,label,parent;
+  // DUF 节点收藏：空键为对象本身，其他键为骨骼资产 ID；空集合也代表已保存的列表。
+  std::string favorite_scope;
+  std::map<std::string,std::set<std::string>> favorites;
   uint32_t instance=0;
   std::vector<Morph> morphs;
   std::string conform_target;

@@ -14,10 +14,10 @@ int wmain(int argc,wchar_t **argv) {
   try {
     using namespace dfv;
     if(argc>=4) {
-      daz::LoadOptions options;for(int i=3;i<argc;++i) options.content_roots.emplace_back(argv[i]);
+      daz::LoadOptions options;bool lazy=false;for(int i=3;i<argc;++i) {if(std::wstring(argv[i])==L"--lazy") lazy=true;else options.content_roots.emplace_back(argv[i]);}
       auto loaded=daz::load(fs::path(argv[1]),options);std::vector<fs::path> roots;
       for(const auto &root:loaded.report["content_roots"]) roots.push_back(fs::u8path(root.get<std::string>()));
-      const auto started=std::chrono::steady_clock::now();auto catalog=daz::discover_morphs(loaded,roots);
+      const auto started=std::chrono::steady_clock::now();auto catalog=daz::discover_morphs(loaded,roots,{},lazy);
       catalog.report["elapsed_seconds"]=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
       catalog.report["input"]=loaded.report["input"];std::ofstream(fs::path(argv[2]))<<catalog.report.dump(2);
       std::cout<<"Catalog inspected: "<<catalog.targets.at(0).morphs.size()<<" parameters, "<<catalog.report["diagnostics"].size()<<" diagnostics\n";return 0;

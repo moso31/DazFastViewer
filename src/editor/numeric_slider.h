@@ -29,7 +29,8 @@ protected:
     commit(anchor_value_+(e->position().x()-anchor_x_)*anchor_span_/std::max(1,width()-16)*precision);e->accept();
   }
   void mouseReleaseEvent(QMouseEvent *e) override {if(e->button()==Qt::LeftButton) {dragging_=false;setSliderDown(false);}e->accept();}
-  void wheelEvent(QWheelEvent *e) override {commit(value_+e->angleDelta().y()/120.0*step_);e->accept();}
+  // 面板将滚轮交给同一行的十进制数字框步进，避免 float 回读累加产生尾数。
+  void wheelEvent(QWheelEvent *e) override {if(wheeled) wheeled(e);else e->ignore();}
   void keyPressEvent(QKeyEvent *e) override {
     const int key=e->key();
     if(key==Qt::Key_Left||key==Qt::Key_Down) commit(value_-step_);
@@ -40,6 +41,7 @@ protected:
   }
 public:
   std::function<void(double)> edited;
+  std::function<void(QWheelEvent *)> wheeled;
   NumericSlider():QSlider(Qt::Horizontal) {setRange(0,1000);}
   void sync(double value,double low,double high,double step) {
     value_=value;step_=std::max(.000001,std::abs(step));span_=std::max({std::abs(high-low),step_*100,std::abs(value)*.5});

@@ -99,6 +99,9 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
   auto skipped=[&](const std::string &type) {out.report["skipped_types"][type]=out.report["skipped_types"].value(type,0)+1;};
   fs::path scene_file;J scene_document=J::object();
   if(loaded.report.contains("input")) {scene_file=fs::u8path(loaded.report.at("input").get<std::string>());scene_document=*document_view(scene_file);}
+  std::map<std::string,const J *> saved_nodes;
+  for(const auto &node:array_member(object_member(scene_document,"scene"),"nodes")) saved_nodes[node.value("id","")]=&node;
+  std::set<std::string> object_nodes;for(const auto &object:loaded.objects) object_nodes.insert(object.id);
   // 场景覆盖只解析一次；大场景不能为每个 Morph 复制和遍历整个 scene。
   std::map<std::pair<std::string,std::string>,J> overrides;
   if(scene_document.contains("scene")&&scene_document["scene"].contains("modifiers"))
@@ -120,6 +123,28 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     }
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
     runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;target.smoothing=object.smoothing;
+    target.favorite_scope=scene_file.empty()?std::string{}:key(scene_file);
+    // 按场景父链归属收藏；相同资产的多角色及其同名骨骼必须彼此隔离。
+    for(const auto &[id,node]:saved_nodes) {
+      const auto &extras=array_member(*node,"extra");
+      if(std::none_of(extras.begin(),extras.end(),[](const auto &extra){return extra.value("type","")=="studio_node_channels"&&extra.contains("favorites");})) continue;
+      auto owner=id;std::set<std::string> visited;
+      while(owner!=object.id&&!object_nodes.contains(owner)&&saved_nodes.contains(owner)&&visited.insert(owner).second) {
+        const auto parent=decode_uri(saved_nodes.at(owner)->value("parent",""));
+        if(!parent.starts_with('#')) break;owner=parent.substr(1);
+      }
+      if(owner!=object.id) continue;
+      std::string node_id;
+      if(id!=object.id) {const auto uri=node->value("url","");if(uri.find('#')==std::string::npos) continue;node_id=reference(uri).id;}
+      for(const auto &extra:extras) if(extra.value("type","")=="studio_node_channels"&&extra.contains("favorites")) {
+        auto &favorites=target.favorites[node_id];
+        for(const auto &entry:extra.at("favorites")) if(entry.is_string()) {
+          auto name=decode_uri(entry.get<std::string>());
+          if(name.ends_with("/Value")) name.resize(name.size()-6);
+          favorites.insert(std::move(name));
+        }
+      }
+    }
     target.edit_frame=object.edit_frame;target.translation_frame=object.translation_frame;target.base_rotation_degrees=object.rotation_degrees;target.rotation_order=object.rotation_order;target.has_edit_frame=true;
     target.rigid_follow=object.rigid_follow;
     target.attachment_bind_rest=object.attachment_bind_rest;
@@ -132,6 +157,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     auto apply_override=[&](runtime::Morph &m) {
       for(const auto &owner:{std::string{},"#"+object.id,"#"+object.geometry_instance_id}) if(auto it=overrides.find({owner,m.id});it!=overrides.end()) {
         const auto &channel=it->second;
+        m.scene_channel=true;
         m.initial=number(channel,"current_value",number(channel,"value",m.initial));
         m.minimum=number(channel,"min",m.minimum);m.maximum=number(channel,"max",m.maximum);
         m.clamped=channel.value("clamped",m.clamped);m.step=number(channel,"step_size",m.step);
@@ -140,6 +166,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
         throw std::runtime_error("场景参数范围或权重无效");
     };
     auto instance_channels=[&](J &report) {
+      report["favorites"]=target.favorites;
       for(size_t i=0;i<target.morphs.size();++i) {auto &m=target.morphs[i];apply_override(m);auto &item=report["morphs"][i];
         item["initial"]=m.initial;item["min"]=m.minimum;item["max"]=m.maximum;item["clamped"]=m.clamped;item["step_size"]=m.step;}
     };
