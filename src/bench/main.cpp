@@ -2,6 +2,7 @@
 #include "bench/fixtures.h"
 #include "bench/scene_export.h"
 #include "bench/displacement_check.h"
+#include "bench/graft_check.h"
 #include "cycles/adapter.h"
 #include "daz/loader.h"
 #include "device/device.h"
@@ -27,7 +28,7 @@
 
 namespace {
 struct Options {
-  bool displacement_check=false,render_subdivision=false;
+  bool displacement_check=false,graft_check=false,render_subdivision=false;
   bool raw_sampling=false,devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
   double seconds=60,warmup=10,refine=10,preview_seconds=0;
@@ -51,6 +52,7 @@ Options parse(int argc,char **argv) {
     else if(arg=="--export-scene") o.export_scene=true;
     else if(arg=="--material-delta-check") o.material_delta_check=true;
     else if(arg=="--displacement-check") o.displacement_check=true;
+    else if(arg=="--graft-check") o.graft_check=true;
     else if(arg=="--dump-shaders") o.dump_shaders=true;
     else if(arg=="--strict-dson") o.strict=true;
     else if(arg=="--monitor") o.monitor=std::stoi(value());
@@ -442,6 +444,7 @@ int wmain(int argc,wchar_t **wide_argv) {
       return 0;
     }
     if(options.displacement_check) return dfv::displacement_check(select_device(options.backend),std::filesystem::absolute(options.output));
+    if(options.graft_check) return dfv::graft_check(select_device(options.backend),std::filesystem::absolute(options.output));
     return run(options,select_device(options.backend));
   } catch(const std::exception &error) {std::cerr<<"ERROR: "<<error.what()<<std::endl;return 1;}
 }

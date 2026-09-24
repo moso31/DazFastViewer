@@ -2,6 +2,8 @@
 
 本轮处理用户追加的三个问题，属于 007 之后的兼容性修复，008 未开始。用户资产继续只读引用，界面验证只使用副屏。
 
+**后续复查修正：** 本文的“最终顶点／最终世界坐标”仅指形变后、细分前的基础控制网格。旧检查不能证明渲染接缝消失；test7 仍因宿主与附件分别细分而出现毫米级裂缝。新的基础／细分边界测量、原始 UV 核对及灰模对照见 [GeoGraft 接缝复查](graft_subdivision_seam_analysis_cn.md)。
+
 ## 原因与改动
 
 **Golden Palace 接缝。** 之前只导入 `graft.hidden_polys`，没有使用 `vertex_pairs`。按照 [DAZ 官方 graft 定义](https://docs.daz3d.com/public/dson_spec/object_definitions/graft/start)，每对索引依次指向插件顶点和宿主顶点。现在保存并校验顶点对，在 Morph、蒙皮、碰撞和刚性跟随完成后，将插件边界转换到正确的局部坐标并对齐宿主最终顶点。按 Fit To 依赖顺序处理嵌套插件，结果通过网格 Delta 同步到渲染和选取；不修改资产、不合并材质或改变原拓扑。

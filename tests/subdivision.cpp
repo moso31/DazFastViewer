@@ -3,6 +3,8 @@
 #include <iostream>
 #include <cmath>
 #include <stdexcept>
+#include <map>
+#include <set>
 using namespace dfv;
 static void require(bool value,const char *message) {if(!value) throw std::runtime_error(message);}
 static ir::Mesh quad() {
@@ -10,8 +12,33 @@ static ir::Mesh quad() {
   ir::Polygon p;p.vertices={0,1,2,3};p.uv={{0,0},{1,0},{1,1},{0,1}};p.material_slot=7;m.polygons={p};
   ir::Triangle a,b;a.vertices={0,1,2};b.vertices={0,2,3};m.triangles={a,b};m.subdivision={true,1,2,0,1,0};return m;
 }
+// 对照真正可绘制的三角面边界，验证追踪包含孔洞边界，且没有使用基础层索引冒充细分层。
+static void check_boundaries(ir::Mesh mesh) {
+  using Edge=std::pair<uint32_t,uint32_t>;
+  auto edge=[](uint32_t a,uint32_t b)->Edge {return {std::min(a,b),std::max(a,b)};};
+  for(int algorithm:{0,1,2}) for(int level:{1,2}) {
+    mesh.subdivision.algorithm=algorithm;mesh.subdivision.level=level;
+    runtime::Subdivision normal(mesh),traced(mesh,false,true);
+    const auto positions=traced.evaluate(mesh.positions);
+    require(normal.evaluate(mesh.positions)==positions&&normal.triangles()==traced.triangles(),"边界诊断改变了渲染结果");
+    require(normal.boundaries().empty(),"默认路径不应保存诊断边界");
+    std::map<Edge,int> counts;std::set<Edge> expected,actual;
+    for(const auto &t:traced.triangles()) for(int c=0;c<3;++c) ++counts[edge(t.vertices[c],t.vertices[(c+1)%3])];
+    for(auto [e,count]:counts) if(count==1) expected.insert(e);
+    require(traced.boundaries().size()==4,"可见四边形的边界数量错误");
+    for(const auto &b:traced.boundaries()) {
+      require(b.a<mesh.positions.size()&&b.b<mesh.positions.size(),"基础边界端点越界");
+      require(b.vertices.size()==size_t((1<<level)+1),"细分边界链长度错误");
+      for(auto v:b.vertices) require(v<positions.size(),"最终细分顶点越界");
+      for(size_t i=1;i<b.vertices.size();++i) actual.insert(edge(b.vertices[i-1],b.vertices[i]));
+    }
+    require(actual==expected,"追踪边界与最终可见面边界不一致");
+  }
+}
 int main() {
  try {
+  check_boundaries(quad());
+  {auto hole=quad();hole.positions.push_back({2,0,0});hole.positions.push_back({2,1,0});ir::Polygon p;p.vertices={1,4,5,2};p.uv={{1,0},{2,0},{2,1},{1,1}};hole.polygons.push_back(p);hole.hidden_polygons={1};check_boundaries(hole);}
   auto m=quad();runtime::Subdivision s(m);const auto positions=s.evaluate(m.positions);
   {auto invalid=m;invalid.polygons[0].vertices[1]=invalid.polygons[0].vertices[0];bool failed=false;try {runtime::Subdivision bad(invalid);}catch(...) {failed=true;}require(failed,"重复顶点进入了细分库");}
   {auto invalid=m;invalid.creases.push_back({0,999,1});bool failed=false;try {runtime::Subdivision bad(invalid);}catch(...) {failed=true;}require(failed,"越界折痕进入了细分库");}

@@ -7,6 +7,7 @@
 
 namespace dfv::runtime {
 struct PayloadProgress {size_t pending=0;std::string error;};
+// 仅测量形变后的基础控制网格；不包含渲染阶段细分、法线或置换造成的接缝。
 struct GraftSeam {uint32_t follower=0,source=0;size_t pairs=0;double max_gap_m=0;};
 class DeformationRuntime {
   const std::vector<Target> &targets_;

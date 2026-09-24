@@ -31,6 +31,7 @@ struct Subdivision::Data {
   std::unique_ptr<const osd::Far::StencilTable> stencils;
   std::vector<ir::Triangle> triangles;
   size_t cage_size=0;
+  std::vector<SubdivisionBoundary> boundaries;
 };
 namespace {
 struct UV {
@@ -39,7 +40,7 @@ struct UV {
   void AddWithWeight(const UV &v,float w) {x+=v.x*w;y+=v.y*w;}
 };
 }
-Subdivision::Subdivision(const ir::Mesh &mesh,bool final_render) {
+Subdivision::Subdivision(const ir::Mesh &mesh,bool final_render,bool capture_boundaries) {
   const auto &settings=mesh.subdivision;
   const int level=final_render?std::max(settings.level,settings.render_level):settings.level;
   if(!settings.enabled||level==0||mesh.triangles.empty()) return;
@@ -92,6 +93,25 @@ Subdivision::Subdivision(const ir::Mesh &mesh,bool final_render) {
     std::vector<int> next_parents(topology.GetNumFaces());for(int f=0;f<topology.GetNumFaces();++f) next_parents[f]=parents.at(topology.GetFaceParentFace(f));parents=std::move(next_parents);
   }
   auto data=std::make_shared<Data>();data->cage_size=mesh.positions.size();
+  if(capture_boundaries) {
+    const auto &base=refiner->GetLevel(0);
+    for(int e=0;e<base.GetNumEdges();++e) {
+      int visible=0;for(int f:base.GetEdgeFaces(e)) visible+=!base.IsFaceHole(f);
+      if(visible!=1) continue;
+      const auto ends=base.GetEdgeVertices(e);SubdivisionBoundary boundary;
+      boundary.a=uint32_t(ends[0]);boundary.b=uint32_t(ends[1]);boundary.vertices={boundary.a,boundary.b};
+      for(int l=0;l<level;++l) {
+        const auto &from=refiner->GetLevel(l);std::vector<uint32_t> next;
+        for(size_t k=1;k<boundary.vertices.size();++k) {
+          const auto a=boundary.vertices[k-1],b=boundary.vertices[k];const auto edge=from.FindEdge(int(a),int(b));
+          if(edge<0) throw std::runtime_error("细分边界追踪失败");
+          next.push_back(uint32_t(from.GetVertexChildVertex(int(a))));next.push_back(uint32_t(from.GetEdgeChildVertex(edge)));
+        }
+        next.push_back(uint32_t(from.GetVertexChildVertex(int(boundary.vertices.back()))));boundary.vertices=std::move(next);
+      }
+      data->boundaries.push_back(std::move(boundary));
+    }
+  }
   osd::Far::StencilTableFactory::Options stencil_options;stencil_options.generateOffsets=true;stencil_options.generateIntermediateLevels=false;
   data->stencils.reset(osd::Far::StencilTableFactory::Create(*refiner,stencil_options));
   if(!data->stencils) throw std::runtime_error("OpenSubdiv 无法建立顶点模板");
@@ -117,4 +137,5 @@ std::vector<ir::Vec3> Subdivision::evaluate(std::span<const ir::Vec3> cage) cons
   return result;
 }
 const std::vector<ir::Triangle> &Subdivision::triangles() const {return data_->triangles;}
+const std::vector<SubdivisionBoundary> &Subdivision::boundaries() const {return data_->boundaries;}
 }

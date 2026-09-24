@@ -259,6 +259,8 @@ class Editor final:public QMainWindow {
   int visibility_target_=-1;
   bool visibility_initial_=true;
   size_t visibility_geometry_updates_=0;
+  size_t visibility_sessions_=0,visibility_morph_evaluations_=0;
+  bool visibility_local_graft_=false;
   QStringList capture_targets_;
   bool capture_front_=false;
   std::optional<std::array<float,6>> capture_view_;
@@ -1349,17 +1351,26 @@ class Editor final:public QMainWindow {
         for(size_t t=0;t<document_->catalog.targets.size();++t) if(text(document_->catalog.targets[t].label)==visibility_label_) visibility_target_=int(t);
         if(visibility_target_<0) {finish_test(false,"可见性测试对象缺失");return;}
         choose(visibility_target_);visibility_initial_=snapshot_.values[size_t(visibility_target_)].visible;visibility_geometry_updates_=state.adapter.geometry_updates;
+        visibility_sessions_=state.sessions;visibility_morph_evaluations_=state.evaluation.morph_evaluations;
+        const auto &scene=document_->loaded.scene;auto index=document_->catalog.targets[size_t(visibility_target_)].instance;
+        if(scene.instances[index].prototype>=0) index=uint32_t(scene.instances[index].prototype);
+        visibility_local_graft_=scene.instances[index].graft_source>=0||std::any_of(scene.instances.begin(),scene.instances.end(),[&](const auto &i){return i.graft_source==int(index);});
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(prefix+"-initial.png")).wstring()));
         visible_->setChecked(!visibility_initial_);test_stage_=1;return;
       }
       const auto instance=document_->catalog.targets[size_t(visibility_target_)].instance;
       const bool expected=test_stage_==1?!visibility_initial_:visibility_initial_;
-      if(state.visible.at(instance)!=expected||visible_->isChecked()!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)||state.adapter.geometry_updates!=visibility_geometry_updates_) {
-        finish_test(false,"树、属性和渲染可见性不同步，或切换触发了几何重建");return;
+      if(state.visible.at(instance)!=expected||visible_->isChecked()!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)) {
+        finish_test(false,"树、属性和渲染可见性不同步");return;
+      }
+      // 共用 SSS 对象的 GeoGraft 允许每次切换更新一个组合的面列表；普通对象仍不更新几何。
+      const auto budget=visibility_local_graft_?size_t(test_stage_):0;
+      if(state.adapter.geometry_updates-visibility_geometry_updates_>budget||state.sessions!=visibility_sessions_||state.evaluation.morph_evaluations!=visibility_morph_evaluations_) {
+        finish_test(false,"显隐更新超出所属 GeoGraft 组合，或重新建立会话／求值 Morph");return;
       }
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(prefix+(test_stage_==1?"-toggled.png":"-restored.png"))).wstring()));
       if(test_stage_==1) {hierarchy_->currentItem()->setCheckState(0,visibility_initial_?Qt::Checked:Qt::Unchecked);test_stage_=2;return;}
-      visibility_checks_.push_back({{"label",visibility_label_.toStdString()},{"instance",instance},{"toggle_restore",true},{"geometry_updates",state.adapter.geometry_updates-visibility_geometry_updates_}});
+      visibility_checks_.push_back({{"label",visibility_label_.toStdString()},{"instance",instance},{"toggle_restore",true},{"local_graft",visibility_local_graft_},{"geometry_updates",state.adapter.geometry_updates-visibility_geometry_updates_},{"sessions",state.sessions}});
       if(++visibility_case_<visibility_labels_.size()) {visibility_label_=visibility_labels_[visibility_case_];visibility_target_=-1;test_stage_=0;return;}
       finish_test(true);return;
     }
