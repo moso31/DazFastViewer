@@ -35,7 +35,7 @@ class DeformationRuntime {
   ir::Delta weld_grafts(ir::Delta delta);
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
 public:
-  DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs);
+  DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
   PayloadProgress prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry=false);
   const auto &morph_stats() const {return morph_.stats();}

@@ -4,9 +4,11 @@
 #include "editor/content_browser.h"
 #include "editor/content_catalog.h"
 #include "daz/documents.h"
+#include "daz/content_entry.h"
 #include "render_ir/options_json.h"
 #include "daz/pose.h"
 #include "runtime/picking.h"
+#include "diagnostics/event_profile.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
 #include <QApplication>
@@ -40,6 +42,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QMessageBox>
+#include <QInputDialog>
 #include <QSettings>
 #include <QCloseEvent>
 #include <QTreeWidgetItemIterator>
@@ -185,7 +188,7 @@ class Editor final:public QMainWindow {
       if(state.clicks<=regression_clicks_||state.selections.size()!=1) return;
       if(!check(selected_==1,"Ctrl 取消选中后活动对象错误")) return;
       regression_checks_.push_back({{"input","viewport-ctrl-remove"},{"selected",state.selections.size()}});
-      choose(0);parameters_->query("SubDivision Level");auto *s=spin("SubDIALevel");if(!check(s!=nullptr,"未显示 DAZ 细分控件")) return;
+      choose(0);parameters_->query(QStringLiteral("渲染细分等级"));auto *s=spin("SubDRenderLevel");if(!check(s!=nullptr,"未显示渲染细分等级控件")) return;
       regression_triangles_=state.adapter.unique_triangles;s->setValue(2);++test_stage_;return;
     }
     if(test_stage_==7) {
@@ -261,6 +264,22 @@ class Editor final:public QMainWindow {
   std::optional<std::array<float,6>> capture_view_;
   bool lifecycle_test_=false;
   std::filesystem::path scene_reopen_file_;
+  std::filesystem::path wear_test_file_;
+  std::filesystem::path rebuild_test_file_;
+  size_t rebuild_host_=0,rebuild_first_=0;
+  int rebuild_level_=0,rebuild_render_level_=0;
+  double rebuild_begin_=0;
+  RenderStatus rebuild_before_;
+  nlohmann::json rebuild_checks_=nlohmann::json::array();
+  bool subdivision_stress_test_=false;
+  qint64 subdivision_recovery_started_=0;
+  uint64_t subdivision_camera_epoch_=0;
+  size_t subdivision_target_=0;
+  int subdivision_original_=0;
+  RenderStatus subdivision_initial_;
+  std::map<int,size_t> subdivision_triangles_;
+  nlohmann::json subdivision_checks_=nlohmann::json::array();
+  size_t wear_test_first_=0,wear_test_host_=0;
   nlohmann::json scene_reopen_checks_=nlohmann::json::array();
   std::filesystem::path lifecycle_first_,lifecycle_second_;
   std::weak_ptr<const Document> retired_document_;
@@ -420,6 +439,7 @@ class Editor final:public QMainWindow {
       auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;size_t removed=0;
       if(selected_light_>=0) removed=remove_light(*next,snapshot,size_t(selected_light_));
       else removed=remove_target(*next,snapshot,size_t(selected_));
+      std::erase_if(snapshot.subdivision_levels,[&](const auto &entry) {return std::none_of(next->loaded.scene.meshes.begin(),next->loaded.scene.meshes.end(),[&](const auto &mesh){return mesh.id==entry.first;});});
       next->generation=++generation_;snapshot.generation=next->generation;
       parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);
       select(-1);rebuild_hierarchy();frame_pending_=false;pose_report_=nullptr;pose_status_->clear();load_error_.clear();
@@ -482,16 +502,66 @@ class Editor final:public QMainWindow {
     snapshot_.poses[size_t(index)]=document_->skeletons.skins[size_t(index)].initial;send();frame_pending_=true;
     pose_status_->setText(QStringLiteral("已恢复载入时的骨骼姿势；Morph 保持当前值。"));pose_report_=nullptr;
   }
-  void open_asset(const std::filesystem::path &file) {
+  void open_asset(const std::filesystem::path &entry) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
-    try {const auto data=daz::read_document_file(file);
+    try {const auto file=daz::content_asset(entry,roots_);const auto data=daz::read_document_file(file);
       const auto contents=daz::inspect_contents(data);
-      if(contents.instantiate) load(file,false,document_!=nullptr);
+      if(contents.instantiate) {
+        const bool wear=contents.requires_selection||data.value("asset_info",nlohmann::json::object()).value("type","")=="wearable";
+        std::string target;
+        if(wear) {
+          if(!document_) throw std::runtime_error("请先加载并选中兼容角色，再添加服装、头发或角色附件");
+          int selected=selected_;
+          if(selected<0) {
+            for(size_t t=0;t<document_->catalog.targets.size();++t) {
+              bool character=false;try {character=attachment_host(*document_,t)==t;} catch(const std::exception &) {}
+              if(character) {if(selected>=0) throw std::runtime_error("场景有多个角色，请先选择穿戴目标");selected=int(t);}
+            }
+          }
+          if(selected<0) throw std::runtime_error("请先选中兼容角色");
+          target=document_->catalog.targets.at(attachment_host(*document_,size_t(selected))).id;
+        }
+        load(file,false,document_!=nullptr,target,entry);
+      }
       else if(contents.properties&&contents.materials) apply_combined_file(file,data);
       else if(contents.properties) apply_pose_file(file);
       else if(contents.materials) apply_material_file(file);
       else throw std::runtime_error("DUF 中没有当前可实例化或应用的内容；资产定义需要 scene 实例引用");
-    } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
+    } catch(const std::exception &e) {if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
+  }
+  void change_attachment(bool detach,int requested_host=-1) {
+    if(loading_||!document_||selected_<0) return;
+    try {
+      int host=detach?-1:requested_host;
+      if(!detach&&host<0) {
+        QStringList names;std::vector<size_t> targets;
+        for(size_t t=0;t<document_->catalog.targets.size();++t) {
+          bool character=false;try {character=attachment_host(*document_,t)==t;} catch(const std::exception &) {}
+          if(character) {targets.push_back(t);names.push_back(text(document_->catalog.targets[t].label+" ["+document_->catalog.targets[t].id+"]"));}
+        }
+        if(targets.empty()) throw std::runtime_error("场景中没有可绑定的角色");
+        bool accepted=false;const auto choice=QInputDialog::getItem(this,QStringLiteral("绑定 / 更换附件目标"),QStringLiteral("目标角色（同次加载的整套附件一起更换）："),names,0,false,&accepted);
+        if(!accepted) return;host=int(targets.at(size_t(names.indexOf(choice))));
+      }
+      const auto follower=selected_;const auto previous=document_;const auto generation=++generation_;
+      loading_=true;open_->setEnabled(false);project_action_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在更新附件绑定…"));
+      loader_=std::jthread([this,previous,follower,host,detach,generation](std::stop_token) {
+        try {
+          auto next=std::make_shared<Document>(*previous);fit_attachment(*next,size_t(follower),host);next->generation=generation;
+          QMetaObject::invokeMethod(this,[this,next,follower,detach] {
+            parameters_->bind(nullptr,nullptr);document_=next;snapshot_.generation=document_->generation;++snapshot_.revision;
+            loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);
+            rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);choose(follower);
+            statusBar()->showMessage(detach?QStringLiteral("已解除挂接并更新角色表面；附件自身参数保留。") : QStringLiteral("已更新附件目标。"));
+          },Qt::QueuedConnection);
+        } catch(const std::exception &e) {
+          const std::string error=e.what();QMetaObject::invokeMethod(this,[this,error] {
+            loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);
+            if(self_test_) finish_test(false,error);else QMessageBox::warning(this,QStringLiteral("无法更新附件"),text(error));
+          },Qt::QueuedConnection);
+        }
+      });
+    } catch(const std::exception &e) {if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法更新附件"),text(e.what()));}
   }
   void update_libraries() {
     roots_.clear();for(const auto &root:project_.content_roots) roots_.push_back(file_path(root));
@@ -515,19 +585,104 @@ class Editor final:public QMainWindow {
     if(manual_morph_->isChecked()) {if(pending_parameters_.at(key).value==snapshot_.values[size_t(selected_)].morphs[canonical]) {if(!pending_parameters_.at(key).unlimited) snapshot_.values[size_t(selected_)].unlimited_morphs.erase(target.morphs[canonical].id);pending_parameters_.erase(key);}apply_parameters_->setEnabled(!pending_parameters_.empty());return;}
     send();
   }
-  void set_subdivision(size_t target,int field,int value) {
-    if(loading_||!document_) return;
-    auto next=std::make_shared<Document>(*document_);
-    auto &mesh=next->loaded.scene.meshes.at(next->loaded.scene.instances.at(next->catalog.targets.at(target).instance).mesh);
-    auto &settings=mesh.subdivision;
-    if(field==0) settings.enabled=value!=0;
-    else if(field==1) settings.level=value;
-    else if(field==2) settings.render_level=value;
-    else if(field==3) settings.algorithm=value;
-    else if(field==4) settings.edge_interpolation=value;
-    else settings.normal_smoothing=value;
-    document_=next;++snapshot_.revision;renderer_->set_document(document_,submitted_snapshot(),false);
-    QTimer::singleShot(0,this,[this]{select(selected_,selected_joint_,selected_light_);});
+  void set_subdivision(size_t target,int value) {
+    if(loading_||!document_||subdivision_level(*document_,snapshot_,target)==value) return;
+    const auto begin=now();
+    const auto &mesh=document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(document_->catalog.targets.at(target).instance).mesh);
+    try {runtime::validate_subdivision_budget(mesh,value);} catch(const std::exception &e) {load_error_=text(e.what());statusBar()->showMessage(load_error_);return;}
+    snapshot_.subdivision_levels[mesh.id]=value;load_error_.clear();send();
+    if(!rebuild_test_file_.empty()) renderer_->trace("subdivision_ui_submit",(now()-begin)*1000);
+  }
+  void rebuild_tick(const RenderStatus &state) {
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"场景重建诊断超时");return;}
+    if(!state.error.empty()||!state.edit_error.empty()) {finish_test(false,state.error+state.edit_error);return;}
+    if(loading_||!document_||state.generation!=document_->generation||state.applied_revision!=snapshot_.revision||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.preview||state.samples<4) return;
+    static const char *names[]={"viewport_subdivision_change","viewport_subdivision_restore","subdivision_base","subdivision_restore","wearable_import","wearable_delete_one"};
+    if(rebuild_begin_) {
+      if(state.requested_epoch<=rebuild_before_.requested_epoch) return;
+      const int completed=test_stage_-1;
+      if(completed<4&&state.mesh_hashes!=rebuild_before_.mesh_hashes) {finish_test(false,"细分设置改变了基础形变结果");return;}
+      if(state.sessions!=rebuild_before_.sessions) {finish_test(false,"局部修改重新创建了渲染会话");return;}
+      if(completed<4&&state.collision.evaluations!=rebuild_before_.collision.evaluations) {finish_test(false,"细分修改重复计算碰撞");return;}
+      rebuild_checks_.push_back({{"input",names[completed]},{"begin",rebuild_begin_},{"observed_present",state.present_time},{"before_epoch",rebuild_before_.requested_epoch},{"final_epoch",state.presented_epoch},
+        {"sessions_added",state.sessions-rebuild_before_.sessions},{"triangles_before",rebuild_before_.adapter.unique_triangles},{"triangles_after",state.adapter.unique_triangles},
+        {"targets",document_->catalog.targets.size()},{"base_meshes_unchanged",state.mesh_hashes==rebuild_before_.mesh_hashes}});
+      std::ofstream(output_/"rebuild-checks.json")<<rebuild_checks_.dump(2);
+      rebuild_begin_=0;
+    }
+    if(test_stage_==6) {finish_test(true);return;}
+    if(test_stage_==0) {
+      bool found=false;for(size_t t=0;t<document_->catalog.targets.size();++t) try {if(attachment_host(*document_,t)==t) {rebuild_host_=t;found=true;break;}} catch(const std::exception &) {}
+      if(!found) {finish_test(false,"诊断场景没有可穿戴角色");return;}
+      const auto &mesh=document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(document_->catalog.targets[rebuild_host_].instance).mesh);
+      if(!mesh.subdivision.enabled) {finish_test(false,"诊断需要启用细分的角色");return;}
+      rebuild_level_=subdivision_level(*document_,snapshot_,rebuild_host_);rebuild_render_level_=mesh.subdivision.render_level;rebuild_first_=document_->catalog.targets.size();
+    }
+    choose(int(rebuild_host_));rebuild_before_=state;rebuild_begin_=now();renderer_->trace(names[test_stage_]);
+    const int action=test_stage_++;
+    if(action==0) set_subdivision(rebuild_host_,rebuild_level_==1?2:1);
+    else if(action==1) set_subdivision(rebuild_host_,rebuild_level_);
+    else if(action==2) set_subdivision(rebuild_host_,0);
+    else if(action==3) set_subdivision(rebuild_host_,rebuild_level_);
+    else if(action==4) open_asset(rebuild_test_file_);
+    else {
+      if(document_->catalog.targets.size()<=rebuild_first_) {finish_test(false,"诊断服装未追加");return;}
+      choose(int(rebuild_first_));delete_->trigger();
+    }
+  }
+  void subdivision_stress_tick(const RenderStatus &state) {
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>600000) {finish_test(false,"细分反复切换验证超时");return;}
+    if(test_stage_==0&&!state.error.empty()&&state.error.find("细分")!=std::string::npos&&document_&&!loading_) {
+      if(subdivision_recovery_started_) {if(QDateTime::currentMSecsSinceEpoch()-subdivision_recovery_started_>30000) finish_test(false,"降低等级后没有从细分错误恢复");return;}
+      subdivision_recovery_started_=QDateTime::currentMSecsSinceEpoch();
+      subdivision_checks_.push_back({{"input","recover-initial-subdivision-error"},{"error",state.error}});
+      for(size_t t=0;t<document_->catalog.targets.size();++t) if(!document_->loaded.scene.meshes[document_->loaded.scene.instances[document_->catalog.targets[t].instance].mesh].polygons.empty()) {set_subdivision(t,1);return;}
+    }
+    if(!state.error.empty()||!state.edit_error.empty()) {finish_test(false,state.error+state.edit_error);return;}
+    if(loading_||!document_||state.generation!=document_->generation||state.applied_revision!=snapshot_.revision||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.preview||state.samples<4) return;
+    constexpr int levels[]={0,1,2,3,2,1,0,2,3,0,1,2};
+    if(!subdivision_camera_epoch_) {renderer_->orbit(.2f,0);subdivision_camera_epoch_=renderer_->input_camera().epoch;return;}
+    if(state.camera.epoch<subdivision_camera_epoch_) return;
+    if(test_stage_==0) {
+      bool found=false;for(size_t t=0;t<document_->catalog.targets.size();++t) {
+        const auto &mesh=document_->loaded.scene.meshes[document_->loaded.scene.instances[document_->catalog.targets[t].instance].mesh];
+        if(!mesh.polygons.empty()) {subdivision_target_=t;found=true;break;}
+      }
+      if(!found) {finish_test(false,"细分验证场景没有多边形模型");return;}
+      subdivision_initial_=state;subdivision_original_=subdivision_level(*document_,snapshot_,subdivision_target_);
+      choose(int(subdivision_target_));parameters_->query(QStringLiteral("渲染细分等级"));
+    }
+    QDoubleSpinBox *spin=nullptr;
+    for(auto *s:parameters_->findChildren<QDoubleSpinBox *>()) if(s->property("parameterId").toString()=="SubDRenderLevel") spin=s;
+    if(!spin) {finish_test(false,"缺少唯一的渲染细分控件");return;}
+    if(test_stage_>0) {
+      const int level=subdivision_level(*document_,snapshot_,subdivision_target_);
+      if(state.sessions!=subdivision_initial_.sessions||state.mesh_hashes!=subdivision_initial_.mesh_hashes||state.collision.evaluations!=subdivision_initial_.collision.evaluations||state.generation!=subdivision_initial_.generation) {finish_test(false,"细分修改重建会话、基础形变或碰撞");return;}
+      if(state.adapter.camera_updates!=subdivision_initial_.adapter.camera_updates) {finish_test(false,"细分修改重置了用户相机");return;}
+      const auto [it,inserted]=subdivision_triangles_.emplace(level,state.adapter.unique_triangles);
+      if(!inserted&&it->second!=state.adapter.unique_triangles) {finish_test(false,"恢复细分等级后的三角形数量不一致");return;}
+      PROCESS_MEMORY_COUNTERS_EX memory{};memory.cb=sizeof(memory);K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory),sizeof(memory));
+      subdivision_checks_.push_back({{"stage",test_stage_},{"level",level},{"triangles",state.adapter.unique_triangles},{"private_bytes",memory.PrivateUsage},{"sessions",state.sessions}});
+    }
+    if(test_stage_<int(std::size(levels))) {spin->setValue(levels[test_stage_++]);return;}
+    if(test_stage_==int(std::size(levels))) {
+      // 实际 Qt 控件连续输入，验证快照合并以及无变化输入。
+      const auto revision=snapshot_.revision;set_subdivision(subdivision_target_,2);
+      if(snapshot_.revision!=revision) {finish_test(false,"相同细分值重复提交");return;}
+      for(int level:{1,3,0,2}) spin->setValue(level);
+      ++test_stage_;return;
+    }
+    if(test_stage_==int(std::size(levels))+1) {
+      const auto &mesh=document_->loaded.scene.meshes[document_->loaded.scene.instances[document_->catalog.targets[subdivision_target_].instance].mesh];
+      bool excessive=false;try {runtime::validate_subdivision_budget(mesh,6);} catch(const std::exception &) {excessive=true;}
+      if(excessive) {
+        const auto revision=snapshot_.revision;spin->setValue(6);
+        if(snapshot_.revision!=revision||spin->value()!=2||load_error_.isEmpty()) {finish_test(false,"过高细分未保留原值或给出原因");return;}
+        subdivision_checks_.push_back({{"input","over-budget-rejected"},{"retained_level",2}});load_error_.clear();
+      }
+      spin->setValue(subdivision_original_);++test_stage_;return;
+    }
+    screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"subdivision-control.png").wstring()));finish_test(true);
   }
   std::vector<runtime::JointPose> effective_roots_;
   uint64_t effective_generation_=0;
@@ -570,17 +725,11 @@ class Editor final:public QMainWindow {
       for(int i=0;i<9;++i) {ParameterControl c;c.id="joint/"+std::to_string(i);c.label=std::string(1,"XYZ"[i%3])+(i<3?" Translate":i<6?" Rotate":" Scale");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.enabled=false;c.detail="已保存的骨骼通道；当前通过姿势预设 / ERC 编辑";c.read=[this,skin,joint,i]{const auto &p=snapshot_.poses[size_t(skin)][size_t(joint)];const auto v=i<3?p.translation_cm:i<6?p.rotation_degrees:p.scale;return double(i%3==0?v.x:i%3==1?v.y:v.z);};controls.push_back(std::move(c));}
     }
     if(joint<0&&!document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(target.instance).mesh).polygons.empty()) {
-      const char *ids[]={"ResolutionLevel","SubDIALevel","SubDRenderLevel","SubDAlgorithmControl","SubDEdgeInterpolateLevel","SubDNormalSmoothing"};
-      const char *labels[]={"Resolution Level（分辨率）","SubDivision Level（视口细分级别）","Render SubD Level (Minimum)（渲染最低级别）","SubDivision Algorithm（细分算法）","Edge Interpolation（边界插值）","SubDivision Normals（细分法线）"};
-      for(int field=0;field<6;++field) {
-        ParameterControl c;c.id=ids[field];c.label=labels[field];c.group="/General/Mesh Resolution";c.minimum=0;c.maximum=6;c.step=1;c.enforce_limits=true;c.slider_minimum=0;c.slider_maximum=4;
-        if(field==0) c.choices={"Base（基础）","High Resolution（高分辨率）"};
-        if(field==3) {c.choices={"Catmark","Bilinear","Loop","Catmull-Clark (Legacy，近似)"};c.detail="Legacy 使用 OpenSubdiv Catmark 近似；不包含 DAZ HD Morph。";}
-        if(field==4) c.choices={"Soft Corners and Edges","Sharp Edges and Corners","Sharp Edges"};
-        if(field==5) {c.choices={"Smoothed","Preserve Cage（待支持）"};c.disabled_choices={1};c.detail="保留文件原值；Preserve Cage 的分裂法线尚未完整实现。";}
-        c.read=[this,index,field] {const auto &scene=document_->loaded.scene;const auto &s=scene.meshes.at(scene.instances.at(document_->catalog.targets.at(size_t(index)).instance).mesh).subdivision;return double(field==0?int(s.enabled):field==1?s.level:field==2?s.render_level:field==3?s.algorithm:field==4?s.edge_interpolation:s.normal_smoothing);};
-        c.write=[this,index,field](double value) {set_subdivision(size_t(index),field,int(value));};controls.push_back(std::move(c));
-      }
+      ParameterControl c;c.id="SubDRenderLevel";c.label="渲染细分等级";c.group="/General/Mesh Resolution";
+      c.minimum=0;c.maximum=6;c.step=1;c.enforce_limits=true;c.slider_minimum=0;c.slider_maximum=4;
+      c.detail="0 为基础网格。此等级同时用于当前预览与最终渲染；过高等级会按网格预算拒绝。";
+      c.read=[this,index] {return double(subdivision_level(*document_,snapshot_,size_t(index)));};
+      c.write=[this,index](double value) {set_subdivision(size_t(index),int(value));};controls.push_back(std::move(c));
     }
     parameters_->set_extra(std::move(controls));parameters_->bind(&target,&values,node);
   }
@@ -612,12 +761,15 @@ class Editor final:public QMainWindow {
     if(navigation_test_) {report["scope"]="navigation-preview-and-refinement";report["checks"]=navigation_checks_;}
     if(interaction_test_) {report["scope"]="interaction-latency";report["checks"]=interaction_checks_;report["sessions"]=status.sessions;
       report["local_geometry_restored"]=status.mesh_hashes==interaction_initial_.mesh_hashes;report["instance_transforms_restored"]=status.instance_transforms==interaction_initial_.instance_transforms;report["boundaries"]=interaction_boundaries_;}
+    if(!rebuild_test_file_.empty()) {report["scope"]="scene-rebuild-latency";report["checks"]=rebuild_checks_;report["sessions"]=status.sessions;report["initial_subdivision_level"]=rebuild_level_;report["initial_render_subdivision_level"]=rebuild_render_level_;}
+    if(subdivision_stress_test_) {report["scope"]="subdivision-repeat-coalesce-budget-and-restore";report["checks"]=subdivision_checks_;report["sessions"]=status.sessions;}
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
     if(edit_regression_test_) {report["scope"]="multi-selection-focus-subdivision-ERC-scale";report["checks"]=regression_checks_;}
     if(joint_selection_test_) {report["scope"]="same-figure-joint-ctrl-selection-and-focus";report["checks"]=regression_checks_;}
     if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;report["checks"]=visibility_checks_;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
+    if(!wear_test_file_.empty()&&document_) {report["scope"]="wearable-browser-import-detach-rebind";report["added_targets"]=document_->catalog.targets.size()-wear_test_first_;report["attachment_groups"]=document_->attachments.size();}
     report["hierarchy"]=hierarchy_report();report["options"]=ir::options_json(snapshot_.options);
     report["graft_seams"]=nlohmann::json::array();for(const auto &g:status.graft_seams) report["graft_seams"].push_back({{"follower",document_->loaded.scene.instances.at(g.follower).id},{"source",document_->loaded.scene.instances.at(g.source).id},{"pairs",g.pairs},{"max_gap_m",g.max_gap_m}});
     if(!scene_reopen_file_.empty()) {report["scope"]="open-new-empty-open-from-content-browser";report["checks"]=scene_reopen_checks_;}
@@ -1035,6 +1187,8 @@ class Editor final:public QMainWindow {
     if(size!=viewport_size_) {viewport_size_=size;renderer_->resize(size.width(),size.height());resize_at_=0;}
     if(resize_at_&&QDateTime::currentMSecsSinceEpoch()>=resize_at_) {resize_at_=0;renderer_->resize(size.width(),size.height());}
     const auto state=renderer_->status();
+    if(!rebuild_test_file_.empty()) {rebuild_tick(state);return;}
+    if(subdivision_stress_test_) {subdivision_stress_tick(state);return;}
     if(interaction_test_) {interaction_tick(state);return;}
     if(navigation_test_) {navigation_tick(state);return;}
     if(refresh_parameters_) refresh_parameters_->setEnabled(!loading_&&document_&&selected_>=0);
@@ -1125,9 +1279,35 @@ class Editor final:public QMainWindow {
     else if(!state.resource_error.empty()) statusBar()->showMessage(QStringLiteral("Morph 未应用：")+text(state.resource_error)+QStringLiteral("；可重试加载或刷新参数目录"));
     else if(state.pending_payloads) statusBar()->showMessage(QStringLiteral("正在异步载入 %1 项 Morph 数据，完成后应用最新输入…").arg(state.pending_payloads));
     else if(!pending_parameters_.empty()) statusBar()->showMessage(QStringLiteral("有 %1 项参数更改待应用").arg(pending_parameters_.size()));
+    else if(!loading_&&document_&&(state.generation!=document_->generation||state.presented_revision!=snapshot_.revision)) statusBar()->showMessage(QStringLiteral("正在更新场景…"));
     else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4 · 发丝 %5").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations).arg(state.adapter.curves));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
+    if(!wear_test_file_.empty()) {
+      if(QDateTime::currentMSecsSinceEpoch()-test_started_>600000) {finish_test(false,"自动穿戴界面验证超时");return;}
+      if(loading_||!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<8) return;
+      if(test_stage_==0) {
+        bool found=false;for(size_t t=0;t<document_->catalog.targets.size();++t) try {if(attachment_host(*document_,t)==t) {wear_test_host_=t;found=true;break;}} catch(const std::exception &) {}
+        if(!found) {finish_test(false,"没有自动穿戴测试角色");return;}
+        choose(int(wear_test_host_));wear_test_first_=document_->catalog.targets.size();snapshot_.values[wear_test_host_].transform.translation_cm.x=20;
+        for(size_t s=0;s<document_->skeletons.skins.size();++s) if(document_->skeletons.skins[s].instance==document_->catalog.targets[wear_test_host_].instance)
+          for(size_t j=0;j<document_->skeletons.skins[s].joints.size();++j) if(document_->skeletons.skins[s].joints[j].name=="head") snapshot_.poses[s][j].rotation_degrees.y=12;
+        send();++test_stage_;return;
+      }
+      if(test_stage_==1) {++test_stage_;open_asset(wear_test_file_);return;}
+      if(document_->catalog.targets.size()<=wear_test_first_||document_->attachments.empty()||snapshot_.values[wear_test_host_].transform.translation_cm.x!=20) {finish_test(false,"自动穿戴丢失角色状态或附件绑定");return;}
+      if(test_stage_==2) {
+        screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"wear-attached.png").wstring()));
+        choose(int(wear_test_first_));++test_stage_;change_attachment(true);return;
+      }
+      if(test_stage_==3) {
+        if(!document_->attachments.back().host.empty()) {finish_test(false,"界面解除挂接没有生效");return;}
+        ++test_stage_;change_attachment(false,int(wear_test_host_));return;
+      }
+      if(document_->attachments.back().host.empty()) {finish_test(false,"界面重新绑定没有生效");return;}
+      for(const auto &g:state.graft_seams) if(g.max_gap_m>1e-5) {finish_test(false,"自动挂接后的接缝不连续");return;}
+      screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"wear-rebound.png").wstring()));finish_test(true);return;
+    }
     if(edit_regression_test_) {edit_regression_tick(state);return;}
     if(joint_selection_test_) {joint_selection_tick(state);return;}
     if(!selection_test_labels_.empty()) {selection_tick(state);return;}
@@ -1431,7 +1611,7 @@ public:
     connect(apply_parameters_,&QPushButton::clicked,this,[this]{apply_parameters();});connect(manual_morph_,&QCheckBox::toggled,this,[this](bool manual){if(!manual) apply_parameters();});
     auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
     auto *file_menu=menuBar()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
-    connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 文件 (*.duf)"));if(!file.isEmpty()) open_asset(file_path(file));});
+    connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 资源 (*.duf *.dse)"));if(!file.isEmpty()) open_asset(file_path(file));});
     connect(file_menu->addAction(QStringLiteral("近期使用…")),&QAction::triggered,this,[this,explorer_dock]{explorer_dock->show();explorer_dock->raise();browser_->show_recent();});
     connect(file_menu->addAction(QStringLiteral("保存环境与色调设置…")),&QAction::triggered,this,[this]{
       if(!document_) return;const auto file=QFileDialog::getSaveFileName(this,QStringLiteral("保存渲染设置"),{},QStringLiteral("渲染设置 (*.dfv-render.json)"));if(file.isEmpty()) return;
@@ -1446,11 +1626,14 @@ public:
     connect(file_menu->addAction(QStringLiteral("退出")),&QAction::triggered,this,&QWidget::close);
     auto *focus_action=new QAction(QStringLiteral("聚焦选中对象（F）"),this);hierarchy_->addAction(focus_action);focus_action->setShortcut(QKeySequence(Qt::Key_F));focus_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);connect(focus_action,&QAction::triggered,this,[this]{focus_selection();});
     auto *edit=menuBar()->addMenu(QStringLiteral("编辑"));edit->addAction(focus_action);connect(edit->addAction(QStringLiteral("重置选中对象")),&QAction::triggered,this,[this] {reset_selected();});
+    auto *attachment_menu=menuBar()->addMenu(QStringLiteral("穿戴与附件"));
+    auto *fit=attachment_menu->addAction(QStringLiteral("绑定到角色 / 更换目标…"));connect(fit,&QAction::triggered,this,[this]{change_attachment(false);});
+    auto *detach=attachment_menu->addAction(QStringLiteral("解除挂接"));detach->setToolTip(QStringLiteral("整套附件恢复独立载入位置，角色被遮盖的表面随绑定关系重新计算"));connect(detach,&QAction::triggered,this,[this]{change_attachment(true);});
     delete_=edit->addAction(QStringLiteral("删除选中对象及其子对象"));delete_->setShortcut(QKeySequence::Delete);delete_->setEnabled(false);
     delete_->setToolTip(QStringLiteral("删除对象、子对象及绑定的穿戴物；选择骨骼部位时请先选择所属模型"));
     connect(delete_,&QAction::triggered,this,[this] {delete_selection();});
     hierarchy_->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this](const QPoint &point) {hierarchy_->setCurrentItem(hierarchy_->itemAt(point));QMenu menu(this);menu.addAction(delete_);menu.exec(hierarchy_->viewport()->mapToGlobal(point));});
+    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach](const QPoint &point) {hierarchy_->setCurrentItem(hierarchy_->itemAt(point));QMenu menu(this);menu.addAction(fit);menu.addAction(detach);menu.addSeparator();menu.addAction(delete_);menu.exec(hierarchy_->viewport()->mapToGlobal(point));});
     connect(file_menu->addAction(QStringLiteral("新建空场景")),&QAction::triggered,this,[this] {clear_scene();});
     connect(file_menu->addAction(QStringLiteral("打开场景（替换）…")),&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("打开场景"),{},QStringLiteral("DAZ 场景 (*.duf)"));if(!file.isEmpty()) load(file_path(file));});
     auto *create=menuBar()->addMenu(QStringLiteral("创建"));
@@ -1482,34 +1665,51 @@ public:
   void keep_open_after_test() {keep_open_after_test_=true;}
   void attachment_test() {attachment_test_=self_test_=true;}
   void lazy_test() {lazy_test_=self_test_=true;}
-  void load(const std::filesystem::path &file,bool preserve=false,bool append=false) {
+  void wear_test(const std::filesystem::path &file) {wear_test_file_=file;self_test_=true;}
+  void rebuild_test(const std::filesystem::path &file) {rebuild_test_file_=file;self_test_=true;}
+  void subdivision_stress_test() {subdivision_stress_test_=true;self_test_=true;}
+  void load(const std::filesystem::path &file,bool preserve=false,bool append=false,std::string attachment_target={},std::filesystem::path entry={}) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
     loading_=true;load_error_.clear();open_->setEnabled(false);project_action_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在后台解析场景与参数依赖…"));
     // 新建产生有效 Document，但它还不是需要保留环境的已有场景。
     const bool empty=!document_||(document_->loaded.nodes.empty()&&document_->loaded.scene.instances.empty()&&snapshot_.lights.empty()&&snapshot_.options.environment.id.empty()&&snapshot_.options.tonemapper.id.empty()&&snapshot_.options.environment_file.empty());
     const auto generation=++generation_;const auto roots=roots_;const auto previous_document=append&&!empty?document_:nullptr;
-    loader_=std::jthread([this,file,roots,generation,preserve,previous_document](std::stop_token stop) {
+    const bool profiling=!rebuild_test_file_.empty();
+    loader_=std::jthread([this,file,roots,generation,preserve,previous_document,attachment_target,entry,profiling](std::stop_token stop) {
       try {
-        auto document=std::make_shared<Document>();document->generation=generation;document->loaded=daz::load(file,{roots,false});
+        diagnostics::EventProfile profile(profiling,[this](const char *name,double ms){renderer_->trace(name,ms);});
+        diagnostics::Scope loading_scope("asset_load");
+        auto document=std::make_shared<Document>();document->generation=generation;
+        {diagnostics::Scope scope("geometry_materials");document->loaded=daz::load(file,{roots,false,!attachment_target.empty()});}
         std::vector<std::filesystem::path> resolved;for(const auto &p:document->loaded.report["content_roots"]) resolved.push_back(std::filesystem::u8path(p.get<std::string>()));
         progress(QStringLiteral("正在发现 Morph 与读取场景参数…"));
-        document->catalog=daz::discover_morphs(document->loaded,resolved,[this,stop](const std::string &message) {if(stop.stop_requested()) throw std::runtime_error("已取消加载");progress(text(message));},true);
+        {diagnostics::Scope scope("morph_discovery");document->catalog=daz::discover_morphs(document->loaded,resolved,[this,stop](const std::string &message) {if(stop.stop_requested()) throw std::runtime_error("已取消加载");progress(text(message));},true);}
         progress(QStringLiteral("正在解析骨架与场景姿势…"));
-        document->skeletons=daz::load_skeletons(document->loaded);
+        {diagnostics::Scope scope("skeleton_load");document->skeletons=daz::load_skeletons(document->loaded);}
         progress(QStringLiteral("正在编译 Formula / ERC…"));
-        document->formulas=daz::enable_formulas(document->catalog,document->skeletons);
+        {diagnostics::Scope scope("formula_compile");document->formulas=daz::enable_formulas(document->catalog,document->skeletons);}
         std::ofstream(output_/"asset-report.json")<<document->loaded.report.dump(2);
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
         std::ofstream(output_/"skeleton-report.json")<<document->skeletons.report.dump(2);
         std::ofstream(output_/"formula-report.json")<<document->formulas.report.dump(2);
         const auto category=content_category(*daz::document_view(file));
         release_load_data(*document);
-        if(previous_document) {auto merged=std::make_shared<Document>(*previous_document);merged->generation=generation;append_document(*merged,std::move(*document));document=std::move(merged);}
+        if(previous_document) {
+          diagnostics::Scope scope("merge_bind");
+          auto merged=std::make_shared<Document>(*previous_document);merged->generation=generation;const auto first=merged->catalog.targets.size();
+          append_document(*merged,std::move(*document));
+          if(!attachment_target.empty()) {
+            auto host=std::find_if(merged->catalog.targets.begin(),merged->catalog.targets.begin()+first,[&](const auto &t){return t.id==attachment_target;});
+            if(host==merged->catalog.targets.begin()+first) throw std::runtime_error("穿戴目标已不存在，请重新选择角色");
+            progress(QStringLiteral("正在绑定服装 / 头发 / 角色附件…"));attach_import(*merged,first,size_t(host-merged->catalog.targets.begin()));
+          }
+          document=std::move(merged);
+        }
         else if(document->loaded.scene.lights.empty()) ir::add_studio(document->loaded.scene);
-        QMetaObject::invokeMethod(this,[this,document,preserve,previous_document,file,category] {
+        QMetaObject::invokeMethod(this,[this,document,preserve,previous_document,file,category,entry] {
           const auto old=document_;const auto previous=snapshot_;parameters_->bind(nullptr,nullptr);
           if(!preserve&&!previous_document) {pending_parameters_.clear();apply_parameters_->setEnabled(false);}
-          document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.options=(preserve||previous_document)?previous.options:document->loaded.scene.options;snapshot_.generation=document->generation;snapshot_.revision=1;snapshot_.lights=document->loaded.scene.lights;
+          document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_={};snapshot_.options=(preserve||previous_document)?previous.options:document->loaded.scene.options;if(preserve||previous_document) snapshot_.subdivision_levels=previous.subdivision_levels;snapshot_.generation=document->generation;snapshot_.revision=1;snapshot_.lights=document->loaded.scene.lights;
           if(previous_document) for(size_t l=0;l<previous.lights.size();++l) snapshot_.lights[l]=previous.lights[l];
           frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));
           for(const auto &skin:document_->skeletons.skins) {
@@ -1534,7 +1734,10 @@ public:
           if(capture_view_) renderer_->camera_view(*capture_view_);
           const auto first=previous_document?previous_document->catalog.targets.size():0;
           if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
-          if(!self_test_&&!preserve) browser_->record_use(QString::fromStdWString(file.wstring()),category);
+          if(!self_test_&&!preserve) browser_->record_use(QString::fromStdWString((entry.empty()?file:entry).wstring()),category);
+          if(!entry.empty()&&entry!=file) {
+            pose_status_->setText(QStringLiteral("已挂接 HD Nipples 基础附件。皮肤纹理生成、碰撞优化和 dForce 配套脚本尚未支持；可应用已准备的材质预设。"));
+          }
           if(!pose_file_.empty()&&!pose_test_) {const auto file=pose_file_;pose_file_.clear();apply_pose_file(file);}
         },Qt::QueuedConnection);
       } catch(const std::exception &e) {
@@ -1574,6 +1777,9 @@ int main(int argc,char **argv) {
   parser.addOption({"lifecycle-test",QStringLiteral("验证反复增删与替换场景，指定第二个测试 DUF"),"file"});
   parser.addOption({"lifecycle-rounds",QStringLiteral("生命周期验证轮数"),"count","8"});
   parser.addOption({"scene-reopen-test",QStringLiteral("验证打开、新建空场景、从内容库再次打开指定场景"),"file"});
+  parser.addOption({"wear-test",QStringLiteral("验证移动 / 摆姿势后自动穿戴、解除及重新绑定"),"file"});
+  parser.addOption({"rebuild-test",QStringLiteral("副屏测量细分修改、自动穿戴和删除的全场景重建耗时"),"file"});
+  parser.addOption({"subdivision-stress-test",QStringLiteral("副屏验证细分反复切换、快速输入及预算限制")});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
@@ -1584,7 +1790,8 @@ int main(int argc,char **argv) {
   std::filesystem::create_directories(output);
   try {
     SamplingSettings sampling;
-    sampling.interaction_probe=parser.isSet("interaction-test");
+    sampling.rebuild_probe=parser.isSet("rebuild-test");
+    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test");
     if(parser.isSet("sampling-settings")) {nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
@@ -1596,7 +1803,7 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
@@ -1616,6 +1823,9 @@ int main(int argc,char **argv) {
     if(parser.isSet("visibility-test")) editor.visibility_test(parser.values("visibility-test"));
     if(parser.isSet("lifecycle-test")) editor.lifecycle_test(file_path(parser.value("file")),file_path(parser.value("lifecycle-test")),parser.value("lifecycle-rounds").toInt());
     if(parser.isSet("scene-reopen-test")) editor.scene_reopen_test(file_path(parser.value("scene-reopen-test")));
+    if(parser.isSet("wear-test")) editor.wear_test(file_path(parser.value("wear-test")));
+    if(parser.isSet("rebuild-test")) editor.rebuild_test(file_path(parser.value("rebuild-test")));
+    if(parser.isSet("subdivision-stress-test")) editor.subdivision_stress_test();
     if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

@@ -1,4 +1,5 @@
 #include "editor/content_browser.h"
+#include "daz/content_entry.h"
 #include "editor/content_catalog.h"
 #include <QAbstractListModel>
 #include <QApplication>
@@ -138,7 +139,7 @@ struct ContentBrowser::Impl {
     menu->addSection(QStringLiteral("搜索范围"));scope=new QComboBox;scope->setObjectName("contentScope");scope->addItems({QStringLiteral("全部内容库"),QStringLiteral("当前内容库"),QStringLiteral("当前目录及子目录")});auto *scope_action=new QWidgetAction(menu);scope_action->setDefaultWidget(scope);menu->addAction(scope_action);
     menu->addSection(QStringLiteral("图标大小（Ctrl＋滚轮）"));zoom=new QSlider(Qt::Horizontal);zoom->setObjectName("contentZoom");zoom->setRange(0,maximum_zoom);zoom->setMinimumWidth(180);zoom->setToolTip(QStringLiteral("列表，或 64–224 像素图标，每档 8 像素"));auto *zoom_action=new QWidgetAction(menu);zoom_action->setDefaultWidget(zoom);menu->addAction(zoom_action);
     splitter=new QSplitter;splitter->setObjectName("contentSplitter");left=new QStackedWidget;
-    files=new QFileSystemModel(o);files->setReadOnly(true);files->setOption(QFileSystemModel::DontUseCustomDirectoryIcons);files->setNameFilters({"*.duf"});files->setNameFilterDisables(false);
+    files=new QFileSystemModel(o);files->setReadOnly(true);files->setOption(QFileSystemModel::DontUseCustomDirectoryIcons);files->setNameFilters({"*.duf","HD Nipples for G8F - 2.0.dse"});files->setNameFilterDisables(false);
     tree=new QTreeView;tree->setObjectName("contentTree");tree->setModel(files);tree->setHeaderHidden(true);tree->setUniformRowHeights(true);tree->setMinimumWidth(85);for(int i=1;i<4;++i) tree->hideColumn(i);tree->viewport()->installEventFilter(o);left->addWidget(tree);
     categories=new QListWidget;categories->setObjectName("contentCategories");categories->setMinimumWidth(105);for(const auto &c:content_categories()) {auto *item=new QListWidgetItem(category_label(c),categories);item->setData(Qt::UserRole,c);}categories->setCurrentRow(0);categories->viewport()->installEventFilter(o);left->addWidget(categories);splitter->addWidget(left);
     view=new QListView;view->setObjectName("contentItems");model=new ContentModel(thumbnails,o);view->setModel(model);view->setUniformItemSizes(true);view->setLayoutMode(QListView::Batched);view->setBatchSize(100);view->setResizeMode(QListView::Adjust);view->setSelectionMode(QAbstractItemView::SingleSelection);view->setEditTriggers(QAbstractItemView::NoEditTriggers);view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);view->setMouseTracking(true);view->viewport()->installEventFilter(o);view->setContextMenuPolicy(Qt::CustomContextMenu);splitter->addWidget(view);splitter->setStretchFactor(1,1);layout->addWidget(splitter,1);
@@ -224,7 +225,7 @@ struct ContentBrowser::Impl {
     if(zoom->value()==0) {empty->hide();return;}
     const auto folder=directory;directories.start([this,folder,generation] {
       const QDir dir(folder);const auto entries=dir.entryInfoList(QDir::Dirs|QDir::Files|QDir::NoDotAndDotDot,QDir::DirsFirst|QDir::Name|QDir::IgnoreCase);std::vector<Item> items;
-      for(const auto &entry:entries) {if(generation!=directory_generation) return;if(entry.isDir()||entry.suffix().compare("duf",Qt::CaseInsensitive)==0) items.push_back({entry.absoluteFilePath(),{},entry.isDir()});}
+      for(const auto &entry:entries) {if(generation!=directory_generation) return;if(entry.isDir()||daz::supported_content_entry(std::filesystem::path(entry.absoluteFilePath().toStdWString()))) items.push_back({entry.absoluteFilePath(),{},entry.isDir()});}
       QMetaObject::invokeMethod(owner,[this,generation,items=std::move(items)]() mutable {if(generation!=directory_generation) return;display(std::move(items));},Qt::QueuedConnection);
     });
   }

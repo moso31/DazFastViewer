@@ -1,4 +1,5 @@
 #include "editor/content_catalog.h"
+#include "daz/content_entry.h"
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDateTime>
@@ -126,7 +127,7 @@ void ContentIndex::refresh(const QStringList &input,bool read_cache) {
       while(it!=end&&!cancelled()) {
         const auto item=*it;const auto qpath=QString::fromStdWString(item.path().wstring());
         if(item.is_directory(error)) {if(QFileInfo(qpath).isSymbolicLink()||QFileInfo(qpath).isJunction()) it.disable_recursion_pending();}
-        else if(QString::fromStdWString(item.path().extension().wstring()).compare(".duf",Qt::CaseInsensitive)==0&&item.is_regular_file(error)) {
+        else if(daz::supported_content_entry(item.path())&&item.is_regular_file(error)) {
           auto p=QDir::fromNativeSeparators(qpath),folded=p.toCaseFolded();if(!seen.contains(folded)) {seen.insert(folded);entries->push_back({std::move(p),std::move(folded)});}
         }
         error.clear();it.increment(error);if(error) {unavailable.append(root);break;}

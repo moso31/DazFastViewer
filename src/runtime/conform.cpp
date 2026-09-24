@@ -1,4 +1,5 @@
 #include "runtime/conform.h"
+#include "runtime/geometry_key.h"
 #include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
@@ -58,7 +59,7 @@ public:
 };
 bool transferable(const Morph &m) {return m.evaluable&&m.auto_follow&&m.kind!="alias"&&m.alias_morph<0&&m.has_offsets();}
 }
-ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs):targets_(targets) {
+ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse):targets_(targets) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("Fit To 公式图数量不一致");
   link_for_target_.resize(targets.size(),-1);offsets_.resize(targets.size());revisions_.resize(targets.size());
   std::map<std::string,std::vector<size_t>> identifiers;
@@ -99,6 +100,9 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     }
     const auto &a=scene.instances.at(source.instance),&b=scene.instances.at(follower.instance);const auto follower_to_source=inverse(a.transform)*b.transform;l.source_to_follower=inverse(b.transform)*a.transform;
     const auto &body=scene.meshes.at(a.mesh),&cloth=scene.meshes.at(b.mesh);
+    GeometryKey key;key.points(body.positions);key.topology(body);key.points(cloth.positions);key.topology(cloth);key.add(follower_to_source);l.geometry_key=key.value;
+    const ConformLink *cached=nullptr;if(reuse) for(const auto &old:reuse->links_) if(old.geometry_key==l.geometry_key&&reuse->targets_[old.follower].id==follower.id&&reuse->targets_[old.source].id==source.id) {cached=&old;break;}
+    if(cached) {l.surface=cached->surface;l.neighbors=cached->neighbors;stats_.bindings+=l.surface.size();continue;}
     auto &cached_index=surface_indexes[a.mesh];if(!cached_index) cached_index=std::make_unique<SurfaceIndex>(body);const auto &index=*cached_index;l.surface.reserve(cloth.positions.size());
     l.neighbors.resize(cloth.positions.size());
     for(const auto &triangle:cloth.triangles) for(size_t i=0;i<3;++i) for(size_t j=0;j<3;++j) if(i!=j) l.neighbors[triangle.vertices[i]].push_back(triangle.vertices[j]);
@@ -187,6 +191,9 @@ CollisionRuntime::CollisionRuntime(ir::Scene &scene,const std::vector<Target> &t
   };
   for(const auto &[i,b]:pending) visit(i);
 }
+void CollisionRuntime::reuse(const CollisionRuntime &previous) {
+  for(auto &b:bindings_) for(const auto &old:previous.bindings_) if(scene_.instances[b.follower].id==previous.scene_.instances[old.follower].id) {b.cache_key=old.cache_key;b.output=old.output;break;}
+}
 ir::Delta CollisionRuntime::evaluate(ir::Delta delta) {
   diagnostics::Scope scope("collision_evaluate");
   std::set<uint32_t> changed;
@@ -205,6 +212,15 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta) {
     }
     if(b.initialized&&!graft_changed&&!changed.contains(follower.mesh)&&!changed.contains(source.mesh)&&relative.value==b.relative.value) continue;
     b.initialized=true;b.relative=relative;b.graft_relatives=std::move(graft_relatives);
+    GeometryKey cache;cache.points(b.input);cache.topology(scene_.meshes[follower.mesh]);cache.add(relative);cache.add(uint64_t(b.settings.collision_iterations));cache.add(uint64_t(b.settings.smoothing_iterations));cache.add(b.settings.weight);
+    cache.add(source.id);cache.points(scene_.meshes[source.mesh].positions);cache.topology(scene_.meshes[source.mesh]);cache.add(uint64_t(b.grafts.size()));
+    for(size_t k=0;k<b.grafts.size();++k) {const auto &g=scene_.instances[b.grafts[k]];cache.add(g.id);cache.add(uint64_t(g.visible));cache.add(b.graft_relatives[k]);cache.points(scene_.meshes[g.mesh].positions);cache.topology(scene_.meshes[g.mesh]);}
+    if(cache.value==b.cache_key&&b.output.size()==b.input.size()) {
+      scene_.meshes[follower.mesh].positions=b.output;
+      auto found=std::find_if(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==follower.mesh;});
+      if(found==delta.meshes.end()) delta.meshes.push_back({follower.mesh,b.output});else found->positions=b.output;
+      changed.insert(follower.mesh);++stats_.cache_hits;continue;
+    }
     // 基础人体与可见附加网格分别施加外侧约束，避免最近面选到内层后漏碰撞。
     std::vector<ir::Mesh> surfaces{scene_.meshes[source.mesh]};
     for(size_t k=0;k<b.grafts.size();++k) {const auto g=b.grafts[k];if(!scene_.instances[g].visible) continue;
@@ -282,6 +298,7 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta) {
       if(dot(d,d)>1e-16f) {positions[v]=inverse.point(positions[v]);++corrected;} else positions[v]=b.input[v];
     }
     auto &current=scene_.meshes[follower.mesh].positions;
+    b.output=positions;b.cache_key=cache.value;
     const bool different=!std::equal(positions.begin(),positions.end(),current.begin(),[](auto a,auto b) {return a.x==b.x&&a.y==b.y&&a.z==b.z;});
     if(different) {
       current=positions;auto e=std::find_if(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e) {return e.index==follower.mesh;});

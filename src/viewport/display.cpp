@@ -51,6 +51,20 @@ bool Display::update_begin(const Params &p,int width,int height) {
       }
       if(s.state==State::idle) {writing_=i;s.state=State::writing;break;}
     }
+    // 场景同步暂时占用呈现线程时，覆盖尚未显示的最旧完成帧。
+    // 正在显示的槽继续保留，不把短暂积压当成 interop 错误。
+    if(writing_<0) {
+      int oldest=-1;
+      for(int i=0;i<3;++i) if(slots_[i].state==State::ready) {
+        const auto result=glClientWaitSync(slots_[i].fence,0,0);
+        if((result==GL_ALREADY_SIGNALED||result==GL_CONDITION_SATISFIED)&&
+           (oldest<0||slots_[i].frame.id<slots_[oldest].frame.id)) oldest=i;
+      }
+      if(oldest>=0) {
+        auto &s=slots_[oldest];glDeleteSync(s.fence);s.fence=nullptr;
+        telemetry_.skipped++;writing_=oldest;s.state=State::writing;
+      }
+    }
   }
   if(writing_<0) {telemetry_.skipped++;window_.render_context.deactivate();return false;}
   if(upload_) {glWaitSync(upload_,0,GL_TIMEOUT_IGNORED);glDeleteSync(upload_);upload_=nullptr;}

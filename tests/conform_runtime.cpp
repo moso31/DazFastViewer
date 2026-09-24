@@ -29,6 +29,15 @@ static void mesh_collision() {
   std::vector<Target> targets={a,b};CollisionRuntime runtime(scene,targets);auto d=runtime.evaluate({});
   require(d.meshes.size()==1,"初始碰撞未输出服装更新");for(auto p:scene.meshes[1].positions) require(p.z>=.00049f,"穿入平面的服装未推出");
   const auto baseline=scene.meshes[1].positions;
+  {
+    auto rebuilt=scene;rebuilt.meshes[1]=cloth;CollisionRuntime cached(rebuilt,targets);cached.reuse(runtime);cached.evaluate({});
+    require(cached.stats().evaluations==0&&cached.stats().cache_hits==1&&rebuilt.meshes[1].positions==baseline,"相同场景重建未复用碰撞结果");
+    for(auto &p:rebuilt.meshes[0].positions) p.z=.3f;ir::Delta changed;changed.meshes.push_back({0,rebuilt.meshes[0].positions});cached.evaluate(changed);
+    auto reference=rebuilt;reference.meshes[1]=cloth;CollisionRuntime fresh(reference,targets);fresh.evaluate({});
+    require(cached.stats().evaluations==1&&rebuilt.meshes[1].positions==reference.meshes[1].positions,"宿主形变后错误复用旧碰撞结果");
+    rebuilt=scene;rebuilt.meshes[1]=cloth;auto adjusted=targets;adjusted[1].smoothing.collision_iterations++;
+    CollisionRuntime settings(rebuilt,adjusted);settings.reuse(runtime);settings.evaluate({});require(settings.stats().cache_hits==0,"碰撞设置改变后没有使缓存失效");
+  }
   require(runtime.evaluate({}).meshes.empty(),"相同输入重复执行碰撞");
   for(auto &p:scene.meshes[0].positions) p.z=.2f;d={};d.meshes.push_back({0,scene.meshes[0].positions});runtime.evaluate(d);
   for(auto p:scene.meshes[1].positions) require(p.z>=.20049f,"只有碰撞对象改变时服装没有更新");

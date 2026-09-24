@@ -38,6 +38,7 @@ struct Target {
   std::string rotation_order="XYZ";
   bool has_edit_frame=false;
   RigidFollow rigid_follow;
+  bool attachment_bind_rest=false;
 };
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};

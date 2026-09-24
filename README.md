@@ -1,10 +1,14 @@
 # DazFastViewer
 
+换装和细分更新已改为复用渲染会话，更新期间保留最后画面。模型参数只保留“渲染细分等级”，同时作用于当前预览与最终渲染；0 为基础网格，超出网格预算的等级会保留原值并显示原因。实现、实测与限制见[优化记录](Docs/scene_rebuild_optimization_execution_cn.md)。
+
+新增自动穿戴与角色附件挂接：选中兼容角色后，在内容库双击服装、头发或 GeoGraft，自动解析当前角色并建立 Fit To／骨骼挂接。支持整套解除和更换目标、宿主遮盖面重算及 HD Nipples 基础资产入口；兼容性和脚本边界见[使用与实现记录](Docs/attachment_import_execution_cn.md)。
+
 独立 DAZ Runtime，使用 Cycles 提供交互式路径追踪视口。当前已经能够直接加载用户指定的 Genesis 8.1 Basic Female 与 ARK Food Plate with Fries DUF；无需启动 Blender、DAZ Studio 或 Iray。
 
 **Spec 003 角色与道具静态预览已于 2026-09-20 通过用户手动验收。** Spec 005 中文编辑器与直接 Morph 已通过工程验证，尚待用户手动验收；详细结果见各阶段执行报告。
 
-已实现独立 Render Scene IR、Cycles Adapter、原生 DUF / DSF 加载、Mesh / UV / 基础材质、OptiX 视口、稀疏 Morph、Genesis 8 骨架 / 双四元数蒙皮、Formula / ERC / JCM、单帧姿势 DUF 及相机操作。当前仍基于基础网格，尚未实现 SubD / HD 或完整 Iray Uber 材质，公式与变形的完整 DAZ Studio Golden 仍待验收。
+已实现独立 Render Scene IR、Cycles Adapter、原生 DUF / DSF 加载、Mesh / UV / 基础材质、OptiX 视口、稀疏 Morph、Genesis 8 骨架 / 双四元数蒙皮、Formula / ERC / JCM、单帧姿势 DUF、OpenSubdiv 细分及相机操作。尚未实现 DAZ HD Morph 或完整 Iray Uber 材质，公式与变形的完整 DAZ Studio Golden 仍待验收。
 
 最新 test3 修复已部署：HDRI / ToneMapper 导入与设置保存、左右分类参数面板、F 聚焦及 WASDQE 导航；同时修正黑皮肤、眼镜挂接和拖鞋形变。验证与近似边界见[本轮报告](Docs/test3_scene_repair_execution_cn.md)。
 

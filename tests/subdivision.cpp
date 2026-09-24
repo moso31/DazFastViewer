@@ -13,6 +13,9 @@ static ir::Mesh quad() {
 int main() {
  try {
   auto m=quad();runtime::Subdivision s(m);const auto positions=s.evaluate(m.positions);
+  {auto invalid=m;invalid.polygons[0].vertices[1]=invalid.polygons[0].vertices[0];bool failed=false;try {runtime::Subdivision bad(invalid);}catch(...) {failed=true;}require(failed,"重复顶点进入了细分库");}
+  {auto invalid=m;invalid.creases.push_back({0,999,1});bool failed=false;try {runtime::Subdivision bad(invalid);}catch(...) {failed=true;}require(failed,"越界折痕进入了细分库");}
+  {auto heavy=m;heavy.polygons.resize(1200,heavy.polygons[0]);bool failed=false;try {runtime::validate_subdivision_budget(heavy,6);}catch(...) {failed=true;}require(failed,"高等级在分配前没有进行预算校验");}
   require(positions.size()==9&&s.triangles().size()==8,"原始四边面一级细分应为 9 顶点 / 8 三角面");
   require(positions[0]==m.positions[0],"Sharp Corners 没有保留边界角点");
   bool center=false;for(auto p:positions) center|=p==ir::Vec3{.5f,.5f,0};require(center,"面中心插值错误");

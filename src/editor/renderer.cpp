@@ -9,6 +9,7 @@
 #include "scene/pass.h"
 #include "session/session.h"
 #include "diagnostics/load_profile.h"
+#include "diagnostics/event_profile.h"
 #include <epoxy/wgl.h>
 #include <fstream>
 #include <bit>
@@ -22,6 +23,7 @@ Renderer::~Renderer() {thread_.request_stop();if(thread_.joinable()) thread_.joi
 void Renderer::set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene) {
   if(frame_scene) {ir::Bounds bounds;for(const auto &target:document->catalog.targets) {const auto &i=document->loaded.scene.instances[target.instance];if(i.visible) for(auto p:document->loaded.scene.meshes[i.mesh].positions) bounds.add(i.transform.point(p));}frame(bounds);}
   std::lock_guard lock(mutex_);document_=std::move(document);snapshot_=snapshot;
+  if(sampling_.rebuild_probe) telemetry_.event("document_submitted");
 }
 void Renderer::resize(int width,int height) {
   if(width<1||height<1) return;
@@ -62,28 +64,32 @@ void Renderer::run(std::stop_token stop) {
   std::optional<runtime::InstanceGroups> instance_groups;
   auto cleanup=[&] {
     if(session) {
-      session->cancel(true);
+      {diagnostics::Scope scope("cancel");session->cancel(true);}
       const auto &integrator=*session->scene->integrator;const auto &background=session->scene->dscene.data.background;
       sampling_report={{"denoise",integrator.get_use_denoise()},{"max_samples",sampling_.samples},{"adaptive_sampling",integrator.get_use_adaptive_sampling()},
         {"adaptive_threshold",integrator.get_adaptive_threshold()},{"min_bounces",integrator.get_min_bounce()},{"transparent_min_bounces",integrator.get_transparent_min_bounce()},
         {"sampling_pattern",sampling_.blue_noise?"blue_noise_first":"tabulated_sobol"},{"background_mis",background.use_mis},{"background_map_resolution",{background.map_res_x,background.map_res_y}}};
       window_->present_context.activate();overlay.release();if(display) display->release_present_resources();window_->present_context.deactivate();
       adapter.reset();
-      session.reset();display=nullptr;
+      {diagnostics::Scope scope("session_destroy");session.reset();}display=nullptr;
     }
   };
   RenderStatus state;
   uint64_t sessions=0;
+  bool blank_presented=false;
   auto timing=[&](const char *name,double begin,uint64_t revision=0) {Frame f;f.epoch=state.requested_epoch;f.id=revision;telemetry_.event(name,f,(now()-begin)*1000);};
   try {
     DeviceInfo device;
     for(const auto &candidate:Device::available_devices()) if(candidate.type==DEVICE_OPTIX) {device=candidate;break;}
     if(device.type!=DEVICE_OPTIX) throw std::runtime_error("找不到 OptiX 设备；编辑器不会自动回退 CPU");
     std::shared_ptr<const Document> current;
-    ir::Scene render_scene;
+    std::unique_ptr<ir::Scene> render_scene_ptr;
+    std::shared_ptr<const Document> pending_document;
+    std::unique_ptr<ir::Scene> pending_scene;
+    std::unique_ptr<runtime::DeformationRuntime> pending_runtime;
     std::unique_ptr<runtime::DeformationRuntime> runtime;
     uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
-    uint64_t retried=0;
+    uint64_t retried=0,failed_revision=UINT64_MAX;
     std::vector<std::vector<ir::Vec3>> previous_positions;
     std::vector<double> displacements;
     SessionParams params;params.device=device;params.samples=sampling_.samples;params.pixel_size=1;params.background=false;
@@ -107,41 +113,35 @@ void Renderer::run(std::stop_token stop) {
         window_->width=width;window_->height=height;
       }
       if(!document) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
-      if(current==document&&!state.error.empty()) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
-      try {
-      if(current!=document&&current&&session&&current->generation==document->generation&&document->asset_revision>current->asset_revision) {
-        // 参数目录更新保留 Cycles 会话；从基础几何重建求值状态，避免二次叠加形变。
-        runtime.reset();previous_positions.clear();for(const auto &mesh:render_scene.meshes) previous_positions.push_back(mesh.positions);
-        current=document;render_scene=current->loaded.scene;
-        runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
-        attempted_revision=0;state.edit_error.clear();
+      if(current==document&&!state.error.empty()) {
+        if(desired.revision==failed_revision) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+        // 导入等级过高等可恢复错误：允许用户降低等级后重新准备场景。
+        state.error.clear();
       }
+      try {
       if(current!=document||!session) {
-        cleanup();geometry_dirty=true;edit_affects_render=false;
-        if(current!=document) {
-          // 先销毁持有旧场景引用的求值器，再释放文档、顶点与射线缓存。
-          runtime.reset();picking={};regions={};pickable={};render_scene={};
-          current=document;state={};previous_positions.clear();render_scene=current->loaded.scene;
-          regions.clear();regions.resize(render_scene.instances.size());
-          pickable=runtime::viewport_pick_mask(render_scene,current->catalog.targets);
-          for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene.meshes.at(render_scene.instances.at(skin.instance).mesh),skin);
-          runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,current->catalog.targets,current->skeletons.skins,current->formulas.graphs);
+        diagnostics::EventProfile profile(sampling_.rebuild_probe,[&](const char *name,double ms){telemetry_.event(name,{},ms);});
+        if(pending_document!=document||!pending_runtime) {
+          diagnostics::Scope scope("document_prepare");
+          pending_runtime.reset();pending_scene=std::make_unique<ir::Scene>(document->loaded.scene);pending_document=document;
+          diagnostics::Scope construction("runtime_construct");
+          pending_runtime=std::make_unique<runtime::DeformationRuntime>(*pending_scene,document->catalog.targets,document->skeletons.skins,document->formulas.graphs,runtime.get());
         }
-        const auto resources=runtime->prepare(desired.values,desired.poses,retry_payloads);
-        retried=retry;
-        state.generation=current->generation;state.pending_payloads=resources.pending;state.resource_error=resources.error;
-        if(resources.pending||!resources.error.empty()) {
-          {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;
-        }
-        runtime->evaluate(desired.values,desired.poses);
-        render_scene.lights=desired.lights;render_scene.options=desired.options;
+        const auto resources=pending_runtime->prepare(desired.values,desired.poses,retry_payloads);retried=retry;
+        state.pending_payloads=resources.pending;state.resource_error=resources.error;
+        if(resources.pending||!resources.error.empty()) {{std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+        {diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(desired.values,desired.poses);}
+        pending_scene->lights=desired.lights;pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
+        const auto camera=window_->mailbox.latest();pending_scene->camera=render_camera(camera,window_->width,window_->height);
+        camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
+        set_quality(camera.navigating||now()<camera.preview_until);
+        if(!session) {
         SceneParams scene_params;scene_params.background=false;scene_params.bvh_type=BVH_TYPE_DYNAMIC;
         scene_params.use_texture_cache=false;scene_params.auto_texture_cache=false;
-        const auto initial_camera=window_->mailbox.latest();
-        set_quality(initial_camera.navigating||now()<initial_camera.preview_until);
-        session=std::make_unique<Session>(params,scene_params);
+        {diagnostics::Scope scope("session_create");session=std::make_unique<Session>(params,scene_params);}
         ++sessions;telemetry_.event("session_created");
         auto &scene=*session->scene;
+        if(sampling_.rebuild_probe) scene.enable_update_stats();
         auto *pass=scene.create_node<Pass>();pass->set_name(ustring("combined"));pass->set_type(PASS_COMBINED);
         scene.integrator->set_seed(1337);scene.integrator->set_max_bounce(8);scene.integrator->set_max_diffuse_bounce(4);
         scene.integrator->set_max_glossy_bounce(4);scene.integrator->set_max_transmission_bounce(8);scene.integrator->set_transparent_max_bounce(32);
@@ -150,14 +150,25 @@ void Renderer::run(std::stop_token stop) {
         scene.integrator->set_sampling_pattern(sampling_.blue_noise?SAMPLING_PATTERN_BLUE_NOISE_FIRST:SAMPLING_PATTERN_TABULATED_SOBOL);
         scene.integrator->set_min_bounce(sampling_.min_bounces);scene.integrator->set_transparent_min_bounce(sampling_.transparent_min_bounces);
         session->dfv_event=[&](const char *name,uint64_t epoch,double ms) {Frame frame;frame.epoch=epoch;telemetry_.event(name,frame,ms);};
-        auto camera=window_->mailbox.latest();render_scene.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
-        const auto load_begin=now();adapter=std::make_unique<CyclesAdapter>(scene);adapter->load(render_scene);timing("adapter_load",load_begin);
-        auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
-        display=driver.get();display->set_options(desired.options);session->set_display_driver(std::move(driver));session->dfv_requested_epoch=++epoch;
-        applied_revision=attempted_revision=desired.revision;session->reset(params,buffers);session->start();
+          const auto begin=now();adapter=std::make_unique<CyclesAdapter>(*session->scene);adapter->load(*pending_scene);timing("adapter_load",begin);
+          auto driver=std::make_unique<Display>(*window_,telemetry_,session->dfv_render_epoch,session->dfv_render_samples,false);
+          display=driver.get();display->set_options(desired.options);session->set_display_driver(std::move(driver));
+          session->dfv_requested_epoch=++epoch;session->reset(params,buffers);session->start();
+        } else {
+          const auto begin=now();thread_scoped_lock lock(session->scene->mutex);
+          const bool changed=adapter->synchronize(*pending_scene);timing("scene_incremental_sync",begin,desired.revision);display->set_options(desired.options);
+          if(changed) {session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
+        }
+        // 新场景成功准备后才释放旧运行时及其文档；显示驱动继续保留有效帧。
+        runtime.reset();render_scene_ptr=std::move(pending_scene);runtime=std::move(pending_runtime);current=document;pending_document.reset();
+        regions.clear();regions.resize(render_scene_ptr->instances.size());pickable=runtime::viewport_pick_mask(*render_scene_ptr,current->catalog.targets);
+        for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene_ptr->meshes.at(render_scene_ptr->instances.at(skin.instance).mesh),skin);
+        geometry_dirty=true;edit_affects_render=false;previous_positions.clear();
+        applied_revision=attempted_revision=desired.revision;
         {Frame f;f.epoch=epoch;f.id=applied_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);}
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
+      auto &render_scene=*render_scene_ptr;
       if(session->progress.get_error()) throw std::runtime_error(session->progress.get_error_message());
       std::string progress,detail;session->progress.get_status(progress,detail);
       progress+=" | "+detail;
@@ -170,7 +181,8 @@ void Renderer::run(std::stop_token stop) {
       bool wanted_preview=navigation_preview||(edit_affects_render&&(editing||now()<preview_until))||
         (edit_pending&&!state.pending_payloads&&state.resource_error.empty());
       const bool quality_changed=wanted_preview!=preview;
-      ir::Delta delta;bool new_render_edit=false;
+      ir::Delta delta;bool new_render_edit=false,subdivision_edit=false;
+      std::vector<ir::SubdivisionSettings> previous_subdivision;
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
       if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending) &&
          ((wanted_preview&&!preview)||(telemetry_.displayed_epoch.load()>=epoch && session->ready_to_reset()))) {
@@ -183,6 +195,8 @@ void Renderer::run(std::stop_token stop) {
             state.pending_payloads=resources.pending;state.resource_error=resources.error;
             if(!resources.pending&&resources.error.empty()) {
             attempted_revision=desired.revision;const auto evaluate_begin=now();
+            for(const auto &mesh:render_scene.meshes) previous_subdivision.push_back(mesh.subdivision);
+            subdivision_edit=apply_subdivision_levels(render_scene,desired.subdivision_levels);
             diagnostics::LoadProfile profile;diagnostics::active=&profile;
             try {delta=runtime->evaluate(desired.values,desired.poses);} catch(...) {diagnostics::active=nullptr;throw;}
             diagnostics::active=nullptr;timing("edit_evaluate",evaluate_begin,desired.revision);
@@ -199,16 +213,28 @@ void Renderer::run(std::stop_token stop) {
               if(render_scene.options.environment!=desired.options.environment||render_scene.options.environment_file!=desired.options.environment_file||render_scene.options.backdrop!=desired.options.backdrop) delta.options=desired.options;
               render_scene.options=desired.options;display->set_options(desired.options);
             }
-            new_render_edit=delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
+            new_render_edit=subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
             edit_affects_render=new_render_edit;applied_revision=desired.revision;state.edit_error.clear();}
           }
-          catch(const std::exception &e) {attempted_revision=desired.revision;state.edit_error=e.what();}
+          catch(const std::exception &e) {
+            for(size_t m=0;m<previous_subdivision.size();++m) render_scene.meshes[m].subdivision=previous_subdivision[m];
+            subdivision_edit=false;attempted_revision=desired.revision;state.edit_error=e.what();
+          }
         }
-        if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
+        if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);render_scene.camera=*delta.camera;camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
         wanted_preview=navigation_preview||(edit_affects_render&&(editing||now()<preview_until||new_render_edit));
-        if(wanted_preview!=preview||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
-          {const auto begin=now();thread_scoped_lock lock(session->scene->mutex);timing("scene_lock",begin,applied_revision);const auto apply_begin=now();adapter->apply(delta);timing("adapter_apply",apply_begin,applied_revision);set_quality(wanted_preview);session->dfv_requested_epoch=++epoch;const auto reset_begin=now();session->reset(params,buffers);timing("session_reset",reset_begin,applied_revision);
+        if(wanted_preview!=preview||subdivision_edit||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
+          {const auto begin=now();thread_scoped_lock lock(session->scene->mutex);timing("scene_lock",begin,applied_revision);const auto apply_begin=now();
+            if(subdivision_edit) {
+              try {adapter->synchronize(render_scene);} catch(const std::exception &e) {
+                for(size_t m=0;m<previous_subdivision.size();++m) render_scene.meshes[m].subdivision=previous_subdivision[m];
+                state.edit_error=e.what();subdivision_edit=false;adapter->apply(delta);
+              }
+              // 同一输入还可能带有相机修改；同步使用最新相机。
+              ir::Delta camera_only;camera_only.camera=delta.camera;adapter->apply(camera_only);
+            } else adapter->apply(delta);
+            timing("adapter_apply",apply_begin,applied_revision);set_quality(wanted_preview);session->dfv_requested_epoch=++epoch;const auto reset_begin=now();session->reset(params,buffers);timing("session_reset",reset_begin,applied_revision);
             Frame f;f.epoch=epoch;f.id=applied_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);}
         state.applied_revision=applied_revision;
       }
@@ -296,6 +322,7 @@ void Renderer::run(std::stop_token stop) {
       if(!SwapBuffers(window_->dc)) {window_->present_context.deactivate();throw std::runtime_error("Qt 视口 SwapBuffers 失败");}
       display->after_swap();window_->present_context.deactivate();
       const auto shown=display->drawn_frame();
+      if(sampling_.rebuild_probe&&(shown.id==0)!=blank_presented) {blank_presented=shown.id==0;telemetry_.event(blank_presented?"blank_present_begin":"blank_present_end");}
       state.present_time=telemetry_.last_present_time;state.sessions=sessions;
       state.preview=preview;state.render_width=shown.width;state.render_height=shown.height;
       if(shown.id&&shown.width==std::max(1,window_->width.load()/4)&&shown.height==std::max(1,window_->height.load()/4)) state.last_preview_frame=shown.id;
@@ -330,8 +357,8 @@ void Renderer::run(std::stop_token stop) {
       }
       {std::lock_guard lock(mutex_);status_=state;}
       } catch(const std::exception &e) {
-        const std::string error=e.what();cleanup();runtime.reset();render_scene={};picking={};regions={};pickable={};
-        current=document;state={};state.generation=document->generation;state.clicks=clicks;state.error=error;
+        const std::string error=e.what();cleanup();runtime.reset();render_scene_ptr.reset();pending_runtime.reset();pending_scene.reset();pending_document.reset();picking={};regions={};pickable={};
+        current=document;failed_revision=desired.revision;state={};state.generation=document->generation;state.clicks=clicks;state.error=error;
         std::lock_guard lock(mutex_);status_=state;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(8));
@@ -346,7 +373,8 @@ void Renderer::run(std::stop_token stop) {
     {"camera_updates",state.adapter.camera_updates},{"morph_evaluations",state.evaluation.morph_evaluations},{"offsets_visited",state.evaluation.offsets_visited},
     {"skin_evaluations",state.skinning.evaluations},{"skin_vertices",state.skinning.vertices},
     {"conform_bound_vertices",state.conform.bindings},{"conform_authored_morphs",state.conform.authored_morphs},{"conform_evaluations",state.conform.evaluations},
-    {"collision_evaluations",state.collision.evaluations},{"collision_corrected_vertices",state.collision.corrected_vertices},
+    {"collision_evaluations",state.collision.evaluations},{"collision_corrected_vertices",state.collision.corrected_vertices},{"collision_cache_hits",state.collision.cache_hits},
+    {"topology_updates",state.adapter.topology_updates},{"scene_updates",state.adapter.scene_updates},
     {"formula_evaluations",state.formulas.expressions},{"formula_channels",state.formulas.channels},{"edit_error",state.edit_error},
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
     {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"},

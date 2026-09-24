@@ -1,4 +1,5 @@
 #include "cycles/adapter.h"
+#include "diagnostics/load_profile.h"
 #include "render_ir/options.h"
 #include "render_ir/sun_sky.h"
 #include "scene/scene.h"
@@ -16,6 +17,7 @@
 #include "util/transform.h"
 #include <OpenImageIO/imageio.h>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <cmath>
 #include <cfloat>
@@ -241,107 +243,7 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
   background_light_->set_use_mis(mode!=3);background_light_->set_map_resolution(0);background_light_->tag_update(&scene_);
   for(size_t i=0;i<lights_.size();++i) {lights_[i]->set_strength(ir::scene_lights(options)?vector(light_power_[i]):zero_float3());lights_[i]->tag_update(&scene_);}
 }
-void CyclesAdapter::load(const ir::Scene &source) {
-  using namespace ccl;
-  if(loaded_) throw std::runtime_error("同一 CyclesAdapter 只允许一次完整加载，请使用 Delta 更新");
-  source.validate();textures_=source.textures;stats_.textures=textures_.size();
-  bump_distances_.assign(source.materials.size(),0);
-  std::vector<double> world_area(source.materials.size()),uv_area(source.materials.size());
-  for(const auto &instance:source.instances) if(instance.prototype<0) {
-    const auto &mesh=source.meshes.at(instance.mesh);
-    for(const auto &t:mesh.triangles) {
-      const auto index=instance.materials.at(t.material_slot);const auto &m=source.materials.at(index);
-      if(!m.bump_from_texel_density||m.bump_texture<0||m.bump_strength<=0) continue;
-      const auto a=instance.transform.point(mesh.positions[t.vertices[0]]),b=instance.transform.point(mesh.positions[t.vertices[1]]),c=instance.transform.point(mesh.positions[t.vertices[2]]);
-      const double x1=b.x-a.x,y1=b.y-a.y,z1=b.z-a.z,x2=c.x-a.x,y2=c.y-a.y,z2=c.z-a.z;
-      const double x=y1*z2-z1*y2,y=z1*x2-x1*z2,z=x1*y2-y1*x2;
-      const double u1=t.uv[1].x-t.uv[0].x,v1=t.uv[1].y-t.uv[0].y,u2=t.uv[2].x-t.uv[0].x,v2=t.uv[2].y-t.uv[0].y;
-      world_area[index]+=std::sqrt(x*x+y*y+z*z);uv_area[index]+=std::abs((u1*v2-v1*u2)*m.uv_scale.x*m.uv_scale.y);
-    }
-  }
-  std::map<std::filesystem::path,double> pixels;
-  for(size_t i=0;i<source.materials.size();++i) if(world_area[i]>0&&uv_area[i]>0) {
-    const auto &t=textures_.at(source.materials[i].bump_texture);
-    if(!pixels.contains(t.file)) {const auto p=t.file.u8string();auto input=OIIO::ImageInput::open(std::string(p.begin(),p.end()));pixels[t.file]=input?double(input->spec().width)*input->spec().height:0;}
-    if(pixels[t.file]>0) bump_distances_[i]=float(2*std::sqrt(world_area[i]/(uv_area[i]*pixels[t.file])));
-  }
-  meshes_.resize(source.meshes.size());hairs_.resize(source.meshes.size());for(const auto &m:source.meshes) vertex_counts_.push_back(m.positions.size());
-  for(const auto &mesh:source.meshes) subdivisions_.emplace_back(mesh,final_render_);
-  for(size_t i=0;i<source.materials.size();++i) {auto *shader=scene_.create_node<Shader>();material(*shader,source.materials[i],bump_distances_[i]);shaders_.push_back(shader);++stats_.materials;}
-  std::map<std::pair<uint32_t,std::vector<uint32_t>>,Mesh *> meshes;
-  std::map<std::pair<uint32_t,std::vector<uint32_t>>,Hair *> hairs;
-  for(const auto &instance:source.instances) {
-    const auto key=std::make_pair(instance.mesh,instance.materials);auto found=meshes.find(key);Mesh *mesh;
-    const auto &data=source.meshes.at(instance.mesh);
-    std::vector<Geometry *> geometries;
-    if(!data.triangles.empty()) {
-    if(found==meshes.end()) {
-      const auto &subdivision=subdivisions_.at(instance.mesh);
-      const auto &triangles=subdivision.active()?subdivision.triangles():data.triangles;
-      const auto refined=subdivision.active()?subdivision.evaluate(data.positions):std::vector<ir::Vec3>{};
-      const auto &points=subdivision.active()?refined:data.positions;
-      const auto visible=std::count_if(triangles.begin(),triangles.end(),[&](const auto &t){return data.draws(t);});
-      mesh=scene_.create_node<Mesh>();mesh->resize_mesh(int(points.size()),int(visible));
-      auto *positions=mesh->get_position_for_write();
-      for(size_t i=0;i<points.size();++i) positions[i]=vector(points[i]);
-      auto *uv=mesh->attributes.add(ATTR_STD_UV,ustring("UVMap"))->data_for_write<float2>();
-      size_t i=0;for(const auto &t:triangles) {if(!data.draws(t)) continue;
-        for(size_t k=0;k<3;++k) {mesh->get_triangles()[i*3+k]=int(t.vertices[k]);uv[i*3+k]=make_float2(t.uv[k].x,t.uv[k].y);}
-        mesh->get_shader()[i]=t.material_slot;mesh->get_smooth()[i]=data.smooth;
-        ++i;
-      }
-      array<Node *> shaders(instance.materials.size());for(size_t i=0;i<shaders.size();++i) shaders[i]=shaders_.at(instance.materials[i]);mesh->set_used_shaders(shaders);
-      meshes.emplace(key,mesh);meshes_[instance.mesh].push_back(mesh);++stats_.meshes;stats_.unique_triangles+=visible;
-    } else mesh=found->second;
-    geometries.push_back(mesh);
-    }
-    if(!data.curves.empty()) {
-      Hair *hair;
-      if(auto cached=hairs.find(key);cached!=hairs.end()) hair=cached->second;
-      else {
-        hair=scene_.create_node<Hair>();size_t count=0;for(const auto &curve:data.curves) count+=curve.vertices.size();
-        hair->resize_curves(int(data.curves.size()),int(count));hair->curve_shape=CURVE_THICK;
-        auto *positions=hair->get_position_for_write();auto *radii=hair->get_radius_for_write();
-        auto *uv=hair->attributes.add(ATTR_STD_UV,ustring("UVMap"))->data_for_write<float2>();
-        auto *intercept=hair->attributes.add(ATTR_STD_CURVE_INTERCEPT)->data_for_write<float>();
-        HairBinding binding;binding.hair=hair;binding.vertices.reserve(count);size_t first=0;
-        for(size_t c=0;c<data.curves.size();++c) {
-          const auto &curve=data.curves[c];const auto &material=source.materials.at(instance.materials.at(curve.material_slot));
-          hair->get_curve_first_key()[c]=int(first);hair->get_curve_shader()[c]=int(curve.material_slot);uv[c]=make_float2(curve.uv.x,curve.uv.y);
-          for(size_t k=0;k<curve.vertices.size();++k) {
-            const float t=float(k)/float(curve.vertices.size()-1);const auto v=curve.vertices[k];positions[first]=vector(data.positions[v]);
-            radii[first]=std::max(1e-8f,material.hair_root_radius*(1-t)+material.hair_tip_radius*t);intercept[first]=t;
-            binding.vertices.push_back(v);++first;
-          }
-        }
-        array<Node *> shaders(instance.materials.size());for(size_t i=0;i<shaders.size();++i) shaders[i]=shaders_.at(instance.materials[i]);hair->set_used_shaders(shaders);
-        hairs.emplace(key,hair);hairs_[instance.mesh].push_back(std::move(binding));stats_.curves+=data.curves.size();
-      }
-      geometries.push_back(hair);
-    }
-    objects_.emplace_back();
-    for(auto *geometry:geometries) {
-      auto *object=scene_.create_node<Object>();object->name=ustring(instance.id);object->set_geometry(geometry);object->set_tfm(transform(instance.transform));
-      object->set_visibility(instance.visible?PATH_RAY_VISIBILITY_ALL:0);objects_.back().push_back(object);
-    }
-    ++stats_.instances;if(!data.triangles.empty()) stats_.triangles+=mesh->num_triangles();
-  }
-  auto light_graph=make_unique<ShaderGraph>();auto *emission=light_graph->create_node<EmissionNode>();
-  emission->set_color(one_float3());emission->set_strength(1);light_graph->connect(emission->output("Emission"),light_graph->output()->input("Surface"));
-  scene_.default_light->set_graph(std::move(light_graph));scene_.default_light->tag_update(&scene_);
-  for(const auto &data:source.lights) {
-    Light *light=nullptr;
-    if(data.kind==ir::LightKind::point) light=scene_.create_node<PointLight>();
-    else if(data.kind==ir::LightKind::spot) {auto *spot=scene_.create_node<SpotLight>();spot->set_angle(data.angle);light=spot;}
-    else if(data.kind==ir::LightKind::distant) light=scene_.create_node<SunLight>();
-    else {auto *area=scene_.create_node<AreaLight>();area->set_sizeu(data.width);area->set_sizev(data.height);light=area;}
-    light_power_.push_back(data.power);light->set_strength(vector(data.power));light->set_use_mis(true);lights_.push_back(light);
-    auto *object=scene_.create_node<Object>();object->set_geometry(light);object->set_tfm(transform(data.transform));
-    light_objects_.push_back(object);
-  }
-  environment_=source.environment;environment(source.options);
-  loaded_=true;ir::Delta initial;initial.camera=source.camera;apply(initial);
-}
+#include "cycles/synchronize.inl"
 void CyclesAdapter::apply(const ir::Delta &delta) {
   if(!loaded_) throw std::runtime_error("CyclesAdapter 尚未加载场景");
   // 先校验整个变更，避免索引错误导致只应用一部分。
@@ -352,7 +254,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
   }
   for(const auto &edit:delta.materials) {
     if(edit.index>=shaders_.size()) throw std::runtime_error("材质更新索引越界");
-    ir::validate(edit.value,textures_.size());
+    ir::validate(edit.value,source_.textures.size());
   }
   for(const auto &edit:delta.meshes) {
     if(edit.index>=meshes_.size() || edit.positions.size()!=vertex_counts_[edit.index]) throw std::runtime_error("顶点 Delta 不能改变拓扑或越界");
@@ -365,7 +267,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     for(auto *object:objects_[edit.index]) if(object->get_geometry()->transform_applied) throw std::runtime_error("对象变换已烘焙，不能直接动态修改");
   }
   for(const auto &edit:delta.visibility) if(edit.index>=objects_.size()) throw std::runtime_error("可见性实例索引越界");
-  if(delta.options) environment(*delta.options);
+  if(delta.options) {environment(*delta.options);source_.options=*delta.options;}
   if(delta.camera) {
     const auto &c=*delta.camera;auto &camera=*scene_.camera;
     camera.set_camera_type(ccl::CAMERA_PERSPECTIVE);camera.set_full_width(c.width);camera.set_full_height(c.height);
@@ -373,6 +275,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     // Cycles 的 FLT_MAX 表示无限远裁剪；大地形聚焦后可远超默认 100 千米。
     camera.set_farclip(FLT_MAX);
     camera.need_device_update=true;camera.need_flags_update=true;++stats_.camera_updates;
+    source_.camera=c;
   }
   for(const auto &edit:delta.materials) {
     auto *shader=shaders_.at(edit.index);
@@ -386,17 +289,20 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
         mesh->tag_position_modified();mesh->tag_update(&scene_,false);
       }
     }
-    material(*shader,edit.value,bump_distances_.at(edit.index));++stats_.material_updates;
+    auto canonical=edit.value;for(auto *index:ir::texture_indices(canonical)) if(*index>=0) *index=texture_map_.at(size_t(*index));
+    material(*shader,canonical,bump_distances_.at(edit.index));canonical_materials_[edit.index]=std::move(canonical);source_.materials[edit.index]=edit.value;++stats_.material_updates;
   }
   for(const auto &edit:delta.lights) {
     light_power_[edit.index]=edit.value.power;lights_[edit.index]->set_strength(ir::scene_lights(options_)?vector(edit.value.power):ccl::zero_float3());lights_[edit.index]->tag_update(&scene_);
     auto *object=light_objects_[edit.index];object->set_tfm(transform(edit.value.transform));object->tag_update(&scene_);
+    source_.lights[edit.index]=edit.value;
   }
   for(const auto &edit:delta.meshes) {
     const auto &subdivision=subdivisions_.at(edit.index);
     const auto refined=subdivision.active()?subdivision.evaluate(edit.positions):std::vector<ir::Vec3>{};
     const auto &points=subdivision.active()?refined:edit.positions;
     for(auto *mesh:meshes_[edit.index]) {
+      if(size_t(mesh->num_verts())!=points.size()) throw std::runtime_error("细分后的顶点数量不匹配，已拒绝写入设备网格");
       auto *positions=mesh->get_position_for_write();
       for(size_t i=0;i<points.size();++i) positions[i]=vector(points[i]);
       for(auto attribute:{ccl::ATTR_STD_VERTEX_NORMAL,ccl::ATTR_STD_POSITION_UNDISPLACED,ccl::ATTR_STD_NORMAL_UNDISPLACED,ccl::ATTR_STD_UV_TANGENT_UNDISPLACED,ccl::ATTR_STD_UV_TANGENT_SIGN_UNDISPLACED}) mesh->attributes.remove(attribute);
@@ -408,10 +314,11 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
       binding.hair->tag_position_modified();binding.hair->compute_bounds();binding.hair->tag_update(&scene_,false);
     }
     ++stats_.geometry_updates;
+    source_.meshes[edit.index].positions=edit.positions;
   }
   for(const auto &edit:delta.instances) {
-    for(auto *object:objects_[edit.index]) {object->set_tfm(transform(edit.transform));object->tag_update(&scene_);}++stats_.instance_updates;
+    for(auto *object:objects_[edit.index]) {object->set_tfm(transform(edit.transform));object->tag_update(&scene_);}source_.instances[edit.index].transform=edit.transform;++stats_.instance_updates;
   }
-  for(const auto &edit:delta.visibility) for(auto *object:objects_[edit.index]) {object->set_visibility(edit.visible?ccl::PATH_RAY_VISIBILITY_ALL:0);object->tag_update(&scene_);}
+  for(const auto &edit:delta.visibility) {for(auto *object:objects_[edit.index]) {object->set_visibility(edit.visible?ccl::PATH_RAY_VISIBILITY_ALL:0);object->tag_update(&scene_);}source_.instances[edit.index].visible=edit.visible;}
 }
 }

@@ -5,6 +5,22 @@
 #include <set>
 
 namespace dfv::editor {
+int subdivision_level(const Document &document,const Snapshot &snapshot,size_t target) {
+  const auto &mesh=document.loaded.scene.meshes.at(document.loaded.scene.instances.at(document.catalog.targets.at(target).instance).mesh);
+  const auto found=snapshot.subdivision_levels.find(mesh.id);if(found!=snapshot.subdivision_levels.end()) return found->second;
+  return mesh.subdivision.enabled?std::max(mesh.subdivision.level,mesh.subdivision.render_level):0;
+}
+bool apply_subdivision_levels(ir::Scene &scene,const std::map<std::string,int> &levels) {
+  for(const auto &[id,level]:levels) if(level<0||level>6) throw std::runtime_error("细分等级超出支持范围");
+  bool changed=false;
+  for(auto &mesh:scene.meshes) if(!mesh.polygons.empty()) {
+    auto next=mesh.subdivision;const auto found=levels.find(mesh.id);
+    const int level=found==levels.end()?(next.enabled?std::max(next.level,next.render_level):0):found->second;
+    if(level<0||level>6) throw std::runtime_error("细分等级超出支持范围");
+    next.enabled=level>0;next.level=next.render_level=level;changed|=next!=mesh.subdivision;mesh.subdivision=next;
+  }
+  return changed;
+}
 std::shared_ptr<Document> refresh_parameters(const Document &document,size_t selected,const std::vector<std::filesystem::path> &roots,const std::function<void(const std::string &)> &progress) {
   const auto &target=document.catalog.targets.at(selected);
   auto loaded=document.loaded;
@@ -94,6 +110,11 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   std::erase_if(document.loaded.objects,[&](const auto &o) {return removed.contains(o.id);});
   for(auto &o:document.loaded.objects) {o.instance=uint32_t(instance_map.at(o.instance));if(refers_to(o.smoothing.collision_target,removed)) o.smoothing.collision_target.clear();}
   std::erase_if(document.loaded.nodes,[&](const auto &n) {return removed.contains(n.id);});
+  for(auto &binding:document.attachments) {
+    std::erase_if(binding.items,[&](const auto &i){return removed.contains(i.node);});
+    std::erase_if(binding.nodes,[&](const auto &n){return removed.contains(n.id);});
+  }
+  std::erase_if(document.attachments,[](const auto &b){return b.items.empty();});
   std::erase_if(snapshot.lights,[&](const auto &l) {return removed.contains(l.id);});scene.lights=snapshot.lights;
   daz::apply_graft_masks(document.loaded);collect_resources(document);release_load_data(document);++snapshot.revision;
   return std::count(targets.begin(),targets.end(),false);
@@ -152,6 +173,13 @@ void append_document(Document &destination,Document source) {
   for(auto &t:source.catalog.targets) {if(t.rigid_follow.target.starts_with('#')) t.rigid_follow.target="#"+prefix+t.rigid_follow.target.substr(1);t.instance+=instances;t.id=prefix+t.id;if(t.parent.starts_with('#')) t.parent="#"+prefix+t.parent.substr(1);for(auto &ancestor:t.ancestors) if(ancestor.starts_with('#')) ancestor="#"+prefix+ancestor.substr(1);if(t.conform_target.starts_with('#')) t.conform_target="#"+prefix+t.conform_target.substr(1);if(t.smoothing.collision_target.starts_with('#')) t.smoothing.collision_target="#"+prefix+t.smoothing.collision_target.substr(1);destination.catalog.targets.push_back(std::move(t));}
   for(auto &s:source.skeletons.skins) {s.instance+=instances;s.id=prefix+s.id;for(auto &j:s.joints) if(!j.scene_id.empty()) j.scene_id=prefix+j.scene_id;destination.skeletons.skins.push_back(std::move(s));}
   for(auto &g:source.formulas.graphs) {if(g.skin>=0) g.skin+=skins;destination.formulas.graphs.push_back(std::move(g));}
+  auto rename=[&](std::string &uri){if(uri.starts_with('#')) uri="#"+prefix+uri.substr(1);};
+  for(auto &b:source.attachments) {
+    if(!b.host.empty()) b.host=prefix+b.host;
+    for(auto &i:b.items) {i.node=prefix+i.node;rename(i.parent);rename(i.conform);rename(i.collision);rename(i.rigid);}
+    for(auto &n:b.nodes) {n.id=prefix+n.id;rename(n.parent);}
+    destination.attachments.push_back(std::move(b));
+  }
   release_load_data(destination);
   a.validate();
 }

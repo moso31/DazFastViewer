@@ -12,6 +12,7 @@ struct SurfaceBinding {
   uint32_t polygon=0;
 };
 struct ConformLink {
+  uint64_t geometry_key=0;
   size_t follower=0,source=0;
   int follower_skin=-1,source_skin=-1;
   std::vector<int> joints,morph_sources;
@@ -33,7 +34,7 @@ class ConformRuntime {
   std::vector<uint64_t> revisions_,source_revisions_;
   ConformStats stats_;
 public:
-  ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs);
+  ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse=nullptr);
   const ConformLink *link(size_t target) const;
   const auto &order() const {return order_;}
   const auto &links() const {return links_;}
@@ -42,7 +43,7 @@ public:
 };
 // 保留穿戴物的局部编辑与额外骨骼，跟随骨骼使用角色最终 ERC 姿势。
 std::vector<JointPose> conform_pose(const ConformLink &link,const std::vector<Skin> &skins,const std::vector<std::vector<JointPose>> &resolved,const std::vector<JointPose> &input);
-struct CollisionStats {uint64_t evaluations=0,corrected_vertices=0;};
+struct CollisionStats {uint64_t evaluations=0,corrected_vertices=0,cache_hits=0;};
 // 每次从未碰撞的蒙皮输出求值，不将上次修正反馈到 Morph 或蒙皮。
 class CollisionRuntime {
   struct Binding {
@@ -54,6 +55,8 @@ class CollisionRuntime {
     ir::Transform relative;
     std::vector<ir::Transform> graft_relatives;
     bool initialized=false;
+    uint64_t cache_key=0;
+    std::vector<ir::Vec3> output;
   };
   ir::Scene &scene_;
   std::vector<Binding> bindings_;
@@ -62,6 +65,7 @@ class CollisionRuntime {
 public:
   CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets,std::function<ir::Transform(uint32_t,uint32_t)> relative={});
   ir::Delta evaluate(ir::Delta delta);
+  void reuse(const CollisionRuntime &previous);
   const auto &stats() const {return stats_;}
 };
 }

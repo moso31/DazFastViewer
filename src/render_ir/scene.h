@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace dfv::ir {
-struct Vec2 {float x=0,y=0;};
+struct Vec2 {float x=0,y=0;bool operator==(const Vec2 &) const = default;};
 struct Vec3 {float x=0,y=0,z=0;bool operator==(const Vec3 &) const = default;};
 // 保存 DAZ 碰撞修改器的显式对象关系；距离统一为米。
 struct MeshSmoothing {
@@ -16,12 +16,14 @@ struct MeshSmoothing {
   std::string collision_target;
   int smoothing_iterations=2,collision_iterations=3;
   float weight=.5f;
+  bool operator==(const MeshSmoothing &) const = default;
 };
 // 米，右手坐标系，Z 向上；矩阵为三行四列，作用于列向量。
 struct Transform {
   std::array<float,12> value{1,0,0,0, 0,1,0,0, 0,0,1,0};
   Vec3 point(Vec3 p) const;
   static Transform translate(Vec3 p);
+  bool operator==(const Transform &) const = default;
 };
 Transform operator*(const Transform &a,const Transform &b);
 Transform inverse(const Transform &transform);
@@ -40,12 +42,14 @@ struct ImageLayer {
   float opacity=1,rotation=0;
   Vec2 scale{1,1},offset;
   bool invert=false,mirror_x=false,mirror_y=false;
+  bool operator==(const ImageLayer &) const = default;
 };
 struct Texture {
   std::string id;std::filesystem::path file;ColorSpace colorspace=ColorSpace::srgb;
   // LIE 在图像编码空间叠加，最后统一转换到工作空间；源资产保持只读。
   std::vector<ImageLayer> layers;
   float gamma=0;
+  bool operator==(const Texture &) const = default;
 };
 struct Material {
   std::string id;
@@ -75,6 +79,7 @@ struct Material {
   int coat_texture=-1,coat_roughness_texture=-1,dual_texture=-1,metallic_texture=-1,transmission_texture=-1;
   int specular_color_texture=-1,coat_color_texture=-1;
   bool bump_invert=false,bump_from_texel_density=false;
+  bool operator==(const Material &) const = default;
 };
 template<class M> auto texture_indices(M &m) {
   return std::array{&m.color_texture,&m.roughness_texture,&m.opacity_texture,&m.normal_texture,&m.bump_texture,
@@ -87,12 +92,14 @@ struct Triangle {
   uint32_t material_slot=0;
   uint32_t polygon_group=0;
   uint32_t source_polygon=0;
+  bool operator==(const Triangle &) const = default;
 };
 // 发丝保持源顶点编号，复用 Morph / 蒙皮；后端按曲线展开控制点。
 struct Curve {
   std::vector<uint32_t> vertices;
   uint32_t material_slot=0;
   Vec2 uv;
+  bool operator==(const Curve &) const = default;
 };
 struct SubdivisionSettings {
   bool enabled=false;
@@ -104,6 +111,7 @@ struct Polygon {
   std::vector<uint32_t> vertices;
   std::vector<Vec2> uv;
   uint32_t material_slot=0,polygon_group=0;
+  bool operator==(const Polygon &) const = default;
 };
 struct Mesh {
   // GeoGraft 的目标基础拓扑；用于把附加表面纳入服装碰撞。
@@ -120,7 +128,7 @@ struct Mesh {
   // 细分必须使用原始四边面，不能对绘制用的三角化结果做 Catmark。
   std::vector<Polygon> polygons;
   SubdivisionSettings subdivision;
-  struct Crease {uint32_t a,b;float weight;};
+  struct Crease {uint32_t a,b;float weight;bool operator==(const Crease &) const = default;};
   std::vector<Crease> creases;
   std::vector<std::pair<uint32_t,float>> corners;
   std::vector<std::string> material_slots;
@@ -149,6 +157,7 @@ struct AreaLight {
   float width=1,height=1;
   LightKind kind=LightKind::area;
   float angle=.785398f;
+  bool operator==(const AreaLight &) const = default;
 };
 struct Camera {
   Transform transform;

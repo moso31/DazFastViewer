@@ -6,8 +6,26 @@
 #include <tuple>
 #include <numeric>
 #include <stdexcept>
+#include <set>
+#include <cmath>
 
 namespace dfv::runtime {
+void validate_subdivision_budget(const ir::Mesh &mesh,int level) {
+  if(level<0||level>6) throw std::runtime_error("细分等级超出支持范围 0–6");
+  if(level==0||mesh.triangles.empty()) return;
+  if(mesh.polygons.empty()) throw std::runtime_error("该网格缺少细分所需的多边形拓扑");
+  uint64_t faces=0;
+  for(const auto &p:mesh.polygons) {
+    if(p.vertices.size()<3||p.uv.size()!=p.vertices.size()) throw std::runtime_error("细分多边形或 UV 无效");
+    std::set<uint32_t> unique;
+    for(size_t i=0;i<p.vertices.size();++i) if(p.vertices[i]>=mesh.positions.size()||!unique.insert(p.vertices[i]).second||!std::isfinite(p.uv[i].x)||!std::isfinite(p.uv[i].y)) throw std::runtime_error("细分多边形包含无效或重复顶点／UV");
+    faces+=mesh.subdivision.algorithm==2?(p.vertices.size()-2)*4:p.vertices.size();
+  }
+  for(int i=1;i<level&&faces<=4000000;++i) faces*=4;
+  if(faces>4000000) throw std::runtime_error("该细分等级超过单网格 400 万细分面的预算，请降低等级；当前画面保持不变");
+  for(const auto &c:mesh.creases) if(c.a>=mesh.positions.size()||c.b>=mesh.positions.size()||c.a==c.b||!std::isfinite(c.weight)||c.weight<0) throw std::runtime_error("细分边折痕索引或权重无效");
+  for(auto [v,w]:mesh.corners) if(v>=mesh.positions.size()||!std::isfinite(w)||w<0) throw std::runtime_error("细分角点索引或权重无效");
+}
 namespace osd=OpenSubdiv;
 struct Subdivision::Data {
   std::unique_ptr<const osd::Far::StencilTable> stencils;
@@ -25,6 +43,7 @@ Subdivision::Subdivision(const ir::Mesh &mesh,bool final_render) {
   const auto &settings=mesh.subdivision;
   const int level=final_render?std::max(settings.level,settings.render_level):settings.level;
   if(!settings.enabled||level==0||mesh.triangles.empty()) return;
+  validate_subdivision_budget(mesh,level);
   if(level<0||level>6) throw std::runtime_error("SubD 级别超出当前支持范围 0–6："+mesh.id);
   if(settings.algorithm<0||settings.algorithm>3||settings.edge_interpolation<0||settings.edge_interpolation>2) throw std::runtime_error("未知 SubD 算法或边界插值模式："+mesh.id);
   if(mesh.polygons.empty()) throw std::runtime_error("细分缺少原始多边形拓扑："+mesh.id);
@@ -49,7 +68,7 @@ Subdivision::Subdivision(const ir::Mesh &mesh,bool final_render) {
     else {std::vector<int> corners(polygon.vertices.size());std::iota(corners.begin(),corners.end(),0);add_face(polygon,p,corners);}
   }
   // 显式拒绝无法承受的设置，不静默降低用户保存的级别。
-  uint64_t faces=sizes.size();for(int i=0;i<level;++i) {faces*=4;if(faces>16000000) throw std::runtime_error("SubD 超过当前每网格 1600 万面的上限，请降低细分级别："+mesh.id);}
+  // 开销已在建立 UV 映射前检查。
   for(const auto &c:mesh.creases) {crease_indices.push_back(int(c.a));crease_indices.push_back(int(c.b));crease_weights.push_back(c.weight);}
   for(const auto &[v,w]:mesh.corners) {corner_indices.push_back(int(v));corner_weights.push_back(w);}
   osd::Far::TopologyDescriptor descriptor;
@@ -63,7 +82,8 @@ Subdivision::Subdivision(const ir::Mesh &mesh,bool final_render) {
   options.SetFVarLinearInterpolation(osd::Sdc::Options::FVAR_LINEAR_ALL);
   const auto scheme=settings.algorithm==1?osd::Sdc::SCHEME_BILINEAR:settings.algorithm==2?osd::Sdc::SCHEME_LOOP:osd::Sdc::SCHEME_CATMARK;
   using Factory=osd::Far::TopologyRefinerFactory<osd::Far::TopologyDescriptor>;
-  std::unique_ptr<osd::Far::TopologyRefiner> refiner(Factory::Create(descriptor,Factory::Options(scheme,options)));
+  Factory::Options factory_options(scheme,options);factory_options.validateFullTopology=true;
+  std::unique_ptr<osd::Far::TopologyRefiner> refiner(Factory::Create(descriptor,factory_options));
   if(!refiner) throw std::runtime_error("OpenSubdiv 无法建立拓扑："+mesh.id);
   osd::Far::TopologyRefiner::UniformOptions uniform(level);uniform.fullTopologyInLastLevel=true;refiner->RefineUniform(uniform);
   osd::Far::PrimvarRefiner interpolate(*refiner);

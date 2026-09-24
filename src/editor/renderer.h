@@ -14,6 +14,7 @@ struct SamplingSettings {
   float adaptive_threshold=.01f;
   bool blue_noise=true;
   bool interaction_probe=false;
+  bool rebuild_probe=false;
 };
 struct RenderStatus {
   uint64_t generation=0,applied_revision=0,presented_revision=0,frames=0;
@@ -90,6 +91,6 @@ public:
   void keyboard(int key,bool pressed);
   void frame(const ir::Bounds &bounds);
   void focus(const ir::Bounds &bounds);
-  void trace(const char *event) {telemetry_.event(event);}
+  void trace(const char *event,double duration_ms=0) {telemetry_.event(event,{},duration_ms);}
 };
 }

@@ -4,7 +4,9 @@
 #include <nlohmann/json.hpp>
 
 namespace dfv::daz {
-struct LoadOptions {std::vector<std::filesystem::path> content_roots;bool strict=false;};
+struct LoadOptions {std::vector<std::filesystem::path> content_roots;bool strict=false;bool defer_selection=false;};
+// 穿戴预设中的选择引用在追加到目标文档后解析，不当作文件内部 ID。
+bool selection_reference(const std::string &uri);
 struct GeometrySource {std::filesystem::path file;std::string id;};
 struct AssetObject {
   uint32_t instance=0;
@@ -23,13 +25,16 @@ struct AssetObject {
   ir::Transform edit_frame,translation_frame;
   std::string rotation_order="XYZ";
   runtime::RigidFollow rigid_follow;
+  std::string content_type,preferred_base,auto_fit_base;
+  std::vector<std::string> extended_bases;
+  bool attachment_bind_rest=false;
 };
 struct AssetNode {std::string id,parent,label;bool group=false;};
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;};
-struct DufContents {bool instantiate=false,materials=false,properties=false;};
+struct DufContents {bool instantiate=false,materials=false,properties=false,requires_selection=false;};
 DufContents inspect_contents(const nlohmann::json &document);
 LoadedScene load(const std::filesystem::path &file,const LoadOptions &options={});
-void apply_graft_masks(LoadedScene &loaded);
+void apply_graft_masks(LoadedScene &loaded,bool defer_selection=false);
 void sync_instance_meshes(ir::Scene &scene);
 nlohmann::json read_document_file(const std::filesystem::path &file);
 std::string decode_uri(const std::string &uri);

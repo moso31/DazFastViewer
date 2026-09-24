@@ -173,13 +173,22 @@ ir::Transform node_transform(const Json &n) {
   const auto orientation=rotation(axes(n,"orientation",{}),"XYZ");
   return ir::Transform::translate({pivot.x+t.x,pivot.y+t.y,pivot.z+t.z})*orientation*rotation(r,n.value("rotation_order","XYZ"))*scale*transpose_rotation(orientation)*ir::Transform::translate({-pivot.x,-pivot.y,-pivot.z});
 }
-void apply_graft_masks(LoadedScene &loaded) {
+bool selection_reference(const std::string &uri) {
+  const auto decoded=decode_uri(uri);
+  for(const auto *prefix:{"name://@selection","id://@selection"}) if(decoded.starts_with(prefix)) {
+    const auto suffix=decoded.substr(std::char_traits<char>::length(prefix));
+    return suffix.empty()||suffix.starts_with(':')||suffix.starts_with('/')||suffix.starts_with('#');
+  }
+  return false;
+}
+void apply_graft_masks(LoadedScene &loaded,bool defer_selection) {
   auto &scene=loaded.scene;
   for(auto &mesh:scene.meshes) mesh.hidden_polygons.clear();
   std::map<uint32_t,std::set<uint32_t>> masks;
   for(const auto &object:loaded.objects) {
     const auto &graft=scene.meshes.at(scene.instances.at(object.instance).mesh);
     if(!graft.graft_target_vertices||object.conform_target.empty()) continue;
+    if(defer_selection&&selection_reference(object.conform_target)) continue;
     const AssetObject *host=nullptr;
     for(const auto &candidate:loaded.objects) if(object.conform_target=="#"+candidate.id) {
       const auto &mesh=scene.meshes.at(scene.instances.at(candidate.instance).mesh);
@@ -199,13 +208,22 @@ void apply_graft_masks(LoadedScene &loaded) {
     const auto &mask=masks[i];std::vector<uint32_t> hidden(mask.begin(),mask.end());const auto key=std::make_pair(instance.mesh,hidden);
     if(auto found=variants.find(key);found!=variants.end()) {instance.mesh=found->second;continue;}
     const auto original=instance.mesh;
-    if(!used.insert(original).second) {auto mesh=scene.meshes.at(original);instance.mesh=uint32_t(scene.meshes.size());scene.meshes.push_back(std::move(mesh));}
+    if(!used.insert(original).second) {auto mesh=scene.meshes.at(original);mesh.id+="/mask/"+instance.id;instance.mesh=uint32_t(scene.meshes.size());scene.meshes.push_back(std::move(mesh));}
     scene.meshes.at(instance.mesh).hidden_polygons=std::move(hidden);variants.emplace(key,instance.mesh);
   }
   sync_instance_meshes(scene);
 }
 DufContents inspect_contents(const Json &document) {
   DufContents result;const auto &scene=document.value("scene",Json::object());
+  std::function<void(const Json &)> selection=[&](const Json &value) {
+    if(result.requires_selection) return;
+    if(value.is_object()) for(auto i=value.begin();i!=value.end();++i) {
+      const auto &key=i.key();
+      if(i->is_string()&&(key=="parent"||key=="conform_target"||key=="parent_in_place"||key=="node")) result.requires_selection|=selection_reference(i->get<std::string>());
+      else if(key=="extra"||key=="channels"||key=="channel") selection(*i);
+    } else if(value.is_array()) for(const auto &child:value) selection(child);
+  };
+  for(const auto *field:{"nodes","modifiers"}) if(auto i=scene.find(field);i!=scene.end()) selection(*i);
   const auto type=document.value("asset_info",Json::object()).value("type","");
   result.materials=!scene.value("materials",Json::array()).empty();
   result.properties=!scene.value("animations",Json::array()).empty();
@@ -227,6 +245,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   if(repo.roots.empty()) fail("不能推断内容库；请使用 --content-root");
   const auto &document=repo.document(file);if(!document.contains("scene")) fail("文件中没有 scene");
   const auto &source=document.at("scene");LoadedScene out;auto &scene=out.scene;
+  auto deferred=[&](const std::string &uri) {return options.defer_selection&&selection_reference(uri);};
   Json warnings=Json::array(),material_reports=Json::array(),geometry_reports=Json::array(),subdivision_reports=Json::array();
   auto warn=[&](const std::string &code,const std::string &asset,const std::string &detail) {warnings.push_back({{"code",code},{"asset",asset},{"detail",detail}});};
   std::map<std::pair<std::string,ir::ColorSpace>,int> textures;
@@ -487,7 +506,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       const auto &c=entry.at("channel");if(c.value("id","")=="Follow Target"&&c.contains("node")&&c["node"].is_string()) follow.target=decode(c["node"].get<std::string>());
     }
     if(follow.target.empty()) {auto parent=decode(node.value("parent",""));while(parent.starts_with('#')&&nodes.contains(parent.substr(1))) {const auto &p=nodes.at(parent.substr(1));if(p.contains("geometries")) {follow.target=parent;break;}parent=decode(p.value("parent",""));}}
-    if(follow.vertices.empty()||!follow.target.starts_with('#')||!nodes.contains(follow.target.substr(1))) fail("刚性跟随的目标或参考顶点缺失: "+id);
+    if(follow.vertices.empty()||(!deferred(follow.target)&&(!follow.target.starts_with('#')||!nodes.contains(follow.target.substr(1))))) fail("刚性跟随的目标或参考顶点缺失: "+id);
     rigid_groups[id]=std::move(follow);
   }
   std::map<std::string,ir::Transform> transforms;std::set<std::string> visiting;
@@ -509,7 +528,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     const auto orientation=rotation(axes(n,"orientation",{}),"XYZ");
     auto matrix=ir::Transform::translate({pivot.x+t.x,pivot.y+t.y,pivot.z+t.z})*orientation*rotation(r,n.value("rotation_order","XYZ"))*scale*transpose_rotation(orientation)*ir::Transform::translate({-pivot.x,-pivot.y,-pivot.z});
     const auto parent=n.value("parent","");
-    if(!parent.empty()) {
+    if(!parent.empty()&&!deferred(parent)) {
       if(!parent.starts_with('#')) fail("不支持跨文件的场景实例 parent: "+parent);
       matrix=world(decode(parent.substr(1)))*matrix;
     }
@@ -523,11 +542,15 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     const auto original=world(id);if(!fitting.insert(id).second) fail("Fit To / parent 关系存在循环: "+id);
     const auto &node=nodes.at(id);auto result=original;
     const auto target=node.contains("conform_target")&&node["conform_target"].is_string()?decode(node["conform_target"].get<std::string>()):std::string{};
-    if(!target.empty()) {
+    if(rigid_groups.contains(id)&&deferred(rigid_groups.at(id).target)) {
+      const auto parent=decode(node.value("parent",""));result=parent.starts_with('#')?ir::inverse(world(parent.substr(1)))*original:original;
+    }
+    else if(deferred(target)) result=ir::Transform{};
+    else if(!target.empty()) {
       if(!target.starts_with('#')||!nodes.contains(target.substr(1))) fail("Fit To 目标不存在: "+target);
       // Fit To 替换 Figure 的世界变换；保存的穿戴前位移不能再叠加一次。
       result=fitted_world(target.substr(1));
-    } else if(const auto parent=decode(node.value("parent",""));!parent.empty()) {
+    } else if(const auto parent=decode(node.value("parent",""));!parent.empty()&&!deferred(parent)) {
       // 刚性跟随由参考表面的最终顶点求姿态，不能再继承挂接骨骼的保存姿态。
       const auto owner=rigid_groups.contains(id)?rigid_groups.at(id).target.substr(1):parent.substr(1);
       // Follow Target 使用节点原点坐标；网格矩阵已减去中心，嵌套挂接需补回。
@@ -642,6 +665,8 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
           }
         }
         geometry_reports.push_back({{"id",geometry_id},{"vertices",mesh.positions.size()},{"polygons",polygons.size()},{"triangles",mesh.triangles.size()},{"curves",mesh.curves.size()},{"material_groups",mesh.material_slots}});
+        // 同源但不同 UV／细分设置的网格需要独立身份，供编辑快照和增量渲染匹配。
+        if(std::any_of(scene.meshes.begin(),scene.meshes.end(),[&](const auto &old){return old.id==mesh.id;})) mesh.id+="/variant/"+id+"/"+geometry_id;
         mesh_index=uint32_t(scene.meshes.size());mesh_cache.emplace(key,mesh_index);scene.meshes.push_back(std::move(mesh));
       }
       ir::Instance render_instance;render_instance.id=id+"/"+geometry_id;render_instance.mesh=mesh_index;render_instance.materials=std::move(material_indices);render_instance.transform=render_transform(fitted_world(id));
@@ -766,7 +791,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   if(source.contains("animations")&&!source["animations"].empty())
     warn("scene_animation_timeline",std::to_string(source["animations"].size()),"载入保存的节点和 Modifier 当前值；场景动画时间线尚未求值。选中对象的单帧预设由预设入口应用");
   if(scene.instances.empty()&&scene.lights.empty()&&scene.materials.empty()&&source.value("nodes",Json::array()).empty()) fail("文件没有可加载的场景内容");
-  apply_graft_masks(out);
+  apply_graft_masks(out,options.defer_selection);
   scene.validate();const auto bounds=scene.bounds();
   out.report={{"input",utf8(file)},{"mode","static-base-mesh-preview"},{"content_roots",Json::array()},
               {"dependencies",repo.dependencies},{"parsed_documents",repo.documents.size()},{"geometries",geometry_reports},{"subdivision",subdivision_reports},{"materials",material_reports},
@@ -782,6 +807,9 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   for(const auto &root:repo.roots) out.report["content_roots"].push_back(utf8(root));
   for(auto &object:out.objects) {
     object.source_file=file;object.source_node=object.id;
+    const auto presentation=nodes.at(object.id).value("presentation",Json::object());
+    object.content_type=presentation.value("type","");object.preferred_base=presentation.value("preferred_base","");
+    object.auto_fit_base=presentation.value("auto_fit_base","");object.extended_bases=presentation.value("extended_bases",std::vector<std::string>{});
     const auto &n=nodes.at(object.id);object.translation_cm=axes(n,"translation",{});object.rotation_degrees=axes(n,"rotation",{});object.scale=axes(n,"scale",{1,1,1});object.general_scale=number(n.value("general_scale",Json(1)),1);
     const auto pivot=axes(n,"center_point",{}),t=object.translation_cm;
     const auto orientation=rotation(axes(n,"orientation",{}),"XYZ");object.rotation_order=n.value("rotation_order","XYZ");

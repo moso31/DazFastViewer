@@ -50,15 +50,15 @@ inline int displacement_check(const ccl::DeviceInfo &device,const std::filesyste
   }
   require(geometries[2]==geometries[6],"置换破坏了实例网格共享");
   J checks=J::array();
-  auto run=[&](const char *name,const std::array<float,7> &heights,float morph=0) {
+  auto run=[&](const char *name,const std::array<float,7> &heights,float morph=0,int vertices=4) {
     const auto folder=output/name;std::filesystem::create_directories(folder);auto result=std::make_unique<Output>(folder);auto *written=result.get();session.set_output_driver(std::move(result));
     session.reset(params,buffers);session.start();session.wait();
     require(!session.progress.get_error(),session.progress.get_error_message().c_str());require(written->written&&written->error.empty(),"置换测试渲染失败");
     float maximum=0;J measured=J::array();
     for(size_t i=0;i<7;++i) {
-      const auto *mesh=geometries[i];require(mesh->num_verts()==4,"置换错误改变源网格拓扑");
+      const auto *mesh=geometries[i];require(mesh->num_verts()==vertices,"置换后的网格顶点数量错误");
       const auto *p=mesh->get_position();float error=0;
-      for(int v=0;v<4;++v) error=std::max(error,std::abs(p[v].y-(morph-heights[i])));
+      for(int v=0;v<vertices;++v) error=std::max(error,std::abs(p[v].y-(morph-heights[i])));
       maximum=std::max(maximum,error);measured.push_back({{"id",source.instances[i].id},{"y_m",p[0].y},{"error_m",error}});
     }
     checks.push_back({{"stage",name},{"vertices",measured},{"maximum_error_m",maximum}});
@@ -76,7 +76,32 @@ inline int displacement_check(const ccl::DeviceInfo &device,const std::filesyste
   ir::Delta reset;reset.meshes.push_back({0,source.meshes[0].positions});apply(reset);run("morph-reset",enabled);
   ir::Delta view;view.camera=source.camera;view.camera->transform.value[3]+=.1f;apply(view);run("camera",enabled);
   ir::Delta move;auto transform=source.instances[0].transform;transform.value[3]+=.2f;move.instances.push_back({0,transform});apply(move);run("object-transform",enabled);
+  auto sync=[&](const ir::Scene &next) {thread_scoped_lock lock(scene.mutex);return adapter.synchronize(next);};
+  require(sync(source),"完整快照没有恢复增量修改");run("snapshot-restore",enabled);
+  require(!sync(source),"未变化快照触发了场景更新");
+  // 模拟删除资产造成贴图数组重新编号，同一资源不应重新编译材质。
+  auto reordered=source;std::rotate(reordered.textures.begin(),reordered.textures.begin()+1,reordered.textures.end());
+  for(auto &m:reordered.materials) for(auto *i:ir::texture_indices(m)) if(*i>=0) *i=*i==0?int(reordered.textures.size()-1):*i-1;
+  require(!sync(reordered),"相同贴图重新编号导致重复场景更新");run("texture-index-remap",enabled);
+  auto subdivided=reordered;subdivided.meshes[0].subdivision.enabled=true;subdivided.meshes[0].subdivision.level=1;
+  require(sync(subdivided),"细分修改未更新网格");run("subdivision-with-displacement",enabled,0,9);
+  apply(morph);run("subdivision-morph",enabled,.1f,9);
+  sync(source);run("topology-restore",enabled);
+  // 增删真实曲线节点，并验证 Cycles 的不可删除 Shader 节点池得到复用。
+  auto with_hair=source;auto hair_material=source.materials[0];hair_material.id="sync-hair-material";
+  const auto hair_material_index=uint32_t(with_hair.materials.size());with_hair.materials.push_back(hair_material);
+  ir::Mesh hair;hair.id="sync-hair";hair.material_slots={hair_material.id};hair.positions={{0,0,0},{0,0,1},{.1f,0,2}};
+  ir::Curve curve;curve.vertices={0,1,2};hair.curves.push_back(curve);
+  ir::Instance hair_instance;hair_instance.id="sync-hair-instance";hair_instance.mesh=uint32_t(with_hair.meshes.size());hair_instance.materials={hair_material_index};
+  with_hair.meshes.push_back(hair);with_hair.instances.push_back(hair_instance);
+  const auto shader_count=scene.shaders.size();
+  for(int round=0;round<3;++round) {
+    sync(with_hair);require(adapter.stats().curves==1,"同步没有添加曲线");run(("curve-add-"+std::to_string(round)).c_str(),enabled);
+    auto hair_edit=with_hair;hair_edit.meshes.back().positions.back().x+=.2f;sync(hair_edit);run(("curve-edit-"+std::to_string(round)).c_str(),enabled);
+    sync(source);require(adapter.stats().curves==0,"同步没有移除曲线");run(("curve-remove-"+std::to_string(round)).c_str(),enabled);
+    require(scene.shaders.size()==shader_count+1,"反复增删导致 Shader 节点无限增长");
+  }
   std::ofstream(output/"displacement-check.json")<<J({{"status","PASS"},{"checks",checks},{"shared_geometry",true},{"device",device.id}}).dump(2);
-  std::cout<<"Displacement GPU checks: PASS (9 stages)\n";return 0;
+  std::cout<<"Displacement and scene synchronization GPU checks: PASS ("<<checks.size()<<" stages)\n";return 0;
 }
 }

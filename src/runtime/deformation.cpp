@@ -42,8 +42,9 @@ void set_parameter(const Target &target,Properties &values,size_t index,float va
   const auto resolved=p.alias_morph>=0?size_t(p.alias_morph):index;
   values.morphs.at(resolved)=value;if(p.value_type!="bool") values.unlimited_morphs.insert(target.morphs[resolved].id);sync_aliases(target,values);
 }
-DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs)
-  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs),collision_(scene,targets,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);}),scene_(scene) {
+DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse)
+  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs,reuse?&reuse->conform_:nullptr),collision_(scene,targets,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);}),scene_(scene) {
+  if(reuse) collision_.reuse(reuse->collision_);
   if(graphs.size()!=targets.size()) throw std::runtime_error("角色和公式图数量不一致");
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
   for(const auto &target:targets) {Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);sync_aliases(target,p);previous_.push_back(p);}
@@ -80,7 +81,8 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
         const auto &skin=skins[s];size_t parent=0;while(parent<targets.size()&&targets[parent].instance!=skin.instance) ++parent;
         if(parent==targets.size()) continue;
         for(size_t j=0;j<skin.joints.size();++j) if(!skin.joints[j].scene_id.empty()&&ancestor=="#"+skin.joints[j].scene_id) {
-          const auto figure=scene.instances.at(skin.instance).transform;const auto bind=joint_transforms(skin,skin.initial);
+          const auto figure=scene.instances.at(skin.instance).transform;
+          const auto bind=joint_transforms(skin,targets[t].attachment_bind_rest?std::vector<JointPose>(skin.joints.size()):skin.initial);
           morph_.bind_parent(t,parent);attachments_.push_back({t,s,j,figure,ir::inverse(figure*bind[j])});bound=true;break;
         }
       }

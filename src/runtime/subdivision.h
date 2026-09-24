@@ -4,6 +4,8 @@
 #include <span>
 
 namespace dfv::runtime {
+// 在构建模板或触碰设备网格之前校验开销，供界面及渲染线程共同使用。
+void validate_subdivision_budget(const ir::Mesh &mesh,int level);
 // 缓存细分模板和 UV；Morph / Skinning 只重新插值位置，相机更新不接触细分。
 class Subdivision {
   struct Data;

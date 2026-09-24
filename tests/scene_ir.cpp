@@ -51,6 +51,7 @@ int main() {
     shape["edge_interpolation_mode"]="edges_and_corners";
     const auto subdivided_path=directory/"subdivided.duf";write(subdivided_path,subdivided);const auto subd=dfv::daz::load(subdivided_path,{{directory},true});
     require(subd.scene.meshes.size()==2,"细分设置不同的同源对象错误地共享设置");
+    require(subd.scene.meshes[0].id!=subd.scene.meshes[1].id,"不同细分网格的稳定身份发生冲突");
     const auto &subd_mesh=subd.scene.meshes[subd.scene.instances[0].mesh];
     require(subd_mesh.subdivision.enabled&&subd_mesh.subdivision.level==2&&subd_mesh.subdivision.edge_interpolation==1,"场景细分属性丢失");
     require(subd_mesh.polygons.size()==1&&subd_mesh.polygons[0].vertices.size()==4&&subd_mesh.polygons[0].uv[1].x==.25f,"原始四边面或 UV 接缝丢失");
@@ -249,6 +250,7 @@ int main() {
     write(path,graft_scene);auto grafted=dfv::daz::load(path);const auto &host=grafted.scene.meshes[grafted.scene.instances[0].mesh];
     require(host.triangles.size()==2&&!host.draws(host.triangles[0])&&!host.draws(host.triangles[1]),"隐藏插件恢复宿主面，或破坏原始拓扑");
     const auto &other=grafted.scene.meshes[grafted.scene.instances[1].mesh];require(other.draws(other.triangles[0]),"遮盖泄漏给同资产另一角色");
+    require(other.id!=host.id,"独立遮盖网格的稳定身份发生冲突");
     require(grafted.scene.meshes[grafted.scene.instances.back().mesh].graft_vertex_pairs==std::vector<std::array<uint32_t,2>>({{0,2},{1,3}}),"GeoGraft 顶点对丢失或顺序颠倒");
     dfv::runtime::PickingScene picking;picking.update(grafted.scene);require(picking.ray({2.5f,-1,.5f},{0,1,0}).instance<0,"已遮盖表面仍被选取");
     grafted.objects.pop_back();dfv::daz::apply_graft_masks(grafted);require(grafted.scene.meshes[grafted.scene.instances[0].mesh].hidden_polygons.empty(),"删除插件未恢复宿主面");
