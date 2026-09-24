@@ -36,7 +36,7 @@ enable_testing()
 add_library(dfv_scene STATIC src/render_ir/scene.cpp src/daz/loader.cpp src/daz/morphs.cpp src/runtime/morph.cpp
   src/daz/skeleton.cpp src/daz/pose.cpp src/runtime/skeleton.cpp src/daz/formulas.cpp src/runtime/formula.cpp src/runtime/deformation.cpp
   src/editor/document.cpp src/runtime/picking.cpp src/runtime/conform.cpp src/runtime/rigid_follow.cpp src/daz/documents.cpp src/runtime/morph_data.cpp)
-target_sources(dfv_scene PRIVATE src/runtime/subdivision.cpp src/editor/attachments.cpp)
+target_sources(dfv_scene PRIVATE src/runtime/subdivision.cpp src/runtime/graft_surface.cpp src/editor/attachments.cpp)
 target_compile_definitions(dfv_scene PRIVATE _USE_MATH_DEFINES)
 target_include_directories(dfv_scene PRIVATE "${DFV_LIB_DIR}/opensubdiv/include")
 target_link_libraries(dfv_scene PRIVATE optimized "${DFV_LIB_DIR}/opensubdiv/lib/osdCPU.lib" debug "${DFV_LIB_DIR}/opensubdiv/lib/osdCPU_d.lib")

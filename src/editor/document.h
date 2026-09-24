@@ -33,6 +33,7 @@ struct Snapshot {
   std::vector<ir::AreaLight> lights;
 };
 Snapshot initial_snapshot(const Document &document);
+const ir::Mesh &subdivision_mesh(const Document &document,size_t target);
 int subdivision_level(const Document &document,const Snapshot &snapshot,size_t target);
 bool apply_subdivision_levels(ir::Scene &scene,const std::map<std::string,int> &levels);
 std::shared_ptr<Document> refresh_parameters(const Document &document,size_t selected,const std::vector<std::filesystem::path> &roots,const std::function<void(const std::string &)> &progress={});

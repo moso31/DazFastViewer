@@ -1,12 +1,18 @@
 #include "editor/document.h"
 #include "daz/documents.h"
+#include "runtime/graft_surface.h"
 #include <algorithm>
 #include <map>
 #include <set>
 
 namespace dfv::editor {
+const ir::Mesh &subdivision_mesh(const Document &document,size_t target) {
+  const auto &scene=document.loaded.scene;auto instance=document.catalog.targets.at(target).instance;
+  if(scene.instances.at(instance).prototype>=0) instance=uint32_t(scene.instances[instance].prototype);
+  return scene.meshes.at(scene.instances.at(runtime::graft_root(scene,instance)).mesh);
+}
 int subdivision_level(const Document &document,const Snapshot &snapshot,size_t target) {
-  const auto &mesh=document.loaded.scene.meshes.at(document.loaded.scene.instances.at(document.catalog.targets.at(target).instance).mesh);
+  const auto &mesh=subdivision_mesh(document,target);
   const auto found=snapshot.subdivision_levels.find(mesh.id);if(found!=snapshot.subdivision_levels.end()) return found->second;
   return mesh.subdivision.enabled?std::max(mesh.subdivision.level,mesh.subdivision.render_level):0;
 }
@@ -18,6 +24,10 @@ bool apply_subdivision_levels(ir::Scene &scene,const std::map<std::string,int> &
     const int level=found==levels.end()?(next.enabled?std::max(next.level,next.render_level):0):found->second;
     if(level<0||level>6) throw std::runtime_error("细分等级超出支持范围");
     next.enabled=level>0;next.level=next.render_level=level;changed|=next!=mesh.subdivision;mesh.subdivision=next;
+  }
+  for(const auto &group:runtime::graft_groups(scene)) {
+    const auto settings=scene.meshes[scene.instances[group[0]].mesh].subdivision;
+    for(auto member:group) {auto &s=scene.meshes[scene.instances[member].mesh].subdivision;changed|=s.enabled!=settings.enabled||s.level!=settings.level||s.render_level!=settings.render_level;s.enabled=settings.enabled;s.level=settings.level;s.render_level=settings.render_level;}
   }
   return changed;
 }
@@ -102,7 +112,7 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   for(const auto &t:document.catalog.targets) targets.push_back(instances.at(t.instance));
   for(const auto &s:document.skeletons.skins) skins.push_back(instances.at(s.instance));
   const auto instance_map=retain(scene.instances,instances),skin_map=retain(document.skeletons.skins,skins);
-  for(auto &i:scene.instances) if(i.prototype>=0) i.prototype=instance_map.at(size_t(i.prototype));
+  for(auto &i:scene.instances) {if(i.prototype>=0) i.prototype=instance_map.at(size_t(i.prototype));if(i.graft_source>=0) i.graft_source=instance_map.at(size_t(i.graft_source));}
   retain(snapshot.poses,skins);retain(document.catalog.targets,targets);retain(snapshot.values,targets);retain(document.formulas.graphs,targets);
   for(auto &t:document.catalog.targets) {t.instance=uint32_t(instance_map.at(t.instance));if(refers_to(t.smoothing.collision_target,removed)) t.smoothing.collision_target.clear();}
   for(auto &s:document.skeletons.skins) s.instance=uint32_t(instance_map.at(s.instance));
@@ -166,7 +176,7 @@ void append_document(Document &destination,Document source) {
     a.materials.push_back(std::move(m));
   }
   for(auto &m:b.meshes) {m.id=prefix+m.id;a.meshes.push_back(std::move(m));}
-  for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;if(i.prototype>=0) i.prototype+=int(instances);if(!i.instance_node.empty()) i.instance_node=prefix+i.instance_node;if(!i.instance_group.empty()) i.instance_group=prefix+i.instance_group;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
+  for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;if(i.prototype>=0) i.prototype+=int(instances);if(i.graft_source>=0) i.graft_source+=int(instances);if(!i.instance_node.empty()) i.instance_node=prefix+i.instance_node;if(!i.instance_group.empty()) i.instance_group=prefix+i.instance_group;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
   for(auto l:b.lights) {l.id=prefix+l.id;a.lights.push_back(std::move(l));}
   for(auto n:source.loaded.nodes) {n.id=prefix+n.id;if(n.parent.starts_with('#')) n.parent="#"+prefix+n.parent.substr(1);destination.loaded.nodes.push_back(std::move(n));}
   for(auto o:source.loaded.objects) {if(o.rigid_follow.target.starts_with('#')) o.rigid_follow.target="#"+prefix+o.rigid_follow.target.substr(1);o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);if(o.smoothing.collision_target.starts_with('#')) o.smoothing.collision_target="#"+prefix+o.smoothing.collision_target.substr(1);destination.loaded.objects.push_back(std::move(o));}

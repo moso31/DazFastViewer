@@ -11,6 +11,7 @@ class Subdivision {
   struct Data;
   std::shared_ptr<const Data> data_;
 public:
+  Subdivision()=default;
   Subdivision(const ir::Mesh &mesh,bool final_render=false);
   std::vector<ir::Vec3> evaluate(std::span<const ir::Vec3> cage) const;
   const std::vector<ir::Triangle> &triangles() const;

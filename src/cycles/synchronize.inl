@@ -1,7 +1,6 @@
 // 在 adapter.cpp 的 dfv 命名空间内包含，复用材质和坐标转换辅助函数。
 static bool same_topology(const ir::Mesh &a,const ir::Mesh &b) {
-  return a.positions.size()==b.positions.size()&&a.triangles==b.triangles&&a.polygons==b.polygons&&a.curves==b.curves&&
-    a.subdivision==b.subdivision&&a.creases==b.creases&&a.corners==b.corners&&a.hidden_polygons==b.hidden_polygons&&a.smooth==b.smooth;
+  return runtime::same_mesh_topology(a,b);
 }
 void CyclesAdapter::load(const ir::Scene &source) {
   if(loaded_) throw std::runtime_error("同一 CyclesAdapter 只允许一次完整加载，请使用同步接口");
@@ -15,6 +14,22 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   for(const auto &mesh:source.meshes) if(!identities.insert(mesh.id).second) throw std::runtime_error("网格身份重复，无法安全增量同步："+mesh.id);
   // 所有模板及快照先准备完毕。非法等级、拓扑和主要 CPU 分配失败不会破坏现有节点。
   ir::Scene saved=source;
+  std::vector<runtime::GraftSurface> grafts;std::vector<GraftBinding> graft_bindings(source.instances.size());
+  std::vector<bool> graft_topology_changed,graft_positions_changed;
+  {
+    diagnostics::Scope scope("graft_subdivision_build");
+    for(auto members:runtime::graft_groups(source)) {
+      auto old=std::find_if(grafts_.begin(),grafts_.end(),[&](const auto &g){return g.compatible(source,source_,members);});
+      const bool rebuild=old==grafts_.end();bool changed=true;
+      if(rebuild) grafts.emplace_back(source,members,final_render_);
+      else {grafts.push_back(*old);grafts.back().rebind(members);changed=grafts.back().evaluate(source);}
+      for(size_t part=0;part<members.size();++part) graft_bindings[members[part]]={int(grafts.size()-1),part};
+      graft_topology_changed.push_back(rebuild);graft_positions_changed.push_back(changed);
+    }
+    for(size_t i=0;i<source.instances.size();++i) if(source.instances[i].prototype>=0) graft_bindings[i]=graft_bindings[size_t(source.instances[i].prototype)];
+  }
+  std::vector<bool> ordinary_mesh(source.meshes.size());
+  for(size_t i=0;i<source.instances.size();++i) if(graft_bindings[i].group<0) ordinary_mesh[source.instances[i].mesh]=true;
   std::map<std::string,size_t> old_meshes;
   for(size_t i=0;i<source_.meshes.size();++i) old_meshes.emplace(source_.meshes[i].id,i);
   std::vector<runtime::Subdivision> subdivisions;std::vector<int> previous_mesh(source.meshes.size(),-1);
@@ -25,7 +40,8 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
       if(auto old=old_meshes.find(source.meshes[i].id);old!=old_meshes.end()) {
         previous_mesh[i]=int(old->second);topology_changed[i]=!same_topology(source.meshes[i],source_.meshes[old->second]);
       }
-      if(!topology_changed[i]) subdivisions.push_back(subdivisions_.at(size_t(previous_mesh[i])));
+      if(!ordinary_mesh[i]) subdivisions.emplace_back();
+      else if(!topology_changed[i]&&subdivisions_.at(size_t(previous_mesh[i])).active()==(source.meshes[i].subdivision.enabled&&source.meshes[i].subdivision.level>0)) subdivisions.push_back(subdivisions_.at(size_t(previous_mesh[i])));
       else subdivisions.emplace_back(source.meshes[i],final_render_);
     }
   }
@@ -67,7 +83,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   std::map<std::string,std::vector<Object *>> old_objects;
   std::set<Object *> retired_objects;std::set<Geometry *> retired_geometry;
   for(size_t i=0;i<source_.instances.size();++i) {
-    const auto &instance=source_.instances[i];Key key;key.first=source_.meshes[instance.mesh].id;for(auto m:instance.materials) key.second.push_back(shaders_[m]);
+    const auto &instance=source_.instances[i];Key key;key.first=source_.meshes[instance.mesh].id;if(graft_bindings_[i].group>=0) key.first+="/graft-curves";for(auto m:instance.materials) key.second.push_back(shaders_[m]);
     old_objects[instance.id]=objects_[i];
     for(auto *object:objects_[i]) {
       auto *g=object->get_geometry();retired_objects.insert(object);retired_geometry.insert(g);
@@ -80,14 +96,14 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   stats_.meshes=stats_.curves=stats_.unique_triangles=stats_.triangles=0;
   for(const auto &instance:source.instances) {
     const auto index=instance.mesh;const auto &data=source.meshes[index];const auto &subdivision=subdivisions[index];
-    Key key;key.first=data.id;for(auto m:instance.materials) key.second.push_back(shaders[m]);
+    Key key;key.first=data.id;if(graft_bindings[size_t(&instance-source.instances.data())].group>=0) key.first+="/graft-curves";for(auto m:instance.materials) key.second.push_back(shaders[m]);
     auto [it,inserted]=new_geometry.try_emplace(key);auto &geometry=it->second;
     if(inserted) {
       const auto old=old_geometry.find(key);if(old!=old_geometry.end()) geometry=old->second;
       const bool shader_changed=std::any_of(key.second.begin(),key.second.end(),[&](auto *s){return modified_shaders.contains(s);});
       const bool positions_changed=previous_mesh[index]<0||data.positions!=source_.meshes[size_t(previous_mesh[index])].positions;
       array<Node *> used(key.second.size());for(size_t m=0;m<used.size();++m) used[m]=key.second[m];
-      if(!data.triangles.empty()) {
+      if(!data.triangles.empty()&&graft_bindings[size_t(&instance-source.instances.data())].group<0) {
         const bool rebuild=topology_changed[index]||!geometry.mesh;
         if(!geometry.mesh) geometry.mesh=scene_.create_node<Mesh>();auto *mesh=geometry.mesh;retired_geometry.erase(mesh);
         if(rebuild||positions_changed||shader_changed) {
@@ -133,6 +149,37 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     }
     if(geometry.mesh) stats_.triangles+=geometry.mesh->num_triangles();
   }
+  // 一个宿主组合使用一个 Cycles Object，使 SSS 可以跨越 GeoGraft 交界。
+  std::map<std::string,GraftRender> assemblies;
+  for(size_t i=0;i<source.instances.size();++i) if(graft_bindings[i].group>=0) {
+    const auto &binding=graft_bindings[i];const auto &surface=grafts[size_t(binding.group)];const auto &object=source.instances[i];
+    const auto placement=object.prototype<0?std::string("original"):object.instance_group.empty()?object.id:object.instance_group;
+    const auto id=source.instances[surface.members()[0]].id+"/graft/"+placement;auto [it,inserted]=assemblies.try_emplace(id);auto &render=it->second;
+    if(inserted) {render.id=id;render.group=size_t(binding.group);render.parts.assign(surface.members().size(),-1);}render.parts[binding.part]=int(i);
+  }
+  std::map<Key,Mesh *> old_graft_geometry,new_graft_geometry;
+  for(const auto &render:graft_renders_) {old_graft_geometry[{render.geometry_key,render.shaders}]=render.mesh;retired_objects.insert(render.object);retired_geometry.insert(render.mesh);}
+  std::vector<GraftRender> graft_renders;
+  for(auto &[id,render]:assemblies) {
+    const auto &surface=grafts[render.group];render.visible=graft_visibility(source,render.parts);render.geometry_key=source.instances[surface.members()[0]].id+"/graft";
+    for(size_t p=0;p<render.parts.size();++p) {render.geometry_key+=render.visible[p]?"/1":"/0";const auto i=render.parts[p]<0?surface.members()[p]:uint32_t(render.parts[p]);for(auto m:source.instances[i].materials) render.shaders.push_back(shaders[m]);}
+    Key key{render.geometry_key,render.shaders};auto [geometry,inserted]=new_graft_geometry.try_emplace(key,nullptr);
+    if(inserted) {
+      if(auto old=old_graft_geometry.find(key);old!=old_graft_geometry.end()) geometry->second=old->second;
+      const bool rebuild=graft_topology_changed[render.group]||!geometry->second;
+      if(!geometry->second) geometry->second=scene_.create_node<Mesh>();
+      const bool shader_changed=std::any_of(render.shaders.begin(),render.shaders.end(),[&](auto *s){return modified_shaders.contains(s);});
+      if(rebuild||graft_positions_changed[render.group]||shader_changed) {graft_mesh(scene_,*geometry->second,surface,source,render.parts,render.shaders,rebuild);if(rebuild) ++stats_.topology_updates;if(loaded_) ++stats_.geometry_updates;changed=true;}
+      ++stats_.meshes;stats_.unique_triangles+=geometry->second->num_triangles();
+    }
+    render.mesh=geometry->second;retired_geometry.erase(render.mesh);
+    auto old=std::find_if(graft_renders_.begin(),graft_renders_.end(),[&](const auto &r){return r.id==id;});
+    render.object=old==graft_renders_.end()?scene_.create_node<Object>():old->object;
+    if(old==graft_renders_.end()||render.object->get_geometry()!=render.mesh) {render.object->name=ustring(id);render.object->set_geometry(render.mesh);changed=true;}
+    const auto matrix=transform(graft_transform(surface,source,render.parts));const auto visible=std::any_of(render.visible.begin(),render.visible.end(),[](bool v){return v;})?PATH_RAY_VISIBILITY_ALL:0;
+    if(render.object->get_tfm()!=matrix||render.object->get_visibility()!=visible) {render.object->set_tfm(matrix);render.object->set_visibility(visible);render.object->tag_update(&scene_);if(loaded_) ++stats_.instance_updates;changed=true;}
+    retired_objects.erase(render.object);stats_.triangles+=render.mesh->num_triangles();graft_renders.push_back(std::move(render));
+  }
   for(auto *o:retired_objects) scene_.delete_node(o);
   for(auto *g:retired_geometry) scene_.delete_node(g);
   changed|=!retired_objects.empty()||!retired_geometry.empty();
@@ -152,6 +199,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   if(!loaded_||environment_!=source.environment||options_!=source.options) {environment_=source.environment;environment(source.options);changed=true;}
   const bool camera_changed=!loaded_||source_.camera.transform!=source.camera.transform||source_.camera.width!=source.camera.width||source_.camera.height!=source.camera.height||source_.camera.fov!=source.camera.fov;
   texture_map_=std::move(texture_map);shaders_=std::move(shaders);canonical_materials_=std::move(canonical);bump_distances_=std::move(bumps);subdivisions_=std::move(subdivisions);meshes_=std::move(meshes);hairs_=std::move(hairs);objects_=std::move(objects);vertex_counts_=std::move(counts);source_=std::move(saved);loaded_=true;
+  grafts_=std::move(grafts);graft_bindings_=std::move(graft_bindings);graft_renders_=std::move(graft_renders);
   stats_.instances=source.instances.size();stats_.materials=source.materials.size();stats_.textures=source.textures.size();++stats_.scene_updates;
   if(camera_changed) {ir::Delta delta;delta.camera=source.camera;apply(delta);changed=true;}
   return changed;

@@ -60,6 +60,7 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
     if(host.positions.size()!=mesh.graft_target_vertices||(mesh.graft_target_polygons&&host.source_polygon_count!=mesh.graft_target_polygons)) throw std::runtime_error("GeoGraft 目标拓扑不匹配");
     for(const auto &pair:mesh.graft_vertex_pairs) if(pair[0]>=mesh.positions.size()||pair[1]>=host.positions.size()) throw std::runtime_error("GeoGraft 顶点对越界");
     grafts_.push_back({follower,source});
+    scene.instances[follower].graft_source=int(source);
   }
   for(size_t t=0;t<targets.size();++t) if(!targets[t].rigid_follow.target.empty()) {
     const auto &follow=targets[t].rigid_follow;size_t source=0;

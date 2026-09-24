@@ -145,6 +145,8 @@ struct Instance {
   bool visible=true;
   // DAZ 实例复用最终形变网格；不为散布条目重复发现参数或蒙皮。
   int prototype=-1;
+  // GeoGraft 的直接宿主实例；与可编辑对象身份独立，供渲染侧共同细分。
+  int graft_source=-1;
   std::string instance_node;
   // 一个 DAZ Instance / 散布条目的所有渲染零件共用此键。
   std::string instance_group,instance_label;

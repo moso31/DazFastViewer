@@ -1,6 +1,7 @@
 #pragma once
 #include "render_ir/scene.h"
 #include "runtime/subdivision.h"
+#include "runtime/graft_surface.h"
 #include <cstddef>
 #include <vector>
 
@@ -17,6 +18,19 @@ class CyclesAdapter {
   std::vector<std::vector<HairBinding>> hairs_;
   std::vector<size_t> vertex_counts_;
   std::vector<runtime::Subdivision> subdivisions_;
+  struct GraftBinding {int group=-1;size_t part=0;};
+  std::vector<runtime::GraftSurface> grafts_;
+  std::vector<GraftBinding> graft_bindings_;
+  struct GraftRender {
+    std::string id,geometry_key;
+    size_t group=0;
+    std::vector<int> parts;
+    std::vector<ccl::Shader *> shaders;
+    std::vector<bool> visible;
+    ccl::Mesh *mesh=nullptr;
+    ccl::Object *object=nullptr;
+  };
+  std::vector<GraftRender> graft_renders_;
   bool final_render_=false;
   std::vector<std::vector<ccl::Object *>> objects_;
   std::vector<ccl::Object *> light_objects_;

@@ -588,7 +588,7 @@ class Editor final:public QMainWindow {
   void set_subdivision(size_t target,int value) {
     if(loading_||!document_||subdivision_level(*document_,snapshot_,target)==value) return;
     const auto begin=now();
-    const auto &mesh=document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(document_->catalog.targets.at(target).instance).mesh);
+    const auto &mesh=subdivision_mesh(*document_,target);
     try {runtime::validate_subdivision_budget(mesh,value);} catch(const std::exception &e) {load_error_=text(e.what());statusBar()->showMessage(load_error_);return;}
     snapshot_.subdivision_levels[mesh.id]=value;load_error_.clear();send();
     if(!rebuild_test_file_.empty()) renderer_->trace("subdivision_ui_submit",(now()-begin)*1000);

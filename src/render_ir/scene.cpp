@@ -81,6 +81,7 @@ void Scene::validate() const {
     }
   }
   for(const auto &i:instances) {
+    require(i.graft_source>=-1&&(i.graft_source<0||(size_t(i.graft_source)<instances.size()&& &instances[size_t(i.graft_source)]!=&i)),"IR: GeoGraft 宿主引用无效");
     require(i.prototype>=-1&&(i.prototype<0||(size_t(i.prototype)<instances.size()&&instances[size_t(i.prototype)].prototype<0)),"IR: 实例原型引用无效");
     require(i.mesh<meshes.size(),"IR: 实例网格索引越界");
     require(i.materials.size()==meshes[i.mesh].material_slots.size(),"IR: 实例材质槽数量不匹配");

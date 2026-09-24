@@ -184,6 +184,7 @@ bool selection_reference(const std::string &uri) {
 void apply_graft_masks(LoadedScene &loaded,bool defer_selection) {
   auto &scene=loaded.scene;
   for(auto &mesh:scene.meshes) mesh.hidden_polygons.clear();
+  for(auto &instance:scene.instances) instance.graft_source=-1;
   std::map<uint32_t,std::set<uint32_t>> masks;
   for(const auto &object:loaded.objects) {
     const auto &graft=scene.meshes.at(scene.instances.at(object.instance).mesh);
@@ -197,6 +198,7 @@ void apply_graft_masks(LoadedScene &loaded,bool defer_selection) {
       }
     }
     if(!host) fail("GeoGraft 目标拓扑不匹配："+object.id);
+    if(!graft.graft_vertex_pairs.empty()) scene.instances.at(object.instance).graft_source=int(host->instance);
     const auto count=scene.meshes.at(scene.instances.at(host->instance).mesh).source_polygon_count;
     for(auto polygon:graft.graft_hidden_polygons) {if(polygon>=count) fail("GeoGraft 遮盖面越界："+object.id);masks[host->instance].insert(polygon);}
   }

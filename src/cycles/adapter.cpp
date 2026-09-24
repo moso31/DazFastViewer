@@ -243,6 +243,7 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
   background_light_->set_use_mis(mode!=3);background_light_->set_map_resolution(0);background_light_->tag_update(&scene_);
   for(size_t i=0;i<lights_.size();++i) {lights_[i]->set_strength(ir::scene_lights(options)?vector(light_power_[i]):zero_float3());lights_[i]->tag_update(&scene_);}
 }
+#include "cycles/graft_geometry.inl"
 #include "cycles/synchronize.inl"
 void CyclesAdapter::apply(const ir::Delta &delta) {
   if(!loaded_) throw std::runtime_error("CyclesAdapter 尚未加载场景");
@@ -267,6 +268,16 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     for(auto *object:objects_[edit.index]) if(object->get_geometry()->transform_applied) throw std::runtime_error("对象变换已烘焙，不能直接动态修改");
   }
   for(const auto &edit:delta.visibility) if(edit.index>=objects_.size()) throw std::runtime_error("可见性实例索引越界");
+  if(!delta.visibility.empty()&&!graft_renders_.empty()) {
+    // 保留旧快照用于比较；显隐与 Morph 同时提交时不能漏掉其他组合的几何更新。
+    auto next=source_;if(delta.options) next.options=*delta.options;if(delta.camera) next.camera=*delta.camera;
+    for(const auto &e:delta.meshes) next.meshes[e.index].positions=e.positions;
+    for(const auto &e:delta.instances) next.instances[e.index].transform=e.transform;
+    for(const auto &e:delta.materials) next.materials[e.index]=e.value;
+    for(const auto &e:delta.lights) next.lights[e.index]=e.value;
+    for(const auto &e:delta.visibility) next.instances[e.index].visible=e.visible;
+    synchronize(next);return;
+  }
   if(delta.options) {environment(*delta.options);source_.options=*delta.options;}
   if(delta.camera) {
     const auto &c=*delta.camera;auto &camera=*scene_.camera;
@@ -320,5 +331,24 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     for(auto *object:objects_[edit.index]) {object->set_tfm(transform(edit.transform));object->tag_update(&scene_);}source_.instances[edit.index].transform=edit.transform;++stats_.instance_updates;
   }
   for(const auto &edit:delta.visibility) {for(auto *object:objects_[edit.index]) {object->set_visibility(edit.visible?ccl::PATH_RAY_VISIBILITY_ALL:0);object->tag_update(&scene_);}source_.instances[edit.index].visible=edit.visible;}
+  // 所有对象 Delta 已进入控制网格，再更新共同曲面。显隐只重建所属组合的面列表。
+  std::vector<bool> changed(grafts_.size());
+  for(size_t group=0;group<grafts_.size();++group) {
+    auto &surface=grafts_[group];bool dirty=false;
+    for(auto member:surface.members()) {
+      for(const auto &e:delta.meshes) dirty|=e.index==source_.instances[member].mesh;
+      for(const auto &e:delta.instances) dirty|=e.index==member;
+    }
+    changed[group]=dirty&&surface.evaluate(source_);
+  }
+  std::set<ccl::Mesh *> updated;
+  for(auto &render:graft_renders_) {
+    bool material_changed=false;for(const auto &e:delta.materials) material_changed|=std::find(render.shaders.begin(),render.shaders.end(),shaders_[e.index])!=render.shaders.end();
+    if((changed[render.group]||material_changed)&&updated.insert(render.mesh).second) {
+      if(render.mesh->transform_applied) throw std::runtime_error("GeoGraft 动态更新要求未烘焙网格");
+      graft_mesh(scene_,*render.mesh,grafts_[render.group],source_,render.parts,render.shaders,false);++stats_.geometry_updates;
+    }
+    if(!delta.instances.empty()) {const auto matrix=transform(graft_transform(grafts_[render.group],source_,render.parts));if(render.object->get_tfm()!=matrix) {render.object->set_tfm(matrix);render.object->tag_update(&scene_);}}
+  }
 }
 }
