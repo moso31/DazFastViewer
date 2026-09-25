@@ -2,6 +2,21 @@
 #include <set>
 
 namespace dfv {
+void HoverOverlay::draw_gizmo(const editor::GizmoShape &shape,int width,int height,int active,float dpi) {
+  if(shape.lines.empty()) return;
+  glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_DEPTH_TEST);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+  glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadIdentity();glOrtho(0,width,height,0,-1,1);glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadIdentity();
+  const float colors[][3]={{1,.3f,.28f},{.38f,.9f,.38f},{.3f,.6f,1},{.88f,.9f,.94f}};
+  for(const auto &plane:shape.planes) {const auto *c=colors[plane.handle-4];if(plane.handle==active) glColor4f(1,.86f,.2f,.55f);else glColor4f(c[0],c[1],c[2],.3f);glBegin(GL_QUADS);for(auto p:plane.corners) glVertex2f(p.x,p.y);glEnd();}
+  for(int pass=0;pass<2;++pass) {glLineWidth((pass?2.5f:5.5f)*dpi);glBegin(GL_LINES);for(const auto &line:shape.lines) {const auto *c=colors[line.handle>=4?line.handle-4:std::clamp(line.handle,0,3)];if(!pass) glColor4f(.03f,.04f,.06f,.9f);else if(line.handle==active) glColor4f(1,.86f,.2f,1);else glColor4f(c[0],c[1],c[2],1);glVertex2f(line.a.x,line.a.y);glVertex2f(line.b.x,line.b.y);}glEnd();}
+  if(shape.rotation_center) {
+    // 在旋转环之上绘制屏幕等大的轴心菱形；不占用任何手柄编号或命中区域。
+    for(int pass=0;pass<2;++pass) {const float r=(pass?3.5f:5.5f)*dpi;const auto p=shape.center;
+      if(pass) glColor4f(.95f,.96f,1,1);else glColor4f(.03f,.04f,.06f,1);
+      glBegin(GL_QUADS);glVertex2f(p.x,p.y-r);glVertex2f(p.x+r,p.y);glVertex2f(p.x,p.y+r);glVertex2f(p.x-r,p.y);glEnd();}
+  }
+  glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
+}
 void HoverOverlay::draw_pose(const CameraState &camera,int width,int height,const ir::Mesh &proxy,const ir::Transform &world,
   const std::vector<std::pair<ir::Vec3,ir::Vec3>> &bones,ir::Vec3 goal) {
   glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_CULL_FACE);glDisable(GL_BLEND);

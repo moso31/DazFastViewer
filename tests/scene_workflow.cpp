@@ -117,11 +117,12 @@ static void lifecycle() {
   document.loaded.objects[1].conform_target=document.catalog.targets[1].conform_target="#a";
   document.loaded.objects[2].parent=document.catalog.targets[2].parent="#head";
   for(auto i:{0u,3u}) {runtime::Skin skin;skin.id=std::string(1,char('a'+i));skin.instance=i;runtime::Joint root;root.id="root";skin.joints={root};skin.initial.resize(1);skin.weights={{{0,1}},{{0,1}},{{0,1}}};document.formulas.graphs[i].skin=int(document.skeletons.skins.size());document.skeletons.skins.push_back(skin);}
-  auto snapshot=editor::initial_snapshot(document);snapshot.values[3].transform.translation_cm.x=123;snapshot.poses[1][0].rotation_degrees.z=17;
+  auto snapshot=editor::initial_snapshot(document);require(snapshot.values[0].ground_alignment_ratio==0&&snapshot.values[3].ground_alignment_ratio==0,"角色地面对齐比例默认值错误");snapshot.values[0].ground_alignment_ratio=.01;snapshot.values[3].ground_alignment_ratio=-.02;snapshot.values[3].transform.translation_cm.x=123;snapshot.poses[1][0].rotation_degrees.z=17;
   auto clothes_only=document;auto clothes_snapshot=snapshot;require(editor::remove_target(clothes_only,clothes_snapshot,1)==1&&clothes_only.catalog.targets.size()==3,"删除衣物连带删除人物");
   require(editor::remove_target(document,snapshot,0)==3,"删除人物没有清理 Fit To 或骨骼附件");
   require(document.catalog.targets.size()==1&&document.catalog.targets[0].id=="d/mesh"&&document.catalog.targets[0].instance==0,"删除误伤无关模型或未重映射实例");
   require(document.formulas.graphs[0].skin==0&&document.skeletons.skins[0].instance==0&&snapshot.values[0].transform.translation_cm.x==123&&snapshot.poses[0][0].rotation_degrees.z==17,"删除丢失其他角色的公式 / 姿势 / 变换");
+  require(snapshot.values[0].ground_alignment_ratio==-.02,"删除角色后地面对齐比例串到其他实例");
   require(scene.meshes.size()==1&&scene.materials.size()==1&&scene.textures.size()==1&&scene.textures[0].id=="b"&&scene.materials[0].color_texture==0,"删除后仍持有孤立资源");
   auto rendered=scene;runtime::DeformationRuntime runtime(rendered,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);runtime.evaluate(snapshot.values,snapshot.poses);
   auto source=document;source.generation=0;

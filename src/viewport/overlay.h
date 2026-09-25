@@ -2,6 +2,7 @@
 #include "render_ir/scene.h"
 #include "bench/camera.h"
 #include "runtime/picking.h"
+#include "editor/gizmo.h"
 #include <epoxy/gl.h>
 #include <map>
 
@@ -15,6 +16,7 @@ class HoverOverlay {
   std::vector<bool> visible_;
   void rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i);
 public:
+  void draw_gizmo(const editor::GizmoShape &shape,int width,int height,int active=-1,float dpi=1);
   void update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions);
   void apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta);
   void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1,const std::vector<uint32_t> *members=nullptr);

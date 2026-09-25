@@ -2,6 +2,7 @@
 #include "editor/document.h"
 #include "editor/selection.h"
 #include "runtime/powerpose.h"
+#include "editor/gizmo.h"
 #include "cycles/adapter.h"
 #include "viewport/window.h"
 #include "bench/telemetry.h"
@@ -18,6 +19,10 @@ struct SamplingSettings {
   bool rebuild_probe=false;
 };
 struct RenderStatus {
+  bool pose_gizmo=false,gizmo_available=false;
+  int pose_light=-1;
+  GizmoShape gizmo_shape;
+  ir::Transform gizmo_light_transform;
   uint64_t pose_commit=0,pose_revision=0,pose_generation=0,pose_previews=0;
   int pose_skin=-1,pose_joint=-1;
   bool pose_dragging=false,pose_restoring=false;
@@ -43,7 +48,7 @@ struct RenderStatus {
   std::vector<ir::Bounds> bounds;
   std::vector<ir::Bounds> head_bounds;
   std::vector<bool> visible;
-  uint64_t clicks=0,focus_requests=0;
+  uint64_t clicks=0,focus_requests=0,ground_requests=0;
   ir::Bounds selection_bounds;
   int hit_target=-1,hit_joint=-1,hovered=-1,hovered_joint=-1,width=0,height=0;
   size_t hovered_triangles=0;
@@ -84,6 +89,7 @@ class Renderer {
   bool edit_active_=false;
   std::vector<runtime::PosePin> pose_pins_;
   runtime::PowerPoseInput powerpose_input_;
+  GizmoSettings gizmo_settings_;
   uint64_t interaction_revision_=0;
   double edit_preview_until_=0,resize_preview_until_=0;
   int selected_target_=-1,selected_joint_=-1;
@@ -102,6 +108,7 @@ public:
   void edit(const Snapshot &snapshot);
   void interaction(bool active);
   void powerpose(runtime::PowerPoseInput input) {std::lock_guard lock(mutex_);powerpose_input_=std::move(input);}
+  void gizmo(GizmoSettings settings) {std::lock_guard lock(mutex_);gizmo_settings_=settings;++window_->pose_selection;}
   void pose_pins(std::vector<runtime::PosePin> pins) {std::lock_guard lock(mutex_);pose_pins_=std::move(pins);++window_->pose_selection;}
   void retry_resources();
   RenderStatus status();

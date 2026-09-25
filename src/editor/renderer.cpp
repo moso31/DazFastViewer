@@ -79,8 +79,9 @@ void Renderer::run(std::stop_token stop) {
   RenderStatus state;
   PoseDrag pose_drag;uint64_t pose_serial=0,pose_commits=0,pose_previews=0;bool pose_paused=false;
   PowerPoseDrag powerpose_drag;uint64_t powerpose_serial=0,powerpose_selection=0;
+  GizmoDrag gizmo_drag;uint64_t gizmo_serial=0,gizmo_consumed=0,gizmo_selection=UINT64_MAX,gizmo_revision=UINT64_MAX;int gizmo_light=-1;bool gizmo_valid=false;
   std::vector<std::vector<ir::Vec3>> powerpose_reference;
-  struct {bool active=false,powerpose=false;uint64_t generation=0,revision=0;} pose_recovery;
+  struct {bool active=false,powerpose=false;uint64_t generation=0,revision=0;bool gizmo=false;} pose_recovery;
   uint64_t sessions=0;
   bool blank_presented=false;
   auto timing=[&](const char *name,double begin,uint64_t revision=0) {Frame f;f.epoch=state.requested_epoch;f.id=revision;telemetry_.event(name,f,(now()-begin)*1000);};
@@ -115,8 +116,9 @@ void Renderer::run(std::stop_token stop) {
       bool editing,ik_allowed;double preview_until,resize_until;
       std::vector<runtime::PosePin> pose_pins;
       runtime::PowerPoseInput powerpose;
+      GizmoSettings gizmo_settings;
       {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
-      {std::lock_guard lock(mutex_);powerpose=powerpose_input_;}
+      {std::lock_guard lock(mutex_);powerpose=powerpose_input_;gizmo_settings=gizmo_settings_;}
       const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
         window_->width=width;window_->height=height;
@@ -181,6 +183,64 @@ void Renderer::run(std::stop_token stop) {
       if(pose_recovery.active&&pose_recovery.generation!=current->generation) pose_recovery.active=false;
       const auto pointer=window_->pose_pointer();
       const auto input_camera=window_->mailbox.latest();
+      const float gizmo_dpi=GetDpiForWindow(window_->hwnd)/96.f;
+      if(gizmo_consumed&&pointer.serial==gizmo_consumed) clicks=window_->clicks.load();
+      if(gizmo_drag.active&&(current!=document||gizmo_drag.generation!=current->generation||gizmo_drag.revision!=desired.revision||pointer.cancelled||
+        pointer.selection!=window_->pose_selection||pointer.serial!=gizmo_drag.press.serial||input_camera.epoch!=gizmo_drag.camera.epoch||
+        width!=gizmo_drag.width||height!=gizmo_drag.height||gizmo_settings!=gizmo_drag.settings||powerpose.held)) {
+        gizmo_drag.active=false;gizmo_valid=false;state.pose_dragging=false;gizmo_revision=UINT64_MAX;
+      }
+      if(!gizmo_drag.active&&!pose_recovery.active&&(gizmo_selection!=window_->pose_selection||gizmo_revision!=applied_revision||gizmo_drag.generation!=current->generation)) {
+        gizmo_selection=window_->pose_selection;gizmo_revision=applied_revision;gizmo_valid=false;gizmo_light=-1;
+        if(gizmo_settings.tool!=GizmoTool::select&&current==document&&desired.revision==applied_revision&&selection_generation==current->generation&&selections.size()==1) {
+          if(selected_target>=0&&size_t(selected_target)<current->catalog.targets.size()) {
+            const auto &target=current->catalog.targets[selected_target];const auto &instance=render_scene.instances[target.instance];
+            if(instance.visible) {
+              gizmo_drag.object(target,desired.values[selected_target].transform,current->loaded.scene.instances[target.instance].transform,instance.transform);gizmo_valid=selected_joint<0;
+              if(selected_joint>=0) for(size_t s=0;s<current->skeletons.skins.size();++s) {const auto &skin=current->skeletons.skins[s];if(skin.instance==target.instance&&size_t(selected_joint)<skin.joints.size()) {gizmo_drag.bone(skin,selected_joint,desired.poses[s],runtime->effective_poses()[s],instance.transform);gizmo_drag.skin=int(s);gizmo_valid=true;break;}}
+              gizmo_drag.target=selected_target;
+            }
+          } else if(selections.front()[2]>=0&&size_t(selections.front()[2])<desired.lights.size()) {
+            gizmo_light=selections.front()[2];runtime::Target frame;const auto &matrix=desired.lights[gizmo_light].transform;
+            frame.has_edit_frame=true;frame.edit_frame=matrix;gizmo_drag.object(frame,{},matrix,matrix);gizmo_drag.target=-1;gizmo_valid=true;
+          }
+        }
+        gizmo_drag.generation=current->generation;gizmo_drag.revision=applied_revision;
+      }
+      state.gizmo_available=gizmo_valid&&gizmo_settings.tool!=GizmoTool::select;
+      if(gizmo_valid&&!gizmo_drag.active&&!pose_recovery.active) gizmo_drag.layout(input_camera,window_->width,window_->height,gizmo_settings,gizmo_dpi);
+      if(pointer.serial!=gizmo_serial) {
+        gizmo_serial=pointer.serial;
+        if(gizmo_valid&&gizmo_settings.tool!=GizmoTool::select&&!pose_drag.active&&!powerpose_drag.active&&!pose_recovery.active&&
+          pointer.held&&!pointer.cancelled&&pointer.selection==window_->pose_selection&&current==document&&desired.revision==applied_revision&&!input_camera.navigating) {
+          ir::Mesh light_proxy;const ir::Mesh *mesh=&light_proxy;const std::vector<ir::Vec3> *source=nullptr;
+          if(gizmo_drag.target>=0) {const auto &instance=render_scene.instances[current->catalog.targets[gizmo_drag.target].instance];mesh=&render_scene.meshes[instance.mesh];if(gizmo_drag.joint>=0) source=&runtime->skin_source(gizmo_drag.skin);}
+          if(gizmo_drag.begin(pointer,input_camera,window_->width,window_->height,gizmo_settings,gizmo_dpi,*mesh,source)) gizmo_consumed=pointer.serial;
+        }
+      }
+      if(gizmo_drag.active) {
+        const auto begin=now();const bool updated=gizmo_drag.update(pointer);state.pose_gizmo=true;state.pose_powerpose=false;
+        if(updated) {state.pose_solve_ms=(now()-begin)*1000;state.pose_previews=++pose_previews;telemetry_.event("gizmo_proxy_update",{},state.pose_solve_ms);}
+        if(!pointer.held) {
+          if(gizmo_drag.moved&&gizmo_drag.changed()&&!pointer.cancelled) {
+            state.pose_commit=++pose_commits;state.pose_generation=gizmo_drag.generation;state.pose_revision=gizmo_drag.revision;state.pose_skin=gizmo_drag.skin;
+            state.pose_joint=gizmo_drag.joint;state.pose_target=gizmo_drag.target;state.pose_light=gizmo_light;state.pose_figure=gizmo_drag.joint<0;
+            state.pose_transform=gizmo_drag.transform;state.pose_input=gizmo_drag.poses;state.pose_error=state.pose_angle_error=0;
+            if(gizmo_light>=0) state.gizmo_light_transform=gizmo_drag.world;
+            pose_recovery={true,false,gizmo_drag.generation,gizmo_drag.revision,true};telemetry_.event("gizmo_commit");
+          }
+          gizmo_drag.active=false;state.pose_dragging=false;gizmo_revision=UINT64_MAX;
+        } else if(gizmo_drag.moved) {
+          if(!pose_paused) {session->set_pause(true);pose_paused=true;}
+          window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
+          overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot());
+          const auto shape=gizmo_shape(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.pivot(),gizmo_drag.orientation(),gizmo_settings,gizmo_dpi,gizmo_drag.enabled);
+          overlay.draw_gizmo(shape,window_->width,window_->height,gizmo_drag.handle,gizmo_dpi);state.gizmo_shape=shape;
+          SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;
+          if(updated) {state.pose_latency_ms=(now()-pointer.input_seconds)*1000;telemetry_.event("gizmo_proxy_present",{},state.pose_latency_ms);}
+          {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
+        }
+      }
       if(powerpose_drag.active&&(powerpose_drag.press.generation!=current->generation||powerpose_drag.press.revision!=desired.revision||
         powerpose.cancelled||powerpose.serial!=powerpose_drag.press.serial||powerpose_selection!=window_->pose_selection||
         input_camera.epoch!=powerpose_drag.camera.epoch||window_->width!=powerpose_drag.width||window_->height!=powerpose_drag.height)) {
@@ -188,7 +248,7 @@ void Renderer::run(std::stop_token stop) {
       }
       if(powerpose.serial!=powerpose_serial&&(powerpose.moved||powerpose.cancelled)) {
         powerpose_serial=powerpose.serial;
-        if(!pose_drag.active&&!powerpose.cancelled&&current==document&&powerpose.generation==current->generation&&
+        if(!gizmo_drag.active&&!pose_drag.active&&!powerpose.cancelled&&current==document&&powerpose.generation==current->generation&&
           powerpose.revision==desired.revision&&desired.revision==applied_revision&&powerpose.skin>=0&&powerpose.target>=0&&
           size_t(powerpose.skin)<current->skeletons.skins.size()&&size_t(powerpose.target)<current->catalog.targets.size()&&
           selection_generation==current->generation&&selected_target==powerpose.target&&!selections.empty()&&
@@ -204,13 +264,14 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       if(powerpose_drag.active) {
+        state.pose_gizmo=false;
         const auto &skin=current->skeletons.skins[powerpose.skin];const auto begin=now();const bool updated=powerpose_drag.update(skin,powerpose);
         if(updated) {state.pose_solve_ms=(now()-begin)*1000;state.pose_error=powerpose_drag.result.error;state.pose_angle_error=powerpose_drag.result.angle_error_degrees;state.pose_previews=++pose_previews;telemetry_.event("powerpose_proxy_update",{},state.pose_solve_ms);}
         if(!powerpose.held) {
           if(powerpose_drag.moved&&powerpose_drag.changed()&&!powerpose.cancelled) {
             auto poses=desired.poses;state.pose_input=powerpose_drag.commit(skin,[&](const auto &input){poses[powerpose.skin]=input;return runtime->resolve_poses(desired.values,poses)[powerpose.skin];});
             state.pose_commit=++pose_commits;state.pose_generation=powerpose.generation;state.pose_revision=powerpose.revision;state.pose_skin=powerpose.skin;state.pose_joint=powerpose_drag.bound.joints.empty()?-1:powerpose_drag.bound.joints.front();
-            state.pose_powerpose=true;state.pose_figure=powerpose_drag.bound.figure;state.pose_target=powerpose.target;state.pose_transform=powerpose_drag.transform;
+            state.pose_gizmo=false;state.pose_powerpose=true;state.pose_figure=powerpose_drag.bound.figure;state.pose_target=powerpose.target;state.pose_transform=powerpose_drag.transform;
             state.pose_error=powerpose_drag.result.error;state.pose_angle_error=powerpose_drag.result.angle_error_degrees;
             pose_recovery={true,true,powerpose.generation,powerpose.revision};telemetry_.event("powerpose_commit");
           }
@@ -231,7 +292,7 @@ void Renderer::run(std::stop_token stop) {
       if(pointer.serial!=pose_serial) {
         pose_serial=pointer.serial;
         // 只使用按下时已经存在的单选身份；首次选中、Ctrl 多选和过期场景不能启动 IK。
-        if(!powerpose_drag.active&&ik_allowed&&pointer.held&&!pointer.cancelled&&!geometry_dirty&&current==document&&desired.revision==applied_revision&&
+        if(!gizmo_drag.active&&gizmo_consumed!=pointer.serial&&!powerpose_drag.active&&!pose_recovery.active&&ik_allowed&&pointer.held&&!pointer.cancelled&&!geometry_dirty&&current==document&&desired.revision==applied_revision&&
            selection_generation==current->generation&&pointer.selection==window_->pose_selection&&telemetry_.displayed_epoch.load()>=epoch&&!preview&&selections.size()==1) {
           const auto hit=picking.screen(input_camera,pointer.start_x,pointer.start_y,window_->width,window_->height);
           int hit_target=-1;for(size_t t=0;t<current->catalog.targets.size();++t) if(int(current->catalog.targets[t].instance)==hit.instance) hit_target=int(t);
@@ -249,6 +310,7 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       if(pose_drag.active) {
+        state.pose_gizmo=false;
         const auto begin=now();const bool updated=pose_drag.update(pointer);
         if(updated) {state.pose_solve_ms=(now()-begin)*1000;state.pose_error=pose_drag.result.error;state.pose_angle_error=pose_drag.result.angle_error_degrees;state.pose_previews=++pose_previews;telemetry_.event("ik_proxy_update",{},state.pose_solve_ms);}
         if(!pointer.held) {
@@ -257,7 +319,7 @@ void Renderer::run(std::stop_token stop) {
             state.pose_input=pose_drag.commit(current->skeletons.skins.at(pose_drag.skin),[&](const auto &input){pose_inputs.at(pose_drag.skin)=input;return runtime->resolve_poses(desired.values,pose_inputs).at(pose_drag.skin);});
             timing("ik_constraint_finalize",finalize_begin,pose_drag.revision);state.pose_error=pose_drag.result.error;state.pose_angle_error=pose_drag.result.angle_error_degrees;
             state.pose_commit=++pose_commits;state.pose_generation=pose_drag.generation;state.pose_revision=pose_drag.revision;state.pose_skin=pose_drag.skin;state.pose_joint=pose_drag.joint;
-            state.pose_powerpose=false;state.pose_figure=false;
+            state.pose_gizmo=false;state.pose_powerpose=false;state.pose_figure=false;
             clicks=window_->clicks.load();telemetry_.event("ik_commit");
             pose_recovery={true,false,pose_drag.generation,pose_drag.revision};
           }
@@ -369,7 +431,10 @@ void Renderer::run(std::stop_token stop) {
       state.pose_restoring=pose_recovery.active;
       // 松手后的等待使用本次手势的白模和输入版本，不能借用另一种工具的旧状态。
       if(pose_recovery.active) {
-        if(pose_recovery.powerpose) {
+        if(pose_recovery.gizmo) {
+          overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot());
+          overlay.draw_gizmo(gizmo_shape(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.pivot(),gizmo_drag.orientation(),gizmo_drag.settings,gizmo_dpi,gizmo_drag.enabled),window_->width,window_->height,gizmo_drag.handle,gizmo_dpi);
+        } else if(pose_recovery.powerpose) {
           const auto goal=powerpose_drag.bones.empty()?powerpose_drag.world.point({}):powerpose_drag.bones.front().second;
           overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal);
         } else overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position));
@@ -385,6 +450,7 @@ void Renderer::run(std::stop_token stop) {
       const int instance_key=state.selected_target>=0&&size_t(state.selected_target)<current->catalog.targets.size()?int(current->catalog.targets[size_t(state.selected_target)].instance):state.selected_target<=-5?-5-state.selected_target:-1;
       const int selected_instance=instance_key>=0&&size_t(instance_key)<render_scene.instances.size()?instance_key:-1;
       state.focus_requests=window_->focus_requests;
+      state.ground_requests=window_->ground_requests;
       if(bounds_dirty||selection_dirty) {state.selection_bounds={};
       for(const auto &selection:state.selections) {
         if(selection[2]>=0&&size_t(selection[2])<render_scene.lights.size()) {
@@ -431,6 +497,10 @@ void Renderer::run(std::stop_token stop) {
       if(members) {state.hovered_triangles=0;for(auto i:*members) state.hovered_triangles+=overlay.triangle_count(int(i));}
       const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;
       if(presented&&!preview&&!pose_recovery.active) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members);
+      state.gizmo_shape={};
+      if(gizmo_valid&&!pose_recovery.active&&!pose_drag.active&&!powerpose_drag.active&&gizmo_revision==applied_revision&&desired.revision==applied_revision) {
+        state.gizmo_shape=gizmo_drag.shape;overlay.draw_gizmo(gizmo_drag.shape,window_->width,window_->height,gizmo_drag.shape.hit(float(window_->pointer_x),float(window_->pointer_y),8*gizmo_dpi),gizmo_dpi);
+      }
       if(presented&&!pose_drag.active&&window_->clicks.load()!=clicks) {
         clicks=window_->clicks.load();const auto hit=picking.screen(camera,window_->click_x,window_->click_y,window_->width,window_->height);
         state.clicks=clicks;state.hit_target=-1;state.hit_joint=-1;state.hit_toggle=window_->click_toggle;

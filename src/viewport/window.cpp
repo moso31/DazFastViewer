@@ -122,6 +122,9 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     case WM_MOUSELEAVE:if(!self->automated_pointer) {self->back_click_=false;self->pointer_x=-1;self->pointer_y=-1;}return 0;
     case WM_CLOSE:self->close=true;return 0;
     case WM_KEYDOWN:
+      if(w=='D'&&self->pointer_toggle&&!(GetKeyState(VK_SHIFT)&0x8000)&&!(GetKeyState(VK_MENU)&0x8000)) {
+        self->cancel_pose();self->keys_[3]=false;self->update_navigation();if(!(l&(1LL<<30))) ++self->ground_requests;return 0;
+      }
       if(w==VK_ESCAPE) self->cancel_pose();
       if(w==VK_CONTROL||w==VK_SHIFT||w==VK_MENU) self->cancel_pose();
       self->back_click_=false;

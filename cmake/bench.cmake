@@ -21,6 +21,7 @@ target_link_libraries(dfv_content PUBLIC Qt6::Widgets)
 target_compile_options(dfv_content PRIVATE /utf-8)
 target_compile_definitions(dfv_content PRIVATE QT_NO_KEYWORDS NOMINMAX)
 qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
+  "${DFV_ROOT}/src/editor/chrome.cpp"
   "${DFV_ROOT}/src/editor/powerpose_panel.cpp"
   "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/parameters.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
@@ -46,6 +47,12 @@ target_link_libraries(PowerPosePanelTest PRIVATE dfv_scene Qt6::Widgets Qt6::Tes
 target_compile_options(PowerPosePanelTest PRIVATE /utf-8)
 target_compile_definitions(PowerPosePanelTest PRIVATE NOMINMAX QT_NO_KEYWORDS)
 add_test(NAME powerpose_panel COMMAND PowerPosePanelTest)
+add_executable(EditorChromeTest "${DFV_ROOT}/tests/editor_chrome.cpp" "${DFV_ROOT}/src/editor/chrome.cpp")
+target_link_libraries(EditorChromeTest PRIVATE dfv_scene Qt6::Widgets Qt6::Test dwmapi)
+target_compile_options(EditorChromeTest PRIVATE /utf-8)
+target_compile_definitions(EditorChromeTest PRIVATE NOMINMAX QT_NO_KEYWORDS)
+add_test(NAME editor_chrome COMMAND EditorChromeTest)
+set_tests_properties(editor_chrome PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 set_tests_properties(powerpose_panel PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 set_tests_properties(parameter_controls PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 add_executable(ContentBrowserTest "${DFV_ROOT}/tests/content_browser.cpp")
