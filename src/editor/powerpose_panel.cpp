@@ -13,6 +13,14 @@
 namespace dfv::editor {
 namespace {
 QString text(const std::string &s) {return QString::fromUtf8(s);}
+class SingleLineLabel final:public QLabel {
+public:
+  explicit SingleLineLabel(const QString &value):QLabel(value) {setFixedHeight(fontMetrics().height()+2);setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}
+  void paintEvent(QPaintEvent *) override {
+    QPainter p(this);p.setPen(palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::WindowText));
+    p.drawText(contentsRect(),Qt::AlignLeft|Qt::AlignVCenter,fontMetrics().elidedText(text(),Qt::ElideRight,contentsRect().width()));
+  }
+};
 }
 class PowerPoseCanvas final:public QWidget {
   PowerPosePanel &panel_;
@@ -43,14 +51,15 @@ public:
   void contextMenuEvent(QContextMenuEvent *e) override {e->accept();}
 };
 PowerPosePanel::PowerPosePanel(QWidget *parent):QWidget(parent) {
-  setObjectName("powerpose.panel");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(6,6,6,6);layout->setSpacing(4);
-  source_=new QLabel(QStringLiteral("请选择一个 Genesis 8 / 8.1 角色"));source_->setWordWrap(true);source_->setFixedHeight(36);layout->addWidget(source_);
+  setObjectName("powerpose.panel");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(6,6,6,6);layout->setSpacing(3);
+  source_=new SingleLineLabel(QStringLiteral("请选择一个 Genesis 8 / 8.1 角色"));layout->addWidget(source_);
   auto *form=new QGridLayout;sets_=new QComboBox;sets_->setObjectName("powerpose.set");sets_->addItem(QStringLiteral("Base"));sets_->setEnabled(false);
+  sets_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);sets_->setMinimumContentsLength(5);sets_->setMinimumWidth(60);sets_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
   pages_=new QComboBox;pages_->setObjectName("powerpose.template");pages_->addItems({"Body","Hands","Head"});
-  form->addWidget(new QLabel("Template Set"),0,0);form->addWidget(sets_,0,1);form->addWidget(new QLabel("Template"),1,0);form->addWidget(pages_,1,1);layout->addLayout(form);
-  canvas_=new PowerPoseCanvas(*this);layout->addWidget(canvas_,1);details_=new QLabel(QStringLiteral("选择控制点查看操作；Shift 按下后拖动可精调。"));details_->setWordWrap(true);details_->setFixedHeight(38);layout->addWidget(details_);
-  auto *controls=new QGridLayout;const QString names[]={QStringLiteral("左键 ↔"),QStringLiteral("左键 ↕"),QStringLiteral("右键 ↔"),QStringLiteral("右键 ↕")};
-  for(int i=0;i<4;++i) {controls_[i]=new QLabel(names[i]+QStringLiteral("：—"));controls_[i]->setWordWrap(true);controls_[i]->setMinimumWidth(110);controls_[i]->setFixedHeight(36);controls->addWidget(controls_[i],i%2,i/2);}layout->addLayout(controls);
+  form->setHorizontalSpacing(5);form->addWidget(new QLabel("Template Set"),0,0);form->addWidget(sets_,0,1);form->addWidget(new QLabel("Template"),0,2);form->addWidget(pages_,0,3);form->setColumnStretch(1,1);layout->addLayout(form);
+  canvas_=new PowerPoseCanvas(*this);layout->addWidget(canvas_,1);details_=new SingleLineLabel(QStringLiteral("选择控制点查看操作；Shift 拖动精调。"));layout->addWidget(details_);
+  auto *controls=new QGridLayout;controls->setVerticalSpacing(2);controls->setColumnStretch(0,1);controls->setColumnStretch(1,1);const QString names[]={QStringLiteral("左键 ↔"),QStringLiteral("左键 ↕"),QStringLiteral("右键 ↔"),QStringLiteral("右键 ↕")};
+  for(int i=0;i<4;++i) {controls_[i]=new SingleLineLabel(names[i]+QStringLiteral("：—"));controls->addWidget(controls_[i],i%2,i/2);}layout->addLayout(controls);
   connect(pages_,&QComboBox::currentIndexChanged,this,[this](int p){change_page(p);});qApp->installEventFilter(this);
   for(const auto &p:runtime::powerpose_templates()[0].points) {runtime::BoundPosePoint b;b.point=&p;points_.push_back(b);}
 }
@@ -64,6 +73,7 @@ void PowerPosePanel::bind(const runtime::Skin *skin,int index,int target,uint64_
     male_=skin&&!skin->joints.empty()&&skin->joints.front().id.find("Male")!=std::string::npos;
     const bool g81=skin&&!skin->joints.empty()&&skin->joints.front().id.find("8_1")!=std::string::npos;
     const QString set=QStringLiteral("Base (Genesis %1 %2)").arg(g81?"8.1":"8",male_?"Male":"Female");sets_->setItemText(0,skin?set:QStringLiteral("Base"));
+    sets_->setToolTip(sets_->currentText());
     for(int page=0;page<3;++page) {backgrounds_[page]={};const auto name=runtime::powerpose_templates()[page].name;
       // 优先所选角色对应世代，缺图时用同一性别的另一代原图。
       for(bool modern:{g81,!g81}) {for(const auto &root:roots) {
@@ -82,6 +92,7 @@ void PowerPosePanel::bind(const runtime::Skin *skin,int index,int target,uint64_
     descriptions_.push_back(desc);
   }
   source_->setText(skin?text(skin->id)+(ready_?QString{}:QStringLiteral(" · 等待场景就绪")):QStringLiteral("请选择同一 Genesis 8 / 8.1 角色的对象或骨骼"));
+  source_->setToolTip(source_->text());
   show_controls(selected_);canvas_->update();
 }
 void PowerPosePanel::change_page(int page) {
@@ -91,13 +102,13 @@ void PowerPosePanel::change_page(int page) {
 }
 void PowerPosePanel::show_controls(int index) {
   const QString names[]={QStringLiteral("左键 ↔"),QStringLiteral("左键 ↕"),QStringLiteral("右键 ↔"),QStringLiteral("右键 ↕")};
-  if(index<0||size_t(index)>=points_.size()) {details_->setText(QStringLiteral("选择控制点查看操作；Shift 拖动精调。"));for(int i=0;i<4;++i) {controls_[i]->setText(names[i]+QStringLiteral("：—"));controls_[i]->setToolTip({});}return;}
+  if(index<0||size_t(index)>=points_.size()) {details_->setText(QStringLiteral("选择控制点查看操作；Shift 拖动精调。"));details_->setToolTip(details_->text());for(int i=0;i<4;++i) {controls_[i]->setText(names[i]+QStringLiteral("：—"));controls_[i]->setToolTip({});}return;}
   const auto &b=points_[index];const auto &p=*b.point;details_->setText(text(p.id+" · "+p.label)+(p.disabled?QStringLiteral(" · 不支持 Face"):QString{}));
   const auto lines=size_t(index)<descriptions_.size()?descriptions_[index].split('\n'):QStringList{};
   for(int i=0;i<4;++i) {const QString desc=lines.value(i);QStringList labels;
     for(const auto &entry:desc.split(QStringLiteral("；"),Qt::SkipEmptyParts)) {auto label=entry.section(QStringLiteral(" · "),1).section(' ',0,-4);if(!labels.contains(label)) labels<<label;}
     controls_[i]->setText(names[i]+QStringLiteral("：")+(labels.isEmpty()?QStringLiteral("无变化"):labels.join(" / ")));controls_[i]->setToolTip(desc);}
-  QStringList unavailable;for(const auto &name:b.unavailable) unavailable<<text(name);details_->setToolTip(unavailable.isEmpty()?QStringLiteral("位移相对按下位置；Esc 取消。数值受角色自身锁定与限位约束。"):QStringLiteral("以下绑定不可编辑：\n")+unavailable.join('\n'));
+  QStringList unavailable;for(const auto &name:b.unavailable) unavailable<<text(name);details_->setToolTip(details_->text()+"\n"+(unavailable.isEmpty()?QStringLiteral("位移相对按下位置；Esc 取消。数值受角色自身锁定与限位约束。"):QStringLiteral("以下绑定不可编辑：\n")+unavailable.join('\n')));
 }
 void PowerPosePanel::emit_input() {++gesture_.event;gesture_.input_seconds=now();if(input) input(gesture_);}
 void PowerPosePanel::press(QPointF pos,Qt::MouseButton button,Qt::KeyboardModifiers modifiers) {

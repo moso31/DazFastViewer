@@ -1,0 +1,83 @@
+{
+  "status": "PASS",
+  "project_ctest_passed": 20,
+  "editor_sha256": "9383c2d4c48de50d5fef899252f1fe6a60883d5dee4c378cebd81d5ab94ed7c9",
+  "source_hash_count": 161,
+  "source_mismatches": [],
+  "geometry": [
+    {
+      "canvas": [
+        6,
+        55,
+        488,
+        466
+      ],
+      "file": "500-Body.png",
+      "panel_height": 586,
+      "panel_width": 500,
+      "same_row": true
+    },
+    {
+      "canvas": [
+        6,
+        55,
+        488,
+        466
+      ],
+      "file": "500-Hands.png",
+      "panel_height": 586,
+      "panel_width": 500,
+      "same_row": true
+    },
+    {
+      "canvas": [
+        6,
+        55,
+        488,
+        466
+      ],
+      "file": "500-Head.png",
+      "panel_height": 586,
+      "panel_width": 500,
+      "same_row": true
+    },
+    {
+      "canvas": [
+        6,
+        55,
+        318,
+        466
+      ],
+      "file": "330-Body.png",
+      "panel_height": 586,
+      "panel_width": 330,
+      "same_row": true
+    },
+    {
+      "canvas": [
+        6,
+        55,
+        318,
+        466
+      ],
+      "file": "330-Hands.png",
+      "panel_height": 586,
+      "panel_width": 330,
+      "same_row": true
+    },
+    {
+      "canvas": [
+        6,
+        55,
+        318,
+        466
+      ],
+      "file": "330-Head.png",
+      "panel_height": 586,
+      "panel_width": 330,
+      "same_row": true
+    }
+  ],
+  "visual_check": "副屏 Windows 原生 Qt 面板，Microsoft YaHei UI 9；另核对两种宽度的已选联动组",
+  "evidence_directory": "artifacts/009-powerpose/compact"
+}

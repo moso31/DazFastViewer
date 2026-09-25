@@ -69,7 +69,6 @@ class Editor final:public QMainWindow {
   ContentBrowser *browser_=nullptr;
   QTreeWidget *hierarchy_=nullptr;
   QLabel *selection_=nullptr;
-  QCheckBox *visible_=nullptr;
   QCheckBox *manual_morph_=nullptr;
   QPushButton *refresh_parameters_=nullptr,*apply_parameters_=nullptr,*retry_parameters_=nullptr;
   struct PendingParameter {float value;bool unlimited;};
@@ -454,7 +453,7 @@ class Editor final:public QMainWindow {
     if(loading_||!document_||snapshot_.values.at(target).visible==visible) return;
     snapshot_.values[target].visible=visible;
     {QSignalBlocker block(hierarchy_);for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==int(target)&&(*it)->data(0,Qt::UserRole+1).toInt()<0) (*it)->setCheckState(0,visible?Qt::Checked:Qt::Unchecked);}
-    if(selected_==int(target)) {QSignalBlocker block(visible_);visible_->setChecked(visible);}send();
+    send();
   }
   void add_light() {
     if(loading_) return;
@@ -496,7 +495,7 @@ class Editor final:public QMainWindow {
     next->generation=++generation_;snapshot.generation=next->generation;++snapshot.revision;next->loaded.scene.lights=snapshot.lights;
     parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);pose_report_=std::move(applied.report);
     std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
-    pose_status_->setText(QStringLiteral("已应用复合 DUF 的材质与姿势 / 形态；%1 项通道未应用，可查看详情。").arg(pose_report_["unapplied"].size()));
+    pose_status_->setText(QStringLiteral("已应用复合 DUF 的材质与姿势 / 形态；%1 项通道未应用。").arg(pose_report_["unapplied"].size()));
     select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
     if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(data));
   }
@@ -522,7 +521,7 @@ class Editor final:public QMainWindow {
       snapshot_.poses[size_t(index)]=std::move(applied.joints);snapshot_.values[size_t(selected_)]=std::move(applied.properties);pose_report_=applied.report;
       std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
       const auto skipped=pose_report_["unapplied"].size();
-      pose_status_->setText(QStringLiteral("预设：%1\n已应用 %2 个骨骼通道、%3 个 Morph 通道；%4 项未应用。%5").arg(QString::fromStdWString(file.stem().wstring())).arg(pose_report_["applied_bone_channels"].get<int>()).arg(pose_report_["applied_morph_channels"].get<int>()).arg(skipped).arg(skipped?QStringLiteral("点击下方查看详情。") : QString()));
+      pose_status_->setText(QStringLiteral("预设：%1\n已应用 %2 个骨骼通道、%3 个 Morph 通道；%4 项未应用。").arg(QString::fromStdWString(file.stem().wstring())).arg(pose_report_["applied_bone_channels"].get<int>()).arg(pose_report_["applied_morph_channels"].get<int>()).arg(skipped));
       pose_status_->setToolTip(QString::fromStdWString(file.wstring()));select(selected_,selected_joint_);send();frame_pending_=self_test_;
       if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*data));return true;
     } catch(const std::exception &e) {
@@ -725,7 +724,6 @@ class Editor final:public QMainWindow {
   }
   void select(int index,int joint=-1,int light=-1) {
     if(powerpose_) powerpose_->cancel();
-    {QSignalBlocker block(visible_);visible_->setEnabled(document_&&index>=0&&joint<0&&light<0);visible_->setChecked(document_&&index>=0?snapshot_.values.at(size_t(index)).visible:false);}
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1);
@@ -816,7 +814,7 @@ class Editor final:public QMainWindow {
     if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
     if(edit_regression_test_) {report["scope"]="multi-selection-focus-subdivision-ERC-scale";report["checks"]=regression_checks_;}
     if(joint_selection_test_) {report["scope"]="same-figure-joint-ctrl-selection-and-focus";report["checks"]=regression_checks_;}
-    if(!visibility_label_.isEmpty()) {report["scope"]="property-and-hierarchy-visibility-toggle-restore";report["visible"]=status.visible;report["checks"]=visibility_checks_;}
+    if(!visibility_label_.isEmpty()) {report["scope"]="hierarchy-visibility-toggle-restore";report["visible"]=status.visible;report["checks"]=visibility_checks_;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
     if(!wear_test_file_.empty()&&document_) {report["scope"]="wearable-browser-import-detach-rebind";report["added_targets"]=document_->catalog.targets.size()-wear_test_first_;report["attachment_groups"]=document_->attachments.size();}
     report["hierarchy"]=hierarchy_report();report["options"]=ir::options_json(snapshot_.options);
@@ -1413,17 +1411,18 @@ class Editor final:public QMainWindow {
         for(size_t t=0;t<document_->catalog.targets.size();++t) if(text(document_->catalog.targets[t].label)==visibility_label_) visibility_target_=int(t);
         if(visibility_target_<0) {finish_test(false,"可见性测试对象缺失");return;}
         choose(visibility_target_);visibility_initial_=snapshot_.values[size_t(visibility_target_)].visible;visibility_geometry_updates_=state.adapter.geometry_updates;
+        findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"))->raise();
         visibility_sessions_=state.sessions;visibility_morph_evaluations_=state.evaluation.morph_evaluations;
         const auto &scene=document_->loaded.scene;auto index=document_->catalog.targets[size_t(visibility_target_)].instance;
         if(scene.instances[index].prototype>=0) index=uint32_t(scene.instances[index].prototype);
         visibility_local_graft_=scene.instances[index].graft_source>=0||std::any_of(scene.instances.begin(),scene.instances.end(),[&](const auto &i){return i.graft_source==int(index);});
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(prefix+"-initial.png")).wstring()));
-        visible_->setChecked(!visibility_initial_);test_stage_=1;return;
+        hierarchy_->currentItem()->setCheckState(0,visibility_initial_?Qt::Unchecked:Qt::Checked);test_stage_=1;return;
       }
       const auto instance=document_->catalog.targets[size_t(visibility_target_)].instance;
       const bool expected=test_stage_==1?!visibility_initial_:visibility_initial_;
-      if(state.visible.at(instance)!=expected||visible_->isChecked()!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)) {
-        finish_test(false,"树、属性和渲染可见性不同步");return;
+      if(state.visible.at(instance)!=expected||snapshot_.values[size_t(visibility_target_)].visible!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)) {
+        finish_test(false,"场景树、对象状态和渲染可见性不同步");return;
       }
       // 共用 SSS 对象的 GeoGraft 允许每次切换更新一个组合的面列表；普通对象仍不更新几何。
       const auto budget=visibility_local_graft_?size_t(test_stage_):0;
@@ -1664,15 +1663,6 @@ public:
     light_power_=new QDoubleSpinBox;light_power_->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
     connect(light_power_,&QDoubleSpinBox::valueChanged,this,[this](double value) {if(selected_light_<0) return;auto &p=snapshot_.lights[size_t(selected_light_)].power;const auto previous=std::max({p.x,p.y,p.z});const float ratio=previous>0?float(value)/previous:0;p=previous>0?ir::Vec3{p.x*ratio,p.y*ratio,p.z*ratio}:ir::Vec3{float(value),float(value),float(value)};send();});
     pose_status_=new QLabel(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
-    auto *pose_details=new QPushButton(QStringLiteral("预设应用详情"));properties->addWidget(pose_details);
-    connect(pose_details,&QPushButton::clicked,this,[this] {
-      QString details=QStringLiteral("尚未应用预设。");
-      if(!pose_report_.is_null()) {details=QStringLiteral("未应用的通道：\n");for(const auto &c:pose_report_["unapplied"]) details+=text(c.value("node","")+c.value("modifier","")+" · "+c.value("property","")+" = "+std::to_string(c.at("value").get<float>())+"\n"+c.value("reason","")+"\n");
-        if(pose_report_["unapplied"].empty()) details=QStringLiteral("预设中所有非零参数均已应用。");}
-      QMessageBox::information(this,QStringLiteral("预设应用详情"),details);
-    });
-    visible_=new QCheckBox(QStringLiteral("可见（Visible）"));visible_->setEnabled(false);properties->addWidget(visible_);
-    connect(visible_,&QCheckBox::toggled,this,[this](bool value) {if(selected_>=0) set_visible(size_t(selected_),value);});
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column==0&&target>=0&&item->data(0,Qt::UserRole+1).toInt()<0) set_visible(size_t(target),item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     parameters_=new ParameterPanel;parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};properties->addWidget(parameters_,1);
@@ -1852,7 +1842,7 @@ int main(int argc,char **argv) {
   parser.addOption({"capture-samples",QStringLiteral("截图前累积样本数"),"count","16"});
   parser.addOption({"capture-seconds",QStringLiteral("定时记录原始画面，再继续至目标样本或四倍时长"),"seconds","0"});
   parser.addOption({"sampling-settings",QStringLiteral("采样诊断配置 JSON；降噪始终禁用"),"file"});
-  parser.addOption({"visibility-test",QStringLiteral("验证指定对象的属性和层级可见性开关"),"label"});
+  parser.addOption({"visibility-test",QStringLiteral("验证指定对象的场景树显隐开关"),"label"});
   parser.addOption({"lifecycle-test",QStringLiteral("验证反复增删与替换场景，指定第二个测试 DUF"),"file"});
   parser.addOption({"lifecycle-rounds",QStringLiteral("生命周期验证轮数"),"count","8"});
   parser.addOption({"scene-reopen-test",QStringLiteral("验证打开、新建空场景、从内容库再次打开指定场景"),"file"});
