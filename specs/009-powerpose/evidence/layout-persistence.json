@@ -1,0 +1,215 @@
+{
+  "status": "PASS",
+  "method": "离屏创建实际 PowerPosePanel；独立保存进程与恢复进程，使用临时 INI，不改用户设置",
+  "cases": [
+    {
+      "case": 0,
+      "status": "PASS",
+      "saved": {
+        "area": 2,
+        "floating": false,
+        "front": true,
+        "geometry": [
+          445,
+          0,
+          315,
+          696
+        ],
+        "hidden": false,
+        "properties_front": false,
+        "template": "Body"
+      },
+      "restored": {
+        "area": 2,
+        "floating": false,
+        "front": true,
+        "geometry": [
+          445,
+          0,
+          315,
+          696
+        ],
+        "hidden": false,
+        "properties_front": false,
+        "template": "Body"
+      },
+      "compared_fields": [
+        "area",
+        "floating",
+        "front",
+        "hidden",
+        "properties_front",
+        "template",
+        "geometry"
+      ]
+    },
+    {
+      "case": 1,
+      "status": "PASS",
+      "saved": {
+        "area": 2,
+        "floating": false,
+        "front": false,
+        "geometry": [
+          -815,
+          -1196,
+          315,
+          696
+        ],
+        "hidden": false,
+        "properties_front": true,
+        "template": "Hands"
+      },
+      "restored": {
+        "area": 2,
+        "floating": false,
+        "front": false,
+        "geometry": [
+          -750,
+          -1022,
+          250,
+          522
+        ],
+        "hidden": false,
+        "properties_front": true,
+        "template": "Hands"
+      },
+      "compared_fields": [
+        "area",
+        "floating",
+        "front",
+        "hidden",
+        "properties_front",
+        "template"
+      ]
+    },
+    {
+      "case": 2,
+      "status": "PASS",
+      "saved": {
+        "area": 2,
+        "floating": false,
+        "front": false,
+        "geometry": [
+          445,
+          0,
+          315,
+          696
+        ],
+        "hidden": true,
+        "properties_front": true,
+        "template": "Head"
+      },
+      "restored": {
+        "area": 2,
+        "floating": false,
+        "front": false,
+        "geometry": [
+          -600,
+          -530,
+          250,
+          522
+        ],
+        "hidden": true,
+        "properties_front": true,
+        "template": "Head"
+      },
+      "compared_fields": [
+        "area",
+        "floating",
+        "front",
+        "hidden",
+        "properties_front",
+        "template"
+      ]
+    },
+    {
+      "case": 3,
+      "status": "PASS",
+      "saved": {
+        "area": 2,
+        "floating": true,
+        "front": true,
+        "geometry": [
+          60,
+          60,
+          310,
+          620
+        ],
+        "hidden": false,
+        "properties_front": true,
+        "template": "Body"
+      },
+      "restored": {
+        "area": 2,
+        "floating": true,
+        "front": true,
+        "geometry": [
+          60,
+          60,
+          310,
+          620
+        ],
+        "hidden": false,
+        "properties_front": true,
+        "template": "Body"
+      },
+      "compared_fields": [
+        "area",
+        "floating",
+        "front",
+        "hidden",
+        "properties_front",
+        "template",
+        "geometry"
+      ]
+    },
+    {
+      "case": 4,
+      "status": "PASS",
+      "saved": {
+        "area": 1,
+        "floating": false,
+        "front": true,
+        "geometry": [
+          0,
+          198,
+          377,
+          522
+        ],
+        "hidden": false,
+        "properties_front": true,
+        "template": "Hands"
+      },
+      "restored": {
+        "area": 1,
+        "floating": false,
+        "front": true,
+        "geometry": [
+          0,
+          198,
+          377,
+          522
+        ],
+        "hidden": false,
+        "properties_front": true,
+        "template": "Hands"
+      },
+      "compared_fields": [
+        "area",
+        "floating",
+        "front",
+        "hidden",
+        "properties_front",
+        "template",
+        "geometry"
+      ]
+    }
+  ],
+  "notes": "非前台或隐藏 Dock 的 Qt 内部离屏坐标不作为可见位置比较；可见停靠及浮动状态逐项比较几何",
+  "project_ctest_passed": 20,
+  "editor_sha256": "929890f8e94333a1d7af937a06e98c031f90460cf4375385b31c9fd7eb3968fe",
+  "source_hash_count": 161,
+  "source_mismatches": [],
+  "evidence_directory": "artifacts/009-powerpose/layout"
+}

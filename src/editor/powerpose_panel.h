@@ -48,5 +48,7 @@ public:
   QPointF point_position(const std::string &id) const;
   QWidget *canvas() const;
   void page(int index) {pages_->setCurrentIndex(index);}
+  QString template_name() const {return pages_->currentText();}
+  void restore_template(const QString &name) {const int index=pages_->findText(name);if(index>=0) page(index);}
 };
 }

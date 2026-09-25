@@ -1,5 +1,7 @@
 # 009 PowerPose 实施记录
 
+> 后续增强：关闭后继承 PowerPose 布局和当前模板页，详见 [布局继承记录](layout-persistence.md)。
+
 > 后续修复：PowerPose 松手后保留本次白模，直到新姿态首帧完成，详见 [白模等待修复记录](white-proxy-hold.md)。下文发布哈希和验收数据为首次交付记录。
 
 2026-09-25。用户已提交 [91 项人工核对结果](evidence/manual-review-results.json)，并明确授权实施；男性不再额外人工核对，采用女性已经确认的交互机制。
