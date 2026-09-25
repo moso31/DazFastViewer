@@ -1,5 +1,7 @@
 # DazFastViewer — A Faster, More Efficient Viewport Renderer for DAZ 3D
 
+<img width="2560" height="1392" alt="image" src="https://github.com/user-attachments/assets/c498f3c2-db2b-49b7-be4b-1ae59a217cdf" />
+
 ## 我为什么要做这个东西
 
 其实原因很简单，我自己用 DAZ 3D 用得比较多，但是一直觉得它的更新速度和使用体验在 4.24 以后越来越差，到 DAZ6 Iray 已经卡的没法用了。
@@ -34,6 +36,10 @@
 
 项目里有内容库和内容浏览器，可以配置自己的资源目录，然后从里面查找和使用角色、姿势、形态、材质等资源。
 
+和DAZ不同的地方在于我会记录一个近期用过的各种资源（每种资源记录最近历史50个），至少我还是挺需要这个功能的
+<img width="1969" height="523" alt="image" src="https://github.com/user-attachments/assets/b93a4940-c125-4c1c-acb4-87cea711b314" />
+
+
 ### 在独立视口里预览
 
 项目使用独立的 Cycles 运行时来做场景预览，不需要额外启动 Blender、DAZ Studio 或 Iray。
@@ -58,7 +64,15 @@
 
 参数既可以通过滑块调，也可以直接输入数值。部分 Formula、ERC 和 JCM 关系也已经接入，所以一些参数在改变姿势或形态之后，可以跟着一起更新。
 
-我也希望参数面板能够尽量把事情说明白。比如某个参数暂时不能使用，最好能告诉用户原因，而不是只有一个不能动的滑块。
+### 角色身材系统/成长系统/体重测量（残缺版）
+
+测量角色的身高/体重/控制体格。年龄只是控制生长曲线用的，只是模拟了幼年到成年，无法控制中老年的体型变化。
+
+这玩意早先是DAZ Script自用的，现在直接整合进C++逻辑里了。
+
+<img width="970" height="541" alt="image" src="https://github.com/user-attachments/assets/dcb45d77-8d7b-4c71-a905-ff0a2ae2746b" />
+
+<img width="971" height="496" alt="image" src="https://github.com/user-attachments/assets/3dc50216-962f-4d35-82a1-519ed3d33921" />
 
 ### 服装和附加物跟随
 
@@ -66,16 +80,16 @@
 
 也就是说，角色穿上服装之后，服装可以跟着角色一起移动和摆姿势。这个部分还在继续完善，因为真实的 DAZ 服装和附加物情况比较复杂，很多资源都有自己的特殊处理方式。
 
+### IK/FK
+
+<img width="500" height="495" alt="image" src="https://github.com/user-attachments/assets/fea589a9-9ef6-4b76-819b-b5a96de68db6" />
+
+IK层面较简单，支持一些比较快速的样条IK。
+
+FK层面，支持powerpose 75%的功能，操作和DAZ powerpose完全一致。脸部微表情的调整暂不支持。
+
 ### 基本场景编辑
 
 目前可以在场景里新增、删除和替换对象，也可以创建空场景、重新加载场景和管理场景树。
 
-项目还支持保存项目配置、渲染选项和一些常用收藏内容。这样可以把经常使用的内容保存下来，不需要每次都重新寻找和设置。
-
-## 未来打算做什么
-
-PowerPose
-
-更好的UI交互逻辑
-
-现在有些scene还是打不开，得查下原因
+项目还支持保存项目配置、渲染选项和一些常用收藏内容。
