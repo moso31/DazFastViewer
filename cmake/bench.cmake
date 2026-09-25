@@ -22,6 +22,7 @@ target_compile_options(dfv_content PRIVATE /utf-8)
 target_compile_definitions(dfv_content PRIVATE QT_NO_KEYWORDS NOMINMAX)
 qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
   "${DFV_ROOT}/src/editor/chrome.cpp"
+  "${DFV_ROOT}/src/editor/extension_panel.cpp"
   "${DFV_ROOT}/src/editor/powerpose_panel.cpp"
   "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/parameters.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
@@ -38,6 +39,7 @@ target_compile_options(ProjectSettingsTest PRIVATE /utf-8)
 add_test(NAME project_settings COMMAND ProjectSettingsTest)
 set_tests_properties(project_settings PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 add_executable(ParameterControlsTest "${DFV_ROOT}/tests/parameter_controls.cpp" "${DFV_ROOT}/src/editor/parameters.cpp")
+target_sources(ParameterControlsTest PRIVATE "${DFV_ROOT}/src/editor/extension_panel.cpp")
 target_include_directories(ParameterControlsTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(ParameterControlsTest PRIVATE dfv_scene Qt6::Widgets Qt6::Test)
 target_compile_options(ParameterControlsTest PRIVATE /utf-8)

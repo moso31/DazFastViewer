@@ -27,6 +27,12 @@
 
 namespace dfv::editor {
 static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsizetype(s.size()));}
+static std::string favorite_id(const runtime::Target &target,const runtime::Morph &m) {
+  auto path=m.source;std::replace(path.begin(),path.end(),'\\','/');for(auto &c:path)if(c>='A'&&c<='Z')c=char(c-'A'+'a');
+  auto scope=target.favorite_scope;std::replace(scope.begin(),scope.end(),'\\','/');for(auto &c:scope)if(c>='A'&&c<='Z')c=char(c-'A'+'a');
+  if(path==scope)path="scene";else if(const auto at=path.find("/data/");at!=std::string::npos)path=path.substr(at);
+  const auto at=m.id.rfind('#');return "morph:"+path+"#"+(!m.channel_id.empty()?m.channel_id:at==std::string::npos?m.id:m.id.substr(at+1));
+}
 static void forward_wheel(QWidget *target,QWheelEvent *event) {
   QWheelEvent forwarded(target->mapFromGlobal(event->globalPosition()),event->globalPosition(),event->pixelDelta(),event->angleDelta(),
     event->buttons(),event->modifiers(),event->phase(),event->inverted(),event->source(),event->pointingDevice());
@@ -70,13 +76,30 @@ bool ParameterPanel::eventFilter(QObject *object,QEvent *event) {
   }
   return QWidget::eventFilter(object,event);
 }
+void ParameterPanel::import_favorites(const runtime::Target *target,std::optional<runtime::FavoriteState> &state) const {
+  if(state)return;state.emplace();std::map<std::string,std::string> ids;
+  if(favorites_.empty()&&favorite_overrides_.empty())return;
+  if(target)for(const auto &m:target->morphs)ids[m.source+"#"+m.id]=favorite_id(*target,m);
+  auto portable=[&](const std::string &id){const auto it=ids.find(id);return it==ids.end()?id:it->second;};
+  for(const auto &id:favorites_)if(ids.contains(id)||id.find('#')==std::string::npos)state->fallback.insert(portable(id));
+  if(!target)return;const auto prefix=target->favorite_scope+"\n"+target->id+"\n";
+  for(const auto &[key,value]:favorite_overrides_)if(key.starts_with(prefix)){
+    const auto at=key.find('\n',prefix.size());if(at==std::string::npos)continue;
+    state->nodes[key.substr(prefix.size(),at-prefix.size())][portable(key.substr(at+1))]=value;
+  }
+}
 bool ParameterPanel::is_favorite(const ParameterControl &control) const {
+  if(saved_favorites_){const auto &id=control.favorite_id.empty()?control.id:control.favorite_id;
+    if(const auto node=saved_favorites_->nodes.find(saved_favorite_node_);node!=saved_favorites_->nodes.end())if(const auto found=node->second.find(id);found!=node->second.end())return found->second;
+    return control.favorite||(!scene_favorites_&&saved_favorites_->fallback.contains(id));
+  }
   if(!favorite_scope_.empty()) if(const auto it=favorite_overrides_.find(favorite_scope_+"\n"+control.id);it!=favorite_overrides_.end()) return it->second;
   return control.favorite||(!scene_favorites_&&favorites_.contains(control.id));
 }
 void ParameterPanel::toggle_favorite(size_t index) {
   const auto &control=controls_.at(index);const bool enabled=!is_favorite(control);
-  if(favorite_scope_.empty()) {
+  if(saved_favorites_&&favorite_changed){favorite_changed(saved_favorite_node_,control.favorite_id.empty()?control.id:control.favorite_id,enabled);}
+  else if(favorite_scope_.empty()) {
     if(enabled) favorites_.insert(control.id);else favorites_.erase(control.id);
     QStringList ids;for(const auto &id:favorites_) ids<<text(id);QSettings().setValue("parameters/favorites",ids);
   } else {
@@ -89,6 +112,7 @@ void ParameterPanel::toggle_favorite(size_t index) {
   QTimer::singleShot(0,this,[this]{filter();});
 }
 void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node) {
+  if(!target)bind_favorites(nullptr);
   target_=target;values_=values;node_=node;effective_.clear();controls_.clear();morph_rows_.clear();
   favorite_scope_.clear();scene_favorites_=false;
   if(target_) {
@@ -101,8 +125,9 @@ void ParameterPanel::bind(const runtime::Target *target,const runtime::Propertie
     controls_=extra_;morph_rows_.resize(target_->morphs.size(),-1);
     for(auto &c:controls_) c.favorite=saved_favorite(c.favorite_name);
     for(size_t i=0;i<target_->morphs.size();++i) {
-      const auto &m=target_->morphs[i];if(!runtime::parameter_on_node(m.owner,m.group,node_)) continue;
+      const auto &m=target_->morphs[i];if(runtime::legacy_extension_channel(m.label)||!runtime::parameter_on_node(m.owner,m.group,node_)) continue;
       ParameterControl c;c.morph=int(i);c.id=m.source+"#"+m.id;c.label=m.label;c.group=m.group.empty()?"/Morphs":m.group;c.detail=m.source+"\n"+m.unsupported+"\n"+m.limitation;
+      c.favorite_id=favorite_id(*target_,m);
       // Figure 列表不能同时点亮头部的同名别名；骨骼列表只属于该骨骼自身。
       c.favorite=favorite_owner(m)&&(saved_favorite(m.channel_name)||saved_favorite(m.channel_id));
       // 多个资源定义同名属性时，优先 DUF 实际引用的资源，避免重复收藏另一产品的通道。

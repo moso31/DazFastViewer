@@ -2,6 +2,8 @@
 #include "render_ir/scene.h"
 #include "runtime/morph_data.h"
 #include "runtime/rigid_follow.h"
+#include "runtime/growth.h"
+#include "runtime/favorites.h"
 #include <set>
 #include <map>
 
@@ -47,9 +49,11 @@ struct Target {
 };
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
-  float general_scale=1;
+  double general_scale=1;
 };
 struct Properties {
+  std::optional<FavoriteState> favorites;
+  ObjectExtension extension;
   std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;
   double ground_alignment_ratio=0; // 每个角色独立的操作设置，修改比例本身不触发几何求值。
 };

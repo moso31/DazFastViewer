@@ -524,6 +524,11 @@ void Renderer::run(std::stop_token stop) {
       state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
       state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();state.graft_seams=runtime->graft_seams();
       state.effective_poses=runtime->effective_poses();state.input_poses=runtime->input_poses();state.skin_world.clear();for(const auto &skin:current->skeletons.skins) state.skin_world.push_back(render_scene.instances[skin.instance].transform);
+      state.target_world.clear();for(const auto &target:current->catalog.targets)state.target_world.push_back(render_scene.instances[target.instance].transform);
+      if(selected_target>=0&&size_t(selected_target)<desired.values.size()&&selection_generation==current->generation&&desired.values[size_t(selected_target)].extension.kind==runtime::ExtensionKind::density){
+        if(state.weight_target!=selected_target||state.weight_generation!=current->generation||bounds_dirty){const auto &instance=render_scene.instances.at(current->catalog.targets.at(size_t(selected_target)).instance);state.weight_positions=std::make_shared<const std::vector<ir::Vec3>>(render_scene.meshes.at(instance.mesh).positions);}
+        state.weight_target=selected_target;state.weight_generation=current->generation;
+      }else{state.weight_positions.reset();state.weight_target=-1;}
       state.effective_roots.assign(current->catalog.targets.size(),{});
       for(size_t t=0;t<current->catalog.targets.size();++t) for(size_t s=0;s<current->skeletons.skins.size();++s)
         if(current->catalog.targets[t].instance==current->skeletons.skins[s].instance&&!runtime->effective_poses()[s].empty()) state.effective_roots[t]=runtime->effective_poses()[s][0];

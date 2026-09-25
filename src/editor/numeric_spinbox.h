@@ -1,5 +1,6 @@
 #pragma once
 #include <QDoubleSpinBox>
+#include "runtime/decimal_float.h"
 #include <QLocale>
 #include <charconv>
 #include <cmath>
@@ -7,11 +8,7 @@
 
 namespace dfv::editor {
 // 以 float 的最短可往返十进制显示，避免先提升到 double 后暴露二进制尾数。
-inline double decimal_float(double value) {
-  char buffer[64];const auto result=std::to_chars(buffer,buffer+sizeof(buffer),float(value));
-  if(result.ec!=std::errc{}) return value;
-  double decimal=value;std::from_chars(buffer,result.ptr,decimal);return decimal;
-}
+using runtime::decimal_float;
 class NumericSpinBox final:public QDoubleSpinBox {
   bool float_backed_;
 public:

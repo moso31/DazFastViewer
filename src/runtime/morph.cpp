@@ -53,7 +53,7 @@ bool MorphRuntime::set_morph(size_t target,size_t index,float value,bool enforce
 }
 void validate_transform(const TransformValues &v) {
   finite(v.translation_cm);finite(v.rotation_degrees);finite(v.scale);
-  if(!std::isfinite(v.general_scale)||v.general_scale==0) throw std::runtime_error("总体缩放必须为有限非零值");
+  if(!std::isfinite(float(v.general_scale))||float(v.general_scale)==0) throw std::runtime_error("总体缩放必须为渲染范围内的有限非零值");
   if(v.scale.x==0 || v.scale.y==0 || v.scale.z==0) throw std::runtime_error("缩放不能为零");
 }
 ir::Transform make_transform(const TransformValues &v,const std::string &order) {

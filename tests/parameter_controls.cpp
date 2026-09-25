@@ -24,6 +24,7 @@
 static void require(bool value,const char *message) {if(!value) throw std::runtime_error(message);}
 #include "parameter_favorites.inl"
 #include "parameter_wheel.inl"
+#include "extension_panel.inl"
 int main(int argc,char **argv) {
   QApplication app(argc,argv);
   try {
@@ -82,6 +83,7 @@ int main(int argc,char **argv) {
     date->setDate(QDate(2026,9,23));clock->setTime(QTime(23,59,59));require(options.parameters[1].value[0]==QDate(2026,9,23).toJulianDay()&&options.parameters[2].value[0]==86399,"年月日 / 时分秒没有写回原通道");
     parameter_favorites(app);
     parameter_wheel(app);
+    extension_panel(app);
     std::cout<<"Numeric text / focus commit / unbounded slider / sun-sky date-time / DUF favorites: PASS\n";return 0;
   }catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}
 }

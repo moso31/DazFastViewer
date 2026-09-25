@@ -59,4 +59,31 @@ static void parameter_favorites(QApplication &app) {
   require(av.morphs[shape_index]==.25f&&bv.morphs[shape_index]==.75f,"加星操作改变了参数值");
   auto refreshed=daz::discover_morphs(loaded,{root},{},true);require(refreshed.targets[0].favorites==a.favorites,"刷新目录丢失场景收藏");
   require(daz::read_document_file(file).at("scene").at("nodes")==nodes,"收藏编辑改写源 DUF");
+  // 导入旧本机覆盖后，场景状态成为唯一覆盖来源，并能离开原目录。
+  panel.import_favorites(&a,av.favorites);panel.import_favorites(&b,bv.favorites);
+  require(av.favorites&&bv.favorites,"未迁移旧收藏");
+  QSettings().remove("parameters/favorites");QSettings().remove("parameters/favoriteOverrides");
+  editor::ParameterPanel portable;portable.resize(500,650);portable.set_extra({scale});portable.show();
+  auto moved_a=a,moved_b=b;
+  for(auto *target:{&moved_a,&moved_b}){target->favorite_scope="Z:/moved/scene.duf";for(auto &m:target->morphs){
+    auto path=m.source;std::replace(path.begin(),path.end(),'\\','/');const auto at=path.find("/data/");if(at!=std::string::npos)m.source="Z:/library"+path.substr(at);
+    m.id=m.source+"#"+m.channel_id;
+  }}
+  auto bind_saved=[&](const runtime::Target &target,runtime::Properties &values,const std::string &node=""){
+    portable.favorite_changed=[&values](const std::string &n,const std::string &id,bool value){values.favorites->nodes[n][id]=value;};
+    portable.bind_favorites(&*values.favorites,node);portable.bind(&target,&values,node);app.processEvents();
+  };
+  bind_saved(moved_a,av);group(portable,"@favorites");require(count(portable)==2,"移动资源目录后取消收藏丢失");
+  bind_saved(moved_b,bv);require(count(portable)==1,"另一角色的收藏未随场景状态恢复");
+  const auto moved_id=moved_b.morphs[shape_index].source+"#"+moved_b.morphs[shape_index].id;
+  star=button(portable,moved_id);require(star&&star->text()==QStringLiteral("★"),"移动后 Morph 收藏身份不一致");star->click();app.processEvents();require(count(portable)==0,"保存状态下取消收藏未立即生效");
+  portable.set_extra({x,y});bind_saved(moved_a,av,"head");star=button(portable,x.id);require(star,"骨骼收藏未恢复");star->click();app.processEvents();require(count(portable)==0,"骨骼取消收藏失败");
+  bind_saved(moved_b,bv,"head");require(count(portable)==1&&button(portable,y.id),"同名骨骼收藏串值");
+  bind_saved(moved_a,av,"head");require(count(portable)==0,"骨骼切换丢失取消记录");
+  require(!av.favorites->nodes.at("head").at(x.id),"取消收藏未显式保存 false");
+  std::optional<runtime::FavoriteState> global;portable.import_favorites(nullptr,global);portable.favorite_changed=[&](const std::string &n,const std::string &id,bool value){global->nodes[n][id]=value;};
+  auto light=scale;light.id="light/0";portable.bind_favorites(&*global,"light/A");portable.bind_controls({light});group(portable,"*");button(portable,light.id)->click();app.processEvents();
+  portable.bind_favorites(&*global,"light/B");portable.bind_controls({light});group(portable,"@favorites");require(count(portable)==0,"灯光收藏串值");
+  portable.bind_favorites(&*global,"light/A");portable.bind_controls({light});app.processEvents();require(count(portable)==1,"灯光收藏未恢复");
+  require(!QSettings().contains("parameters/favorites")&&!QSettings().contains("parameters/favoriteOverrides"),"场景收藏仍依赖本机设置写入");
 }

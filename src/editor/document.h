@@ -2,6 +2,7 @@
 #include "daz/morphs.h"
 #include "daz/skeleton.h"
 #include "runtime/deformation.h"
+#include "runtime/pose_edit.h"
 #include <map>
 
 namespace dfv::editor {
@@ -15,6 +16,8 @@ struct AttachmentBinding {
   std::vector<daz::AssetNode> nodes;
 };
 struct Document {
+  std::filesystem::path source_file;
+  nlohmann::json operations=nlohmann::json::array();
   uint64_t generation=0;
   uint64_t asset_revision=0;
   daz::LoadedScene loaded;
@@ -24,6 +27,7 @@ struct Document {
   std::vector<AttachmentBinding> attachments;
 };
 struct Snapshot {
+  std::optional<runtime::FavoriteState> control_favorites;
   // 按稳定网格身份保存，追加／删除对象不会把级别套到其他对象。
   std::map<std::string,int> subdivision_levels;
   ir::RenderOptions options;
@@ -31,13 +35,14 @@ struct Snapshot {
   std::vector<runtime::Properties> values;
   std::vector<std::vector<runtime::JointPose>> poses;
   std::vector<ir::AreaLight> lights;
+  std::vector<runtime::PosePin> pose_pins;
 };
 Snapshot initial_snapshot(const Document &document);
 const ir::Mesh &subdivision_mesh(const Document &document,size_t target);
 int subdivision_level(const Document &document,const Snapshot &snapshot,size_t target);
 bool apply_subdivision_levels(ir::Scene &scene,const std::map<std::string,int> &levels);
 std::shared_ptr<Document> refresh_parameters(const Document &document,size_t selected,const std::vector<std::filesystem::path> &roots,const std::function<void(const std::string &)> &progress={});
-void append_document(Document &destination,Document source);
+void append_document(Document &destination,Document source,const std::string &identity_prefix={});
 // 以下操作作用于调用方的待提交副本；失败时不发布该副本。
 size_t attachment_host(const Document &document,size_t selected);
 void attach_import(Document &document,size_t first_target,size_t host);

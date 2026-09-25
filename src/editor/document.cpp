@@ -130,12 +130,13 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   return std::count(targets.begin(),targets.end(),false);
 }
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target) {
-  const auto &selected=document.catalog.targets.at(target);std::set<std::string> removed{node_id(selected)};
+  const auto &selected=document.catalog.targets.at(target);const auto id=selected.id;std::set<std::string> removed{node_id(selected)};
   for(const auto &object:document.loaded.objects) if(object.instance==selected.instance) removed.insert(object.id);
-  return remove_nodes(document,snapshot,std::move(removed));
+  const auto count=remove_nodes(document,snapshot,std::move(removed));document.operations.push_back({{"op","remove"},{"target",id}});return count;
 }
 size_t remove_light(Document &document,Snapshot &snapshot,size_t light) {
-  return remove_nodes(document,snapshot,{snapshot.lights.at(light).id});
+  const auto id=snapshot.lights.at(light).id;const auto count=remove_nodes(document,snapshot,{id});
+  document.operations.push_back({{"op","remove_light"},{"id",id}});return count;
 }
 size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset) {
   auto &scene=document.loaded.scene;auto &instance=scene.instances.at(document.catalog.targets.at(target).instance);
@@ -152,7 +153,9 @@ size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &
     auto material=preset.scene.materials[m];for(auto *index:ir::texture_indices(material)) if(*index>=0) *index+=offset;
     instance.materials[slot]=uint32_t(scene.materials.size());scene.materials.push_back(std::move(material));
   }
-  collect_resources(document);return matches.size();
+  collect_resources(document);
+  if(preset.report.contains("input"))document.operations.push_back({{"op","materials"},{"target",document.catalog.targets.at(target).id},{"file",preset.report.at("input")}});
+  return matches.size();
 }
 Snapshot initial_snapshot(const Document &document) {
   Snapshot result;result.options=document.loaded.scene.options;result.generation=document.generation;result.revision=1;
@@ -164,11 +167,16 @@ Snapshot initial_snapshot(const Document &document) {
   }
   result.lights=document.loaded.scene.lights;return result;
 }
-void append_document(Document &destination,Document source) {
+void append_document(Document &destination,Document source,const std::string &identity_prefix) {
   auto &a=destination.loaded.scene;auto &b=source.loaded.scene;
   const int textures=int(a.textures.size());const auto materials=uint32_t(a.materials.size()),meshes=uint32_t(a.meshes.size()),instances=uint32_t(a.instances.size());
   const auto skins=int(destination.skeletons.skins.size());
-  const auto prefix="instance-"+std::to_string(destination.generation)+"/";
+  auto prefix=identity_prefix;
+  if(prefix.empty()) {
+    auto used=[&](const auto &items){return std::any_of(items.begin(),items.end(),[&](const auto &v){return v.id.starts_with(prefix);});};
+    auto serial=destination.generation;do {prefix="instance-"+std::to_string(serial++)+"/";} while(used(destination.catalog.targets)||used(a.lights)||used(destination.loaded.nodes)||used(a.meshes));
+  }
+  const auto path=source.source_file.generic_u8string();destination.operations.push_back({{"op","append"},{"prefix",prefix},{"file",std::string(path.begin(),path.end())},{"operations",source.operations}});
   a.textures.insert(a.textures.end(),b.textures.begin(),b.textures.end());
   for(auto m:b.materials) {
     m.id=prefix+m.id;

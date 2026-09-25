@@ -35,6 +35,10 @@ struct RenderStatus {
   std::vector<std::vector<runtime::JointPose>> effective_poses;
   std::vector<std::vector<runtime::JointPose>> input_poses;
   std::vector<ir::Transform> skin_world;
+  std::vector<ir::Transform> target_world;
+  int weight_target=-1;
+  uint64_t weight_generation=0;
+  std::shared_ptr<const std::vector<ir::Vec3>> weight_positions;
   uint64_t generation=0,applied_revision=0,presented_revision=0,frames=0;
   uint64_t requested_epoch=0,presented_epoch=0;
   AdapterStats adapter;

@@ -12,7 +12,7 @@ class QLabel;
 namespace dfv::editor {
 struct ParameterControl {
   std::string id,label,group,detail;
-  std::string favorite_name;
+  std::string favorite_name,favorite_id;
   bool favorite=false;
   double minimum=-10000,maximum=10000,step=.01,initial=0;
   double slider_minimum=0,slider_maximum=1;
@@ -46,6 +46,8 @@ class ParameterPanel final:public QWidget {
   std::map<std::string,bool> favorite_overrides_;
   std::string favorite_scope_;
   bool scene_favorites_=false;
+  const runtime::FavoriteState *saved_favorites_=nullptr;
+  std::string saved_favorite_node_;
   bool is_favorite(const ParameterControl &control) const;
   void toggle_favorite(size_t index);
   void rebuild();
@@ -58,6 +60,9 @@ public:
   explicit ParameterPanel(QWidget *parent=nullptr);
   std::function<void(size_t,double)> changed;
   std::function<void(bool)> interaction_changed;
+  std::function<void(const std::string &,const std::string &,bool)> favorite_changed;
+  void import_favorites(const runtime::Target *target,std::optional<runtime::FavoriteState> &state) const;
+  void bind_favorites(const runtime::FavoriteState *state,const std::string &node={}) {saved_favorites_=state;saved_favorite_node_=node;}
   void bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node={});
   void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback);
   void set_extra(std::vector<ParameterControl> controls) {extra_=std::move(controls);}

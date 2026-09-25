@@ -255,6 +255,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
         for(const auto &modifier:array_member(doc,"modifier_library")) {
           const auto &channel=object_member(modifier,"channel");const auto type=channel.value("type","");
           if(type.empty() || modifier.contains("skin")) {skipped("non_parameter");continue;}
+          if(runtime::legacy_extension_channel(channel.value("label",modifier.value("label",channel.value("name",modifier.value("id","")))))) {skipped("legacy_object_extension");continue;}
           const auto parent=reference(modifier.value("parent",""));const auto parent_file=resolve(parent.file,path,roots);
           bool geometry_parent=false,node_parent=false,verified_node=false;
           for(const auto &a:allowed) if(!parent_file.empty() && key(parent_file)==key(a.file)) {

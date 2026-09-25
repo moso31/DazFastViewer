@@ -161,12 +161,14 @@ void attach_import(Document &d,size_t first_target,size_t host) {
   std::set<std::string> members;for(const auto &id:imported) if(connected.contains(id)) members.insert(id);
   if(members.empty()) throw std::runtime_error("穿戴预设没有可绑定到选中角色的附件");
   auto binding=capture(d,members,connected);apply(d,binding,int(host));d.attachments.push_back(std::move(binding));
+  d.operations.push_back({{"op","attach"},{"first",d.catalog.targets.at(first_target).id},{"host",d.catalog.targets.at(host).id}});
 }
 void fit_attachment(Document &d,size_t follower,int host) {
   if(host>=0&&size_t(host)==follower) throw std::runtime_error("不能将附件绑定到自身");
   if(host>=0) host=int(attachment_host(d,size_t(host)));
   const auto id=node_id(d.catalog.targets.at(follower));
-  for(auto &b:d.attachments) if(std::any_of(b.items.begin(),b.items.end(),[&](const auto &i){return i.node==id;})) {apply(d,b,host);return;}
+  auto record=[&]{d.operations.push_back({{"op","fit"},{"target",d.catalog.targets.at(follower).id},{"host",host>=0?d.catalog.targets.at(size_t(host)).id:std::string{}}});};
+  for(auto &b:d.attachments) if(std::any_of(b.items.begin(),b.items.end(),[&](const auto &i){return i.node==id;})) {apply(d,b,host);record();return;}
   auto &root=object(d,id);
   if(!root.auto_fit_base.empty()||(!root.content_type.starts_with("Follower/")&&root.conform_target.empty())) throw std::runtime_error("请选择服装、头发或角色附件");
   std::set<std::string> connected{id};bool changed=true;
@@ -200,6 +202,6 @@ void fit_attachment(Document &d,size_t follower,int host) {
     if(i.node==id&&root.parent.empty()&&root.conform_target.empty()) {i.parent="name://@selection:";if(root.figure) i.conform="name://@selection:";}
   }
   for(auto &n:b.nodes) {if(external.contains(n.parent)) n.parent=external.at(n.parent);else if(n.id==id&&n.parent.empty()) n.parent="name://@selection:";}
-  apply(d,b,host);d.attachments.push_back(std::move(b));
+  apply(d,b,host);d.attachments.push_back(std::move(b));record();
 }
 }

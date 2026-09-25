@@ -13,7 +13,7 @@ class EditorChrome final:public QWidget {
   QToolBar *menus_,*tools_,*functions_;
   QMenuBar *menu_;
   QWidget *grip_;
-  QAction *local_,*world_,*ground_;
+  QAction *local_,*world_,*ground_,*weight_;
   QDoubleSpinBox *ground_ratio_;
   GizmoSettings settings_;
   GizmoSpace translation_space_=GizmoSpace::local,rotation_space_=GizmoSpace::local;
@@ -27,6 +27,7 @@ public:
   std::function<void(GizmoSettings)> changed;
   std::function<void(double)> ground_ratio_changed;
   QAction *ground_action() const {return ground_;}
+  QAction *weight_action() const {return weight_;}
   void bind_ground(bool enabled,double ratio);
   QMenuBar *menus() const {return menu_;}
   GizmoSettings settings() const {return settings_;}
