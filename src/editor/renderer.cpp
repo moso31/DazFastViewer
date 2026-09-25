@@ -1,5 +1,6 @@
 #include "editor/renderer.h"
 #include "editor/pose_drag.h"
+#include "editor/powerpose_drag.h"
 #include "viewport/display.h"
 #include "viewport/overlay.h"
 #include "runtime/picking.h"
@@ -77,6 +78,8 @@ void Renderer::run(std::stop_token stop) {
   };
   RenderStatus state;
   PoseDrag pose_drag;uint64_t pose_serial=0,pose_commits=0,pose_previews=0;bool pose_paused=false;
+  PowerPoseDrag powerpose_drag;uint64_t powerpose_serial=0,powerpose_selection=0;
+  std::vector<std::vector<ir::Vec3>> powerpose_reference;
   bool pose_recovering=false;
   uint64_t sessions=0;
   bool blank_presented=false;
@@ -111,7 +114,9 @@ void Renderer::run(std::stop_token stop) {
       std::vector<Selection> selections;int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
       bool editing,ik_allowed;double preview_until,resize_until;
       std::vector<runtime::PosePin> pose_pins;
+      runtime::PowerPoseInput powerpose;
       {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
+      {std::lock_guard lock(mutex_);powerpose=powerpose_input_;}
       const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
         window_->width=width;window_->height=height;
@@ -176,13 +181,57 @@ void Renderer::run(std::stop_token stop) {
       if(pose_recovering&&pose_drag.generation!=current->generation) pose_recovering=false;
       const auto pointer=window_->pose_pointer();
       const auto input_camera=window_->mailbox.latest();
+      if(powerpose_drag.active&&(powerpose_drag.press.generation!=current->generation||powerpose_drag.press.revision!=desired.revision||
+        powerpose.cancelled||powerpose.serial!=powerpose_drag.press.serial||powerpose_selection!=window_->pose_selection||
+        input_camera.epoch!=powerpose_drag.camera.epoch||window_->width!=powerpose_drag.width||window_->height!=powerpose_drag.height)) {
+        powerpose_drag.active=false;state.pose_dragging=false;
+      }
+      if(powerpose.serial!=powerpose_serial&&(powerpose.moved||powerpose.cancelled)) {
+        powerpose_serial=powerpose.serial;
+        if(!pose_drag.active&&!powerpose.cancelled&&current==document&&powerpose.generation==current->generation&&
+          powerpose.revision==desired.revision&&desired.revision==applied_revision&&powerpose.skin>=0&&powerpose.target>=0&&
+          size_t(powerpose.skin)<current->skeletons.skins.size()&&size_t(powerpose.target)<current->catalog.targets.size()&&
+          selection_generation==current->generation&&selected_target==powerpose.target&&!selections.empty()&&
+          std::all_of(selections.begin(),selections.end(),[&](const auto &s){return s[0]==powerpose.target;})) {
+          const auto &skin=current->skeletons.skins[powerpose.skin];const auto &target=current->catalog.targets[powerpose.target];
+          if(skin.id==powerpose.instance&&skin.instance==target.instance) for(const auto &page:runtime::powerpose_templates()) for(const auto &point:page.points) if(point.id==powerpose.point) {
+            const auto &instance=render_scene.instances[skin.instance];const auto &mesh=render_scene.meshes[instance.mesh];
+            powerpose_drag.begin(skin,mesh,runtime->skin_source(powerpose.skin),desired.poses[powerpose.skin],runtime->effective_poses()[powerpose.skin],instance.transform,
+              desired.values[powerpose.target].transform,runtime::bind_powerpose(skin,point),powerpose,input_camera,window_->width,window_->height,runtime::pin_goals(pose_pins,powerpose.skin,instance.transform),&target,current->loaded.scene.instances[skin.instance].transform);
+            powerpose_selection=window_->pose_selection;
+            if(sampling_.interaction_probe&&powerpose_drag.active) {powerpose_reference.clear();for(const auto &m:render_scene.meshes) powerpose_reference.push_back(m.positions);state.pose_restore_max_error=0;}
+          }
+        }
+      }
+      if(powerpose_drag.active) {
+        const auto &skin=current->skeletons.skins[powerpose.skin];const auto begin=now();const bool updated=powerpose_drag.update(skin,powerpose);
+        if(updated) {state.pose_solve_ms=(now()-begin)*1000;state.pose_error=powerpose_drag.result.error;state.pose_angle_error=powerpose_drag.result.angle_error_degrees;state.pose_previews=++pose_previews;telemetry_.event("powerpose_proxy_update",{},state.pose_solve_ms);}
+        if(!powerpose.held) {
+          if(powerpose_drag.moved&&powerpose_drag.changed()&&!powerpose.cancelled) {
+            auto poses=desired.poses;state.pose_input=powerpose_drag.commit(skin,[&](const auto &input){poses[powerpose.skin]=input;return runtime->resolve_poses(desired.values,poses)[powerpose.skin];});
+            state.pose_commit=++pose_commits;state.pose_generation=powerpose.generation;state.pose_revision=powerpose.revision;state.pose_skin=powerpose.skin;state.pose_joint=powerpose_drag.bound.joints.empty()?-1:powerpose_drag.bound.joints.front();
+            state.pose_powerpose=true;state.pose_figure=powerpose_drag.bound.figure;state.pose_target=powerpose.target;state.pose_transform=powerpose_drag.transform;
+            state.pose_error=powerpose_drag.result.error;state.pose_angle_error=powerpose_drag.result.angle_error_degrees;
+            pose_recovering=true;pose_drag.generation=current->generation;telemetry_.event("powerpose_commit");
+          }
+          powerpose_drag.active=false;state.pose_dragging=false;
+        } else if(powerpose_drag.moved) {
+          if(!pose_paused) {session->set_pause(true);pose_paused=true;telemetry_.event("powerpose_preview_begin");}
+          window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
+          const auto goal=powerpose_drag.bones.empty()?powerpose_drag.world.point({}):powerpose_drag.bones.front().second;
+          overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal);
+          SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;state.pose_powerpose=true;state.pose_skin=powerpose.skin;
+          if(updated) {state.pose_latency_ms=(now()-powerpose.input_seconds)*1000;telemetry_.event("powerpose_proxy_present",{},state.pose_latency_ms);}
+          {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
+        }
+      }
       if(pose_drag.active&&(pose_drag.generation!=current->generation||pose_drag.revision!=desired.revision||pointer.cancelled||pointer.selection!=window_->pose_selection||pointer.serial!=pose_drag.press.serial||input_camera.epoch!=pose_drag.camera().epoch||window_->width!=state.width||window_->height!=state.height)) {
         pose_drag.active=false;state.pose_dragging=false;clicks=window_->clicks.load();
       }
       if(pointer.serial!=pose_serial) {
         pose_serial=pointer.serial;
         // 只使用按下时已经存在的单选身份；首次选中、Ctrl 多选和过期场景不能启动 IK。
-        if(ik_allowed&&pointer.held&&!pointer.cancelled&&!geometry_dirty&&current==document&&desired.revision==applied_revision&&
+        if(!powerpose_drag.active&&ik_allowed&&pointer.held&&!pointer.cancelled&&!geometry_dirty&&current==document&&desired.revision==applied_revision&&
            selection_generation==current->generation&&pointer.selection==window_->pose_selection&&telemetry_.displayed_epoch.load()>=epoch&&!preview&&selections.size()==1) {
           const auto hit=picking.screen(input_camera,pointer.start_x,pointer.start_y,window_->width,window_->height);
           int hit_target=-1;for(size_t t=0;t<current->catalog.targets.size();++t) if(int(current->catalog.targets[t].instance)==hit.instance) hit_target=int(t);
@@ -208,6 +257,7 @@ void Renderer::run(std::stop_token stop) {
             state.pose_input=pose_drag.commit(current->skeletons.skins.at(pose_drag.skin),[&](const auto &input){pose_inputs.at(pose_drag.skin)=input;return runtime->resolve_poses(desired.values,pose_inputs).at(pose_drag.skin);});
             timing("ik_constraint_finalize",finalize_begin,pose_drag.revision);state.pose_error=pose_drag.result.error;state.pose_angle_error=pose_drag.result.angle_error_degrees;
             state.pose_commit=++pose_commits;state.pose_generation=pose_drag.generation;state.pose_revision=pose_drag.revision;state.pose_skin=pose_drag.skin;state.pose_joint=pose_drag.joint;
+            state.pose_powerpose=false;state.pose_figure=false;
             clicks=window_->clicks.load();telemetry_.event("ik_commit");
             pose_recovering=true;
           }
@@ -302,6 +352,15 @@ void Renderer::run(std::stop_token stop) {
           uint64_t hash=14695981039346656037ull;for(auto p:render_scene.meshes[m].positions) for(float v:{p.x,p.y,p.z}) {hash^=std::bit_cast<uint32_t>(v);hash*=1099511628211ull;}state.mesh_hashes[m]=hash;
         }
         state.instance_transforms.clear();for(const auto &instance:render_scene.instances) state.instance_transforms.push_back(instance.transform.value);
+        if(!powerpose_reference.empty()) {
+          double maximum=0;
+          if(powerpose_reference.size()!=render_scene.meshes.size()) maximum=std::numeric_limits<double>::infinity();
+          else for(size_t m=0;m<powerpose_reference.size();++m) {const auto &before=powerpose_reference[m],&after=render_scene.meshes[m].positions;
+            if(before.size()!=after.size()) {maximum=std::numeric_limits<double>::infinity();break;}
+            for(size_t v=0;v<before.size();++v) {const double x=double(before[v].x)-after[v].x,y=double(before[v].y)-after[v].y,z=double(before[v].z)-after[v].z;maximum=std::max(maximum,x*x+y*y+z*z);}
+          }
+          state.pose_restore_max_error=std::sqrt(maximum);
+        }
       }
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
       session->draw();

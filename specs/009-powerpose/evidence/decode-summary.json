@@ -1,0 +1,146 @@
+{
+  "g8": {
+    "format": "Twofish-256 / ECB / zero padding / UTF-8 XML",
+    "plugin": {
+      "path": "C:\\Program Files\\DAZ 3D\\DAZStudio4\\plugins\\PowerPose\\dzpowerpose.dll",
+      "sha256": "eca69b6042fbdb76e72abb30dbbb66c09abd7cb49042511ac9c1293be4a7acb9",
+      "key_file_offset": 907280
+    },
+    "known_answer": true,
+    "source_unchanged": true,
+    "files": [
+      {
+        "source": "H:\\G3\\data\\DAZ 3D\\Genesis 8\\Female\\Tools\\PowerPose\\G8F_Body.dxe",
+        "sha256": "aa68d8048232df947965b2e210ca4c1cedc0e47ce4fc2cdab8c427d537b3618d",
+        "source_bytes": 18528,
+        "xml_sha256": "24adb19b07063857c60ea0cfc2933bed4db94d06cf1c42217201dad19fbe53a8",
+        "xml_bytes": 18525,
+        "root": "template_file",
+        "counts": {
+          "template_points": 2,
+          "node_points": 26,
+          "node_group_points": 8,
+          "property_points": 2
+        },
+        "round_trip": true
+      },
+      {
+        "source": "H:\\G3\\data\\DAZ 3D\\Genesis 8\\Female\\Tools\\PowerPose\\G8F_Hands.dxe",
+        "sha256": "8c3285ffbecf711f1bffa970e5aa2b823a73ba1263436ae2c906abeb0a34df18",
+        "source_bytes": 20656,
+        "xml_sha256": "5e3b13e882dde1bb45b010af3741c4169e73417315ec866f18d5ed1cfbaecb64",
+        "xml_bytes": 20653,
+        "root": "template_file",
+        "counts": {
+          "template_points": 2,
+          "node_points": 32,
+          "node_group_points": 12,
+          "property_points": 0
+        },
+        "round_trip": true
+      },
+      {
+        "source": "H:\\G3\\data\\DAZ 3D\\Genesis 8\\Female\\Tools\\PowerPose\\G8F_Head.dxe",
+        "sha256": "c472dc077c5f7c1872b87e42190cb8055c159c6a1fce9829972d9043029915cf",
+        "source_bytes": 10096,
+        "xml_sha256": "cf37953acfbd207745d5abfb95af8aacb34519b2ab64acb92da556f2b7a2db68",
+        "xml_bytes": 10091,
+        "root": "template_file",
+        "counts": {
+          "template_points": 2,
+          "node_points": 4,
+          "node_group_points": 1,
+          "property_points": 14
+        },
+        "round_trip": true
+      },
+      {
+        "source": "H:\\G3\\data\\DAZ 3D\\Genesis 8\\Female\\Tools\\PowerPose\\Templates.dxe",
+        "sha256": "9ada1fde342d2c5c5a3c5571bfaf7cfd95d12bdfe2a2e4ec749d664de885e022",
+        "source_bytes": 672,
+        "xml_sha256": "391351d234f1b1c7a6a1298a18adfb5de52888e9ff9f06ab64a4904f0ea029fb",
+        "xml_bytes": 658,
+        "root": "template_suite",
+        "counts": {
+          "template_points": 0,
+          "node_points": 0,
+          "node_group_points": 0,
+          "property_points": 0
+        },
+        "round_trip": true
+      }
+    ]
+  },
+  "g81": {
+    "format": "Twofish-256 / ECB / zero padding / UTF-8 XML",
+    "plugin": {
+      "path": "C:\\Program Files\\DAZ 3D\\DAZStudio4\\plugins\\PowerPose\\dzpowerpose.dll",
+      "sha256": "eca69b6042fbdb76e72abb30dbbb66c09abd7cb49042511ac9c1293be4a7acb9",
+      "key_file_offset": 907280
+    },
+    "known_answer": true,
+    "source_unchanged": true,
+    "files": [
+      {
+        "source": "C:\\Users\\Public\\Documents\\My DAZ 3D Library\\data\\DAZ 3D\\Genesis 8\\Female 8_1\\Tools\\PowerPose\\G8_1F_Body.dxe",
+        "sha256": "a4959a054229dd16097ca65f47aebecc561a7565ea2845f01485152c5525ad6a",
+        "source_bytes": 18528,
+        "xml_sha256": "0eabd4b871cdea28ea4c92ae41009eaa82094b440ba47261f5c90fe3b660db2c",
+        "xml_bytes": 18527,
+        "root": "template_file",
+        "counts": {
+          "template_points": 2,
+          "node_points": 26,
+          "node_group_points": 8,
+          "property_points": 2
+        },
+        "round_trip": true
+      },
+      {
+        "source": "C:\\Users\\Public\\Documents\\My DAZ 3D Library\\data\\DAZ 3D\\Genesis 8\\Female 8_1\\Tools\\PowerPose\\G8_1F_Hands.dxe",
+        "sha256": "53f005c90fa6c3d724353b0ff7033c8d65d5509b9479c76c90fc89f3f6662444",
+        "source_bytes": 20656,
+        "xml_sha256": "3753be8bfb61a84f4578d78695da7f717915702c5201e18105a14f8012bf7893",
+        "xml_bytes": 20655,
+        "root": "template_file",
+        "counts": {
+          "template_points": 2,
+          "node_points": 32,
+          "node_group_points": 12,
+          "property_points": 0
+        },
+        "round_trip": true
+      },
+      {
+        "source": "C:\\Users\\Public\\Documents\\My DAZ 3D Library\\data\\DAZ 3D\\Genesis 8\\Female 8_1\\Tools\\PowerPose\\G8_1F_Head.dxe",
+        "sha256": "7ee0d0324a9e171e29337a4bcb55f28f7513c5356d59a8394fce400fe42b1239",
+        "source_bytes": 10096,
+        "xml_sha256": "986cc064dca580f5c6aea16f716abaf18b2b848a836d3f62b8d993d1cb31359e",
+        "xml_bytes": 10093,
+        "root": "template_file",
+        "counts": {
+          "template_points": 2,
+          "node_points": 4,
+          "node_group_points": 1,
+          "property_points": 14
+        },
+        "round_trip": true
+      },
+      {
+        "source": "C:\\Users\\Public\\Documents\\My DAZ 3D Library\\data\\DAZ 3D\\Genesis 8\\Female 8_1\\Tools\\PowerPose\\Templates.dxe",
+        "sha256": "d3c4f6ba4250ed61035cb58b3a95bc558aceeb8b6b2fd80072390c3c7bfb8572",
+        "source_bytes": 672,
+        "xml_sha256": "27d9e5e6297ea233da657bda98ae3e677f68c819cf0ee13006ec18f104b439ec",
+        "xml_bytes": 662,
+        "root": "template_suite",
+        "counts": {
+          "template_points": 0,
+          "node_points": 0,
+          "node_group_points": 0,
+          "property_points": 0
+        },
+        "round_trip": true
+      }
+    ]
+  }
+}

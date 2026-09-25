@@ -3,6 +3,8 @@
 #include "bench/camera.h"
 
 namespace dfv::editor {
+void build_pose_proxy(const runtime::Skin &skin,const ir::Mesh &mesh,const std::vector<ir::Vec3> &source,
+  runtime::Skin &proxy_skin,ir::Mesh &proxy,std::vector<ir::Vec3> &proxy_source);
 // 拖动只处理有预算上限的宿主基础笼；不求服装、曲线头发、碰撞、细分或 Cycles。
 class PoseDrag {
   runtime::Skin solver_,proxy_skin_;

@@ -1,0 +1,15 @@
+{
+  "empty_rejected": true,
+  "truncated_rejected": true,
+  "corrupt_rejected": true,
+  "wrong_key_rejected": true,
+  "javascript_syntax": true,
+  "browser": {
+    "visited": 91,
+    "record_restore": true,
+    "export_json": true,
+    "ok": true
+  },
+  "production_code_changed": false,
+  "manual_daz_drag_validation": false
+}

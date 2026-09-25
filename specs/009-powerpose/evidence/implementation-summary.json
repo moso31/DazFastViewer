@@ -1,0 +1,142 @@
+{
+  "status": "PASS",
+  "checked_at": "2026-09-25T04:07:12.049026+00:00",
+  "manual_review": {
+    "sha256": "2cc3a30ff81f70df2cb8cb505497954b0d0f821e3dffb3d31f29829c5792b8c4",
+    "total": 91,
+    "consistent": 85,
+    "corrected": 6
+  },
+  "release": {
+    "editor_sha256": "9a6e556b5d8c171574070043b2ff2809f0d6bd1594a743ca25467cde90b09963",
+    "staged_at": "2026-09-25T04:01:20.000630+00:00",
+    "manifest_sha256": "c3a15098f583ffeacea0d8d3f2782230cae9ac3bdeaa16ae4ed309363cb6a7ae",
+    "source_hash_count": 161,
+    "source_mismatches": []
+  },
+  "ctest": {
+    "project_tests": 20,
+    "status": "PASS",
+    "log": "artifacts/009-powerpose/release-build.log",
+    "log_sha256": "95b672d9f65e3b451e22f913301eb7498a6ca5fe189d00332b3dd0807cc04ad0"
+  },
+  "qt": {
+    "directions": 680,
+    "scale_factors": [
+      1,
+      1.5
+    ],
+    "status": "PASS"
+  },
+  "native": [
+    {
+      "figure": "g8f",
+      "status": "PASS",
+      "directions": 680,
+      "max_pin_error_m": 1.7525343658013383e-07,
+      "max_pin_angle_error_degrees": 0.0,
+      "report": "artifacts/009-powerpose/g8f-directions.json",
+      "report_sha256": "eafe203a55166d057e2b781097c333bb4b79586e09be420753adfa781f2d15cc"
+    },
+    {
+      "figure": "g81f",
+      "status": "PASS",
+      "directions": 680,
+      "max_pin_error_m": 1.7525343658013383e-07,
+      "max_pin_angle_error_degrees": 0.0,
+      "report": "artifacts/009-powerpose/g81f-directions.json",
+      "report_sha256": "e921145e3c630eb309e178a09387ee478da35b11f8c0e5b3920bd8aa85180dba"
+    },
+    {
+      "figure": "g8m",
+      "status": "PASS",
+      "directions": 680,
+      "max_pin_error_m": 6.537857940340133e-08,
+      "max_pin_angle_error_degrees": 0.0,
+      "report": "artifacts/009-powerpose/g8m-directions.json",
+      "report_sha256": "c7a582d5433c157e60c7b249d744c86507655dd3a319f5a3f2633a17b6daf92a"
+    },
+    {
+      "figure": "g81m",
+      "status": "PASS",
+      "directions": 680,
+      "max_pin_error_m": 6.537857940340133e-08,
+      "max_pin_angle_error_degrees": 0.0,
+      "report": "artifacts/009-powerpose/g81m-directions.json",
+      "report_sha256": "f6d676b44289fb0d1c31eae472f09ca432d5081edc0adc85185107131409fe30"
+    }
+  ],
+  "gui": [
+    {
+      "name": "gui-g8f-release",
+      "status": "PASS",
+      "checks": 15,
+      "commits": 12,
+      "cancellations": 3,
+      "monitor": "VG279QL1A",
+      "curves": 0,
+      "triangles": 130946,
+      "release_seconds_range": [
+        0.41286009999999607,
+        0.4881914999999992
+      ],
+      "input_to_present_ms_median": 14.447100000005264,
+      "restored_geometry_exact": true,
+      "restore_max_error_m": 0,
+      "pin_acceptance_m": 0.005,
+      "pin_acceptance_degrees": 0.5,
+      "report": "artifacts/009-powerpose/gui-g8f-release/editor-check.json",
+      "report_sha256": "ce4366635f16891558d11ef7385ea9f13ce21045e8c40eb6833b59064db2d7b3"
+    },
+    {
+      "name": "gui-g81m-release",
+      "status": "PASS",
+      "checks": 15,
+      "commits": 12,
+      "cancellations": 3,
+      "monitor": "VG279QL1A",
+      "curves": 0,
+      "triangles": 518274,
+      "release_seconds_range": [
+        0.43988640000000245,
+        0.5665592000000004
+      ],
+      "input_to_present_ms_median": 15.227899999999295,
+      "restored_geometry_exact": true,
+      "restore_max_error_m": 0,
+      "pin_acceptance_m": 0.005,
+      "pin_acceptance_degrees": 0.5,
+      "report": "artifacts/009-powerpose/gui-g81m-release/editor-check.json",
+      "report_sha256": "33f8244191bcaaa43a001d41ad30ef6d30d34a5c4f388a272596a182924d7e4c"
+    },
+    {
+      "name": "gui-hair-release",
+      "status": "PASS",
+      "checks": 15,
+      "commits": 12,
+      "cancellations": 3,
+      "monitor": "VG279QL1A",
+      "curves": 35638,
+      "triangles": 760684,
+      "release_seconds_range": [
+        0.497766299999995,
+        1.7442094000000026
+      ],
+      "input_to_present_ms_median": 14.28239999999903,
+      "restored_geometry_exact": true,
+      "restore_max_error_m": 0,
+      "pin_acceptance_m": 0.005,
+      "pin_acceptance_degrees": 0.5,
+      "report": "artifacts/009-powerpose/gui-hair-release/editor-check.json",
+      "report_sha256": "562d5fbd87d05c2668edf93141aed2ba13380f01050fabfd654a697a64bbb6a2"
+    }
+  ],
+  "complex_scene": {
+    "fixture": "artifacts/008/hair-fixture/scene.duf",
+    "fixture_sha256": "75539ea97ef39c5b06a8bd58e9412c25c841fed36d5b3c85b13d820165ec865d",
+    "origin": "H:\\G1\\Scenes\\test.duf",
+    "origin_sha256": "a7ea8dcbd7ae06db55b20bb7d0b6bd890055284c6340a4d5046d5263ed0b8450",
+    "origin_unchanged": true,
+    "scope": "角色 A 及挂接物；沿用保存的细分设置，不代表原三角色全场景"
+  }
+}

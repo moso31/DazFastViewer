@@ -2,6 +2,15 @@
 #include <map>
 
 namespace dfv::editor {
+void build_pose_proxy(const runtime::Skin &skin,const ir::Mesh &mesh,const std::vector<ir::Vec3> &source,
+  runtime::Skin &proxy_skin,ir::Mesh &proxy,std::vector<ir::Vec3> &proxy_source) {
+  proxy={};proxy_skin=skin;proxy_skin.weights.clear();proxy_source.clear();std::map<uint32_t,uint32_t> indices;
+  constexpr size_t triangle_budget=40000;const size_t stride=std::max(size_t(1),(mesh.triangles.size()+triangle_budget-1)/triangle_budget);
+  for(size_t t=0;t<mesh.triangles.size();t+=stride) {auto triangle=mesh.triangles[t];
+    for(auto &v:triangle.vertices) {const auto old=v;auto [it,inserted]=indices.emplace(old,uint32_t(indices.size()));if(inserted) {proxy_source.push_back(source.at(old));proxy_skin.weights.push_back(skin.weights.at(old));}v=it->second;}
+    proxy.triangles.push_back(triangle);
+  }
+}
 void PoseDrag::begin(const runtime::Skin &skeleton,const ir::Mesh &mesh,const std::vector<ir::Vec3> &source,
   const std::vector<runtime::JointPose> &input,const std::vector<runtime::JointPose> &effective,
   ir::Transform world,int bone,runtime::PosePointer pointer,CameraState camera,int width,int height,std::vector<runtime::IkGoal> pins) {
@@ -13,12 +22,7 @@ void PoseDrag::begin(const runtime::Skin &skeleton,const ir::Mesh &mesh,const st
   goal={bone,true,runtime::joint_point(solver_,effective,bone,true),1};start_=world.point(goal.position);
   const auto m=camera.matrix();const float depth=(start_.x-m[3])*m[2]+(start_.y-m[7])*m[6]+(start_.z-m[11])*m[10];if(depth<=0) return;
   pixel_scale_=2*std::tan(.4f)*depth/std::max(1,std::min(width,height));
-  proxy={};proxy_skin_=solver_;source_.clear();std::map<uint32_t,uint32_t> indices;
-  constexpr size_t triangle_budget=40000;const size_t stride=std::max(size_t(1),(mesh.triangles.size()+triangle_budget-1)/triangle_budget);
-  for(size_t t=0;t<mesh.triangles.size();t+=stride) {auto triangle=mesh.triangles[t];
-    for(auto &v:triangle.vertices) {const auto old=v;auto [it,inserted]=indices.emplace(old,uint32_t(indices.size()));if(inserted) {source_.push_back(source.at(old));proxy_skin_.weights.push_back(skeleton.weights.at(old));}v=it->second;}
-    proxy.triangles.push_back(triangle);
-  }
+  build_pose_proxy(skeleton,mesh,source,proxy_skin_,proxy,source_);
   proxy.positions=runtime::deform(proxy_skin_,effective,source_);active=true;result={};
 }
 bool PoseDrag::update(runtime::PosePointer pointer) {

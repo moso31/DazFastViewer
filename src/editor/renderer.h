@@ -1,6 +1,7 @@
 #pragma once
 #include "editor/document.h"
 #include "editor/selection.h"
+#include "runtime/powerpose.h"
 #include "cycles/adapter.h"
 #include "viewport/window.h"
 #include "bench/telemetry.h"
@@ -20,7 +21,11 @@ struct RenderStatus {
   uint64_t pose_commit=0,pose_revision=0,pose_generation=0,pose_previews=0;
   int pose_skin=-1,pose_joint=-1;
   bool pose_dragging=false,pose_restoring=false;
+  bool pose_powerpose=false,pose_figure=false;
+  int pose_target=-1;
+  runtime::TransformValues pose_transform;
   double pose_solve_ms=0,pose_error=0,pose_latency_ms=0,pose_angle_error=0;
+  double pose_restore_max_error=0; // 仅 interaction_probe 的逐顶点恢复诊断。
   std::vector<runtime::JointPose> pose_input;
   std::vector<std::vector<runtime::JointPose>> effective_poses;
   std::vector<std::vector<runtime::JointPose>> input_poses;
@@ -78,6 +83,7 @@ class Renderer {
   uint64_t retry_resources_=0;
   bool edit_active_=false;
   std::vector<runtime::PosePin> pose_pins_;
+  runtime::PowerPoseInput powerpose_input_;
   uint64_t interaction_revision_=0;
   double edit_preview_until_=0,resize_preview_until_=0;
   int selected_target_=-1,selected_joint_=-1;
@@ -95,6 +101,7 @@ public:
   void camera_view(const std::array<float,6> &view);
   void edit(const Snapshot &snapshot);
   void interaction(bool active);
+  void powerpose(runtime::PowerPoseInput input) {std::lock_guard lock(mutex_);powerpose_input_=std::move(input);}
   void pose_pins(std::vector<runtime::PosePin> pins) {std::lock_guard lock(mutex_);pose_pins_=std::move(pins);++window_->pose_selection;}
   void retry_resources();
   RenderStatus status();

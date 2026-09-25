@@ -1,0 +1,644 @@
+{
+  "spec": "009-powerpose",
+  "version": 1,
+  "exported_at": "2026-09-25T02:57:40.204Z",
+  "results": {
+    "N01": {
+      "id": "N01",
+      "template": "Head",
+      "name": "头部",
+      "result": "一致",
+      "note": ""
+    },
+    "N02": {
+      "id": "N02",
+      "template": "Head",
+      "name": "双眼联动组",
+      "result": "一致",
+      "note": ""
+    },
+    "N04": {
+      "id": "N04",
+      "template": "Head",
+      "name": "角色左眼",
+      "result": "一致",
+      "note": ""
+    },
+    "N03": {
+      "id": "N03",
+      "template": "Head",
+      "name": "角色右眼",
+      "result": "一致",
+      "note": ""
+    },
+    "N05": {
+      "id": "N05",
+      "template": "Head",
+      "name": "下颈部",
+      "result": "一致",
+      "note": ""
+    },
+    "NT01": {
+      "id": "NT01",
+      "template": "Head",
+      "name": "Face 入口（不支持）",
+      "result": "一致",
+      "note": ""
+    },
+    "NT02": {
+      "id": "NT02",
+      "template": "Head",
+      "name": "转到 Body",
+      "result": "一致",
+      "note": ""
+    },
+    "H01": {
+      "id": "H01",
+      "template": "Hands",
+      "name": "左中指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H02": {
+      "id": "H02",
+      "template": "Hands",
+      "name": "左食指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H03": {
+      "id": "H03",
+      "template": "Hands",
+      "name": "左无名指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H04": {
+      "id": "H04",
+      "template": "Hands",
+      "name": "左中指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H05": {
+      "id": "H05",
+      "template": "Hands",
+      "name": "左小指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H06": {
+      "id": "H06",
+      "template": "Hands",
+      "name": "左无名指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H07": {
+      "id": "H07",
+      "template": "Hands",
+      "name": "左食指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H08": {
+      "id": "H08",
+      "template": "Hands",
+      "name": "左小指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H09": {
+      "id": "H09",
+      "template": "Hands",
+      "name": "左中指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H10": {
+      "id": "H10",
+      "template": "Hands",
+      "name": "左食指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H11": {
+      "id": "H11",
+      "template": "Hands",
+      "name": "左无名指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H12": {
+      "id": "H12",
+      "template": "Hands",
+      "name": "左小指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H13": {
+      "id": "H13",
+      "template": "Hands",
+      "name": "左中指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H14": {
+      "id": "H14",
+      "template": "Hands",
+      "name": "左食指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H15": {
+      "id": "H15",
+      "template": "Hands",
+      "name": "左拇指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H16": {
+      "id": "H16",
+      "template": "Hands",
+      "name": "左无名指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H17": {
+      "id": "H17",
+      "template": "Hands",
+      "name": "左小指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H18": {
+      "id": "H18",
+      "template": "Hands",
+      "name": "左拇指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H19": {
+      "id": "H19",
+      "template": "Hands",
+      "name": "右中指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H20": {
+      "id": "H20",
+      "template": "Hands",
+      "name": "左拇指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H21": {
+      "id": "H21",
+      "template": "Hands",
+      "name": "角色左整手联动组",
+      "result": "一致",
+      "note": ""
+    },
+    "H22": {
+      "id": "H22",
+      "template": "Hands",
+      "name": "右食指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H23": {
+      "id": "H23",
+      "template": "Hands",
+      "name": "右无名指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H24": {
+      "id": "H24",
+      "template": "Hands",
+      "name": "左拇指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H25": {
+      "id": "H25",
+      "template": "Hands",
+      "name": "右中指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H26": {
+      "id": "H26",
+      "template": "Hands",
+      "name": "右食指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H27": {
+      "id": "H27",
+      "template": "Hands",
+      "name": "右无名指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H28": {
+      "id": "H28",
+      "template": "Hands",
+      "name": "右小指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H29": {
+      "id": "H29",
+      "template": "Hands",
+      "name": "角色左手腕",
+      "result": "一致",
+      "note": ""
+    },
+    "H30": {
+      "id": "H30",
+      "template": "Hands",
+      "name": "右中指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H31": {
+      "id": "H31",
+      "template": "Hands",
+      "name": "右小指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H32": {
+      "id": "H32",
+      "template": "Hands",
+      "name": "右食指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H33": {
+      "id": "H33",
+      "template": "Hands",
+      "name": "右无名指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H34": {
+      "id": "H34",
+      "template": "Hands",
+      "name": "右中指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H35": {
+      "id": "H35",
+      "template": "Hands",
+      "name": "右食指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H36": {
+      "id": "H36",
+      "template": "Hands",
+      "name": "右小指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H37": {
+      "id": "H37",
+      "template": "Hands",
+      "name": "右拇指末节",
+      "result": "一致",
+      "note": ""
+    },
+    "H38": {
+      "id": "H38",
+      "template": "Hands",
+      "name": "右无名指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H39": {
+      "id": "H39",
+      "template": "Hands",
+      "name": "右小指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "H40": {
+      "id": "H40",
+      "template": "Hands",
+      "name": "右拇指中节",
+      "result": "一致",
+      "note": ""
+    },
+    "H41": {
+      "id": "H41",
+      "template": "Hands",
+      "name": "右拇指近节",
+      "result": "一致",
+      "note": ""
+    },
+    "H42": {
+      "id": "H42",
+      "template": "Hands",
+      "name": "角色右整手联动组",
+      "result": "一致",
+      "note": ""
+    },
+    "H43": {
+      "id": "H43",
+      "template": "Hands",
+      "name": "右拇指三节联动",
+      "result": "一致",
+      "note": ""
+    },
+    "HT02": {
+      "id": "HT02",
+      "template": "Hands",
+      "name": "转到 Head",
+      "result": "一致",
+      "note": ""
+    },
+    "H44": {
+      "id": "H44",
+      "template": "Hands",
+      "name": "角色右手腕",
+      "result": "一致",
+      "note": ""
+    },
+    "HT01": {
+      "id": "HT01",
+      "template": "Hands",
+      "name": "转到 Body",
+      "result": "一致",
+      "note": ""
+    },
+    "B01": {
+      "id": "B01",
+      "template": "Body",
+      "name": "头部",
+      "result": "一致",
+      "note": ""
+    },
+    "BT02": {
+      "id": "BT02",
+      "template": "Body",
+      "name": "转到 Head",
+      "result": "一致",
+      "note": ""
+    },
+    "B02": {
+      "id": "B02",
+      "template": "Body",
+      "name": "头颈联动组",
+      "result": "一致",
+      "note": ""
+    },
+    "B03": {
+      "id": "B03",
+      "template": "Body",
+      "name": "上颈部",
+      "result": "一致",
+      "note": ""
+    },
+    "B04": {
+      "id": "B04",
+      "template": "Body",
+      "name": "下颈部",
+      "result": "一致",
+      "note": ""
+    },
+    "B05": {
+      "id": "B05",
+      "template": "Body",
+      "name": "角色右锁骨",
+      "result": "一致",
+      "note": ""
+    },
+    "B06": {
+      "id": "B06",
+      "template": "Body",
+      "name": "角色左锁骨",
+      "result": "一致",
+      "note": ""
+    },
+    "B07": {
+      "id": "B07",
+      "template": "Body",
+      "name": "双肩联动组",
+      "result": "有差异",
+      "note": "操作上没有任何问题，但图标需要采用和B02 B12等相似的复合联动组图标（周围有一圈虚线）"
+    },
+    "B08": {
+      "id": "B08",
+      "template": "Body",
+      "name": "角色右上臂",
+      "result": "有差异",
+      "note": "左键上下移动是bend，右键上下移动是twist"
+    },
+    "B09": {
+      "id": "B09",
+      "template": "Body",
+      "name": "角色左上臂",
+      "result": "有差异",
+      "note": "左键上下移动是bend，右键上下移动是twist"
+    },
+    "B10": {
+      "id": "B10",
+      "template": "Body",
+      "name": "上胸部",
+      "result": "一致",
+      "note": ""
+    },
+    "B11": {
+      "id": "B11",
+      "template": "Body",
+      "name": "角色右手臂联动组",
+      "result": "一致",
+      "note": ""
+    },
+    "B12": {
+      "id": "B12",
+      "template": "Body",
+      "name": "角色左手臂联动组",
+      "result": "一致",
+      "note": ""
+    },
+    "B13": {
+      "id": "B13",
+      "template": "Body",
+      "name": "下胸部",
+      "result": "一致",
+      "note": ""
+    },
+    "B14": {
+      "id": "B14",
+      "template": "Body",
+      "name": "角色右前臂",
+      "result": "一致",
+      "note": ""
+    },
+    "B15": {
+      "id": "B15",
+      "template": "Body",
+      "name": "角色左前臂",
+      "result": "一致",
+      "note": ""
+    },
+    "B16": {
+      "id": "B16",
+      "template": "Body",
+      "name": "上腹部",
+      "result": "一致",
+      "note": ""
+    },
+    "B17": {
+      "id": "B17",
+      "template": "Body",
+      "name": "躯干联动组",
+      "result": "一致",
+      "note": ""
+    },
+    "B18": {
+      "id": "B18",
+      "template": "Body",
+      "name": "下腹部",
+      "result": "一致",
+      "note": ""
+    },
+    "B19": {
+      "id": "B19",
+      "template": "Body",
+      "name": "角色右手腕",
+      "result": "一致",
+      "note": ""
+    },
+    "B20": {
+      "id": "B20",
+      "template": "Body",
+      "name": "角色左手腕",
+      "result": "一致",
+      "note": ""
+    },
+    "B21": {
+      "id": "B21",
+      "template": "Body",
+      "name": "平移髋部",
+      "result": "一致",
+      "note": ""
+    },
+    "B22": {
+      "id": "B22",
+      "template": "Body",
+      "name": "髋部",
+      "result": "一致",
+      "note": ""
+    },
+    "B23": {
+      "id": "B23",
+      "template": "Body",
+      "name": "骨盆",
+      "result": "一致",
+      "note": ""
+    },
+    "B24": {
+      "id": "B24",
+      "template": "Body",
+      "name": "角色右大腿",
+      "result": "一致",
+      "note": ""
+    },
+    "B25": {
+      "id": "B25",
+      "template": "Body",
+      "name": "角色左大腿",
+      "result": "一致",
+      "note": ""
+    },
+    "B26": {
+      "id": "B26",
+      "template": "Body",
+      "name": "角色右腿部联动组",
+      "result": "有差异",
+      "note": "需要注意角色身上自带的角度约束（可以参考任意角色duf文件）；需要注意大腿和小腿的角度变化幅度不同，避免出现骨折的状态。"
+    },
+    "B27": {
+      "id": "B27",
+      "template": "Body",
+      "name": "角色左腿部联动组",
+      "result": "有差异",
+      "note": "需要注意角色身上自带的角度约束（可以参考任意角色duf文件）；需要注意大腿和小腿的角度变化幅度不同，避免出现骨折的状态。"
+    },
+    "B28": {
+      "id": "B28",
+      "template": "Body",
+      "name": "双腿联动组",
+      "result": "有差异",
+      "note": "需要注意角色身上自带的角度约束（可以参考任意角色duf文件）；需要注意大腿和小腿的角度变化幅度不同，避免出现骨折的状态。"
+    },
+    "B29": {
+      "id": "B29",
+      "template": "Body",
+      "name": "角色右小腿",
+      "result": "一致",
+      "note": ""
+    },
+    "B30": {
+      "id": "B30",
+      "template": "Body",
+      "name": "角色左小腿",
+      "result": "一致",
+      "note": ""
+    },
+    "B31": {
+      "id": "B31",
+      "template": "Body",
+      "name": "角色右脚踝",
+      "result": "一致",
+      "note": ""
+    },
+    "B32": {
+      "id": "B32",
+      "template": "Body",
+      "name": "角色左脚踝",
+      "result": "一致",
+      "note": ""
+    },
+    "B33": {
+      "id": "B33",
+      "template": "Body",
+      "name": "角色右脚趾",
+      "result": "一致",
+      "note": ""
+    },
+    "B34": {
+      "id": "B34",
+      "template": "Body",
+      "name": "角色左脚趾",
+      "result": "一致",
+      "note": ""
+    },
+    "B35": {
+      "id": "B35",
+      "template": "Body",
+      "name": "平移角色整体",
+      "result": "一致",
+      "note": ""
+    },
+    "B36": {
+      "id": "B36",
+      "template": "Body",
+      "name": "旋转角色整体",
+      "result": "一致",
+      "note": ""
+    },
+    "BT01": {
+      "id": "BT01",
+      "template": "Body",
+      "name": "转到 Hands",
+      "result": "一致",
+      "note": ""
+    }
+  }
+}

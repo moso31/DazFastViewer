@@ -1,5 +1,15 @@
 # 交接记录
 
+## 最新：009 PowerPose 已实现并部署
+
+2026-09-25：用户已提交 91 项人工核对记录并授权实施，6 项差异已落实。支持 G8／G8.1 男女角色的 Body、Hands、Head 共 85 个姿态点；男性沿用女性确认的交互机制，使用男性底图及坐标。Head 仅保留五点，Face 禁用。独立 DXE 解码工具已验证男女四套共 16 个文件；正式程序使用固化配置，不依赖 Python 或 DAZ 插件。
+
+Qt 面板已接入原生通道限位、Bend／Twist 代理、灰模预览、一次提交、取消、角色隔离和位置／角度固定。整体变换与正式路径共用自身轴心；髋部约束补齐直腿压缩分支。复杂场景测试发现并修复碰撞读取旧 GeoGraft 接缝导致的恢复残差，独立回归覆盖此问题。
+
+20 项工程检查、四套角色 2,720 项方向检查、100%／150% Qt 手势检查和三组副屏共 45 项交互全部通过；恢复后逐顶点误差为零。正式证据为 `artifacts/009-powerpose/{gui-g8f-release,gui-g81m-release,gui-hair-release}`。复杂场景为原 test.duf 提取的角色 A 及挂接物，包含 35,638 根发丝，不代表原三角色全场景验收。详见 [009 实施记录](specs/009-powerpose/execution-report.md)和 [验证汇总](specs/009-powerpose/evidence/implementation-summary.json)。
+
+`out/DazFastViewer.exe` 已更新，SHA-256 为 `9a6e556b5d8c171574070043b2ff2809f0d6bd1594a743ca25467cde90b09963`，发布清单的 161 项源码哈希一致。原始资源未改写，用户原窗口未关闭，重启后生效；本轮未创建 Git 提交。此前预案中的待核措辞为历史记录，不是当前状态。
+
 ## 最新：参数滚轮选择与小数精度
 
 2026-09-25：参数列表仅允许在左键选中的行上滚轮调参，其他行转交列表翻页；点击名称、Slider、数字框共用行选择。Slider 滚轮复用数字框的十进制步进，修复连续滚动及百分比换算的 float 尾数。专项离屏交互及工程规定的 18 项回归通过，已部署 `out/DazFastViewer.exe`，需重启使用。详见 [滚轮修复记录](Docs/parameter_wheel_execution_cn.md)。本轮未创建 Git 提交。

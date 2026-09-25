@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "pages": [
+    {
+      "name": "Body",
+      "supported_points": 38,
+      "male_g8_g81_coordinates_equal": true
+    },
+    {
+      "name": "Hands",
+      "supported_points": 46,
+      "male_g8_g81_coordinates_equal": true
+    },
+    {
+      "name": "Head",
+      "supported_points": 7,
+      "male_g8_g81_coordinates_equal": true
+    }
+  ]
+}

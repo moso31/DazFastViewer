@@ -3,6 +3,7 @@
 #include "editor/parameters.h"
 #include "editor/content_browser.h"
 #include "editor/content_catalog.h"
+#include "editor/powerpose_panel.h"
 #include "daz/documents.h"
 #include "daz/content_entry.h"
 #include "render_ir/options_json.h"
@@ -45,6 +46,9 @@
 #include <QInputDialog>
 #include <QSettings>
 #include <QCloseEvent>
+#include <QMouseEvent>
+#include <QKeyEvent>
+#include <QFocusEvent>
 #include <QTreeWidgetItemIterator>
 #include <psapi.h>
 #include <fstream>
@@ -57,6 +61,8 @@ using namespace dfv::editor;
 static std::filesystem::path file_path(const QString &s) {return std::filesystem::path(s.toStdWString());}
 static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsizetype(s.size()));}
 class Editor final:public QMainWindow {
+  #include "editor/powerpose.inl"
+  #include "editor/powerpose_test.inl"
   #include "editor/pose_test.inl"
   QWidget *host_=nullptr;
   ParameterPanel *parameters_=nullptr;
@@ -348,7 +354,7 @@ class Editor final:public QMainWindow {
     }
     return submitted;
   }
-  void send() {++snapshot_.revision;renderer_->edit(submitted_snapshot());}
+  void send() {if(powerpose_) powerpose_->cancel();++snapshot_.revision;renderer_->edit(submitted_snapshot());}
   void prune_pending_parameters() {
     std::erase_if(pending_parameters_,[&](const auto &p) {for(const auto &t:document_->catalog.targets) if(t.id==p.first.first) for(const auto &m:t.morphs) if(m.id==p.first.second&&m.unsupported.empty()) return false;return true;});
     apply_parameters_->setEnabled(!pending_parameters_.empty());
@@ -718,10 +724,12 @@ class Editor final:public QMainWindow {
     const auto &p=effective_roots_[size_t(selected_)];return axis<0?p.general_scale:axis==0?p.scale.x:axis==1?p.scale.y:p.scale.z;
   }
   void select(int index,int joint=-1,int light=-1) {
+    if(powerpose_) powerpose_->cancel();
     {QSignalBlocker block(visible_);visible_->setEnabled(document_&&index>=0&&joint<0&&light<0);visible_->setChecked(document_&&index>=0?snapshot_.values.at(size_t(index)).visible:false);}
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1);
+    if(renderer_) refresh_powerpose(renderer_->status());
     if(light>=0&&document_) {
       const auto &l=snapshot_.lights.at(size_t(light));light_base_=l.transform;light_base_.value[3]=light_base_.value[7]=light_base_.value[11]=0;selection_->setText(text(l.id));parameters_->bind(nullptr,nullptr);
       const float data[]={l.transform.value[3]*100,l.transform.value[11]*100,-l.transform.value[7]*100,0,0,0,100,100,100};
@@ -803,6 +811,7 @@ class Editor final:public QMainWindow {
     if(!rebuild_test_file_.empty()) {report["scope"]="scene-rebuild-latency";report["checks"]=rebuild_checks_;report["sessions"]=status.sessions;report["initial_subdivision_level"]=rebuild_level_;report["initial_render_subdivision_level"]=rebuild_render_level_;}
     if(subdivision_stress_test_) {report["scope"]="subdivision-repeat-coalesce-budget-and-restore";report["checks"]=subdivision_checks_;report["sessions"]=status.sessions;}
     if(pose_edit_test_) {report["scope"]="native-FK-left-button-IK-selection-proxy-full-quality-cancel";report["checks"]=pose_checks_;}
+    if(powerpose_test_) {report["scope"]="powerpose-qt-proxy-commit-cancel-native-limits-pins";report["checks"]=pp_checks_;}
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
     if(edit_regression_test_) {report["scope"]="multi-selection-focus-subdivision-ERC-scale";report["checks"]=regression_checks_;}
@@ -1231,10 +1240,14 @@ class Editor final:public QMainWindow {
     if(state.pose_commit!=pose_commit_) {
       pose_commit_=state.pose_commit;
       if(document_&&state.pose_generation==document_->generation&&state.pose_revision==snapshot_.revision&&state.pose_skin>=0&&size_t(state.pose_skin)<snapshot_.poses.size()) {
-        snapshot_.poses[size_t(state.pose_skin)]=state.pose_input;send();select(selected_,selected_joint_,selected_light_);
-        pose_status_->setText(state.pose_angle_error>.5?QStringLiteral("固定角度受关节限位或可达范围限制，已保留最接近的姿势（残差 %1 度）。").arg(state.pose_angle_error,0,'f',2):QStringLiteral("IK 姿势已应用。"));
+        if(state.pose_figure&&state.pose_powerpose&&state.pose_target>=0&&size_t(state.pose_target)<snapshot_.values.size()) snapshot_.values[state.pose_target].transform=state.pose_transform;
+        else snapshot_.poses[size_t(state.pose_skin)]=state.pose_input;
+        send();select(selected_,selected_joint_,selected_light_);
+        pose_status_->setText(state.pose_error>.005||state.pose_angle_error>.5?QStringLiteral("固定约束受关节限位或可达范围限制（位置 %1 厘米，角度 %2 度）。").arg(state.pose_error*100,0,'f',2).arg(state.pose_angle_error,0,'f',2):state.pose_powerpose?QStringLiteral("PowerPose 姿势已应用。"):QStringLiteral("IK 姿势已应用。"));
       }
     }
+    refresh_powerpose(state);
+    if(powerpose_test_) {powerpose_tick(state);return;}
     if(pose_edit_test_) {pose_edit_tick(state);return;}
     if(!rebuild_test_file_.empty()) {rebuild_tick(state);return;}
     if(subdivision_stress_test_) {subdivision_stress_tick(state);return;}
@@ -1324,8 +1337,8 @@ class Editor final:public QMainWindow {
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision) {effective_roots_=state.effective_roots;effective_generation_=state.generation;if(selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);}
-    if(state.pose_dragging) statusBar()->showMessage(QStringLiteral("IK 拖动 · 基础网格预览 · 松开后更新服装、头发和完整质量 · Esc 取消 · %1 ms").arg(state.pose_solve_ms,0,'f',1));
-    else if(state.pose_restoring) statusBar()->showMessage(QStringLiteral("正在恢复 IK 完整形变、服装、头发和渲染质量…"));
+    if(state.pose_dragging) statusBar()->showMessage(QStringLiteral("%1 拖动 · 基础网格预览 · 松开后更新服装、头发和完整质量 · Esc 取消 · %2 ms").arg(state.pose_powerpose?QStringLiteral("PowerPose"):QStringLiteral("IK")).arg(state.pose_solve_ms,0,'f',1));
+    else if(state.pose_restoring) statusBar()->showMessage(QStringLiteral("正在恢复姿势的完整形变、服装、头发和渲染质量…"));
     else if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
     else if(!state.resource_error.empty()) statusBar()->showMessage(QStringLiteral("Morph 未应用：")+text(state.resource_error)+QStringLiteral("；可重试加载或刷新参数目录"));
     else if(state.pending_payloads) statusBar()->showMessage(QStringLiteral("正在异步载入 %1 项 Morph 数据，完成后应用最新输入…").arg(state.pending_payloads));
@@ -1608,6 +1621,7 @@ class Editor final:public QMainWindow {
 public:
   void edit_regression_test() {edit_regression_test_=self_test_=true;}
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
+  void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
   void joint_selection_test() {joint_selection_test_=self_test_=true;GetCursorPos(&workflow_cursor_);}
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
@@ -1671,6 +1685,10 @@ public:
     apply_actions->addWidget(manual_morph_);apply_actions->addWidget(apply_parameters_);properties->addLayout(apply_actions);
     connect(apply_parameters_,&QPushButton::clicked,this,[this]{apply_parameters();});connect(manual_morph_,&QCheckBox::toggled,this,[this](bool manual){if(!manual) apply_parameters();});
     auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
+    powerpose_=new PowerPosePanel;auto *powerpose_dock=dock(QStringLiteral("PowerPose"),powerpose_,Qt::RightDockWidgetArea);tabifyDockWidget(property_dock,powerpose_dock);powerpose_dock->raise();
+    powerpose_->selection=[this](const auto &p){select_powerpose(p);};
+    powerpose_->input=[this](auto input){if(renderer_) renderer_->powerpose(std::move(input));};
+    powerpose_->action=[this](const auto &p,int operation,bool enabled){powerpose_action(p,operation,enabled);};
     auto *file_menu=menuBar()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
     connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 资源 (*.duf *.dse)"));if(!file.isEmpty()) open_asset(file_path(file));});
     connect(file_menu->addAction(QStringLiteral("近期使用…")),&QAction::triggered,this,[this,explorer_dock]{explorer_dock->show();explorer_dock->raise();browser_->show_recent();});
@@ -1844,6 +1862,7 @@ int main(int argc,char **argv) {
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"pose-edit-test",QStringLiteral("副屏验证原生 FK 参数、左键 IK、选择门槛、预览和取消")});
+  parser.addOption({"powerpose-test",QStringLiteral("副屏验证 PowerPose 三页、灰模、提交、取消和固定约束")});
   parser.addOption({"pose-test-level",QStringLiteral("FK / IK 验证时使用的宿主细分等级"),"level","-1"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
   parser.addOption({"lazy-test",QStringLiteral("验证异步 Morph、手动应用和参数目录刷新后退出")});
@@ -1854,7 +1873,7 @@ int main(int argc,char **argv) {
   try {
     SamplingSettings sampling;
     sampling.rebuild_probe=parser.isSet("rebuild-test");
-    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test");
+    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||parser.isSet("powerpose-test");
     if(parser.isSet("sampling-settings")) {nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
@@ -1866,11 +1885,12 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
     if(parser.isSet("pose-edit-test")) editor.pose_edit_test(parser.value("pose-test-level").toInt());
+    if(parser.isSet("powerpose-test")) editor.powerpose_test();
     if(parser.isSet("joint-selection-test")) editor.joint_selection_test();
     if(parser.isSet("options-test")) editor.options_test();
     if(parser.isSet("navigation-test")) editor.navigation_test();

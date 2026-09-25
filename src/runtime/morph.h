@@ -52,6 +52,7 @@ struct TransformValues {
 struct Properties {std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;};
 void validate_transform(const TransformValues &value);
 ir::Transform make_transform(const TransformValues &value,const std::string &rotation_order="XYZ");
+ir::Transform parameter_transform(const TransformValues &value,const Target &target,const ir::Transform &loaded_transform);
 struct EvaluationStats {uint64_t morph_evaluations=0,offsets_visited=0,transform_evaluations=0;};
 // 单工作线程拥有；Qt 只发送属性快照，不访问求值中的网格。
 class MorphRuntime {

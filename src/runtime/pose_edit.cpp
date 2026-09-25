@@ -80,7 +80,7 @@ IkResult solve_ik(const Skin &skin,std::vector<JointPose> &poses,std::span<const
   const bool angles=std::any_of(goals.begin(),goals.end(),[](const auto &g){return g.fix_orientation;});
   for(const auto &g:goals) if(g.fix_orientation) for(float v:g.orientation.value) if(!std::isfinite(v)) throw std::runtime_error("无效 IK 固定角度");
   auto measure=[&] {
-    if(goals.front().fix_position) result.error=norm(sub(goals.front().position,joint_point(skin,poses,goals.front().joint,goals.front().end)));
+    for(const auto &g:goals) if(g.fix_position) result.error=std::max(result.error,norm(sub(g.position,joint_point(skin,poses,g.joint,g.end))));
     for(const auto &g:goals) if(g.fix_orientation) result.angle_error_degrees=std::max(result.angle_error_degrees,orientation_error_degrees(g.orientation,joint_orientation(skin,poses,g.joint)));
     result.changed=poses!=initial;
   };
@@ -145,7 +145,7 @@ IkResult refine_ik_input(const Skin &skin,std::vector<JointPose> &input,std::spa
   const auto original=input;auto candidate=input;double best_score=std::numeric_limits<double>::max();IkResult best;
   for(int iteration=0;iteration<10;++iteration) {
     const auto effective=resolve(candidate);IkResult measured;double score=0;
-    for(size_t k=0;k<goals.size();++k) {const auto &g=goals[k];if(g.fix_position) {const double e=norm(sub(g.position,joint_point(skin,effective,g.joint,g.end)));score+=g.weight*e*e;if(k==0) measured.error=e;}
+    for(size_t k=0;k<goals.size();++k) {const auto &g=goals[k];if(g.fix_position) {const double e=norm(sub(g.position,joint_point(skin,effective,g.joint,g.end)));score+=g.weight*e*e;measured.error=std::max(measured.error,e);}
       if(g.fix_orientation) {const double a=orientation_error_degrees(g.orientation,joint_orientation(skin,effective,g.joint));measured.angle_error_degrees=std::max(measured.angle_error_degrees,a);score+=g.weight*std::pow(a*std::numbers::pi/180*.2,2);}}
     if(score<best_score) {best_score=score;best=measured;input=candidate;}else if(iteration>1) break;
     if(measured.error<.0001&&measured.angle_error_degrees<.05) break;

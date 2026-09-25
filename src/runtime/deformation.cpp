@@ -141,7 +141,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     // 实例编辑不参与骨骼 / ERC 输入；沿已有依赖树传播矩阵即可。
     for(const auto &p:values) validate_transform(p.transform);
     for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);}
-    auto delta=weld_grafts(follow_surfaces(collision_.evaluate(morph_.evaluate())));previous_=values;return delta;
+    auto delta=weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(morph_.evaluate()))));previous_=values;return delta;
   }
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
@@ -169,7 +169,9 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*moved*a.inverse_bind);
   }
   conform_.project(weights,morph_);
-  auto delta=weld_grafts(follow_surfaces(collision_.evaluate(skin_.evaluate(morph_.evaluate()))));
+  // 碰撞必须看当前姿势的 GeoGraft 接缝，不能读取上一帧在末尾焊接的边界。
+  // 最后的焊接仍保留，用于刚性跟随或插件自身碰撞之后的边界一致性。
+  auto delta=weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(skin_.evaluate(morph_.evaluate())))));
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;evaluated_=true;return delta;
 }
 ir::Delta DeformationRuntime::weld_grafts(ir::Delta delta) {

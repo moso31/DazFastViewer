@@ -152,7 +152,23 @@ static void root_follower_and_visibility() {
   require(scene.instances[0].visible&&!scene.instances[2].visible,"显示父对象覆盖了子对象自己的隐藏状态");
   values[0].transform={};runtime.evaluate(values,{});require(distance({scene.instances[1].transform.point({})},{{}})==0,"根层级 Fit To 重置产生漂移");
 }
+static void graft_collision_restore() {
+  ir::Mesh body;body.id="body";body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};
+  body.triangles={{{0,1,2}},{{0,2,3}}};body.triangles[0].source_polygon=0;body.triangles[1].source_polygon=1;
+  auto graft=body;graft.id="graft";graft.graft_target_vertices=4;graft.graft_hidden_polygons={0,1};graft.graft_vertex_pairs={{0,0},{1,1},{2,2},{3,3}};for(auto &p:graft.positions) p.z=.1f;
+  ir::Mesh cloth;cloth.id="cloth";cloth.positions={{-.3f,-.3f,.05f},{.3f,-.3f,.05f},{0,.3f,.05f}};cloth.triangles={{{0,1,2}}};
+  ir::Scene scene;scene.meshes={body,graft,cloth};scene.instances.resize(3);for(int i=0;i<3;++i) {scene.instances[i].mesh=i;scene.instances[i].id=scene.meshes[i].id;}
+  Target a;a.id="body/mesh";a.morphs={morph("raise",{{0,{0,0,.2f}},{1,{0,0,.2f}},{2,{0,0,.2f}},{3,{0,0,.2f}}},false)};
+  Target b;b.id="graft/mesh";b.instance=1;b.conform_target="#body";
+  Target c;c.id="cloth/mesh";c.instance=2;c.smoothing.enabled=true;c.smoothing.collision_target="#body";
+  std::vector<Target> targets={a,b,c};std::vector<FormulaGraph> graphs={graph(a,-1),graph(b,-1),graph(c,-1)};std::vector<Skin> skins;
+  DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(3);values[0].morphs={0};runtime.evaluate(values,{});const auto before=scene.meshes[2].positions;
+  values[0].morphs[0]=1;runtime.evaluate(values,{});values[0].morphs[0]=0;runtime.evaluate(values,{});
+  require(distance(before,scene.meshes[2].positions)<1e-6,"GeoGraft 旧接缝参与碰撞，恢复姿势后服装残留形变");
+  require(distance(scene.meshes[2].positions,cloth.positions)<1e-6,"服装碰撞没有使用当前接缝位置");
+}
 static void unit() {
+  graft_collision_restore();
   {
     // 共同祖先的平移 / 旋转 / 缩放应完全保留碰撞缓存，包括 GeoGraft。
     ir::Scene scene;ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};
