@@ -1,0 +1,135 @@
+{
+  "status": "PASS",
+  "editor_sha256": "f0faf1497e40e88fbd0946923971877e71861e60caa83c8837894eaf9e13aa79",
+  "staged_at": "2026-09-25T12:34:47.763299+00:00",
+  "source_hash_count": 161,
+  "source_mismatches": [],
+  "project_ctest_passed": 20,
+  "powerpose": {
+    "checks": 15,
+    "white_proxy_until_new_render": 12,
+    "curves": 35638,
+    "monitor": "VG279QL1A",
+    "max_restore_error_m": 0.0,
+    "report_sha256": "621db70b7642bb332452326245b169bbc0fcf9662e04567e2fe49a5cbda4439d",
+    "status": "PASS",
+    "pixel_pairs": [
+      {
+        "point": "B07-right",
+        "same_pixels": true
+      },
+      {
+        "point": "B09-left",
+        "same_pixels": true
+      },
+      {
+        "point": "B09-right",
+        "same_pixels": true
+      },
+      {
+        "point": "B21-right",
+        "same_pixels": true
+      },
+      {
+        "point": "B23-left",
+        "same_pixels": true
+      },
+      {
+        "point": "B28-left",
+        "same_pixels": true
+      },
+      {
+        "point": "B35-right",
+        "same_pixels": true
+      },
+      {
+        "point": "B36-left",
+        "same_pixels": true
+      },
+      {
+        "point": "H21-left",
+        "same_pixels": true
+      },
+      {
+        "point": "H24-left",
+        "same_pixels": true
+      },
+      {
+        "point": "H29-right",
+        "same_pixels": true
+      },
+      {
+        "point": "N02-right",
+        "same_pixels": true
+      }
+    ],
+    "render_epochs": [
+      {
+        "before": 1,
+        "first_normal": 2
+      },
+      {
+        "before": 4,
+        "first_normal": 5
+      },
+      {
+        "before": 7,
+        "first_normal": 8
+      },
+      {
+        "before": 10,
+        "first_normal": 11
+      },
+      {
+        "before": 13,
+        "first_normal": 14
+      },
+      {
+        "before": 16,
+        "first_normal": 17
+      },
+      {
+        "before": 19,
+        "first_normal": 20
+      },
+      {
+        "before": 22,
+        "first_normal": 23
+      },
+      {
+        "before": 25,
+        "first_normal": 26
+      },
+      {
+        "before": 28,
+        "first_normal": 29
+      },
+      {
+        "before": 31,
+        "first_normal": 32
+      },
+      {
+        "before": 34,
+        "first_normal": 35
+      }
+    ]
+  },
+  "ik": {
+    "checks": 14,
+    "final_stage": 27,
+    "monitor": "VG279QL1A",
+    "report_sha256": "f3ca68fc607a66b30f589e7d57af6bc0d7bf9b429691f455ee942b6c618f853d",
+    "status": "PASS",
+    "render_epochs": [
+      {
+        "before": 8,
+        "first_normal": 9
+      },
+      {
+        "before": 13,
+        "first_normal": 14
+      }
+    ]
+  },
+  "evidence_directory": "artifacts/009-powerpose/white-hold"
+}

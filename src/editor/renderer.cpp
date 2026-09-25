@@ -80,7 +80,7 @@ void Renderer::run(std::stop_token stop) {
   PoseDrag pose_drag;uint64_t pose_serial=0,pose_commits=0,pose_previews=0;bool pose_paused=false;
   PowerPoseDrag powerpose_drag;uint64_t powerpose_serial=0,powerpose_selection=0;
   std::vector<std::vector<ir::Vec3>> powerpose_reference;
-  bool pose_recovering=false;
+  struct {bool active=false,powerpose=false;uint64_t generation=0,revision=0;} pose_recovery;
   uint64_t sessions=0;
   bool blank_presented=false;
   auto timing=[&](const char *name,double begin,uint64_t revision=0) {Frame f;f.epoch=state.requested_epoch;f.id=revision;telemetry_.event(name,f,(now()-begin)*1000);};
@@ -178,7 +178,7 @@ void Renderer::run(std::stop_token stop) {
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       auto &render_scene=*render_scene_ptr;
-      if(pose_recovering&&pose_drag.generation!=current->generation) pose_recovering=false;
+      if(pose_recovery.active&&pose_recovery.generation!=current->generation) pose_recovery.active=false;
       const auto pointer=window_->pose_pointer();
       const auto input_camera=window_->mailbox.latest();
       if(powerpose_drag.active&&(powerpose_drag.press.generation!=current->generation||powerpose_drag.press.revision!=desired.revision||
@@ -212,7 +212,7 @@ void Renderer::run(std::stop_token stop) {
             state.pose_commit=++pose_commits;state.pose_generation=powerpose.generation;state.pose_revision=powerpose.revision;state.pose_skin=powerpose.skin;state.pose_joint=powerpose_drag.bound.joints.empty()?-1:powerpose_drag.bound.joints.front();
             state.pose_powerpose=true;state.pose_figure=powerpose_drag.bound.figure;state.pose_target=powerpose.target;state.pose_transform=powerpose_drag.transform;
             state.pose_error=powerpose_drag.result.error;state.pose_angle_error=powerpose_drag.result.angle_error_degrees;
-            pose_recovering=true;pose_drag.generation=current->generation;telemetry_.event("powerpose_commit");
+            pose_recovery={true,true,powerpose.generation,powerpose.revision};telemetry_.event("powerpose_commit");
           }
           powerpose_drag.active=false;state.pose_dragging=false;
         } else if(powerpose_drag.moved) {
@@ -259,7 +259,7 @@ void Renderer::run(std::stop_token stop) {
             state.pose_commit=++pose_commits;state.pose_generation=pose_drag.generation;state.pose_revision=pose_drag.revision;state.pose_skin=pose_drag.skin;state.pose_joint=pose_drag.joint;
             state.pose_powerpose=false;state.pose_figure=false;
             clicks=window_->clicks.load();telemetry_.event("ik_commit");
-            pose_recovering=true;
+            pose_recovery={true,false,pose_drag.generation,pose_drag.revision};
           }
           pose_drag.active=false;state.pose_dragging=false;
         } else if(pose_drag.moved) {
@@ -281,7 +281,7 @@ void Renderer::run(std::stop_token stop) {
       const bool size_changed=camera_width!=window_->width||camera_height!=window_->height;
       const bool edit_pending=desired.generation==current->generation&&desired.revision!=attempted_revision;
       const bool navigation_preview=camera.needs_preview(camera_epoch,now())||size_changed||now()<resize_until;
-      bool wanted_preview=navigation_preview||(!pose_recovering&&((edit_affects_render&&(editing||now()<preview_until))||
+      bool wanted_preview=navigation_preview||(!pose_recovery.active&&((edit_affects_render&&(editing||now()<preview_until))||
         (edit_pending&&!state.pending_payloads&&state.resource_error.empty())));
       const bool quality_changed=wanted_preview!=preview;
       ir::Delta delta;bool new_render_edit=false,subdivision_edit=false;
@@ -289,7 +289,7 @@ void Renderer::run(std::stop_token stop) {
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
       if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending) &&
          ((wanted_preview&&!preview)||((telemetry_.displayed_epoch.load()>=epoch||
-           (pose_recovering&&display->drawn_frame().epoch>=epoch))&&session->ready_to_reset()))) {
+           (pose_recovery.active&&display->drawn_frame().epoch>=epoch))&&session->ready_to_reset()))) {
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
           try {
             const auto prepare_begin=now();
@@ -327,7 +327,7 @@ void Renderer::run(std::stop_token stop) {
         }
         if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);render_scene.camera=*delta.camera;camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
-        wanted_preview=navigation_preview||(!pose_recovering&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
+        wanted_preview=navigation_preview||(!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
         if(wanted_preview!=preview||subdivision_edit||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
           {const auto begin=now();thread_scoped_lock lock(session->scene->mutex);timing("scene_lock",begin,applied_revision);const auto apply_begin=now();
             if(subdivision_edit) {
@@ -365,9 +365,15 @@ void Renderer::run(std::stop_token stop) {
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
       session->draw();
       const auto beauty=display->drawn_frame();
-      if(pose_recovering&&desired.revision>pose_drag.revision&&applied_revision==desired.revision&&beauty.epoch>=epoch) pose_recovering=false;
-      state.pose_restoring=pose_recovering;
-      if(pose_recovering) overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position));
+      if(pose_recovery.active&&desired.revision>pose_recovery.revision&&applied_revision==desired.revision&&beauty.epoch>=epoch) pose_recovery.active=false;
+      state.pose_restoring=pose_recovery.active;
+      // 松手后的等待使用本次手势的白模和输入版本，不能借用另一种工具的旧状态。
+      if(pose_recovery.active) {
+        if(pose_recovery.powerpose) {
+          const auto goal=powerpose_drag.bones.empty()?powerpose_drag.world.point({}):powerpose_drag.bones.front().second;
+          overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal);
+        } else overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position));
+      }
       state.camera=camera;state.pointer_x=window_->pointer_x;state.pointer_y=window_->pointer_y;
       auto hover=preview?runtime::PickHit{}:picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
       bool editable=hover.instance>=0&&render_scene.instances.at(size_t(hover.instance)).prototype>=0;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
@@ -424,7 +430,7 @@ void Renderer::run(std::stop_token stop) {
       const auto *members=region.instance>=0&&region.joint<0?&instance_groups->members[size_t(region.instance)]:nullptr;
       if(members) {state.hovered_triangles=0;for(auto i:*members) state.hovered_triangles+=overlay.triangle_count(int(i));}
       const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;
-      if(presented&&!preview&&!pose_recovering) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members);
+      if(presented&&!preview&&!pose_recovery.active) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members);
       if(presented&&!pose_drag.active&&window_->clicks.load()!=clicks) {
         clicks=window_->clicks.load();const auto hit=picking.screen(camera,window_->click_x,window_->click_y,window_->width,window_->height);
         state.clicks=clicks;state.hit_target=-1;state.hit_joint=-1;state.hit_toggle=window_->click_toggle;
@@ -437,7 +443,7 @@ void Renderer::run(std::stop_token stop) {
       state.width=window_->width;state.height=window_->height;
       state.visible.clear();for(const auto &instance:render_scene.instances) state.visible.push_back(instance.visible);
       if(!SwapBuffers(window_->dc)) {window_->present_context.deactivate();throw std::runtime_error("Qt 视口 SwapBuffers 失败");}
-      if(!pose_recovering) display->after_swap();window_->present_context.deactivate();
+      if(!pose_recovery.active) display->after_swap();window_->present_context.deactivate();
       const auto shown=display->drawn_frame();
       if(sampling_.rebuild_probe&&(shown.id==0)!=blank_presented) {blank_presented=shown.id==0;telemetry_.event(blank_presented?"blank_present_begin":"blank_present_end");}
       state.present_time=telemetry_.last_present_time;state.sessions=sessions;

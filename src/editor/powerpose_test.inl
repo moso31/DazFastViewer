@@ -5,6 +5,7 @@
   QPointF pp_point_;
   double pp_release_=0;
   double pp_dx_=0,pp_dy_=0;
+  bool pp_recovery_seen_=false;
   nlohmann::json pp_checks_=nlohmann::json::array();
   void powerpose_tick(const RenderStatus &state) {
     if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"PowerPose 副屏验证超时");return;}
@@ -33,7 +34,7 @@
     auto mouse=[&](QEvent::Type type,QPointF offset={}) {const auto pos=pp_point_+offset;QMouseEvent event(type,pos,powerpose_->canvas()->mapToGlobal(pos.toPoint()),type==QEvent::MouseMove?Qt::NoButton:button,type==QEvent::MouseButtonRelease?Qt::NoButton:button,c.pin?Qt::ShiftModifier:Qt::NoModifier);QApplication::sendEvent(powerpose_->canvas(),&event);};
     if(pp_phase_==0) {
       if(!ready) return;pp_before_=state;choose(pp_target_);powerpose_->page(c.page);refresh_powerpose(state);pp_point_=powerpose_->point_position(c.id);pp_steps_=0;
-      pp_dx_=c.dx;pp_dy_=c.dy;
+      pp_dx_=c.dx;pp_dy_=c.dy;pp_recovery_seen_=false;
       // 复杂场景可能已经把本方向摆到限位；改测能够离开限位的反方向。
       for(const auto &page:runtime::powerpose_templates()) for(const auto &point:page.points) if(point.id==c.id) {
         const auto &skin=document_->skeletons.skins[pp_skin_];const auto bound=runtime::bind_powerpose(skin,point);
@@ -56,10 +57,17 @@
       ++pp_steps_;mouse(QEvent::MouseMove,{pp_dx_*pp_steps_/8,pp_dy_*pp_steps_/8});return;
     }
     if(pp_phase_==2) {
+      // UI 收到提交时，新的输入尚未应用；这一帧必须继续呈现本次拖动的白模。
+      if(!c.cancel&&state.pose_commit>pp_before_.pose_commit&&state.applied_revision==pp_before_.applied_revision) {
+        if(!state.pose_restoring) {fail("新姿势首帧之前提前退出白模等待");return;}
+        if(!pp_recovery_seen_) screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(std::string(c.id)+(c.right?"-right":"-left")+"-waiting.png")).wstring()));
+        pp_recovery_seen_=true;
+      }
       if(!ready||state.pose_dragging||now()-pp_release_<.15) return;
       if(c.cancel) {if(snapshot_.poses!=pp_initial_.poses||snapshot_.revision!=pp_before_.applied_revision) {fail("取消后写入姿势");return;}}
       else {
         if(snapshot_.revision!=pp_before_.applied_revision+1) return;
+        if(!pp_recovery_seen_||state.pose_restoring||state.presented_epoch<=pp_before_.requested_epoch) {fail("未完成白模到本次新渲染帧的交接");return;}
         const bool figure=std::string(c.id)=="B35"||std::string(c.id)=="B36";
         if(!figure&&snapshot_.poses==pp_initial_.poses) {fail("松手没有提交骨骼变化");return;}
         if(figure&&state.instance_transforms==pp_before_.instance_transforms) {fail("整体移动没有更新实例矩阵");return;}
@@ -72,6 +80,7 @@
         }
       }
       pp_checks_.push_back({{"point",c.id},{"right",c.right},{"delta",{pp_dx_,pp_dy_}},{"cancel",c.cancel},{"pins",c.pin},{"proxy_ms",state.pose_solve_ms},{"input_to_present_ms",state.pose_latency_ms},{"release_seconds",now()-pp_release_},{"previews",state.pose_previews-pp_before_.pose_previews},{"curves",state.adapter.curves},{"triangles",state.adapter.unique_triangles}});
+      if(!c.cancel) pp_checks_.back()["white_proxy_until_new_render"]=pp_recovery_seen_;
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(std::string(c.id)+(c.right?"-right":"-left")+"-final.png")).wstring()));
       pose_pins_.clear();renderer_->pose_pins({});snapshot_.poses=pp_initial_.poses;snapshot_.values=pp_initial_.values;send();choose(pp_target_);pp_phase_=3;return;
     }
