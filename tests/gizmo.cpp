@@ -1,4 +1,6 @@
 #include "editor/gizmo.h"
+#include "editor/document.h"
+#include "editor/scene_extension.h"
 #include <iostream>
 #include <stdexcept>
 using namespace dfv;
@@ -44,9 +46,28 @@ static void planes_and_ground() {
   }
   bool rejected=false;try {ground_aligned_transform(target,input,loaded,current,{},0);} catch(const std::exception &) {rejected=true;}check(rejected,"空包围盒没有拒绝");
 }
+static void instance_ground() {
+  Document d;d.generation=3;auto &base=d.loaded.scene;base.meshes={mesh()};
+  ir::Instance source;source.id="source";base.instances.push_back(source);
+  auto copy=source;copy.id="copy/a";copy.prototype=0;copy.instance_group="copy";copy.transform=runtime::make_transform({{100,75,40},{13,21,35},{1.2f,.8f,1.1f}});base.instances.push_back(copy);
+  copy.id="copy/b";copy.transform.value[11]+=2;base.instances.push_back(copy);copy.id="other";copy.instance_group="other";copy.transform.value[3]+=4;base.instances.push_back(copy);
+  auto snapshot=initial_snapshot(d);const runtime::InstanceGroups groups(base);const auto before=groups.bounds(base,1);auto scene=base;
+  for(double ratio:{0.,.03,-.02}){
+    auto &edit=snapshot.instance_ground["copy/a"];edit.ratio=ratio;edit.offset_m+=ground_vertical_shift(groups.bounds(scene,1),ratio);ir::Delta delta;apply_instance_ground(scene,base,snapshot.instance_ground,&delta);
+    const auto after=groups.bounds(scene,1);check(std::abs(after.minimum.z-ratio*(before.maximum.z-before.minimum.z))<2e-6,"Instance 未按整个条目的包围盒对齐");
+    check(scene.instances[0].transform==base.instances[0].transform&&scene.instances[3].transform==base.instances[3].transform,"Instance 对齐改动了原型或其他实例");
+    check(std::abs((scene.instances[2].transform.value[11]-scene.instances[1].transform.value[11])-2)<1e-6,"Instance 子零件的相对位置改变");
+    check(delta.instances.size()==2&&std::abs(after.minimum.x-before.minimum.x)<1e-6&&std::abs(after.minimum.y-before.minimum.y)<1e-6,"Instance 对齐没有发送正确的变换更新");
+    check(ground_vertical_shift(after,ratio)==0,"重复 Instance 对齐会积累漂移");ir::Delta repeat;apply_instance_ground(scene,base,snapshot.instance_ground,&repeat);check(repeat.instances.empty(),"相同 Instance 位移重复发出更新");
+  }
+  const auto saved=snapshot_json(d,snapshot);auto restored=initial_snapshot(d);apply_snapshot_json(d,restored,saved);check(restored.instance_ground==snapshot.instance_ground,"Instance 地面对齐的 DUFEX 值未恢复");auto replay=base;apply_instance_ground(replay,base,restored.instance_ground);check(replay.instances[1].transform==scene.instances[1].transform,"Instance 的 DUFEX 位移未实际恢复");
+  auto old=saved;old.erase("instance_ground");apply_snapshot_json(d,restored,old);check(restored.instance_ground.empty(),"旧 DUFEX 未正确使用 Instance 默认值");
+  auto invalid=snapshot.instance_ground;invalid["missing"]={1,0};bool rejected=false;try{validate_instance_ground(base,invalid);}catch(const std::exception &){rejected=true;}check(rejected,"不存在的 Instance 覆盖未拒绝");prune_instance_ground(base,invalid);check(invalid==snapshot.instance_ground,"删除对象后 Instance 覆盖清理错误");
+  ir::Delta reset;apply_instance_ground(scene,base,{},&reset);check(scene.instances[1].transform==base.instances[1].transform&&reset.instances.size()==2,"Instance 清除修改后没有恢复");
+}
 int main() {
   try {
-    planes_and_ground();
+    planes_and_ground();instance_ground();
     const auto m=mesh();
     for(const std::string order:{"XYZ","XZY","YXZ","YZX","ZXY","ZYX"}) for(auto space:{GizmoSpace::local,GizmoSpace::world}) for(int axis=0;axis<3;++axis) {
       runtime::Target target;target.rotation_order=order;target.has_edit_frame=true;

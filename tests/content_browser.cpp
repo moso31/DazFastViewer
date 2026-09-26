@@ -1,5 +1,7 @@
 #include "editor/content_browser.h"
 #include "editor/content_catalog.h"
+#include "daz/documents.h"
+#include "daz/loader.h"
 #include <QApplication>
 #include <QComboBox>
 #include <QElapsedTimer>
@@ -34,6 +36,35 @@ template<class F> static void until(F condition,int timeout=5000) {QElapsedTimer
 static void write(const QString &path,const QByteArray &bytes="{}") {QDir().mkpath(QFileInfo(path).path());QFile f(path);require(f.open(QIODevice::WriteOnly),"临时文件写入失败");f.write(bytes);}
 static ContentSearch query(ContentIndex &index,const QString &text,const QString &scope={}) {bool done=false;ContentSearch result;index.search(text,scope,[&](ContentSearch r){result=std::move(r);done=true;});until([&]{return done;});return result;}
 static void wheel(QWidget *widget,int delta) {const QPointF p(widget->rect().center());QWheelEvent e(p,widget->mapToGlobal(p.toPoint()),{},QPoint(0,delta),Qt::NoButton,Qt::ControlModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(widget,&e);}
+static bool tree_label_visible(QTreeView *tree){const auto rect=tree->visualRect(tree->currentIndex());return rect.width()>64&&tree->viewport()->rect().contains(QPoint(rect.left()+48,rect.center().y()));}
+
+static void source_checks() {
+  QTemporaryDir temp;const auto assets=temp.path()+"/assets",data=temp.path()+"/data-library",scene=assets+"/Scenes/saved.duf",entry=assets+"/Wardrobe/LSO Heels.duf";
+  const auto definition=data+"/data/H&C/Shoes/base.dsf",wrong=data+"/data/Other/base.dsf";
+  using J=nlohmann::json;
+  auto save=[](const QString &path,const J &json){write(path,QByteArray::fromStdString(json.dump()));};
+  save(definition,{{"node_library",J::array({{{"id","shoe"},{"label","LSO Heels"}}})}});save(wrong,{{"node_library",J::array({{{"id","shoe"}}})}});
+  const J node={{"id","shoe"},{"url","/data/H%26C/Shoes/base.dsf#shoe"},{"geometries",J::array({{{"url","/data/H%26C/Shoes/base.dsf#geometry"}}})}};
+  save(scene,{{"asset_info",{{"type","scene"}}},{"scene",{{"nodes",J::array({node,node})}}}});
+  save(entry,{{"asset_info",{{"type","wearable"}}},{"scene",{{"nodes",J::array({node})}}}});
+  auto wrong_node=node;wrong_node["url"]="/data/Other/base.dsf#shoe";
+  const auto decoy=assets+"/Wrong/LSO Heels.duf",material=assets+"/Materials/LSO Heels.duf",outfit=assets+"/LSO Outfit.duf";
+  save(decoy,{{"asset_info",{{"type","wearable"}}},{"scene",{{"nodes",J::array({wrong_node})}}}});
+  save(material,{{"asset_info",{{"type","preset_hierarchical_material"}}},{"scene",{{"nodes",J::array({node})}}}});
+  save(outfit,{{"asset_info",{{"type","preset_wearables"}}},{"scene",{{"nodes",J::array({node,node})}}}});
+  ContentOrigin origin{scene,"shoe",QStringLiteral("用户重命名的鞋子"),{{definition,"geometry"}}};
+  const QStringList candidates{scene,decoy,material,outfit,entry},roots{assets,data};
+  require(resolve_content_entry(origin,roots,candidates)==entry,"未根据跨库节点引用定位独立模型，或误选了同名资源 / 材质 / 场景 / 整套服装");
+  require(resolve_content_entry(origin,roots,{decoy,material}).isEmpty(),"缺少匹配入口时错误回退到原场景或同名模型");
+  require(resolve_content_entry(origin,roots,candidates,[]{return true;}).isEmpty(),"取消定位后继续返回资源");
+  ContentBrowser browser(nullptr,temp.path()+"/ui.ini",temp.path()+"/cache");browser.set_roots(roots);browser.resize(780,640);browser.show();
+  auto *search=browser.findChild<QComboBox *>("contentSearch");auto *view=browser.findChild<QListView *>("contentItems");auto *tree=browser.findChild<QTreeView *>("contentTree");
+  search->setEditText("unrelated search");browser.locate_asset(origin);
+  until([&]{return browser.property("contentLocateState").toString()=="found";});
+  until([&]{return view->currentIndex().data(Qt::UserRole).toString()==entry;});
+  auto *files=qobject_cast<QFileSystemModel *>(tree->model());until([&]{return files->filePath(tree->currentIndex())==QFileInfo(entry).path()&&tree_label_visible(tree);});
+  require(search->currentText()=="unrelated search","模型定位清空了搜索文本");
+}
 
 static void checks() {
   QTemporaryDir temp;require(temp.isValid(),"临时目录失败");const auto settings=temp.path()+"/history.ini",root=temp.path()+QStringLiteral("/中文库"),pose=root+"/Poses/Standing [01].duf",scene=root+"/Scenes/Test.DUF";
@@ -75,13 +106,33 @@ static void checks() {
     auto *preview=browser.findChild<QLabel *>("contentPreviewImage");until([&]{return !preview->pixmap().isNull();});const auto preview_image=preview->pixmap().toImage();require(preview_image.pixelColor(preview_image.width()/2,preview_image.height()/2).green()>240,"悬停没有优先使用 tip 大图");QCursor::setPos(cursor_before);
     int opened=0;browser.open_asset=[&](const QString &p){require(p==pose,"激活了错误文件");++opened;};view->setCurrentIndex(view->model()->index(0,0));QTest::keyClick(view,Qt::Key_Return);require(opened==1,"键盘打开丢失或重复");
     require(ContentHistory(ui_settings).recent().empty(),"仅浏览或请求打开就记入近期使用");
-    search->setEditText({});for(int i=0;i<25;++i) browser.record_use(root+"/pose"+QString::number(i)+".duf","pose");browser.record_use(pose,"pose");browser.record_use(root+"/scene.duf","scene");browser.show_recent();
+    for(int i=0;i<25;++i) browser.record_use(root+"/pose"+QString::number(i)+".duf","pose");browser.record_use(pose,"pose");browser.record_use(root+"/scene.duf","scene");browser.show_recent();
+    require(search->currentText()=="standing [01]","切换近期使用清空了搜索文本");
+    search->setEditText("not a recent resource");QTest::keyClick(search->lineEdit(),Qt::Key_Return);QTest::qWait(200);
+    require(view->model()->rowCount()==27,"近期使用错误应用了搜索过滤");
+    auto *tabs=browser.findChild<QComboBox *>("contentTabs");search->setEditText("standing [01]");tabs->setCurrentIndex(0);
+    until([&]{return view->model()->rowCount()==1&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose;});
+    require(search->currentText()=="standing [01]","切回内容库丢失搜索文本");browser.show_recent();
     require(categories->currentRow()==0&&view->model()->rowCount()==27,"ALL 默认分类或全局记录错误");categories->setCurrentRow(3);require(view->model()->rowCount()==20&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose,"近期分类上限或时间排序错误");
     zoom->setValue(21);require(view->iconSize().width()==224,"最大图标尺寸发生变化");browser.save();
     bool removed=false;QTimer::singleShot(0,[&]{if(auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget()))if(auto *action=menu->findChild<QAction *>("RemoveRecentContent")){removed=true;menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}});
     view->customContextMenuRequested(view->visualRect(view->model()->index(0,0)).center());
     require(removed&&QFileInfo::exists(pose)&&ContentHistory(ui_settings).recent().size()==26,"移除近期记录失败或误删原文件");
     browser.show_recent();require(view->model()->rowCount()==26,"移除没有刷新 ALL 分类");browser.record_use(pose,"pose");require(view->model()->rowCount()==27,"移除后的资源不能再次记入近期使用");
+    for(int i=0;i<90;++i)write(root+QString("/Folder%1/Deep/Asset.duf").arg(i,3,10,QChar('0')));
+    const auto located=root+"/Folder089/Deep/Asset.duf";require(browser.locate(located),"无法定位内容源文件");auto *files=qobject_cast<QFileSystemModel *>(tree->model());
+    until([&]{auto index=tree->currentIndex();return files->filePath(index)==QFileInfo(located).path()&&tree_label_visible(tree);});
+    until([&]{return view->currentIndex().isValid()&&view->currentIndex().data(Qt::UserRole).toString()==located;});
+    require(search->currentText()=="standing [01]","定位时清空了搜索文本");
+    QTest::qWait(250);require(view->currentIndex().data(Qt::UserRole).toString()==located,"定位被延迟搜索覆盖");
+    QTest::keyClick(search->lineEdit(),Qt::Key_Return);until([&]{return view->model()->rowCount()==1&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose;});
+    for(int i=0;i<350;++i)write(root+QString("/Many/Asset%1.duf").arg(i,3,10,QChar('0')));
+    const auto last=root+"/Many/Asset349.duf";require(browser.locate(last),"无法定位列表末尾图标");
+    until([&]{return view->currentIndex().data(Qt::UserRole).toString()==last&&view->viewport()->rect().contains(view->visualRect(view->currentIndex()).center());});
+    zoom->setValue(0);require(browser.locate(last),"列表模式不能定位资源");
+    until([&]{return view->isVisible()&&view->currentIndex().data(Qt::UserRole).toString()==last&&view->viewport()->rect().contains(view->visualRect(view->currentIndex()).center());});zoom->setValue(21);
+    require(browser.locate(pose),"无法切换定位来源");until([&]{auto index=tree->currentIndex();return files->filePath(index)==QFileInfo(pose).path()&&tree_label_visible(tree);});
+    tabs->setCurrentIndex(1);require(search->currentText()=="standing [01]"&&view->model()->rowCount()==27,"定位后切换近期使用丢失文本或仍在过滤");tabs->setCurrentIndex(0);until([&]{return view->model()->rowCount()==1&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose;});
   }
   {
     ContentBrowser restored(nullptr,ui_settings,cache);restored.set_roots({root});require(restored.findChild<QSlider *>("contentZoom")->value()==21,"图标尺寸重启丢失");restored.show_recent();require(restored.findChild<QListView *>("contentItems")->model()->rowCount()==27,"近期使用重启丢失");require(restored.findChild<QComboBox *>("contentSearch")->itemText(0)=="standing [01]","搜索记录重启丢失");
@@ -115,8 +166,29 @@ static void visual() {
   search->setEditText({});browser.record_use("H:/G1/Scenes/test.duf","scene");browser.record_use("H:/G1/Scenes/3.duf","scene");browser.show_recent();QTest::qWait(500);browser.grab().save(output+"/recent.png");
   std::cout<<"Secondary display browser / real thumbnails / real search: PASS\n";
 }
+
+static void locate_real() {
+  QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens())if(screen!=QGuiApplication::primaryScreen()){secondary=screen;break;}require(secondary,"缺少第二屏");
+  const QString output="artifacts/content-locate",scene="H:/G1/Scenes/test9.duf",expected="H:/G1/People/Genesis 8 Female/Clothing/dForce H&C Long skirt outfit/LSO Heels.duf";
+  QDir().mkpath(output);QTemporaryDir temp;ContentBrowser browser(nullptr,temp.path()+"/ui.ini","artifacts/content-browser/benchmark-index");
+  browser.setAttribute(Qt::WA_ShowWithoutActivating);browser.resize(1180,850);browser.move(secondary->availableGeometry().topLeft()+QPoint(20,20));browser.set_roots({"H:/G1","H:/G3"});browser.show();
+  auto *view=browser.findChild<QListView *>("contentItems");auto *tree=browser.findChild<QTreeView *>("contentTree");auto *files=qobject_cast<QFileSystemModel *>(tree->model());auto *search=browser.findChild<QComboBox *>("contentSearch");
+  search->setEditText("existing search text");QJsonArray checks;
+  const auto doc=dfv::daz::document_view(std::filesystem::path(scene.toStdWString()));
+  for(const auto &node:dfv::daz::array_member(dfv::daz::object_member(*doc,"scene"),"nodes")){
+    const auto label=QString::fromStdString(node.value("label",std::string{}));if(!label.startsWith("LSO Heels"))continue;
+    ContentOrigin origin{scene,QString::fromStdString(node.at("id").get<std::string>()),label,{}};
+    for(const auto &g:dfv::daz::array_member(node,"geometries")){const auto url=QString::fromStdString(dfv::daz::decode_uri(g.at("url").get<std::string>()));const auto hash=url.indexOf('#');origin.geometries.emplace_back("H:/G3"+url.left(hash),url.mid(hash+1));}
+    browser.locate_asset(origin);until([&]{return browser.property("contentLocateState").toString()!="resolving";},120000);
+    require(browser.property("contentLocatedPath").toString().compare(expected,Qt::CaseInsensitive)==0,"test9 鞋子没有定位到正确的加载入口");
+    until([&]{return view->currentIndex().data(Qt::UserRole).toString().compare(expected,Qt::CaseInsensitive)==0&&view->viewport()->rect().contains(view->visualRect(view->currentIndex()).center())&&files->filePath(tree->currentIndex()).compare(QFileInfo(expected).path(),Qt::CaseInsensitive)==0&&tree_label_visible(tree);});
+    require(search->currentText()=="existing search text","真实资源定位丢失搜索文本");QTest::qWait(300);browser.grab().save(output+"/"+origin.node+".png");checks.append(QJsonObject{{"node",origin.node},{"label",label},{"located",browser.property("contentLocatedPath").toString()},{"tree_and_icon_visible",true},{"search_preserved",true}});
+  }
+  require(checks.size()==2,"test9 中两个鞋子实例未全部检查");write(output+"/test9.json",QJsonDocument(QJsonObject{{"result","PASS"},{"checks",checks}}).toJson());
+  std::cout<<"test9 LSO Heels / exact DUF / both panes visible / query preserved: PASS\n";
+}
 int main(int argc,char **argv) {
   QApplication app(argc,argv);app.setApplicationName("DazFastViewerContentTest");app.setOrganizationName("DazFastViewerTests");app.setFont(QFont(QStringLiteral("Microsoft YaHei UI"),9));
-  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else checks();return 0;}
+  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else {source_checks();checks();}return 0;}
   catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}
 }

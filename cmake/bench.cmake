@@ -21,14 +21,15 @@ install(FILES "${DFV_LIB_DIR}/epoxy/bin/epoxy-0.dll" DESTINATION "${CMAKE_INSTAL
 set(DFV_QT_ROOT "C:/Qt/6.10.3/msvc2022_64" CACHE PATH "Qt MSVC x64 开发套件")
 find_package(Qt6 6.10 REQUIRED COMPONENTS Widgets Test PATHS "${DFV_QT_ROOT}/lib/cmake/Qt6" NO_DEFAULT_PATH)
 add_library(dfv_content STATIC "${DFV_ROOT}/src/editor/content_browser.cpp" "${DFV_ROOT}/src/editor/content_catalog.cpp" "${DFV_ROOT}/src/editor/ui_scale.cpp")
-target_sources(dfv_content PRIVATE "${DFV_ROOT}/src/editor/viewport_settings.cpp" "${DFV_ROOT}/src/editor/application_settings.cpp")
+target_sources(dfv_content PRIVATE "${DFV_ROOT}/src/editor/viewport_settings.cpp" "${DFV_ROOT}/src/editor/application_settings.cpp" "${DFV_ROOT}/src/editor/content_locator.cpp")
 target_include_directories(dfv_content PUBLIC "${DFV_ROOT}/src" "${DFV_ROOT}/third_party")
-target_link_libraries(dfv_content PUBLIC Qt6::Widgets)
+target_link_libraries(dfv_content PUBLIC Qt6::Widgets dfv_scene)
 target_compile_options(dfv_content PRIVATE /utf-8)
 target_compile_definitions(dfv_content PRIVATE QT_NO_KEYWORDS NOMINMAX)
 qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
   "${DFV_ROOT}/src/editor/chrome.cpp"
   "${DFV_ROOT}/src/editor/extension_panel.cpp"
+  "${DFV_ROOT}/src/editor/material_panel.cpp"
   "${DFV_ROOT}/src/editor/powerpose_panel.cpp"
   "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/parameters.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
@@ -45,6 +46,13 @@ target_include_directories(RendererQualityTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererQualityTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_compile_definitions(RendererQualityTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
 target_compile_options(RendererQualityTest PRIVATE /utf-8)
+add_executable(RendererMaterialsTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_materials.cpp"
+  "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
+  "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
+target_include_directories(RendererMaterialsTest PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(RendererMaterialsTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
+target_compile_definitions(RendererMaterialsTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_options(RendererMaterialsTest PRIVATE /utf-8)
 add_executable(ProjectSettingsTest "${DFV_ROOT}/tests/project_settings.cpp" "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/application_settings.cpp")
 target_include_directories(ProjectSettingsTest PRIVATE "${DFV_ROOT}/src" "${DFV_ROOT}/third_party")
 target_link_libraries(ProjectSettingsTest PRIVATE Qt6::Widgets)
@@ -57,6 +65,12 @@ target_include_directories(ParameterControlsTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(ParameterControlsTest PRIVATE dfv_scene Qt6::Widgets Qt6::Test)
 target_compile_options(ParameterControlsTest PRIVATE /utf-8)
 add_test(NAME parameter_controls COMMAND ParameterControlsTest)
+add_executable(MaterialsTest "${DFV_ROOT}/tests/materials.cpp" "${DFV_ROOT}/src/editor/material_panel.cpp")
+target_link_libraries(MaterialsTest PRIVATE dfv_scene dfv_content Qt6::Widgets Qt6::Test)
+target_compile_options(MaterialsTest PRIVATE /utf-8)
+target_compile_definitions(MaterialsTest PRIVATE NOMINMAX QT_NO_KEYWORDS)
+add_test(NAME materials COMMAND MaterialsTest)
+set_tests_properties(materials PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 add_executable(PowerPosePanelTest "${DFV_ROOT}/tests/powerpose_panel.cpp" "${DFV_ROOT}/src/editor/powerpose_panel.cpp")
 target_link_libraries(PowerPosePanelTest PRIVATE dfv_scene Qt6::Widgets Qt6::Test)
 target_compile_options(PowerPosePanelTest PRIVATE /utf-8)

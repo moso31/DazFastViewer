@@ -34,6 +34,7 @@ struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObjec
 struct DufContents {bool instantiate=false,materials=false,properties=false,requires_selection=false;};
 DufContents inspect_contents(const nlohmann::json &document);
 LoadedScene load(const std::filesystem::path &file,const LoadOptions &options={});
+ir::Material merge_material_preset(const ir::Material &base,const ir::Material &preset,std::vector<ir::Texture> &textures,const LoadOptions &options={});
 void apply_graft_masks(LoadedScene &loaded,bool defer_selection=false);
 void sync_instance_meshes(ir::Scene &scene);
 nlohmann::json read_document_file(const std::filesystem::path &file);

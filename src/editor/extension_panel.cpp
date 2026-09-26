@@ -51,7 +51,7 @@ void ExtensionPanel::bind(const runtime::ObjectExtension &v,bool selection){
   parts_scroll_->setVisible(character&&details_->isChecked());
 }
 void ExtensionPanel::expand(){header_->setChecked(true);}
-void ExtensionPanel::pending(){status_->setText(QStringLiteral("更新中…"));status_->show();}
+void ExtensionPanel::pending(){status_->clear();status_->hide();}
 void ExtensionPanel::measurement_scale(const std::string &s){measurement_scale_=runtime::measurement_scale(s);if(has_result_)render_result();}
 void ExtensionPanel::result(const runtime::WeightResult &v,const std::string &error){measured_=v;error_=error;has_result_=true;render_result();}
 void ExtensionPanel::render_result(){

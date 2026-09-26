@@ -70,6 +70,7 @@ struct RenderStatus {
   ir::Bounds selection_bounds;
   int hit_target=-1,hit_joint=-1,hovered=-1,hovered_joint=-1,width=0,height=0;
   size_t hovered_triangles=0;
+  size_t material_hover_primitives=0;
   uint64_t selection_generation=0;
   int selected_target=-1,selected_joint=-1;
   std::vector<Selection> selections;
@@ -107,6 +108,8 @@ class Renderer {
   std::jthread thread_;
   int requested_width_=0,requested_height_=0;
   uint64_t selection_generation_=0;
+  uint64_t material_hover_generation_=0;
+  std::vector<std::pair<size_t,size_t>> material_hover_;
   uint64_t retry_resources_=0;
   bool edit_active_=false;
   std::vector<runtime::PosePin> pose_pins_;
@@ -129,6 +132,7 @@ public:
   void pointer(int x,int y,bool click=false,bool toggle=false);
   void automated_pointer() {window_->automated_pointer=true;}
   void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={},bool ik_allowed=false);
+  void hover_materials(uint64_t generation,const std::vector<MaterialSurface> &surfaces){std::lock_guard lock(mutex_);material_hover_generation_=generation;material_hover_.clear();for(auto s:surfaces)material_hover_.emplace_back(s.instance,s.slot);}
   void camera_view(const std::array<float,6> &view);
   void edit(const Snapshot &snapshot);
   void interaction(bool active);

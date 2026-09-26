@@ -1,5 +1,6 @@
 #include "editor/document.h"
 #include "daz/documents.h"
+#include "daz/material_uv.h"
 #include "runtime/graft_surface.h"
 #include <algorithm>
 #include <map>
@@ -126,7 +127,7 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   }
   std::erase_if(document.attachments,[](const auto &b){return b.items.empty();});
   std::erase_if(snapshot.lights,[&](const auto &l) {return removed.contains(l.id);});scene.lights=snapshot.lights;
-  daz::apply_graft_masks(document.loaded);collect_resources(document);release_load_data(document);++snapshot.revision;
+  daz::apply_graft_masks(document.loaded);collect_resources(document);prune_material_overrides(scene,snapshot.material_overrides);prune_instance_ground(scene,snapshot.instance_ground);release_load_data(document);++snapshot.revision;
   return std::count(targets.begin(),targets.end(),false);
 }
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target) {
@@ -138,24 +139,45 @@ size_t remove_light(Document &document,Snapshot &snapshot,size_t light) {
   const auto id=snapshot.lights.at(light).id;const auto count=remove_nodes(document,snapshot,{id});
   document.operations.push_back({{"op","remove_light"},{"id",id}});return count;
 }
-size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset) {
-  auto &scene=document.loaded.scene;auto &instance=scene.instances.at(document.catalog.targets.at(target).instance);
-  const auto &slots=scene.meshes[instance.mesh].material_slots;const int offset=int(scene.textures.size());
-  std::vector<std::pair<size_t,size_t>> matches;
-  for(size_t m=0;m<preset.scene.materials.size();++m) for(size_t slot=0;slot<slots.size();++slot) {
-    const auto &groups=preset.report.at("materials").at(m).at("groups");bool matched=false;
-    for(const auto &group:groups) matched|=group.get<std::string>()==slots[slot];
-    if(matched) matches.emplace_back(m,slot);
+namespace {
+bool material_owner_matches(const Document &d,const ir::Material &material,size_t instance){
+  if(material.source_definition.empty())return true;const auto definition=nlohmann::json::parse(material.source_definition);const auto node=definition.value("target_node",std::string{});if(node.empty())return true;
+  for(const auto &object:d.loaded.objects)if(object.instance==instance){if(object.id==node||object.source_node==node)return true;
+    auto uri=definition.value("target_uri",std::string{});if(uri.ends_with(':'))uri.pop_back();const auto slash=uri.rfind('/');const auto name=slash==std::string::npos?uri:uri.substr(slash+1);if(object.id==name||object.source_node==name)return true;
+    if(definition.value("target_root",false)){for(size_t t=0;t<d.catalog.targets.size();++t)if(d.catalog.targets[t].instance==instance){try{return attachment_host(d,t)==t&&object.parent.empty();}catch(const std::exception &){return object.parent.empty();}}}
   }
-  if(matches.empty()) throw std::runtime_error("材质预设没有匹配当前对象的表面组");
-  scene.textures.insert(scene.textures.end(),preset.scene.textures.begin(),preset.scene.textures.end());
-  for(const auto &[m,slot]:matches) {
-    auto material=preset.scene.materials[m];for(auto *index:ir::texture_indices(material)) if(*index>=0) *index+=offset;
-    instance.materials[slot]=uint32_t(scene.materials.size());scene.materials.push_back(std::move(material));
+  return false;
+}
+void replace_surface_material(Document &d,Snapshot *snapshot,const daz::LoadedScene &preset,size_t instance,size_t slot,size_t material_index,int offset){
+  auto &scene=d.loaded.scene;auto &i=scene.instances.at(instance);const auto &incoming=preset.scene.materials.at(material_index);const auto base=scene.materials.at(i.materials.at(slot));auto material=incoming;auto touched=material_preset_parameters(incoming);
+  if(incoming.source_definition.empty()){for(auto *index:ir::texture_indices(material))if(*index>=0)*index+=offset;}
+  else {daz::LoadOptions options;for(const auto &root:(d.loaded.report.is_object()?d.loaded.report.value("content_roots",nlohmann::json::array()):nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));for(const auto &root:preset.report.value("content_roots",nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));daz::apply_material_uv(scene,instance,slot,incoming,options);material=daz::merge_material_preset(base,incoming,scene.textures,options);touched=material_preset_parameters(incoming,&material);for(const auto &p:material_parameters())if(!touched.contains(p.id))p.copy(material,base);}
+  ir::validate(material,scene.textures.size());i.materials[slot]=uint32_t(scene.materials.size());scene.materials.push_back(std::move(material));
+  if(snapshot)if(auto object=snapshot->material_overrides.find(i.id);object!=snapshot->material_overrides.end())if(auto patch=object->second.find(scene.meshes.at(i.mesh).material_slots.at(slot));patch!=object->second.end())for(const auto &id:touched)patch->second.erase(id);
+}
+}
+size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset,Snapshot *snapshot) {
+  const auto &scene=document.loaded.scene;const auto root=document.catalog.targets.at(target).instance;std::vector<MaterialSurface> surfaces;
+  const bool hierarchical=preset.report.value("hierarchical_material",false);const auto selected=node_id(document.catalog.targets.at(target));
+  for(size_t t=0;t<document.catalog.targets.size();++t){const auto &candidate=document.catalog.targets[t];bool include=t==target;
+    if(hierarchical&&!include){try{include=attachment_host(document,t)==target;}catch(const std::exception &){}include|=std::find(candidate.ancestors.begin(),candidate.ancestors.end(),"#"+selected)!=candidate.ancestors.end();}
+    if(include)for(size_t slot=0;slot<scene.instances.at(candidate.instance).materials.size();++slot)surfaces.push_back({candidate.instance,slot});
   }
-  collect_resources(document);
-  if(preset.report.contains("input"))document.operations.push_back({{"op","materials"},{"target",document.catalog.targets.at(target).id},{"file",preset.report.at("input")}});
-  return matches.size();
+  auto scratch=Snapshot{};return apply_surface_materials(document,snapshot?*snapshot:scratch,preset,surfaces);
+}
+size_t apply_surface_materials(Document &d,Snapshot &snapshot,const daz::LoadedScene &preset,const std::vector<MaterialSurface> &surfaces){
+  if(preset.report.value("preset_type","")=="preset_layered_image")throw std::runtime_error("独立 LIE 预设需要合并原有底图与图层，目前尚未支持直接叠加。请使用普通材质预设，或先在 DAZ 中合成并保存完整材质。");
+  auto &scene=d.loaded.scene;std::map<std::pair<size_t,size_t>,std::vector<size_t>> matches;
+  for(auto surface:surfaces){const auto &i=scene.instances.at(surface.instance);const auto &slot=scene.meshes.at(i.mesh).material_slots.at(surface.slot);
+    for(size_t m=0;m<preset.scene.materials.size();++m)for(const auto &group:preset.report.at("materials").at(m).at("groups"))if((group==slot||group=="*")&&material_owner_matches(d,preset.scene.materials[m],surface.instance)){auto &list=matches[{surface.instance,surface.slot}];if(std::find(list.begin(),list.end(),m)==list.end())list.push_back(m);break;}
+  }
+  if(matches.empty())throw std::runtime_error("材质预设没有匹配选中的表面；通用 Shader 预设可应用于任意表面");
+  const auto offset=int(scene.textures.size());scene.textures.insert(scene.textures.end(),preset.scene.textures.begin(),preset.scene.textures.end());nlohmann::json identities=nlohmann::json::array();
+  for(const auto &[surface,m]:matches){auto &i=scene.instances.at(surface.first);const auto slot=scene.meshes.at(i.mesh).material_slots.at(surface.second);
+    for(auto index:m)replace_surface_material(d,&snapshot,preset,surface.first,surface.second,index,offset);identities.push_back({{"instance",i.id},{"slot",slot}});
+  }
+  collect_resources(d);prune_material_overrides(scene,snapshot.material_overrides);
+  if(preset.report.contains("input"))d.operations.push_back({{"op","surface_materials"},{"surfaces",identities},{"file",preset.report.at("input")}});return matches.size();
 }
 Snapshot initial_snapshot(const Document &document) {
   Snapshot result;result.options=document.loaded.scene.options;result.generation=document.generation;result.revision=1;

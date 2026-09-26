@@ -3,6 +3,7 @@
 #include <QStringList>
 #include <functional>
 #include <memory>
+#include "editor/content_locator.h"
 namespace dfv::editor {
 class ContentBrowser final:public QWidget {
   struct Impl;
@@ -15,6 +16,8 @@ public:
   void set_roots(const QStringList &roots);
   void record_use(const QString &path,const QString &category);
   void show_recent();
+  bool locate(const QString &path);
+  void locate_asset(const ContentOrigin &origin);
   void save();
 };
 }

@@ -69,13 +69,16 @@ ir::Transform gizmo_rotation(ir::Vec3 axis,float radians) {
   for(int i=0;i<3;++i) for(int j=0;j<3;++j) r.value[i*4+j]=(i==j?c:0)+(1-c)*a[i]*a[j];
   r.value[1]-=s*axis.z;r.value[2]+=s*axis.y;r.value[4]+=s*axis.z;r.value[6]-=s*axis.x;r.value[8]-=s*axis.y;r.value[9]+=s*axis.x;return r;
 }
-runtime::TransformValues ground_aligned_transform(const runtime::Target &target,const runtime::TransformValues &value,
-  const ir::Transform &loaded,const ir::Transform &current,const ir::Bounds &bounds,double ratio) {
-  if(bounds.empty||!std::isfinite(ratio)) throw std::runtime_error("无法计算角色的地面对齐范围");
+double ground_vertical_shift(const ir::Bounds &bounds,double ratio) {
+  if(bounds.empty||!std::isfinite(ratio)) throw std::runtime_error("无法计算对象的地面对齐范围");
   // IR 为 Z 向上、单位米；DAZ 世界 Y 对应这里的 Z。比例始终乘当前世界高度。
   const double height=double(bounds.maximum.z)-bounds.minimum.z,shift=ratio*height-bounds.minimum.z;
-  if(!std::isfinite(shift)||height<0) throw std::runtime_error("角色的地面对齐范围无效");
-  if(std::abs(shift)<=std::max(1e-7,height*1e-7)) return value;
+  if(!std::isfinite(shift)||height<0) throw std::runtime_error("对象的地面对齐范围无效");
+  return std::abs(shift)<=std::max(1e-7,height*1e-7)?0:shift;
+}
+runtime::TransformValues ground_aligned_transform(const runtime::Target &target,const runtime::TransformValues &value,
+  const ir::Transform &loaded,const ir::Transform &current,const ir::Bounds &bounds,double ratio) {
+  const auto shift=ground_vertical_shift(bounds,ratio);if(shift==0)return value;
   const auto prefix=current*ir::inverse(runtime::parameter_transform(value,target,loaded)*loaded);
   const auto delta=direction(ir::inverse(prefix*target.translation_frame),{0,0,float(shift)});
   auto result=value;result.translation_cm=add(value.translation_cm,{delta.x*100,delta.z*100,-delta.y*100});

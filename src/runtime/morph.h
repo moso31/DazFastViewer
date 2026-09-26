@@ -57,7 +57,7 @@ struct Properties {
   std::optional<FavoriteState> favorites;
   ObjectExtension extension;
   std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;
-  double ground_alignment_ratio=0; // 每个角色独立的操作设置，修改比例本身不触发几何求值。
+  double ground_alignment_ratio=0; // 每个对象独立的操作设置，修改比例本身不触发几何求值。
 };
 void validate_transform(const TransformValues &value);
 ir::Transform make_transform(const TransformValues &value,const std::string &rotation_order="XYZ");

@@ -1,4 +1,5 @@
 #include "daz/pose.h"
+#include "daz/material_animation.h"
 #include "runtime/deformation.h"
 #include <algorithm>
 #include <cmath>
@@ -10,6 +11,7 @@ PosePreset parse_pose(const nlohmann::json &document,const std::string &source) 
   const auto &animations=document.at("scene").at("animations");if(!animations.is_array()||animations.empty()) throw std::runtime_error("姿势预设没有通道");
   std::set<std::string> seen;
   for(const auto &animation:animations) {
+    if(material_animation(animation))continue;
     const auto &keys=animation.at("keys");if(keys.size()!=1||keys.at(0).size()<2||keys.at(0).at(0).get<double>()!=0) throw std::runtime_error("006 只支持时间 0 的单帧姿势，尚不支持多帧动画");
     const auto url=decode_uri(animation.at("url").get<std::string>());const auto query=url.find('?');const auto protocol=url.find("://");
     if(protocol==std::string::npos||query==std::string::npos||!seen.insert(url).second) throw std::runtime_error("姿势通道地址无效或重复："+url);

@@ -1,6 +1,7 @@
 #include "editor/renderer.h"
 #include "editor/project.h"
 #include "editor/parameters.h"
+#include "editor/material_panel.h"
 #include "editor/content_browser.h"
 #include "editor/content_catalog.h"
 #include "editor/powerpose_panel.h"
@@ -77,6 +78,7 @@ class Editor final:public EditorWindow {
   #include "editor/powerpose_test.inl"
   #include "editor/pose_test.inl"
   #include "editor/gizmo_test.inl"
+  #include "editor/ground_test.inl"
   #include "editor/feedback_test.inl"
   #include "editor/render_profile.inl"
   QWidget *host_=nullptr;
@@ -96,6 +98,7 @@ class Editor final:public EditorWindow {
   ProjectSettings project_;
   std::shared_ptr<Document> document_;
   Snapshot snapshot_;
+  MaterialPanel *materials_=nullptr;
   std::unique_ptr<Renderer> renderer_;
   UiScale *ui_scale_=nullptr;
   ViewportSettings *viewport_settings_=nullptr;
@@ -377,34 +380,36 @@ class Editor final:public EditorWindow {
   }
   void send() {if(powerpose_) powerpose_->cancel();++snapshot_.revision;renderer_->edit(submitted_snapshot());}
   int ground_target() const {
-    if(loading_||!document_||selected_<0||selected_light_>=0||hierarchy_->selectedItems().size()!=1) return -1;
-    size_t target=size_t(selected_);if(target>=document_->catalog.targets.size()) return -1;
-    try {target=attachment_host(*document_,target);} catch(const std::exception &) {}
-    for(const auto &skin:document_->skeletons.skins) if(skin.instance==document_->catalog.targets[target].instance&&!skin.joints.empty()) return int(target);
+    if(loading_||!document_||selected_light_>=0||hierarchy_->selectedItems().size()!=1)return -1;
+    if(selected_>=0&&size_t(selected_)<document_->catalog.targets.size())return selected_;
+    if(selected_<=-5){const auto i=size_t(-5-selected_);const auto &scene=document_->loaded.scene;if(i<scene.instances.size()&&scene.instances[i].prototype>=0){const runtime::InstanceGroups groups(scene);return runtime::instance_selection(groups.roots[i]);}}
     return -1;
   }
+  std::string ground_id(int target) const {return target>=0?document_->catalog.targets.at(size_t(target)).id:document_->loaded.scene.instances.at(size_t(-5-target)).id;}
+  double ground_ratio(int target) const {if(target>=0)return snapshot_.values.at(size_t(target)).ground_alignment_ratio;if(target<=-5){const auto found=snapshot_.instance_ground.find(ground_id(target));if(found!=snapshot_.instance_ground.end())return found->second.ratio;}return 0;}
   void request_ground() {
-    const int target=ground_target();if(target<0) return;
-    ground_pending_=document_->catalog.targets[target].id;ground_generation_=document_->generation;
-    statusBar()->showMessage(QStringLiteral("正在按角色当前世界包围盒对齐到地面…"));
+    const int target=ground_target();if(target==-1)return;
+    ground_pending_=ground_id(target);ground_generation_=document_->generation;
+    statusBar()->showMessage(QStringLiteral("正在按对象当前世界包围盒对齐到地面…"));
   }
   void apply_ground(const RenderStatus &state) {
     if(ground_pending_.empty()) return;
     const int index=ground_target();
-    if(!document_||ground_generation_!=document_->generation||index<0||document_->catalog.targets[index].id!=ground_pending_) {ground_pending_.clear();return;}
+    if(!document_||ground_generation_!=document_->generation||index==-1||ground_id(index)!=ground_pending_) {ground_pending_.clear();return;}
     if(state.generation!=document_->generation) return;
-    if(!state.edit_error.empty()||!state.resource_error.empty()) {ground_pending_.clear();statusBar()->showMessage(QStringLiteral("角色求值失败，未执行地面对齐。"),5000);return;}
+    if(!state.edit_error.empty()||!state.resource_error.empty()) {ground_pending_.clear();statusBar()->showMessage(QStringLiteral("对象求值失败，未执行地面对齐。"),5000);return;}
     if(state.applied_revision!=snapshot_.revision||state.pose_dragging||state.pose_restoring||state.pending_payloads) return;
-    const auto &target=document_->catalog.targets[index];
-    for(size_t s=0;s<document_->skeletons.skins.size();++s) if(document_->skeletons.skins[s].instance==target.instance&&s<state.skin_world.size()&&size_t(index)<state.bounds.size()) {
-      ground_pending_.clear();
-      try {
-        auto &value=snapshot_.values[index];const auto next=ground_aligned_transform(target,value.transform,document_->loaded.scene.instances[target.instance].transform,state.skin_world[s],state.bounds[index],value.ground_alignment_ratio);
+    if(index<=-5){
+      if(state.selection_generation!=document_->generation||state.selected_target!=index||state.selections!=tree_selection(hierarchy_))return;
+      ground_pending_.clear();try{const auto shift=ground_vertical_shift(state.selection_bounds,ground_ratio(index));if(shift!=0){auto values=snapshot_.instance_ground;values[ground_id(index)].offset_m+=shift;validate_instance_ground(document_->loaded.scene,values);snapshot_.instance_ground=std::move(values);send();}statusBar()->showMessage(QStringLiteral("实例已对齐到地面"),5000);}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}return;
+    }
+    if(size_t(index)>=state.target_world.size()||size_t(index)>=state.bounds.size())return;
+    const auto &target=document_->catalog.targets[index];ground_pending_.clear();
+    try {
+        auto &value=snapshot_.values[index];const auto next=ground_aligned_transform(target,value.transform,document_->loaded.scene.instances[target.instance].transform,state.target_world[index],state.bounds[index],value.ground_alignment_ratio);
         if(next.translation_cm!=value.transform.translation_cm) {value.transform=next;send();select(selected_,selected_joint_,selected_light_);}
         statusBar()->showMessage(QStringLiteral("已对齐到地面：%1（比例 %2）").arg(text(target.label)).arg(value.ground_alignment_ratio),5000);
       } catch(const std::exception &e) {statusBar()->showMessage(text(e.what()),5000);}
-      return;
-    }
   }
   void prune_pending_parameters() {
     std::erase_if(pending_parameters_,[&](const auto &p) {for(const auto &t:document_->catalog.targets) if(t.id==p.first.first) for(const auto &m:t.morphs) if(m.id==p.first.second&&m.unsupported.empty()) return false;return true;});
@@ -433,6 +438,7 @@ class Editor final:public EditorWindow {
   }
   void progress(const QString &message) {QMetaObject::invokeMethod(this,[this,message] {statusBar()->showMessage(message);},Qt::QueuedConnection);}
   void sync_selection() {
+    {QSignalBlocker block(hierarchy_);for(QTreeWidgetItemIterator it(hierarchy_);*it;++it){auto font=(*it)->font(0);font.setBold((*it)->isSelected());(*it)->setFont(0,font);}}
     auto *item=active_selection(hierarchy_);
     select(item?item->data(0,Qt::UserRole).toInt():-1,item?item->data(0,Qt::UserRole+1).toInt():-1,item?item->data(0,Qt::UserRole+2).toInt():-1);
   }
@@ -543,7 +549,7 @@ class Editor final:public EditorWindow {
     const auto skin=selected_skin();if(skin<0) throw std::runtime_error("姿势 / 形态通道需要带骨骼的目标角色");
     auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;
     auto applied=daz::apply_pose(daz::parse_pose(data),next->skeletons.skins.at(size_t(skin)),snapshot.poses.at(size_t(skin)),next->catalog.targets.at(size_t(selected_)),snapshot.values.at(size_t(selected_)));
-    apply_materials(*next,size_t(selected_),daz::load(file,{roots_,false}));
+    apply_materials(*next,size_t(selected_),daz::load(file,{roots_,false}),&snapshot);
     snapshot.poses[size_t(skin)]=std::move(applied.joints);snapshot.values[size_t(selected_)]=std::move(applied.properties);
     next->generation=++generation_;snapshot.generation=next->generation;++snapshot.revision;next->loaded.scene.lights=snapshot.lights;
     parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);pose_report_=std::move(applied.report);
@@ -552,10 +558,17 @@ class Editor final:public EditorWindow {
     select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
     if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(data));
   }
+  void apply_surface_material_file(const std::filesystem::path &file,const std::vector<MaterialSurface> &surfaces){
+    if(loading_||!document_)return;
+    try{auto preset=daz::load(file,{roots_,false});auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;
+      apply_surface_materials(*next,snapshot,preset,surfaces);next->generation=++generation_;next->loaded.scene.lights=snapshot.lights;document_=std::move(next);snapshot_=std::move(snapshot);snapshot_.generation=document_->generation;++snapshot_.revision;
+      select(selected_,selected_joint_,selected_light_);renderer_->set_document(document_,submitted_snapshot(),false);if(!self_test_)browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*daz::document_view(file)));
+    }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("材质预设应用失败"),text(e.what()));}
+  }
   void apply_material_file(const std::filesystem::path &file) {
     if(loading_||selected_<0||!document_) throw std::runtime_error("请先选中材质预设的目标对象");
     auto preset=daz::load(file,{roots_,false});auto next=std::make_shared<Document>(*document_);next->generation=++generation_;
-    apply_materials(*next,size_t(selected_),preset);
+    auto snapshot=snapshot_;apply_materials(*next,size_t(selected_),preset,&snapshot);snapshot_=std::move(snapshot);
     next->loaded.scene.lights=snapshot_.lights;document_=next;snapshot_.generation=next->generation;++snapshot_.revision;select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
     if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*daz::document_view(file)));
   }
@@ -790,8 +803,9 @@ class Editor final:public EditorWindow {
     if(powerpose_) powerpose_->cancel();
     parameters_->bind_favorites(nullptr);initialize_favorites();
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
+    if(materials_)materials_->bind(document_,&snapshot_,index);
     bind_extension();
-    if(chrome) {const int target=ground_target();chrome->bind_ground(target>=0,target>=0?snapshot_.values[target].ground_alignment_ratio:0);}
+    if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1,ground_ratio(target));}
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1);
     if(renderer_) refresh_powerpose(renderer_->status());
@@ -1324,6 +1338,7 @@ class Editor final:public EditorWindow {
     refresh_powerpose(state);
     if(!render_plan_.empty()) {render_profile_tick(state);return;}
     if(gizmo_test_) {gizmo_tick(state);return;}
+    if(ground_test_) {ground_test_tick(state);return;}
     if(feedback_test_) {feedback_tick(state);return;}
     if(powerpose_test_) {powerpose_tick(state);return;}
     if(pose_edit_test_) {pose_edit_tick(state);return;}
@@ -1332,6 +1347,7 @@ class Editor final:public EditorWindow {
     if(interaction_test_) {interaction_tick(state);return;}
     if(navigation_test_) {navigation_tick(state);return;}
     if(refresh_parameters_) refresh_parameters_->setEnabled(!loading_&&document_&&selected_>=0);
+    if(materials_)materials_->setEnabled(!loading_);
     if(retry_parameters_) retry_parameters_->setEnabled(document_&&!state.resource_error.empty());
     static int resources_tick=0;if(++resources_tick%5==0) parameters_->resource_states();
     if(delete_) delete_->setEnabled(!loading_&&document_&&selected_joint_<0&&(selected_>=0||selected_light_>=0));
@@ -1708,6 +1724,7 @@ public:
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
   void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
   void gizmo_test() {gizmo_test_=self_test_=true;renderer_->automated_pointer();}
+  void ground_test() {ground_test_=self_test_=true;renderer_->automated_pointer();}
   void joint_selection_test() {joint_selection_test_=self_test_=true;GetCursorPos(&workflow_cursor_);}
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
@@ -1771,13 +1788,17 @@ public:
     apply_actions->addWidget(manual_morph_);apply_actions->addWidget(apply_parameters_);properties->addLayout(apply_actions);
     connect(apply_parameters_,&QPushButton::clicked,this,[this]{apply_parameters();});connect(manual_morph_,&QCheckBox::toggled,this,[this](bool manual){if(!manual) apply_parameters();});
     auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
+    materials_=new MaterialPanel;materials_->changed=[this]{if(!loading_&&renderer_)send();};materials_->interaction_changed=[this](bool active){if(renderer_)renderer_->interaction(active);};
+    materials_->preset_requested=[this](const auto &file,const auto &surfaces){apply_surface_material_file(file,surfaces);};
+    materials_->hovered=[this](const auto &surfaces){if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
+    auto *material_dock=dock(QStringLiteral("材质"),materials_,Qt::RightDockWidgetArea);material_dock->setObjectName("Materials");tabifyDockWidget(property_dock,material_dock);
     powerpose_=new PowerPosePanel;auto *powerpose_dock=dock(QStringLiteral("PowerPose"),powerpose_,Qt::RightDockWidgetArea);tabifyDockWidget(property_dock,powerpose_dock);powerpose_dock->raise();
     powerpose_->selection=[this](const auto &p){select_powerpose(p);};
     powerpose_->input=[this](auto input){if(renderer_) renderer_->powerpose(std::move(input));};
     powerpose_->action=[this](const auto &p,int operation,bool enabled){powerpose_action(p,operation,enabled);};
     install_chrome();
     chrome->changed=[this](GizmoSettings settings){if(renderer_) renderer_->gizmo(settings);};
-    chrome->ground_ratio_changed=[this](double ratio){const int target=ground_target();if(target>=0) snapshot_.values[target].ground_alignment_ratio=ratio;};
+    chrome->ground_ratio_changed=[this](double ratio){const int target=ground_target();if(target>=0)snapshot_.values[target].ground_alignment_ratio=ratio;else if(target<=-5)snapshot_.instance_ground[ground_id(target)].ratio=ratio;};
     connect(chrome->ground_action(),&QAction::triggered,this,[this]{request_ground();});
     connect(chrome->weight_action(),&QAction::triggered,this,[this]{enable_extension();});
     auto *file_menu=chrome->menus()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
@@ -1807,7 +1828,14 @@ public:
     delete_->setToolTip(QStringLiteral("删除对象、子对象及绑定的穿戴物；选择骨骼部位时请先选择所属模型"));
     connect(delete_,&QAction::triggered,this,[this] {delete_selection();});
     hierarchy_->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach](const QPoint &point) {hierarchy_->setCurrentItem(hierarchy_->itemAt(point));QMenu menu(this);menu.addAction(fit);menu.addAction(detach);menu.addSeparator();menu.addAction(delete_);menu.exec(hierarchy_->viewport()->mapToGlobal(point));});
+    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach,explorer_dock](const QPoint &point) {
+      auto *item=hierarchy_->itemAt(point);if(!item)return;hierarchy_->setCurrentItem(item);QMenu menu(this);menu.addAction(fit);menu.addAction(detach);
+      ContentOrigin origin;const int target=item->data(0,Qt::UserRole).toInt();
+      if(document_){int instance=target>=0&&size_t(target)<document_->catalog.targets.size()?int(document_->catalog.targets[size_t(target)].instance):(target<=-5?-5-target:-1);
+        if(instance>=0&&size_t(instance)<document_->loaded.scene.instances.size()){while(document_->loaded.scene.instances[size_t(instance)].prototype>=0)instance=document_->loaded.scene.instances[size_t(instance)].prototype;for(const auto &object:document_->loaded.objects)if(object.instance==uint32_t(instance)){origin.scene_file=QString::fromStdWString(object.source_file.wstring());origin.node=text(object.source_node.empty()?object.id:object.source_node);origin.label=text(object.label);origin.geometries.emplace_back(QString::fromStdWString(object.geometry_file.wstring()),text(object.geometry_id));for(const auto &source:object.geometry_sources)origin.geometries.emplace_back(QString::fromStdWString(source.file.wstring()),text(source.id));break;}}}
+      menu.addSeparator();auto *locate=menu.addAction(QStringLiteral("在内容库中定位"));locate->setObjectName("LocateSceneContent");locate->setEnabled(!origin.geometries.empty());locate->setToolTip(QStringLiteral("查找此模型对应的资源，展开所在文件夹并选中资源图标"));menu.addSeparator();menu.addAction(delete_);
+      if(menu.exec(hierarchy_->viewport()->mapToGlobal(point))==locate){explorer_dock->show();explorer_dock->raise();browser_->locate_asset(origin);}
+    });
     connect(file_menu->addAction(QStringLiteral("新建空场景")),&QAction::triggered,this,[this] {clear_scene();});
     connect(file_menu->addAction(QStringLiteral("打开场景（替换）…")),&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("打开场景"),{},QStringLiteral("DAZ 场景 (*.duf *.dufex)"));if(!file.isEmpty()) load(file_path(file));});
     auto *create=chrome->menus()->addMenu(QStringLiteral("创建"));
@@ -1904,6 +1932,8 @@ public:
           for(size_t s=0;s<loaded_snapshot.poses.size();++s)merged_snapshot.poses.at(first_skin+s)=loaded_snapshot.poses[s];
           for(auto pin:loaded_snapshot.pose_pins){pin.skin+=int(first_skin);merged_snapshot.pose_pins.push_back(pin);}
           for(const auto &[id,level]:loaded_snapshot.subdivision_levels)merged_snapshot.subdivision_levels[prefix+id]=level;
+          for(const auto &[id,patch]:loaded_snapshot.material_overrides)merged_snapshot.material_overrides[prefix+id]=patch;
+          for(const auto &[id,value]:loaded_snapshot.instance_ground)merged_snapshot.instance_ground[prefix+id]=value;
           for(size_t l=0;l<loaded_snapshot.lights.size();++l){auto value=loaded_snapshot.lights[l];value.id=prefix+value.id;merged_snapshot.lights.at(first_light+l)=value;}
           if(loaded_snapshot.control_favorites){
             merged_snapshot.control_favorites.emplace();const auto &favorites=*loaded_snapshot.control_favorites;
@@ -1926,6 +1956,8 @@ public:
           if(!preserve&&!previous_document) {pending_parameters_.clear();apply_parameters_->setEnabled(false);}
           document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_=loaded_snapshot;snapshot_.values.clear();snapshot_.poses.clear();snapshot_.options=(preserve||previous_document)?previous.options:loaded_snapshot.options;if(preserve||previous_document){for(const auto &entry:previous.subdivision_levels){snapshot_.subdivision_levels[entry.first]=entry.second;}}snapshot_.generation=document->generation;snapshot_.revision=1;
           if(!previous_document)extension_file_=sidecar;
+          if(preserve||previous_document){for(const auto &[id,patch]:previous.material_overrides)snapshot_.material_overrides[id]=patch;prune_material_overrides(document_->loaded.scene,snapshot_.material_overrides);}
+          if(preserve||previous_document){for(const auto &[id,value]:previous.instance_ground)snapshot_.instance_ground[id]=value;prune_instance_ground(document_->loaded.scene,snapshot_.instance_ground);}
           if(preserve||previous_document){auto incoming=std::move(snapshot_.control_favorites);snapshot_.control_favorites=previous.control_favorites;
             if(previous_document&&incoming){if(!snapshot_.control_favorites)snapshot_.control_favorites.emplace();for(auto &[node,values]:incoming->nodes)snapshot_.control_favorites->nodes[node]=std::move(values);}}
           if(previous_document) for(size_t l=0;l<previous.lights.size();++l) snapshot_.lights[l]=previous.lights[l];
@@ -2008,6 +2040,7 @@ int main(int argc,char **argv) {
   parser.addOption({"pose-edit-test",QStringLiteral("副屏验证原生 FK 参数、左键 IK、选择门槛、预览和取消")});
   parser.addOption({"powerpose-test",QStringLiteral("副屏验证 PowerPose 三页、灰模、提交、取消和固定约束")});
   parser.addOption({"gizmo-test",QStringLiteral("副屏验证三轴工具、Local / World、提交与取消")});
+  parser.addOption({"ground-test",QStringLiteral("副屏验证普通对象与 Instance 的 Ctrl+D 地面对齐")});
   parser.addOption({"empty-test",QStringLiteral("验证默认空场景及移动缩放后的视口刷新")});
   parser.addOption({"extension-test",QStringLiteral("副屏验证生长、重量、密度、折叠与 DUFEX 保存重开")});
   parser.addOption({"pose-test-level",QStringLiteral("FK / IK 验证时使用的宿主细分等级"),"level","-1"});
@@ -2020,7 +2053,7 @@ int main(int argc,char **argv) {
   try {
     SamplingSettings sampling;
     sampling.rebuild_probe=parser.isSet("rebuild-test");
-    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||parser.isSet("powerpose-test")||parser.isSet("gizmo-test");
+    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||parser.isSet("powerpose-test")||parser.isSet("gizmo-test")||parser.isSet("ground-test");
     if(parser.isSet("sampling-settings")) {sampling.quality_override=true;nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
@@ -2059,6 +2092,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("workflow-test")) editor.workflow_test();
     if(parser.isSet("head-selection-test")) editor.head_selection_test();
     if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"),parser.isSet("capture-head"),parser.value("capture-samples").toInt(),capture_seconds);
+    if(parser.isSet("ground-test")) editor.ground_test();
     if(parser.isSet("render-profile")) editor.render_profile(file_path(parser.value("render-profile")));
     if(parser.isSet("selection-test")) editor.selection_test(parser.values("selection-test"));
     if(parser.isSet("focus-test")) editor.selection_test(parser.values("focus-test"),true);

@@ -22,7 +22,8 @@ public:
   void draw_gizmo(const editor::GizmoShape &shape,int width,int height,int active=-1,float dpi=1);
   void update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions);
   void apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta);
-  void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1,const std::vector<uint32_t> *members=nullptr);
+  void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1,const std::vector<uint32_t> *members=nullptr,const std::vector<std::pair<size_t,size_t>> *surfaces=nullptr);
+  size_t surface_count(size_t instance,size_t slot) const;
   size_t triangle_count(int hovered,int joint=-1) const;
   void release();
   void draw_pose(const CameraState &camera,int width,int height,const ir::Mesh &proxy,const ir::Transform &world,

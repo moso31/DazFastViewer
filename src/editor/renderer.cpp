@@ -121,7 +121,7 @@ void Renderer::run(std::stop_token stop) {
       const auto [width,height]=render_size(window_->width,window_->height,quality.percent,moving);
       buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;applied_percent=quality.percent;
     };
-    Snapshot desired;bool edit_affects_render=false;
+    Snapshot desired;InstanceGrounds applied_instance_ground;bool edit_affects_render=false;
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;
       std::vector<Selection> selections;int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
@@ -129,6 +129,8 @@ void Renderer::run(std::stop_token stop) {
       std::vector<runtime::PosePin> pose_pins;
       runtime::PowerPoseInput powerpose;
       GizmoSettings gizmo_settings;
+      uint64_t material_hover_generation;std::vector<std::pair<size_t,size_t>> material_hover;
+      {std::lock_guard lock(mutex_);material_hover_generation=material_hover_generation_;material_hover=material_hover_;}
       {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
       {std::lock_guard lock(mutex_);powerpose=powerpose_input_;gizmo_settings=gizmo_settings_;quality=quality_;}
       const bool retry_payloads=retry!=retried;
@@ -163,6 +165,9 @@ void Renderer::run(std::stop_token stop) {
         if(resources.pending||!resources.error.empty()) {{std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
         {diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(desired.values,desired.poses);}
         pending_scene->lights=desired.lights;pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
+        apply_material_overrides(*pending_scene,document->loaded.scene,desired.material_overrides);
+        if(!desired.instance_ground.empty())apply_instance_ground(*pending_scene,document->loaded.scene,desired.instance_ground);
+        applied_instance_ground=desired.instance_ground;
         const auto camera=window_->mailbox.latest();pending_scene->camera=render_camera(camera,window_->width,window_->height);
         camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
         set_quality(camera.navigating||now()<camera.preview_until);
@@ -377,7 +382,7 @@ void Renderer::run(std::stop_token stop) {
         (edit_pending&&!state.pending_payloads&&state.resource_error.empty())));
       const bool resolution_changed=quality.percent!=applied_percent;
       const bool quality_changed=wanted_preview!=preview||resolution_changed;
-      ir::Delta delta;bool new_render_edit=false,subdivision_edit=false;
+      ir::Delta delta;bool new_render_edit=false,subdivision_edit=false,material_layout_edit=false;
       std::vector<ir::SubdivisionSettings> previous_subdivision;
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
       if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending) &&
@@ -410,7 +415,9 @@ void Renderer::run(std::stop_token stop) {
               if(render_scene.options.environment!=desired.options.environment||render_scene.options.environment_file!=desired.options.environment_file||render_scene.options.backdrop!=desired.options.backdrop) delta.options=desired.options;
               render_scene.options=desired.options;display->set_options(desired.options);
             }
-            new_render_edit=subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
+            material_layout_edit=apply_material_overrides(render_scene,current->loaded.scene,desired.material_overrides,&delta);
+            if(desired.instance_ground!=applied_instance_ground){apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta);applied_instance_ground=desired.instance_ground;}
+            new_render_edit=material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
             edit_affects_render=new_render_edit;applied_revision=desired.revision;state.edit_error.clear();}
           }
           catch(const std::exception &e) {
@@ -421,9 +428,9 @@ void Renderer::run(std::stop_token stop) {
         if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);render_scene.camera=*delta.camera;camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
         wanted_preview=navigation_preview||(!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
-        if(wanted_preview!=preview||resolution_changed||subdivision_edit||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
+        if(wanted_preview!=preview||resolution_changed||material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
           {const auto begin=now();thread_scoped_lock lock(session->scene->mutex);timing("scene_lock",begin,applied_revision);const auto apply_begin=now();
-            if(subdivision_edit) {
+            if(subdivision_edit||material_layout_edit) {
               try {adapter->synchronize(render_scene);} catch(const std::exception &e) {
                 for(size_t m=0;m<previous_subdivision.size();++m) render_scene.meshes[m].subdivision=previous_subdivision[m];
                 state.edit_error=e.what();subdivision_edit=false;adapter->apply(delta);
@@ -547,7 +554,8 @@ void Renderer::run(std::stop_token stop) {
       const auto *members=region.instance>=0&&region.joint<0?&instance_groups->members[size_t(region.instance)]:nullptr;
       if(members) {state.hovered_triangles=0;for(auto i:*members) state.hovered_triangles+=overlay.triangle_count(int(i));}
       const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;
-      if(presented&&!preview&&!pose_recovery.active) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members);
+      if(material_hover_generation!=current->generation)material_hover.clear();state.material_hover_primitives=0;for(auto [i,slot]:material_hover)state.material_hover_primitives+=overlay.surface_count(i,slot);
+      if(presented&&!preview&&!pose_recovery.active) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members,material_hover.empty()?nullptr:&material_hover);
       state.gizmo_shape={};
       if(gizmo_valid&&!pose_recovery.active&&!pose_drag.active&&!powerpose_drag.active&&gizmo_revision==applied_revision&&desired.revision==applied_revision) {
         state.gizmo_shape=gizmo_drag.shape;overlay.draw_gizmo(gizmo_drag.shape,window_->width,window_->height,gizmo_drag.shape.hit(float(window_->pointer_x),float(window_->pointer_y),8*gizmo_dpi),gizmo_dpi);

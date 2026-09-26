@@ -27,6 +27,7 @@ struct GizmoShape {
 GizmoShape gizmo_shape(const CameraState &camera,int width,int height,ir::Vec3 pivot,
   const ir::Transform &orientation,GizmoSettings settings,float dpi=1,std::array<bool,3> enabled={true,true,true});
 ir::Transform gizmo_rotation(ir::Vec3 axis,float radians);
+double ground_vertical_shift(const ir::Bounds &world_bounds,double ratio);
 runtime::TransformValues ground_aligned_transform(const runtime::Target &target,const runtime::TransformValues &value,
   const ir::Transform &loaded,const ir::Transform &current,const ir::Bounds &world_bounds,double ratio);
 class GizmoDrag {

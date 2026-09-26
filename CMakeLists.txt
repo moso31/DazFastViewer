@@ -39,7 +39,7 @@ add_library(dfv_scene STATIC src/render_ir/scene.cpp src/daz/loader.cpp src/daz/
 target_sources(dfv_scene PRIVATE src/runtime/subdivision.cpp src/runtime/graft_surface.cpp src/editor/attachments.cpp src/runtime/pose_edit.cpp src/editor/pose_drag.cpp)
 target_sources(dfv_scene PRIVATE src/runtime/powerpose.cpp src/editor/powerpose_drag.cpp)
 target_sources(dfv_scene PRIVATE src/editor/gizmo.cpp)
-target_sources(dfv_scene PRIVATE src/runtime/growth.cpp src/runtime/weight.cpp src/runtime/measurement_units.cpp src/editor/object_extension.cpp src/editor/scene_extension.cpp)
+target_sources(dfv_scene PRIVATE src/runtime/growth.cpp src/runtime/weight.cpp src/runtime/measurement_units.cpp src/editor/object_extension.cpp src/editor/scene_extension.cpp src/editor/materials.cpp)
 add_executable(GrowthWeightTest tests/growth_weight.cpp)
 target_link_libraries(GrowthWeightTest PRIVATE dfv_scene bf::dependencies::zlib)
 target_compile_options(GrowthWeightTest PRIVATE /utf-8)

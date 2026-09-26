@@ -69,6 +69,11 @@ void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::Joi
       const auto list=glGenLists(1);parts_[i][joint]={list,faces.size()};glNewList(list,GL_COMPILE);glBegin(GL_TRIANGLES);
       for(auto t:faces) triangle(mesh.triangles.at(t));glEnd();glEndList();
     }
+    // 负键专用于材质槽，与骨骼区域共用缓存和失效机制。
+    std::map<uint32_t,std::vector<size_t>> by_surface,curves;
+    for(size_t t=0;t<mesh.triangles.size();++t)if(mesh.draws(mesh.triangles[t]))by_surface[mesh.triangles[t].material_slot].push_back(t);
+    for(size_t c=0;c<mesh.curves.size();++c){curves[mesh.curves[c].material_slot].push_back(c);by_surface.try_emplace(mesh.curves[c].material_slot);}
+    for(const auto &[slot,faces]:by_surface){const auto list=glGenLists(1);size_t count=faces.size();glNewList(list,GL_COMPILE);glBegin(GL_TRIANGLES);for(auto t:faces)triangle(mesh.triangles[t]);glEnd();glLineWidth(2);glBegin(GL_LINES);for(auto c:curves[slot]){const auto &vertices=mesh.curves[c].vertices;for(size_t v=1;v<vertices.size();++v){for(auto index:{vertices[v-1],vertices[v]}){const auto p=mesh.positions[index];glVertex3f(p.x,p.y,p.z);}++count;}}glEnd();glEndList();parts_[i][-int(slot)-2]={list,count};}
 }
 void HoverOverlay::apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta) {
   for(const auto &e:delta.meshes) for(size_t i=0;i<scene.instances.size();++i) if(scene.instances[i].mesh==e.index) rebuild(scene,regions,i);
@@ -79,8 +84,10 @@ size_t HoverOverlay::triangle_count(int hovered,int joint) const {
   if(hovered<0||size_t(hovered)>=lists_.size()) return 0;
   if(joint<0) return triangle_counts_[size_t(hovered)];const auto found=parts_[size_t(hovered)].find(joint);return found==parts_[size_t(hovered)].end()?0:found->second.second;
 }
-void HoverOverlay::draw(const CameraState &camera,int width,int height,int hovered,int joint,const std::vector<uint32_t> *members) {
-  if(hovered<0||size_t(hovered)>=lists_.size()||(!members&&!visible_[size_t(hovered)])) return;
+size_t HoverOverlay::surface_count(size_t instance,size_t slot) const {if(instance>=parts_.size()||!visible_[instance])return 0;auto found=parts_[instance].find(-int(slot)-2);return found==parts_[instance].end()?0:found->second.second;}
+void HoverOverlay::draw(const CameraState &camera,int width,int height,int hovered,int joint,const std::vector<uint32_t> *members,const std::vector<std::pair<size_t,size_t>> *surfaces) {
+  if(surfaces){if(surfaces->empty())return;hovered=int(surfaces->front().first);joint=-1;members=nullptr;}
+  if(hovered<0||size_t(hovered)>=lists_.size()||(!surfaces&&!members&&!visible_[size_t(hovered)])) return;
   auto highlight=lists_[size_t(hovered)];
   if(joint>=0) {const auto found=parts_[size_t(hovered)].find(joint);if(found==parts_[size_t(hovered)].end()) return;highlight=found->second.first;}
   glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_CULL_FACE);
@@ -93,7 +100,8 @@ void HoverOverlay::draw(const CameraState &camera,int width,int height,int hover
   glEnable(GL_STENCIL_TEST);glStencilFunc(GL_ALWAYS,1,0xff);glStencilOp(GL_KEEP,GL_KEEP,GL_REPLACE);
   // 选区始终透过衣服和其他遮挡物显示；只绘制选中几何的遮罩并合成一次黄色，
   // 避免深度竞争，也避免前后表面及重叠三角形反复混色。
-  for(size_t i=0;i<lists_.size();++i)if(visible_[i]) {
+  if(surfaces){for(const auto &[i,slot]:*surfaces)if(i<parts_.size()&&visible_[i]){auto found=parts_[i].find(-int(slot)-2);if(found!=parts_[i].end())draw_instance(i,found->second.first);}}
+  else for(size_t i=0;i<lists_.size();++i)if(visible_[i]) {
     const bool selected=members?std::find(members->begin(),members->end(),uint32_t(i))!=members->end():i==size_t(hovered);
     if(selected)draw_instance(i,joint>=0?highlight:lists_[i]);
   }

@@ -3,6 +3,8 @@
 #include "daz/skeleton.h"
 #include "runtime/deformation.h"
 #include "runtime/pose_edit.h"
+#include "editor/materials.h"
+#include "editor/instance_ground.h"
 #include <map>
 
 namespace dfv::editor {
@@ -27,6 +29,8 @@ struct Document {
   std::vector<AttachmentBinding> attachments;
 };
 struct Snapshot {
+  InstanceGrounds instance_ground;
+  MaterialOverrides material_overrides;
   std::optional<runtime::FavoriteState> control_favorites;
   // 按稳定网格身份保存，追加／删除对象不会把级别套到其他对象。
   std::map<std::string,int> subdivision_levels;
@@ -47,7 +51,8 @@ void append_document(Document &destination,Document source,const std::string &id
 size_t attachment_host(const Document &document,size_t selected);
 void attach_import(Document &document,size_t first_target,size_t host);
 void fit_attachment(Document &document,size_t follower,int host);
-size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset);
+size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset,Snapshot *snapshot=nullptr);
+size_t apply_surface_materials(Document &document,Snapshot &snapshot,const daz::LoadedScene &preset,const std::vector<MaterialSurface> &surfaces);
 void collect_resources(Document &document);
 void release_load_data(Document &document);
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target);

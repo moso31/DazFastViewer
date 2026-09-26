@@ -26,6 +26,8 @@ int main(){
     check(picture("occluder-through-highlight").pixelColor(200,120)==yellow,"有间距的遮挡物阻挡了黄色选区");
     runtime::JointRegions region;region.head=-1;region.detail={7,8};region.body={7,8};overlay.update(scene,{region});glClear(GL_COLOR_BUFFER_BIT);overlay.draw(camera,400,240,0,7);
     const auto part=picture("joint-through-highlight");check(part.pixelColor(230,140)==yellow&&part.pixelColor(170,100).red()==51,"穿透选区没有保持部位范围");
+    scene.meshes[0].triangles[1].material_slot=1;overlay.update(scene,{});const std::vector<std::pair<size_t,size_t>> surfaces{{0,0},{1,0}};glClear(GL_COLOR_BUFFER_BIT);overlay.draw(camera,400,240,-1,-1,nullptr,&surfaces);
+    const auto material=picture("material-through-highlight");check(material.pixelColor(230,140)==yellow&&material.pixelColor(170,100).red()==51&&overlay.surface_count(0,0)==1,"子材质遮罩范围错误或重复混色");
     scene.instances[0].visible=false;overlay.update(scene,{});glClear(GL_COLOR_BUFFER_BIT);overlay.draw(camera,400,240,0,-1,&members);
     // 隐藏对象不参与遮罩；同时取消选择前方物体。
     glClear(GL_COLOR_BUFFER_BIT);const std::vector<uint32_t> hidden{0};overlay.draw(camera,400,240,0,-1,&hidden);

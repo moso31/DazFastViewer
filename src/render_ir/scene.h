@@ -51,6 +51,11 @@ struct Texture {
   float gamma=0;
   bool operator==(const Texture &) const = default;
 };
+struct MaterialSourceChannel {
+  std::string id,label,type,value,image;
+  bool mapped=false;
+  bool operator==(const MaterialSourceChannel &) const = default;
+};
 struct Material {
   std::string id;
   Vec3 base_color{0.5f,0.5f,0.5f};
@@ -84,13 +89,21 @@ struct Material {
   int coat_texture=-1,coat_roughness_texture=-1,dual_texture=-1,metallic_texture=-1,transmission_texture=-1;
   int specular_color_texture=-1,coat_color_texture=-1;
   bool bump_invert=false,bump_from_texel_density=false;
+  float overlay_weight=0,overlay_roughness=0;
+  Vec3 overlay_color{1,1,1};
+  bool overlay_squared=false;
+  int overlay_texture=-1,overlay_color_texture=-1,overlay_roughness_texture=-1;
+  int dual_roughness1_texture=-1,dual_roughness2_texture=-1,hair_tip_texture=-1;
+  std::vector<MaterialSourceChannel> source_channels;
+  std::string source_definition;
   bool operator==(const Material &) const = default;
 };
 template<class M> auto texture_indices(M &m) {
   return std::array{&m.color_texture,&m.roughness_texture,&m.opacity_texture,&m.normal_texture,&m.bump_texture,
     &m.specular_texture,&m.translucency_texture,&m.translucency_color_texture,&m.coat_texture,&m.coat_roughness_texture,
     &m.dual_texture,&m.metallic_texture,&m.transmission_texture,&m.specular_color_texture,&m.coat_color_texture,&m.displacement_texture,
-    &m.emission_color_texture,&m.emission_luminance_texture};
+    &m.emission_color_texture,&m.emission_luminance_texture,&m.overlay_texture,&m.overlay_color_texture,&m.overlay_roughness_texture,
+    &m.dual_roughness1_texture,&m.dual_roughness2_texture,&m.hair_tip_texture};
 }
 struct Triangle {
   std::array<uint32_t,3> vertices{};

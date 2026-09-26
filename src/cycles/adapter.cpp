@@ -124,7 +124,8 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
   if(m.hair) {
     auto *hair=graph->create_node<PrincipledHairBsdfNode>();hair->set_roughness(m.roughness);hair->set_radial_roughness(m.hair_radial_roughness);
     auto *info=graph->create_node<HairInfoNode>();auto *blend=graph->create_node<MixNode>();blend->set_mix_type(NODE_MIX_BLEND);blend->set_color2(vector(m.hair_tip_color));
-    graph->connect(base,blend->input("Color1"));graph->connect(info->output("Intercept"),blend->input("Fac"));
+    graph->connect(base,blend->input("Color1"));graph->connect(color(m.hair_tip_texture,m.hair_tip_color),blend->input("Color2"));graph->connect(info->output("Intercept"),blend->input("Fac"));
+    graph->connect(scalar(m.roughness_texture,m.roughness),hair->input("Roughness"));
     hair->set_parametrization(m.hair_melanin>0?NODE_PRINCIPLED_HAIR_PIGMENT_CONCENTRATION:NODE_PRINCIPLED_HAIR_REFLECTANCE);
     hair->set_melanin(m.hair_melanin);hair->set_melanin_redness(m.hair_redness);
     graph->connect(blend->output("Color"),hair->input(m.hair_melanin>0?"Tint":"Color"));surface=hair->output("BSDF");
@@ -166,9 +167,13 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
       surface=mix(surface,gloss->output("BSDF"),scalar(m.specular_texture,m.specular));
     }
     if(m.dual_weight>0) {
-      auto *a=principled(scalar(-1,m.dual_roughness1),scalar(-1,m.dual_specular),{1,1,1});
-      auto *b=principled(scalar(-1,m.dual_roughness2),scalar(-1,m.dual_specular),{1,1,1});
+      auto *a=principled(scalar(m.dual_roughness1_texture,m.dual_roughness1),scalar(-1,m.dual_specular),{1,1,1});
+      auto *b=principled(scalar(m.dual_roughness2_texture,m.dual_roughness2),scalar(-1,m.dual_specular),{1,1,1});
       surface=mix(surface,mix(b,a,scalar(-1,m.dual_ratio)),scalar(m.dual_texture,m.dual_weight));
+    }
+    if(m.overlay_weight>0){
+      auto *overlay=graph->create_node<DiffuseBsdfNode>();graph->connect(color(m.overlay_color_texture,m.overlay_color),overlay->input("Color"));graph->connect(scalar(m.overlay_roughness_texture,m.overlay_roughness),overlay->input("Roughness"));if(surface_normal)graph->connect(surface_normal,overlay->input("Normal"));
+      auto *weight=scalar(m.overlay_texture,m.overlay_weight);if(m.overlay_squared){auto *square=graph->create_node<MathNode>();square->set_math_type(NODE_MATH_MULTIPLY);graph->connect(weight,square->input("Value1"));graph->connect(weight,square->input("Value2"));weight=square->output("Value");}surface=mix(surface,overlay->output("BSDF"),weight);
     }
     if(m.coat>0) {
       // Top Coat 反射色不能直接作为 Principled Coat Tint 的吸收色。

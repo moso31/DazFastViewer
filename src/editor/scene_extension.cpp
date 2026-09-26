@@ -39,6 +39,10 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
     else if(kind=="attach")attach_import(d,target_index(d,op.at("first")),target_index(d,op.at("host")));
     else if(kind=="fit")fit_attachment(d,target_index(d,op.at("target")),op.at("host").get<std::string>().empty()?-1:int(target_index(d,op.at("host"))));
     else if(kind=="materials")apply_materials(d,target_index(d,op.at("target")),daz::load(source_path(op.at("file")),{roots,false}));
+    else if(kind=="surface_materials"){
+      std::vector<MaterialSurface> surfaces;for(const auto &s:op.at("surfaces")){const auto &scene=d.loaded.scene;auto i=std::find_if(scene.instances.begin(),scene.instances.end(),[&](const auto &v){return v.id==s.at("instance").get<std::string>();});if(i==scene.instances.end())throw std::runtime_error("材质预设对象不存在");const auto &slots=scene.meshes.at(i->mesh).material_slots;auto slot=std::find(slots.begin(),slots.end(),s.at("slot").get<std::string>());if(slot==slots.end())throw std::runtime_error("材质预设表面不存在");surfaces.push_back({size_t(i-scene.instances.begin()),size_t(slot-slots.begin())});}
+      auto snapshot=initial_snapshot(d);apply_surface_materials(d,snapshot,daz::load(source_path(op.at("file")),{roots,false}),surfaces);
+    }
     else throw std::runtime_error("DUFEX 含未知场景操作："+kind);
   }
   d.operations=operations;
@@ -55,6 +59,8 @@ J snapshot_json(const Document &d,const Snapshot &s){
   for(size_t i=0;i<s.poses.size();++i){const auto &skin=d.skeletons.skins[i];runtime::validate_pose(skin,s.poses[i]);J poses=J::object();for(size_t b=0;b<skin.joints.size();++b){const auto &p=s.poses[i][b];auto v=transform(p);v["center_offset_cm"]=vec(p.center_offset_cm);v["end_offset_cm"]=vec(p.end_offset_cm);v["orientation_offset_degrees"]=vec(p.orientation_offset_degrees);poses[skin.joints[b].id]=v;}j["poses"][skin.id]=poses;}
   for(const auto &l:s.lights)j["lights"].push_back({{"id",l.id},{"transform",l.transform.value},{"power",vec(l.power)},{"width",l.width},{"height",l.height},{"kind",int(l.kind)},{"angle",l.angle}});
   j["pins"]=J::array();for(const auto &p:s.pose_pins){const auto &skin=d.skeletons.skins.at(size_t(p.skin));j["pins"].push_back({{"skin",skin.id},{"joint",skin.joints.at(size_t(p.joint)).id},{"world",vec(p.world)},{"position",p.position},{"angle",p.angle},{"orientation",p.world_orientation.value}});}
+  validate_material_overrides(d.loaded.scene,s.material_overrides);j["materials"]=s.material_overrides;
+  validate_instance_ground(d.loaded.scene,s.instance_ground);j["instance_ground"]=J::object();for(const auto &[id,v]:s.instance_ground)j["instance_ground"][id]={{"offset_m",v.offset_m},{"ratio",v.ratio}};
   j["control_favorites"]=favorites(s.control_favorites);return j;
 }
 void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
@@ -69,6 +75,8 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   next.options=ir::options_from_json(j.at("options"));next.subdivision_levels=j.at("subdivision").get<std::map<std::string,int>>();for(const auto &[id,l]:next.subdivision_levels)if(l<0||l>6)throw std::runtime_error("DUFEX 细分等级无效");
   next.lights.clear();std::set<std::string> ids;for(const auto &l:j.at("lights")){ir::AreaLight v;v.id=l.at("id");if(!ids.insert(v.id).second)throw std::runtime_error("DUFEX 灯光身份重复");v.transform.value=l.at("transform").get<std::array<float,12>>();for(auto x:v.transform.value)if(!std::isfinite(x))throw std::runtime_error("DUFEX 灯光变换无效");v.power=vector(l.at("power"));v.width=l.at("width");v.height=l.at("height");v.angle=l.at("angle");const int kind=l.at("kind");if(kind<0||kind>3||!std::isfinite(v.width)||v.width<=0||!std::isfinite(v.height)||v.height<=0||!std::isfinite(v.angle))throw std::runtime_error("DUFEX 灯光参数无效");v.kind=ir::LightKind(kind);next.lights.push_back(v);}
   next.pose_pins.clear();for(const auto &p:j.value("pins",J::array())){auto skin=std::find_if(d.skeletons.skins.begin(),d.skeletons.skins.end(),[&](const auto &v){return v.id==p.at("skin").get<std::string>();});if(skin==d.skeletons.skins.end())throw std::runtime_error("固定关节的角色不存在");auto joint=std::find_if(skin->joints.begin(),skin->joints.end(),[&](const auto &v){return v.id==p.at("joint").get<std::string>();});if(joint==skin->joints.end())throw std::runtime_error("固定关节不存在");runtime::PosePin pin;pin.skin=int(skin-d.skeletons.skins.begin());pin.joint=int(joint-skin->joints.begin());pin.world=vector(p.at("world"));pin.position=p.at("position");pin.angle=p.at("angle");pin.world_orientation.value=p.at("orientation").get<std::array<float,12>>();for(auto v:pin.world_orientation.value)if(!std::isfinite(v))throw std::runtime_error("固定角度无效");next.pose_pins.push_back(pin);}
+  next.material_overrides=j.value("materials",J::object()).get<MaterialOverrides>();validate_material_overrides(d.loaded.scene,next.material_overrides);
+  const auto instance_ground=j.value("instance_ground",J::object());next.instance_ground.clear();for(const auto &[id,v]:instance_ground.items())next.instance_ground[id]={v.at("offset_m").get<double>(),v.at("ratio").get<double>()};validate_instance_ground(d.loaded.scene,next.instance_ground);
   next.control_favorites=read_favorites(j.value("control_favorites",J{}));s=std::move(next);
 }
 void save_scene_extension(const fs::path &file,const Document &d,const Snapshot &s){

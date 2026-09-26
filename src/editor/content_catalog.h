@@ -52,6 +52,7 @@ public:
   void cancel_search();
   size_t size() const {return entries_->size();}
   bool scanning() const {return scanning_;}
+  std::shared_ptr<const ContentEntries> entries() const {return entries_;}
   static ContentSearch match(const ContentEntries &entries,const QString &query,const QString &scope={},const std::function<bool()> &cancel={});
 };
 }

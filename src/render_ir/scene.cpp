@@ -47,6 +47,7 @@ void validate(const Camera &camera) {
   for(float f:camera.transform.value) if(!std::isfinite(f)) throw std::runtime_error("IR: 相机矩阵包含非有限值");
 }
 void validate(const Material &m,size_t texture_count) {
+  for(float f:{m.overlay_weight,m.overlay_roughness,m.overlay_color.x,m.overlay_color.y,m.overlay_color.z,m.coat_normal,m.coat_grazing,m.coat_exponent})if(!std::isfinite(f)||f<0)throw std::runtime_error("IR: 覆盖层或清漆参数无效");
   for(float f:{m.emission_color.x,m.emission_color.y,m.emission_color.z,m.emission_luminance,m.emission_temperature,m.emission_efficacy})
     if(!std::isfinite(f)||f<0) throw std::runtime_error("IR: 自发光参数无效");
   if(m.emission_units<0||m.emission_units>5) throw std::runtime_error("IR: 自发光亮度单位无效");
