@@ -1,4 +1,9 @@
 # 在 Cycles app 目录作用域定义，继承该版本所需的编译选项和 ABI。
+add_executable(RenderSchedulerTest "${DFV_ROOT}/tests/render_scheduler.cpp")
+target_link_libraries(RenderSchedulerTest PRIVATE ${LIB})
+target_compile_options(RenderSchedulerTest PRIVATE /utf-8)
+add_test(NAME render_scheduler COMMAND RenderSchedulerTest)
+set_tests_properties(render_scheduler PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_ROOT}/out")
 add_executable(CyclesViewportBench "${DFV_ROOT}/src/bench/main.cpp"
   "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/cycles/adapter.cpp"
@@ -16,7 +21,7 @@ install(FILES "${DFV_LIB_DIR}/epoxy/bin/epoxy-0.dll" DESTINATION "${CMAKE_INSTAL
 set(DFV_QT_ROOT "C:/Qt/6.10.3/msvc2022_64" CACHE PATH "Qt MSVC x64 开发套件")
 find_package(Qt6 6.10 REQUIRED COMPONENTS Widgets Test PATHS "${DFV_QT_ROOT}/lib/cmake/Qt6" NO_DEFAULT_PATH)
 add_library(dfv_content STATIC "${DFV_ROOT}/src/editor/content_browser.cpp" "${DFV_ROOT}/src/editor/content_catalog.cpp" "${DFV_ROOT}/src/editor/ui_scale.cpp")
-target_sources(dfv_content PRIVATE "${DFV_ROOT}/src/editor/viewport_settings.cpp")
+target_sources(dfv_content PRIVATE "${DFV_ROOT}/src/editor/viewport_settings.cpp" "${DFV_ROOT}/src/editor/application_settings.cpp")
 target_include_directories(dfv_content PUBLIC "${DFV_ROOT}/src" "${DFV_ROOT}/third_party")
 target_link_libraries(dfv_content PUBLIC Qt6::Widgets)
 target_compile_options(dfv_content PRIVATE /utf-8)
@@ -33,12 +38,19 @@ target_include_directories(DazFastViewer PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(DazFastViewer PRIVATE ${LIB} dfv_scene dfv_content Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_compile_definitions(DazFastViewer PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
 target_compile_options(DazFastViewer PRIVATE /utf-8)
-add_executable(ProjectSettingsTest "${DFV_ROOT}/tests/project_settings.cpp" "${DFV_ROOT}/src/editor/project.cpp")
-target_include_directories(ProjectSettingsTest PRIVATE "${DFV_ROOT}/src")
+add_executable(RendererQualityTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_quality.cpp"
+  "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
+  "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
+target_include_directories(RendererQualityTest PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(RendererQualityTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
+target_compile_definitions(RendererQualityTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_options(RendererQualityTest PRIVATE /utf-8)
+add_executable(ProjectSettingsTest "${DFV_ROOT}/tests/project_settings.cpp" "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/application_settings.cpp")
+target_include_directories(ProjectSettingsTest PRIVATE "${DFV_ROOT}/src" "${DFV_ROOT}/third_party")
 target_link_libraries(ProjectSettingsTest PRIVATE Qt6::Widgets)
 target_compile_options(ProjectSettingsTest PRIVATE /utf-8)
 add_test(NAME project_settings COMMAND ProjectSettingsTest)
-set_tests_properties(project_settings PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
+set_tests_properties(project_settings PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 add_executable(ParameterControlsTest "${DFV_ROOT}/tests/parameter_controls.cpp" "${DFV_ROOT}/src/editor/parameters.cpp")
 target_sources(ParameterControlsTest PRIVATE "${DFV_ROOT}/src/editor/extension_panel.cpp")
 target_include_directories(ParameterControlsTest PRIVATE "${DFV_ROOT}/src")

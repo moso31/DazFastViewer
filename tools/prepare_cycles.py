@@ -71,6 +71,32 @@ def main():
     replace("CMakeLists.txt", "include(dependency_targets)", 'include("${DFV_ROOT}/cmake/dependency_targets.cmake")')
     replace("src/app/CMakeLists.txt", "# Application build targets", '# Application build targets\ninclude("${DFV_ROOT}/cmake/bench.cmake")')
     replace("src/util/CMakeLists.txt", "PRIVATE bf::dependencies::openexr", "PRIVATE bf::dependencies::openexr\n  PRIVATE fmt::fmt")
+    # 应用可限制静止视口的更新批次时长；0 保留上游调度，离线渲染不受影响。
+    replace("src/device/device.h", "  thread_mutex image_info_mutex;",
+            "  thread_mutex image_info_mutex;\n  size_t dfv_host_bytes() const { return map_host_used; }\n  size_t dfv_device_bytes() const { return device_mem_in_use; }")
+    replace("src/session/session.h", "  bool use_profiling;", "  double dfv_update_interval = 0.0;\n  bool use_profiling;")
+    replace("src/session/session.h", "threads == params.threads && use_profiling == params.use_profiling &&",
+            "threads == params.threads && dfv_update_interval == params.dfv_update_interval && use_profiling == params.use_profiling &&")
+    replace("src/integrator/render_scheduler.h", "  bool background_;", "  bool background_;\n  double dfv_update_interval_;")
+    replace("src/integrator/render_scheduler.cpp", "      background_(params.background),", "      background_(params.background),\n      dfv_update_interval_(params.dfv_update_interval),")
+    replace("src/integrator/render_scheduler.cpp", "  const double render_time = path_trace_time_.get_wall();",
+            "  if (dfv_update_interval_ > 0.0) return dfv_update_interval_;\n  const double render_time = path_trace_time_.get_wall();")
+    # 自适应模式在采样开始前决定是否呈现，需要计入即将执行的批次。
+    # 否则上一帧刚呈现就跳过下一帧，慢采样会变成每两次才显示一次。
+    replace("src/integrator/render_scheduler.h",
+            "  bool work_need_update_display(const bool denoiser_delayed);",
+            "  bool work_need_update_display(const bool denoiser_delayed, const int scheduled_samples = 0);")
+    replace("src/integrator/render_scheduler.cpp",
+            "  render_work.tile.write = done();\n\n  render_work.display.update = work_need_update_display(denoiser_delayed);",
+            "  render_work.tile.write = done();\n\n  render_work.display.update = work_need_update_display(denoiser_delayed, render_work.path_trace.num_samples);")
+    replace("src/integrator/render_scheduler.cpp",
+            "bool RenderScheduler::work_need_update_display(const bool denoiser_delayed)",
+            "bool RenderScheduler::work_need_update_display(const bool denoiser_delayed, const int scheduled_samples)")
+    replace("src/integrator/render_scheduler.cpp",
+            "  return (time_dt() - state_.last_display_update_time) > update_interval;",
+            """  const double predicted_time = !background_ && dfv_update_interval_ > 0.0 ?
+                                    scheduled_samples * path_trace_time_.get_last_sample_time() : 0.0;
+  return (time_dt() - state_.last_display_update_time + predicted_time) >= update_interval;""")
     # 显式启用与已安装依赖一致的 C++20，避免独立上游残留 C++17 旗标。
     path = "src/cmake/configure_build.cmake"
     files[path] = files[path].replace(b"/std:c++17", b"/std:c++20")
@@ -115,7 +141,7 @@ def main():
     for name, data in files.items():
         write_changed(destination / name, data)
     manifest = {"standalone_commit": STANDALONE, "blender_commit": BLENDER, "adopted_files": adopted,
-                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state"]}
+                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry"]}
     write_changed(destination / "dfv-source-manifest.json", json.dumps(manifest, indent=2) + "\n")
     print(f"Cycles 构建树已生成：{destination}；接入 {len(adopted)} 个 Blender 5.2.2 文件")
 

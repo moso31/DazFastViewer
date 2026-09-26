@@ -11,15 +11,28 @@
 #include <thread>
 
 namespace dfv::editor {
-// 启动时固定的采样参数，诊断可覆盖；降噪始终关闭。
-struct SamplingSettings {
+// 采样参数和可重建的视口画质；诊断可覆盖，降噪始终关闭。
+struct SamplingSettings : RenderQuality {
   int samples=4096,min_bounces=0,transparent_min_bounces=0;
   float adaptive_threshold=.01f;
   bool blue_noise=true;
   bool interaction_probe=false;
   bool rebuild_probe=false;
+  double update_interval_seconds=.125;
+  bool prune_hidden=true;
+  bool quality_override=false;
+};
+// 仅供 --render-profile 的受控消融实验，始终从原场景恢复后应用。
+struct RenderProbe {
+  uint64_t serial=0;
+  bool disable_sss=false,disable_bump=false;
+  int transparent_bounces=32;
+  std::vector<std::string> hidden;
 };
 struct RenderStatus {
+  SamplingSettings sampling;
+  uint64_t probe_serial=0;
+  size_t gpu_device_bytes=0,gpu_host_bytes=0;
   bool pose_gizmo=false,gizmo_available=false;
   int pose_light=-1;
   GizmoShape gizmo_shape;
@@ -83,9 +96,11 @@ class Renderer {
   std::filesystem::path output_;
   SamplingSettings sampling_;
   ViewportQuality quality_;
+  RenderProbe probe_;
   Telemetry telemetry_;
   std::unique_ptr<Window> window_;
   std::mutex mutex_;
+  RenderQuality requested_render_quality_;
   std::shared_ptr<const Document> document_;
   Snapshot snapshot_;
   RenderStatus status_;
@@ -109,6 +124,8 @@ public:
   void set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene=true);
   void resize(int width,int height);
   void quality(ViewportQuality value) {std::lock_guard lock(mutex_);value.percent=std::clamp(value.percent,50,100);quality_=value;}
+  void render_quality(RenderQuality value) {std::lock_guard lock(mutex_);requested_render_quality_=value;}
+  void render_probe(RenderProbe value) {std::lock_guard lock(mutex_);probe_=std::move(value);}
   void pointer(int x,int y,bool click=false,bool toggle=false);
   void automated_pointer() {window_->automated_pointer=true;}
   void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={},bool ik_allowed=false);

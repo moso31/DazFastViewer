@@ -1,4 +1,4 @@
-// 真实副屏检查：设置菜单中的独立参数，以及原生视口不再响应旧缩放快捷键。
+// 真实副屏检查：独立渲染与界面参数，以及原生视口不再响应旧缩放快捷键。
 bool feedback_test_=false;
 int feedback_stage_=0;
 double feedback_at_=0;
@@ -21,18 +21,17 @@ void feedback_tick(const RenderStatus &state) {
   };
   const auto expected=render_size(state.width,state.height,viewport_settings_->value().percent);
   if(expected!=std::pair{state.render_width,state.render_height}||state.quality!=viewport_settings_->value())return;
-  auto percent=[&](int value){findChild<QSpinBox *>("ViewportRenderPercent")->setValue(value);++feedback_stage_;};
+  auto percent=[&](int value){auto quality=viewport_settings_->value();quality.percent=value;viewport_settings_->set(quality);++feedback_stage_;};
   if(feedback_stage_==0){feedback_sessions_=state.sessions;feedback_geometry_=state.adapter.geometry_updates;save("render-100");percent(50);return;}
   if(state.sessions!=feedback_sessions_||state.adapter.geometry_updates!=feedback_geometry_){finish_test(false,"渲染比例或 UI 缩放导致会话或几何重建");return;}
   if(feedback_stage_==1){save("render-50");percent(67);return;}
   if(feedback_stage_==2){save("render-67");percent(75);return;}
-  if(feedback_stage_==3){save("render-75");feedback_epoch_=state.requested_epoch;findChild<QComboBox *>("ViewportReconstruction")->setCurrentIndex(1);++feedback_stage_;return;}
+  if(feedback_stage_==3){save("render-75");feedback_epoch_=state.requested_epoch;auto quality=viewport_settings_->value();quality.reconstruction=Reconstruction::bilinear;viewport_settings_->set(quality);++feedback_stage_;return;}
   if(feedback_stage_==4){if(state.requested_epoch!=feedback_epoch_){finish_test(false,"切换升采样算法丢弃了累计样本");return;}save("render-75-bilinear");percent(100);return;}
   if(feedback_stage_==5){save("render-restored-100");
-    auto *settings=findChild<QMenu *>("ApplicationSettingsMenu");
-    if(!settings||!settings->findChild<QSpinBox *>("UiScalePercent")||!settings->findChild<QSpinBox *>("ViewportRenderPercent")){finish_test(false,"设置菜单缺少独立缩放参数");return;}
-    findChild<QSpinBox *>("UiScalePercent")->setValue(150);feedback_ui_until_=now()+.3;++feedback_stage_;return;}
-  if(feedback_stage_==6){save("ui-150");findChild<QSpinBox *>("UiScalePercent")->setValue(130);feedback_ui_until_=now()+.3;++feedback_stage_;return;}
+    if(findChild<QMenu *>("ApplicationSettingsMenu")){finish_test(false,"设置功能尚未迁移到项目选项卡");return;}
+    ui_scale_->set_percent(150);feedback_ui_until_=now()+.3;++feedback_stage_;return;}
+  if(feedback_stage_==6){save("ui-150");ui_scale_->set_percent(130);feedback_ui_until_=now()+.3;++feedback_stage_;return;}
   auto shortcut=[&](WORD key){
     const HWND viewport=FindWindowExW(reinterpret_cast<HWND>(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);
     if(!viewport)throw std::runtime_error("找不到原生视口用于快捷键检查");
@@ -46,6 +45,6 @@ void feedback_tick(const RenderStatus &state) {
   if(feedback_stage_>=8&&feedback_stage_<=10&&ui_scale_->percent()!=130){finish_test(false,"原生视口仍响应旧 UI 缩放快捷键");return;}
   if(feedback_stage_==8){save("native-ctrl-plus-ignored");shortcut(VK_OEM_MINUS);++feedback_stage_;return;}
   if(feedback_stage_==9){save("native-ctrl-minus-ignored");shortcut('0');++feedback_stage_;return;}
-  if(feedback_stage_==10){save("native-ctrl-0-ignored");findChild<QAction *>("UiZoomReset")->trigger();feedback_ui_until_=now()+.3;++feedback_stage_;return;}
-  if(feedback_stage_==11){if(ui_scale_->percent()!=100){finish_test(false,"设置菜单恢复 100% 失败");return;}save("menu-reset-100");finish_test(true);}
+  if(feedback_stage_==10){save("native-ctrl-0-ignored");ui_scale_->set_percent(100);feedback_ui_until_=now()+.3;++feedback_stage_;return;}
+  if(feedback_stage_==11){if(ui_scale_->percent()!=100){finish_test(false,"界面恢复 100% 失败");return;}save("ui-reset-100");finish_test(true);}
 }

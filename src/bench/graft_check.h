@@ -11,7 +11,7 @@
 #include <fstream>
 
 namespace dfv {
-inline int graft_check(const ccl::DeviceInfo &device,const std::filesystem::path &output) {
+inline int graft_check(const ccl::DeviceInfo &device,const std::filesystem::path &output,bool prune_hidden=false) {
   using namespace ccl;using J=nlohmann::json;std::filesystem::create_directories(output);
   auto require=[](bool v,const char *why) {if(!v) throw std::runtime_error(why);};
   auto source=bench::graft_fixture();
@@ -23,7 +23,7 @@ inline int graft_check(const ccl::DeviceInfo &device,const std::filesystem::path
   SessionParams params;params.device=device;params.background=params.headless=true;params.samples=4;params.threads=4;params.use_resolution_divider=false;params.use_auto_tile=false;
   SceneParams sp;sp.background=true;sp.bvh_type=BVH_TYPE_DYNAMIC;sp.use_texture_cache=false;sp.auto_texture_cache=false;
   Session session(params,sp);auto &scene=*session.scene;auto *pass=scene.create_node<Pass>();pass->set_name(ustring("combined"));pass->set_type(PASS_COMBINED);scene.integrator->set_use_denoise(false);
-  CyclesAdapter adapter(scene);adapter.load(source);BufferParams buffers;buffers.width=buffers.full_width=160;buffers.height=buffers.full_height=120;
+  CyclesAdapter adapter(scene,false,prune_hidden);adapter.load(source);BufferParams buffers;buffers.width=buffers.full_width=160;buffers.height=buffers.full_height=120;
   auto mesh_named=[&](const std::string &name)->Mesh * {for(auto *o:scene.objects) if(o->name.string()==name&&o->get_geometry()->is_mesh()) return static_cast<Mesh *>(o->get_geometry());return nullptr;};
   Mesh *unrelated_mesh=mesh_named("unrelated");require(unrelated_mesh,"缺少无关对象");
   J checks=J::array();
@@ -58,6 +58,16 @@ inline int graft_check(const ccl::DeviceInfo &device,const std::filesystem::path
   sync(initial);run("reattach");
   auto removed=initial;removed.instances.erase(removed.instances.begin()+2,removed.instances.begin()+4);removed.instances.erase(removed.instances.begin()+1);removed.meshes[0].hidden_polygons.clear();sync(removed);run("delete-graft-and-copies");require(!mesh_named("body/graft/original"),"删除后残留组合对象");
   sync(initial);run("restore-all");
+  // 完全隐藏的普通几何释放后，要能同时恢复最新顶点、材质和变换。
+  ir::Delta hide_other;hide_other.visibility={{4,false}};apply(hide_other);
+  unrelated_mesh=mesh_named("unrelated");require(!prune_hidden||!unrelated_mesh,"隐藏普通对象仍保留 GPU 几何");run("hide-unrelated");
+  ir::Delta show_other;show_other.visibility={{4,true}};auto moved=source.meshes[2].positions;moved[5].z+=.2f;show_other.meshes={{2,moved}};
+  apply(show_other);unrelated_mesh=mesh_named("unrelated");require(unrelated_mesh,"隐藏后未恢复普通对象");run("show-unrelated-with-morph");
+  // 共享实例仍可见时，隐藏原型不能移除共享的渲染资源。
+  ir::Delta hide_host;hide_host.visibility={{0,false},{1,false}};apply(hide_host);
+  require(!prune_hidden||!mesh_named("body/graft/original"),"全隐藏组合仍保留 GPU 对象");
+  require(mesh_named("body/graft/copy"),"隐藏原型错误移除了可见实例");
+  sync(initial);unrelated_mesh=mesh_named("unrelated");run("restore-hidden-host-and-copy");
   std::ofstream(output/"graft-check.json")<<J({{"status","PASS"},{"checks",checks},{"device",device.id}}).dump(2);std::cout<<"GeoGraft GPU checks: PASS ("<<checks.size()<<" stages)\n";return 0;
 }
 }

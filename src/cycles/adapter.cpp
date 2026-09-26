@@ -1,4 +1,5 @@
 #include "cycles/adapter.h"
+#include "render_ir/material_quality.h"
 #include "render_ir/emission.h"
 #include "diagnostics/load_profile.h"
 #include "render_ir/options.h"
@@ -29,7 +30,8 @@ static ccl::Transform transform(const ir::Transform &t) {
   ccl::Transform out;const auto &v=t.value;
   out.x=ccl::make_float4(v[0],v[1],v[2],v[3]);out.y=ccl::make_float4(v[4],v[5],v[6],v[7]);out.z=ccl::make_float4(v[8],v[9],v[10],v[11]);return out;
 }
-void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m,float texel_distance,float emission_strength) {
+void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,float texel_distance,float emission_strength) {
+  const auto m=ir::viewport_material(source,render_quality_);
   using namespace ccl;
   auto graph=make_unique<ShaderGraph>();
   auto *uv=graph->create_node<UVMapNode>();uv->set_attribute(ustring("UVMap"));
@@ -127,7 +129,8 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m,float tex
     hair->set_melanin(m.hair_melanin);hair->set_melanin_redness(m.hair_redness);
     graph->connect(blend->output("Color"),hair->input(m.hair_melanin>0?"Tint":"Color"));surface=hair->output("BSDF");
   } else {
-    auto *sss=scalar(m.translucency_texture,m.subsurface);
+    // 关闭 SSS 时使用常量零；共享的透光贴图仍供薄壁等其他闭包使用。
+    auto *sss=scalar(render_quality_.subsurface?m.translucency_texture:-1,m.subsurface);
     ShaderOutput *sss_color=base;
     if(m.separate_subsurface_color&&m.subsurface>0) {
       const ir::Vec3 tint={m.translucency_color.x*m.subsurface_color.x,m.translucency_color.y*m.subsurface_color.y,m.translucency_color.z*m.subsurface_color.z};
@@ -286,7 +289,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     for(auto *object:objects_[edit.index]) if(object->get_geometry()->transform_applied) throw std::runtime_error("对象变换已烘焙，不能直接动态修改");
   }
   for(const auto &edit:delta.visibility) if(edit.index>=objects_.size()) throw std::runtime_error("可见性实例索引越界");
-  if(!delta.visibility.empty()&&!graft_renders_.empty()) {
+  if((!delta.visibility.empty()&&(!graft_renders_.empty()||prune_hidden_))||(prune_hidden_&&!delta.materials.empty())) {
     // 保留旧快照用于比较；显隐与 Morph 同时提交时不能漏掉其他组合的几何更新。
     auto next=source_;if(delta.options) next.options=*delta.options;if(delta.camera) next.camera=*delta.camera;
     for(const auto &e:delta.meshes) next.meshes[e.index].positions=e.positions;

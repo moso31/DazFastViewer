@@ -78,6 +78,7 @@ class Editor final:public EditorWindow {
   #include "editor/pose_test.inl"
   #include "editor/gizmo_test.inl"
   #include "editor/feedback_test.inl"
+  #include "editor/render_profile.inl"
   QWidget *host_=nullptr;
   ParameterPanel *parameters_=nullptr;
   ContentBrowser *browser_=nullptr;
@@ -98,6 +99,7 @@ class Editor final:public EditorWindow {
   std::unique_ptr<Renderer> renderer_;
   UiScale *ui_scale_=nullptr;
   ViewportSettings *viewport_settings_=nullptr;
+  ApplicationSettings application_settings_;
   std::jthread loader_;
   std::vector<std::filesystem::path> roots_;
   std::filesystem::path output_;
@@ -306,6 +308,8 @@ class Editor final:public EditorWindow {
   int visibility_target_=-1;
   bool visibility_initial_=true;
   size_t visibility_geometry_updates_=0;
+  size_t visibility_geometry_budget_=0;
+  std::vector<bool> visibility_previous_;
   size_t visibility_sessions_=0,visibility_morph_evaluations_=0;
   bool visibility_local_graft_=false;
   QStringList capture_targets_;
@@ -653,9 +657,17 @@ class Editor final:public EditorWindow {
   }
   void project_settings() {
     if(loading_) return;
-    if(edit_project_settings(this,project_)) {
-      update_libraries();statusBar()->showMessage(QStringLiteral("内容库设置已保存，将用于后续资产加载。"));
-    }
+    auto roots=project_.content_roots;auto render=application_settings_.render;
+    application_settings_.ui_percent=ui_scale_->percent();application_settings_.viewport=viewport_settings_->value();
+    edit_project_settings(this,project_,application_settings_,{},!self_test_,[&](bool saved) {
+      if(roots!=project_.content_roots) update_libraries();
+      if(ui_scale_->percent()!=application_settings_.ui_percent) ui_scale_->set_percent(application_settings_.ui_percent);
+      viewport_settings_->set(application_settings_.viewport);
+      renderer_->render_quality(application_settings_.render);
+      const auto message=saved?QStringLiteral("项目与应用设置已保存。"):QStringLiteral("设置已应用，尚未保存。");
+      statusBar()->showMessage(message+(render!=application_settings_.render?QStringLiteral("正在释放旧渲染资源并应用新画质…"):QString{}));
+      roots=project_.content_roots;render=application_settings_.render;
+    });
   }
   void set_morph(size_t morph,double value) {
     if(selected_<0) return;
@@ -1310,6 +1322,7 @@ class Editor final:public EditorWindow {
     if(state.ground_requests!=ground_requests_) {ground_requests_=state.ground_requests;request_ground();}
     apply_ground(state);
     refresh_powerpose(state);
+    if(!render_plan_.empty()) {render_profile_tick(state);return;}
     if(gizmo_test_) {gizmo_tick(state);return;}
     if(feedback_test_) {feedback_tick(state);return;}
     if(powerpose_test_) {powerpose_tick(state);return;}
@@ -1480,6 +1493,7 @@ class Editor final:public EditorWindow {
         for(size_t t=0;t<document_->catalog.targets.size();++t) if(text(document_->catalog.targets[t].label)==visibility_label_) visibility_target_=int(t);
         if(visibility_target_<0) {finish_test(false,"可见性测试对象缺失");return;}
         choose(visibility_target_);visibility_initial_=snapshot_.values[size_t(visibility_target_)].visible;visibility_geometry_updates_=state.adapter.geometry_updates;
+        visibility_previous_=state.visible;visibility_geometry_budget_=0;
         findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"))->raise();
         visibility_sessions_=state.sessions;visibility_morph_evaluations_=state.evaluation.morph_evaluations;
         const auto &scene=document_->loaded.scene;auto index=document_->catalog.targets[size_t(visibility_target_)].instance;
@@ -1493,8 +1507,10 @@ class Editor final:public EditorWindow {
       if(state.visible.at(instance)!=expected||snapshot_.values[size_t(visibility_target_)].visible!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)) {
         finish_test(false,"场景树、对象状态和渲染可见性不同步");return;
       }
-      // 共用 SSS 对象的 GeoGraft 允许每次切换更新一个组合的面列表；普通对象仍不更新几何。
-      const auto budget=visibility_local_graft_?size_t(test_stage_):0;
+      // 重新显示会按需恢复 GPU 几何；仍限制在本次实际改变显隐的对象范围。
+      for(size_t i=0;i<state.visible.size();++i) if(state.visible[i]!=visibility_previous_[i]) ++visibility_geometry_budget_;
+      visibility_previous_=state.visible;
+      const auto budget=visibility_geometry_budget_;
       if(state.adapter.geometry_updates-visibility_geometry_updates_>budget||state.sessions!=visibility_sessions_||state.evaluation.morph_evaluations!=visibility_morph_evaluations_) {
         finish_test(false,"显隐更新超出所属 GeoGraft 组合，或重新建立会话／求值 Morph");return;
       }
@@ -1687,6 +1703,7 @@ class Editor final:public EditorWindow {
     }
   }
 public:
+  void render_profile_after_empty(const std::filesystem::path &file) {start_profile_after_empty(file);}
   void edit_regression_test() {edit_regression_test_=self_test_=true;}
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
   void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
@@ -1695,6 +1712,7 @@ public:
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
   void capture_test(QStringList targets={},bool front=false,bool head=false,int samples=16,double seconds=0) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;capture_head_=head;capture_samples_=std::clamp(samples,1,1<<20);capture_seconds_=seconds;}
+  void render_profile(const std::filesystem::path &file) {std::ifstream(file)>>render_plan_;if(!render_plan_.is_array()||render_plan_.empty()) throw std::runtime_error("性能实验计划必须是非空数组");self_test_=true;}
   void selection_test(QStringList labels,bool focus_only=false) {self_test_=true;selection_test_labels_=std::move(labels);focus_only_test_=focus_only;}
   void capture_view(const QString &value) {const auto parts=value.split(',');if(parts.size()!=6) throw std::runtime_error("capture-view 需要 x,y,z,distance,yaw,pitch 六个数值（米/弧度）");std::array<float,6> view;
     for(int i=0;i<6;++i) {bool ok=false;view[i]=parts[i].toFloat(&ok);if(!ok||!std::isfinite(view[i])) throw std::runtime_error("capture-view 数值无效");}
@@ -1808,9 +1826,11 @@ public:
     if(!self_test_) {QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());restoreState(settings.value("window/docks").toByteArray(),1);powerpose_->restore_template(settings.value("powerpose/template","Body").toString());chrome->restore_modules(settings.value("window/topModules").toByteArray());}
     if(!available.contains(frameGeometry())) {resize(std::min(width(),available.width()),std::min(height(),available.height()));move(available.center()-QPoint(width()/2,height()/2));}
     for(auto *d:findChildren<QDockWidget *>()) if(d->isFloating()&&!available.intersects(d->frameGeometry())) d->move(available.topLeft()+QPoint(30,30));
-    auto *settings_menu=chrome->menus()->addMenu(QStringLiteral("设置"));settings_menu->setObjectName("ApplicationSettingsMenu");
-    ui_scale_=new UiScale(!self_test_,{},this);ui_scale_->add_menu(settings_menu);
-    viewport_settings_=new ViewportSettings(!self_test_,{},this);viewport_settings_->add_menu(settings_menu);
+    if(!self_test_) application_settings_=ApplicationSettings::load();
+    if(!self_test_&&!sampling.quality_override) static_cast<RenderQuality &>(sampling)=application_settings_.render;
+    else application_settings_.render=sampling;
+    ui_scale_=new UiScale(false,{},this);ui_scale_->set_percent(application_settings_.ui_percent);
+    viewport_settings_=new ViewportSettings(false,{},this);viewport_settings_->set(application_settings_.viewport);
     viewport_settings_->changed=[this](ViewportQuality value){if(renderer_) renderer_->quality(value);};
     show();
     // 样式首次重建后重新落实默认停靠宽度；已保存的用户布局仍由 restoreState 负责。
@@ -1965,6 +1985,8 @@ int main(int argc,char **argv) {
   parser.addOption({"keep-open-after-test",QStringLiteral("导航验收完成后保留客户端供手动体验")});
   parser.addOption({"attachment-test",QStringLiteral("逐一验证 Head 附件的场景树父节点并截图")});
   parser.addOption({"capture-test",QStringLiteral("场景显示验证后截图退出")});
+  parser.addOption({"render-profile",QStringLiteral("头部特写与材质消融实验计划 JSON"),"file"});
+  parser.addOption({"render-profile-start-empty",QStringLiteral("性能诊断先渲染空场景，再按普通打开流程加载文件")});
   parser.addOption({"selection-test",QStringLiteral("验证指定标签或实例 ID 的射线点击与树选择，可重复"),"label"});
   parser.addOption({"focus-test",QStringLiteral("验证大型对象的 F 与侧键聚焦"),"label"});
   parser.addOption({"capture-target",QStringLiteral("截图时框选的对象标签，可重复"),"label"});
@@ -1999,9 +2021,16 @@ int main(int argc,char **argv) {
     SamplingSettings sampling;
     sampling.rebuild_probe=parser.isSet("rebuild-test");
     sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||parser.isSet("powerpose-test")||parser.isSet("gizmo-test");
-    if(parser.isSet("sampling-settings")) {nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
+    if(parser.isSet("sampling-settings")) {sampling.quality_override=true;nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
+      sampling.prune_hidden=j.value("prune_hidden",sampling.prune_hidden);sampling.texture_limit=j.value("texture_limit",sampling.texture_limit);
+      sampling.subsurface=j.value("subsurface",sampling.subsurface);sampling.bump_and_normal=j.value("bump_and_normal",sampling.bump_and_normal);
+      sampling.transparent_bounces=j.value("transparent_bounces",sampling.transparent_bounces);
+      if(sampling.transparent_bounces<1||sampling.transparent_bounces>32) throw std::runtime_error("透明层数上限无效");
+      sampling.update_interval_seconds=j.value("update_interval_seconds",sampling.update_interval_seconds);
+      if(!std::isfinite(sampling.update_interval_seconds)||sampling.update_interval_seconds<0||sampling.update_interval_seconds>2) throw std::runtime_error("显示更新间隔无效");
+      if(sampling.texture_limit<0||sampling.texture_limit>16384) throw std::runtime_error("纹理诊断尺寸无效");
       if(sampling.samples<1||sampling.samples>(1<<20)||!std::isfinite(sampling.adaptive_threshold)||sampling.adaptive_threshold<0||sampling.adaptive_threshold>1||sampling.min_bounces<0||sampling.min_bounces>8||sampling.transparent_min_bounces<0||sampling.transparent_min_bounces>32) throw std::runtime_error("采样诊断参数无效");
     }
     bool capture_seconds_valid=false;const double capture_seconds=parser.value("capture-seconds").toDouble(&capture_seconds_valid);
@@ -2010,7 +2039,7 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("gizmo-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
@@ -2030,6 +2059,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("workflow-test")) editor.workflow_test();
     if(parser.isSet("head-selection-test")) editor.head_selection_test();
     if(parser.isSet("capture-test")) editor.capture_test(parser.values("capture-target"),parser.isSet("capture-front"),parser.isSet("capture-head"),parser.value("capture-samples").toInt(),capture_seconds);
+    if(parser.isSet("render-profile")) editor.render_profile(file_path(parser.value("render-profile")));
     if(parser.isSet("selection-test")) editor.selection_test(parser.values("selection-test"));
     if(parser.isSet("focus-test")) editor.selection_test(parser.values("focus-test"),true);
     if(parser.isSet("capture-view")) editor.capture_view(parser.value("capture-view"));
@@ -2039,7 +2069,11 @@ int main(int argc,char **argv) {
     if(parser.isSet("wear-test")) editor.wear_test(file_path(parser.value("wear-test")));
     if(parser.isSet("rebuild-test")) editor.rebuild_test(file_path(parser.value("rebuild-test")));
     if(parser.isSet("subdivision-stress-test")) editor.subdivision_stress_test();
-    if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
+    if(parser.isSet("render-profile-start-empty")) {
+      if(!parser.isSet("render-profile")||!parser.isSet("file")) throw std::runtime_error("空场景启动诊断需要 --render-profile 和 --file");
+      editor.render_profile_after_empty(file_path(parser.value("file")));
+    }
+    else if(parser.isSet("file")) editor.load(file_path(parser.value("file")));
     else editor.empty_scene();
     return app.exec();
   } catch(const std::exception &e) {std::ofstream(output/"error.txt")<<e.what();return 1;}

@@ -13,6 +13,14 @@
 #include <QPushButton>
 #include <QSaveFile>
 #include <QVBoxLayout>
+#include <QFormLayout>
+#include <QTabWidget>
+#include <QScrollArea>
+#include <QToolButton>
+#include <QSpinBox>
+#include <QComboBox>
+#include <QCheckBox>
+#include <QLineEdit>
 #include <stdexcept>
 
 namespace dfv::editor {
@@ -45,24 +53,84 @@ void ProjectSettings::save() const {
   const auto bytes=QJsonDocument(QJsonObject{{"version",1},{"content_roots",paths}}).toJson(QJsonDocument::Indented);
   if(output.write(bytes)!=bytes.size() || !output.commit()) fail(QStringLiteral("项目设置保存失败：")+output.errorString());
 }
-bool edit_project_settings(QWidget *parent,ProjectSettings &settings) {
-  QDialog dialog(parent);dialog.setWindowTitle(QStringLiteral("项目设置 · DAZ 内容库"));dialog.resize(720,430);
-  auto *layout=new QVBoxLayout(&dialog);auto *intro=new QLabel(QStringLiteral("按从上到下的顺序查找资源，同一路径优先使用靠前的库。\n保存后会重新扫描当前场景，并按参数 ID 保留仍然兼容的编辑值。"));intro->setWordWrap(true);layout->addWidget(intro);
-  auto *list=new QListWidget;list->addItems(settings.content_roots);layout->addWidget(list,1);
-  auto *buttons=new QHBoxLayout;layout->addLayout(buttons);
+bool edit_project_settings(QWidget *parent,ProjectSettings &settings,ApplicationSettings &application,const QString &application_file,bool persistent,const std::function<void(bool)> &applied) {
+  QDialog dialog(parent);dialog.setObjectName("ProjectSettingsDialog");dialog.setWindowTitle(QStringLiteral("项目设置"));dialog.resize(760,660);
+  auto *layout=new QVBoxLayout(&dialog);auto *tabs=new QTabWidget;tabs->setObjectName("ProjectSettingsTabs");layout->addWidget(tabs,1);
+  QMap<QString,QToolButton *> headers;
+  auto page=[&](const QString &title,const char *name) {
+    auto *scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);
+    auto *widget=new QWidget;widget->setObjectName(name);auto *body=new QVBoxLayout(widget);body->setAlignment(Qt::AlignTop);scroll->setWidget(widget);tabs->addTab(scroll,title);return body;
+  };
+  auto section=[&](QVBoxLayout *parent_layout,const QString &key,const QString &title) {
+    auto *header=new QToolButton;header->setObjectName(key+"Collapse");header->setText(title);header->setCheckable(true);
+    const bool expanded=application.expanded.value(key,true);header->setChecked(expanded);header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);header->setArrowType(expanded?Qt::DownArrow:Qt::RightArrow);
+    header->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);parent_layout->addWidget(header);headers[key]=header;
+    auto *content=new QWidget;content->setObjectName(key+"Section");content->setVisible(expanded);parent_layout->addWidget(content);
+    QObject::connect(header,&QToolButton::toggled,&dialog,[header,content](bool on){content->setVisible(on);header->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});return content;
+  };
+  auto note=[](QLayout *target,const QString &text) {auto *label=new QLabel(text);label->setWordWrap(true);target->addWidget(label);};
+  auto *resources=page(QStringLiteral("资源与保存"),"ProjectResourcesPage");
+  auto *library_layout=new QVBoxLayout(section(resources,"libraries",QStringLiteral("资源库路径")));
+  note(library_layout,QStringLiteral("按从上到下的顺序查找资源，同一路径优先使用靠前的库。保存后用于后续资产加载。"));
+  auto *list=new QListWidget;list->setObjectName("ProjectContentRoots");list->addItems(settings.content_roots);list->setMinimumHeight(180);library_layout->addWidget(list,1);
+  auto *buttons=new QHBoxLayout;library_layout->addLayout(buttons);
   auto button=[&](const QString &name,auto callback) {auto *b=new QPushButton(name);buttons->addWidget(b);QObject::connect(b,&QPushButton::clicked,&dialog,callback);};
   button(QStringLiteral("添加目录…"),[&] {const auto path=QFileDialog::getExistingDirectory(&dialog,QStringLiteral("选择包含 data / Runtime 的内容库根目录"));if(!path.isEmpty()) {QStringList paths;for(int i=0;i<list->count();++i) paths.append(list->item(i)->text());paths.append(path);list->clear();list->addItems(ProjectSettings::normalize(paths));}});
   button(QStringLiteral("移除"),[&] {delete list->takeItem(list->currentRow());});
   auto move=[&](int delta) {const int row=list->currentRow(),next=row+delta;if(row>=0 && next>=0 && next<list->count()) {auto *item=list->takeItem(row);list->insertItem(next,item);list->setCurrentRow(next);}};
   button(QStringLiteral("上移"),[&] {move(-1);});button(QStringLiteral("下移"),[&] {move(1);});buttons->addStretch();
-  auto *location=new QLabel(QStringLiteral("保存文件：")+QDir::toNativeSeparators(settings.file));location->setWordWrap(true);location->setTextInteractionFlags(Qt::TextSelectableByMouse);layout->addWidget(location);
-  auto *status=new QLabel;status->setWordWrap(true);layout->addWidget(status);
-  auto *box=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel);box->button(QDialogButtonBox::Save)->setText(QStringLiteral("保存并应用"));layout->addWidget(box);
+  auto *save_layout=new QVBoxLayout(section(resources,"saveFile",QStringLiteral("保存文件")));
+  auto *location=new QLineEdit(QDir::toNativeSeparators(settings.file));location->setObjectName("ProjectSaveFile");location->setReadOnly(true);save_layout->addWidget(location);
+  note(save_layout,QStringLiteral("资源库路径保存在此项目文件中。界面和渲染偏好随应用保存，下次启动自动恢复。"));
+
+  auto *render=page(QStringLiteral("渲染"),"ProjectRenderPage");
+  auto *display=new QFormLayout(section(render,"display",QStringLiteral("界面与视口")));
+  auto *ui_percent=new QSpinBox;ui_percent->setObjectName("UiScalePercent");ui_percent->setRange(50,200);ui_percent->setSingleStep(10);ui_percent->setSuffix("%");ui_percent->setValue(application.ui_percent);ui_percent->setKeyboardTracking(false);
+  display->addRow(QStringLiteral("界面缩放"),ui_percent);
+  auto *percent=new QSpinBox;percent->setObjectName("ViewportRenderPercent");percent->setRange(50,100);percent->setSingleStep(5);percent->setSuffix("%");percent->setValue(application.viewport.percent);percent->setKeyboardTracking(false);
+  display->addRow(QStringLiteral("视口渲染倍率"),percent);
+  auto *filter=new QComboBox;filter->setObjectName("ViewportReconstruction");filter->addItems({QStringLiteral("双三次（较清晰）"),QStringLiteral("双线性（较柔和）")});filter->setCurrentIndex(application.viewport.reconstruction==Reconstruction::bicubic?0:1);
+  display->addRow(QStringLiteral("升采样方式"),filter);
+  note(display,QStringLiteral("界面缩放只调整文字和控件。渲染倍率 50% 对应约四分之一像素，可更快刷新，但细节较少。"));
+  auto *reset_ui=new QPushButton(QStringLiteral("界面恢复 100%"));reset_ui->setObjectName("UiZoomReset");auto *reset_view=new QPushButton(QStringLiteral("渲染倍率恢复 100%"));
+  display->addRow(reset_ui,reset_view);QObject::connect(reset_ui,&QPushButton::clicked,&dialog,[=]{ui_percent->setValue(100);});QObject::connect(reset_view,&QPushButton::clicked,&dialog,[=]{percent->setValue(100);});
+  auto *textures=new QFormLayout(section(render,"textures",QStringLiteral("纹理精度")));
+  auto *limit=new QComboBox;limit->setObjectName("RenderTextureLimit");for(int size:{512,1024,2048,4096,0}) limit->addItem(size?QString::number(size):QStringLiteral("无限制"),size);
+  limit->setCurrentIndex(std::max(0,limit->findData(application.render.texture_limit)));textures->addRow(QStringLiteral("纹理最大分辨率"),limit);
+  note(textures,QStringLiteral("较低精度减少显存占用，可能改善刷新速度，但会减少皮肤、头发等纹理细节。应用后会释放旧渲染资源并按新精度重新加载，原始贴图不变。"));
+  auto *materials=new QFormLayout(section(render,"materials",QStringLiteral("材质质量")));
+  auto *sss=new QCheckBox(QStringLiteral("启用皮肤次表面散射（SSS）"));sss->setObjectName("RenderSubsurface");sss->setChecked(application.render.subsurface);materials->addRow(sss);
+  note(materials,QStringLiteral("关闭可减少部分角色的计算量，但皮肤透光和柔和感会改变。"));
+  auto *bump=new QCheckBox(QStringLiteral("启用凹凸与法线"));bump->setObjectName("RenderBumpNormal");bump->setChecked(application.render.bump_and_normal);materials->addRow(bump);
+  note(materials,QStringLiteral("关闭可减少材质计算，但毛孔、织物等表面细节会变平。几何置换保持原设置。"));
+  auto *transparent=new QSpinBox;transparent->setObjectName("RenderTransparentBounces");transparent->setRange(1,32);transparent->setValue(application.render.transparent_bounces);materials->addRow(QStringLiteral("透明层数上限"),transparent);
+  note(materials,QStringLiteral("默认 32。降低后可能加快重叠透明头发的计算，但较深层的发片、睫毛或透明物体可能变暗或不再透光。"));
+  tabs->setCurrentIndex(application.settings_tab);
+  auto *status=new QLabel;status->setObjectName("ProjectSettingsStatus");status->setWordWrap(true);layout->addWidget(status);
+  auto *box=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Save|QDialogButtonBox::Cancel);box->setObjectName("ProjectSettingsButtons");
+  box->button(QDialogButtonBox::Apply)->setText(QStringLiteral("应用"));box->button(QDialogButtonBox::Apply)->setToolTip(QStringLiteral("立即应用到当前窗口，不写入配置，保持设置窗口打开。"));
+  box->button(QDialogButtonBox::Save)->setText(QStringLiteral("保存"));box->button(QDialogButtonBox::Save)->setToolTip(QStringLiteral("应用并保存所有设置，下次启动时恢复。"));
+  box->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));box->button(QDialogButtonBox::Cancel)->setToolTip(QStringLiteral("关闭窗口，丢弃尚未应用的修改；已应用的设置继续生效。"));layout->addWidget(box);
   QObject::connect(box,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
-  QObject::connect(box,&QDialogButtonBox::accepted,&dialog,[&] {
-    try {auto updated=settings;updated.content_roots.clear();for(int i=0;i<list->count();++i) updated.content_roots.append(list->item(i)->text());updated.save();settings=std::move(updated);dialog.accept();}
+  auto submit=[&](bool save) {
+    try {
+      auto updated=settings;updated.content_roots.clear();for(int i=0;i<list->count();++i) updated.content_roots.append(list->item(i)->text());updated.content_roots=ProjectSettings::normalize(updated.content_roots);
+      auto preferences=application;preferences.ui_percent=ui_percent->value();preferences.viewport={percent->value(),filter->currentIndex()==0?Reconstruction::bicubic:Reconstruction::bilinear};
+      preferences.render={limit->currentData().toInt(),transparent->value(),sss->isChecked(),bump->isChecked()};preferences.settings_tab=tabs->currentIndex();
+      for(auto i=headers.cbegin();i!=headers.cend();++i) preferences.expanded[i.key()]=i.value()->isChecked();
+      // 应用可能已更新内存中的路径，保存时仍需写入磁盘。
+      if(save&&persistent) {
+        if(!QFileInfo::exists(updated.file)||ProjectSettings::load(updated.file).content_roots!=updated.content_roots) updated.save();
+        preferences.save(application_file);
+      }
+      settings=std::move(updated);application=std::move(preferences);if(applied)applied(save);
+      if(save) dialog.accept();
+      else status->setText(QStringLiteral("已应用到当前窗口，尚未保存。点击“保存”可在下次启动时恢复。"));
+    }
     catch(const std::exception &e) {status->setText(QString::fromUtf8(e.what()));}
-  });
+  };
+  QObject::connect(box,&QDialogButtonBox::accepted,&dialog,[&]{submit(true);});
+  QObject::connect(box->button(QDialogButtonBox::Apply),&QPushButton::clicked,&dialog,[&]{submit(false);});
   for(int i=0;i<list->count();++i) if(!QFileInfo(list->item(i)->text()).isDir()) {list->item(i)->setToolTip(QStringLiteral("目录当前不可访问，配置会保留"));list->item(i)->setForeground(Qt::darkRed);}
   return dialog.exec()==QDialog::Accepted;
 }

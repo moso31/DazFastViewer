@@ -28,6 +28,7 @@
 
 namespace {
 struct Options {
+  bool prune_hidden=false;
   bool displacement_check=false,graft_check=false,render_subdivision=false,emission_check=false;
   bool raw_sampling=false,devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
@@ -43,6 +44,7 @@ Options parse(int argc,char **argv) {
     const std::string arg=argv[i];
     auto value=[&]() {if(++i>=argc) throw std::runtime_error("参数缺少值: "+arg);return std::string(argv[i]);};
     if(arg=="--render-subdivision") o.render_subdivision=true;
+    else if(arg=="--prune-hidden") o.prune_hidden=true;
     else if(arg=="--raw-sampling") o.raw_sampling=true;
     else if(arg=="--devices") o.devices=true;
     else if(arg=="--help") o.help=true;
@@ -170,7 +172,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
     auto exported=scene_json(render_scene,o.samples);exported["render"]["adaptive_sampling"]=refined;
     save_json(o.output/"scene.json",exported);
   }
-  CyclesAdapter adapter(scene,o.smoke||o.render_subdivision);adapter.load(render_scene);const auto counts=adapter.stats();
+  CyclesAdapter adapter(scene,o.smoke||o.render_subdivision,o.prune_hidden);adapter.load(render_scene);const auto counts=adapter.stats();
   if(o.dump_shaders) {
     nlohmann::json materials=nlohmann::json::array();
     for(const auto &m:render_scene.materials)
@@ -425,6 +427,7 @@ int wmain(int argc,wchar_t **wide_argv) {
                <<"  --preview-seconds <seconds>  自动关闭预览；省略则保持交互窗口\n"
                <<"  --smoke  离线 PNG/EXR；--samples <count>；--output <directory>\n"
                <<"  --raw-sampling  关闭自适应采样，用于等样本对照；所有模式均禁用降噪\n"
+               <<"  --prune-hidden  仅上传可见对象及其使用的材质资源\n"
                <<"  --dump-shaders  导出材质图和绑定诊断，不创建窗口或执行渲染\n"
                <<"  --export-scene  无需 GPU 导出参考场景、相机、灯光及材质参数\n"
                <<"  --material-delta-check  与 --smoke --file 合用，检查同一 Session 的材质增量\n"
@@ -447,7 +450,7 @@ int wmain(int argc,wchar_t **wide_argv) {
       return 0;
     }
     if(options.displacement_check) return dfv::displacement_check(select_device(options.backend),std::filesystem::absolute(options.output));
-    if(options.graft_check) return dfv::graft_check(select_device(options.backend),std::filesystem::absolute(options.output));
+    if(options.graft_check) return dfv::graft_check(select_device(options.backend),std::filesystem::absolute(options.output),options.prune_hidden);
     return run(options,select_device(options.backend));
   } catch(const std::exception &error) {std::cerr<<"ERROR: "<<error.what()<<std::endl;return 1;}
 }

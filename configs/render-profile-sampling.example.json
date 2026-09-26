@@ -1,0 +1,7 @@
+{
+  "samples": 4096,
+  "adaptive_threshold": 0.01,
+  "prune_hidden": true,
+  "update_interval_seconds": 0.125,
+  "texture_limit": 0
+}

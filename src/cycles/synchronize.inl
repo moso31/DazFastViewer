@@ -29,7 +29,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     for(size_t i=0;i<source.instances.size();++i) if(source.instances[i].prototype>=0) graft_bindings[i]=graft_bindings[size_t(source.instances[i].prototype)];
   }
   std::vector<bool> ordinary_mesh(source.meshes.size());
-  for(size_t i=0;i<source.instances.size();++i) if(graft_bindings[i].group<0) ordinary_mesh[source.instances[i].mesh]=true;
+  for(size_t i=0;i<source.instances.size();++i) if(graft_bindings[i].group<0&&(!prune_hidden_||source.instances[i].visible)) ordinary_mesh[source.instances[i].mesh]=true;
   std::map<std::string,size_t> old_meshes;
   for(size_t i=0;i<source_.meshes.size();++i) old_meshes.emplace(source_.meshes[i].id,i);
   std::vector<runtime::Subdivision> subdivisions;std::vector<int> previous_mesh(source.meshes.size(),-1);
@@ -53,10 +53,18 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     texture.id.clear();auto found=std::find(textures_.begin(),textures_.end(),texture);
     if(found==textures_.end()) {texture_map.push_back(int(textures_.size()));textures_.push_back(std::move(texture));}else texture_map.push_back(int(found-textures_.begin()));
   }
-  const auto emission=ir::emission_strengths(source);
+  auto emission=ir::emission_strengths(source);
+  std::vector<bool> active_materials(source.materials.size(),!prune_hidden_);
+  if(prune_hidden_) for(const auto &instance:source.instances) if(instance.visible) {
+    const auto &mesh=source.meshes[instance.mesh];
+    for(const auto &t:mesh.triangles) if(mesh.draws(t)) active_materials[instance.materials[t.material_slot]]=true;
+    for(const auto &c:mesh.curves) active_materials[instance.materials[c.material_slot]]=true;
+  }
   std::vector<Shader *> shaders;std::vector<ir::Material> canonical;std::vector<float> bumps;
   std::set<Shader *> used_shaders,modified_shaders;
   for(auto value:source.materials) {
+    // 保留材质索引和原场景快照；未使用的占位着色器不引用纹理。
+    if(!active_materials[canonical.size()]) {const auto id=value.id;value={};value.id=id;emission[canonical.size()]=0;}
     for(auto *index:ir::texture_indices(value)) if(*index>=0) *index=texture_map.at(size_t(*index));
     int previous=-1;
     for(size_t j=0;j<canonical_materials_.size();++j) if(!used_shaders.contains(shaders_[j])&&canonical_materials_[j].id==value.id) {previous=int(j);break;}
@@ -96,6 +104,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   for(const auto &m:source.meshes) counts.push_back(m.positions.size());
   stats_.meshes=stats_.curves=stats_.unique_triangles=stats_.triangles=0;
   for(const auto &instance:source.instances) {
+    if(prune_hidden_&&!instance.visible) {objects.emplace_back();continue;}
     const auto index=instance.mesh;const auto &data=source.meshes[index];const auto &subdivision=subdivisions[index];
     Key key;key.first=data.id;if(graft_bindings[size_t(&instance-source.instances.data())].group>=0) key.first+="/graft-curves";for(auto m:instance.materials) key.second.push_back(shaders[m]);
     auto [it,inserted]=new_geometry.try_emplace(key);auto &geometry=it->second;
@@ -163,6 +172,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   std::vector<GraftRender> graft_renders;
   for(auto &[id,render]:assemblies) {
     const auto &surface=grafts[render.group];render.visible=graft_visibility(source,render.parts);render.geometry_key=source.instances[surface.members()[0]].id+"/graft";
+    if(prune_hidden_&&std::none_of(render.visible.begin(),render.visible.end(),[](bool visible){return visible;})) continue;
     for(size_t p=0;p<render.parts.size();++p) {render.geometry_key+=render.visible[p]?"/1":"/0";const auto i=render.parts[p]<0?surface.members()[p]:uint32_t(render.parts[p]);for(auto m:source.instances[i].materials) render.shaders.push_back(shaders[m]);}
     Key key{render.geometry_key,render.shaders};auto [geometry,inserted]=new_graft_geometry.try_emplace(key,nullptr);
     if(inserted) {

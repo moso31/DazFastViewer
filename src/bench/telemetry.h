@@ -40,6 +40,7 @@ public:
   void swap(uint64_t id,int64_t begin,int64_t end,const Frame &frame) {
     swaps_<<id<<','<<begin<<','<<end<<','<<frame.id<<','<<frame.epoch<<'\n';
   }
+  void flush() {std::lock_guard lock(mutex_);events_.flush();}
   void event(const char *kind,const Frame &frame={},double duration_ms=0) {
     std::lock_guard lock(mutex_);
     events_<<kind<<','<<now()<<','<<frame.id<<','<<frame.epoch<<','<<frame.samples<<','

@@ -9,7 +9,9 @@
 #include <QMenu>
 #include <QMainWindow>
 #include <QPointer>
+#include <QPainter>
 #include <QProxyStyle>
+#include <QStyleOptionDockWidget>
 #include <QStyleFactory>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -27,8 +29,13 @@ class ScaledStyle final:public QProxyStyle {
 public:
   explicit ScaledStyle(const QString &name):QProxyStyle(name) {text_style_->setParent(this);}
   void drawControl(ControlElement element,const QStyleOption *option,QPainter *painter,const QWidget *widget=nullptr) const override {
-    // Windows 主题文字强制使用系统字体；缩放时让菜单和停靠标题遵循控件字体。
-    if(ui_scale()!=1&&(element==CE_MenuBarItem||element==CE_MenuItem||element==CE_DockWidgetTitle))text_style_->drawControl(element,option,painter,widget);
+    if(element==CE_DockWidgetTitle&&widget)if(const auto *dock=qstyleoption_cast<const QStyleOptionDockWidget *>(option)) {
+      // QDockWidget 绘制标题时可能切回创建时缓存的字体；文字与裁切统一使用当前控件字体。
+      auto title=*dock;title.fontMetrics=widget->fontMetrics();painter->save();painter->setFont(widget->font());
+      text_style_->drawControl(element,&title,painter,widget);painter->restore();return;
+    }
+    // Windows 主题文字强制使用系统字体；缩放时让菜单遵循控件字体。
+    if(ui_scale()!=1&&(element==CE_MenuBarItem||element==CE_MenuItem))text_style_->drawControl(element,option,painter,widget);
     else QProxyStyle::drawControl(element,option,painter,widget);
   }
   int pixelMetric(PixelMetric metric,const QStyleOption *option=nullptr,const QWidget *widget=nullptr) const override {

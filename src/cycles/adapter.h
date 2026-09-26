@@ -2,6 +2,7 @@
 #include "render_ir/scene.h"
 #include "runtime/subdivision.h"
 #include "runtime/graft_surface.h"
+#include "viewport/render_quality.h"
 #include <cstddef>
 #include <vector>
 
@@ -33,6 +34,8 @@ class CyclesAdapter {
   };
   std::vector<GraftRender> graft_renders_;
   bool final_render_=false;
+  bool prune_hidden_=false;
+  RenderQuality render_quality_;
   std::vector<std::vector<ccl::Object *>> objects_;
   std::vector<ccl::Object *> light_objects_;
   std::vector<ccl::Light *> lights_;
@@ -49,7 +52,7 @@ class CyclesAdapter {
   std::vector<int> texture_map_;
   void material(ccl::Shader &shader,const ir::Material &value,float texel_distance=0,float emission_strength=0);
 public:
-  explicit CyclesAdapter(ccl::Scene &scene,bool final_render=false):scene_(scene),final_render_(final_render) {}
+  explicit CyclesAdapter(ccl::Scene &scene,bool final_render=false,bool prune_hidden=false,RenderQuality quality={}):scene_(scene),final_render_(final_render),prune_hidden_(prune_hidden),render_quality_(quality) {}
   void load(const ir::Scene &scene);
   // 稳定 ID 匹配资源，保留未变化的节点、纹理与设备状态；调用者持有 Scene 锁。
   bool synchronize(const ir::Scene &scene);
