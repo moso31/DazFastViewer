@@ -28,7 +28,7 @@
 
 namespace {
 struct Options {
-  bool displacement_check=false,graft_check=false,render_subdivision=false;
+  bool displacement_check=false,graft_check=false,render_subdivision=false,emission_check=false;
   bool raw_sampling=false,devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
   double seconds=60,warmup=10,refine=10,preview_seconds=0;
@@ -51,6 +51,7 @@ Options parse(int argc,char **argv) {
     else if(arg=="--inspect") o.inspect=true;
     else if(arg=="--export-scene") o.export_scene=true;
     else if(arg=="--material-delta-check") o.material_delta_check=true;
+    else if(arg=="--emission-check") {o.emission_check=true;o.material_delta_check=true;}
     else if(arg=="--displacement-check") o.displacement_check=true;
     else if(arg=="--graft-check") o.graft_check=true;
     else if(arg=="--dump-shaders") o.dump_shaders=true;
@@ -249,12 +250,14 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
     if(o.material_delta_check) {
       const auto before_pixels=output_result->linear_pixels;
       std::vector<ccl::Geometry *> geometry_before;for(auto *geometry:scene.geometry) geometry_before.push_back(geometry);
-      const auto after_directory=o.output/"material-delta";std::filesystem::create_directories(after_directory);
+      const auto after_directory=o.output/(o.emission_check?"emission-off":"material-delta");std::filesystem::create_directories(after_directory);
       auto after=std::make_unique<Output>(after_directory,false,render_scene.options);auto *after_result=after.get();
       session->set_output_driver(std::move(after));
       ir::Delta delta;
       for(uint32_t i=0;i<render_scene.materials.size();++i) if(render_scene.materials[i].id!="preview-floor") {
-        auto material=render_scene.materials[i];material.base_color={.015f,.05f,.8f};delta.materials.push_back({i,material});
+        auto material=render_scene.materials[i];
+        if(o.emission_check) {if(material.emission_luminance<=0||(material.emission_color.x==0&&material.emission_color.y==0&&material.emission_color.z==0))continue;material.emission_luminance=0;}
+        else material.base_color={.015f,.05f,.8f};delta.materials.push_back({i,material});
       }
       {
         ccl::thread_scoped_lock lock(scene.mutex);adapter.apply(delta);session->dfv_requested_epoch=initial.epoch+1;
@@ -274,7 +277,7 @@ int run(const Options &o,const ccl::DeviceInfo &device) {
       std::vector<ccl::Geometry *> geometry_after;for(auto *geometry:scene.geometry) geometry_after.push_back(geometry);
       const bool stable=geometry_before==geometry_after && stats.meshes==counts.meshes && stats.textures==counts.textures && stats.unique_triangles==counts.unique_triangles;
       const bool pass=stable && stats.material_updates==delta.materials.size() && changed>pixel_count/100;
-      save_json(o.output/"material-delta-check.json",{{"status",pass?"PASS":"FAIL"},{"geometry_pointers_unchanged",stable},
+      save_json(o.output/(o.emission_check?"emission-check.json":"material-delta-check.json"),{{"status",pass?"PASS":"FAIL"},{"geometry_pointers_unchanged",stable},
         {"mesh_count",stats.meshes},{"texture_resource_count",stats.textures},{"material_updates",stats.material_updates},
         {"changed_pixel_fraction",double(changed)/pixel_count},{"linear_rgb_mae",difference/(pixel_count*3)},
         {"gpu_upload_bytes","NOT_MEASURED"},{"session_loads",1}});

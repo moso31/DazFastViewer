@@ -4,6 +4,7 @@
 #include <psapi.h>
 #include "diagnostics/load_profile.h"
 #include "editor/document.h"
+#include "editor/object_extension.h"
 #include "runtime/picking.h"
 #include <fstream>
 #include <iostream>
@@ -11,8 +12,8 @@
 // 无窗口复现编辑器的 CPU 加载与首次形变；不把结果称为 GPU 首帧耗时。
 int main(int argc,char **argv) {
   using namespace dfv;using Json=nlohmann::json;namespace fs=std::filesystem;
-  if(argc<4||argc>5) {std::cerr<<"SceneLoadProfile <scene.duf> <project.json> <output-directory> [--eager]\n";return 2;}
-  const bool lazy=argc==4;
+  if(argc<4||argc>5) {std::cerr<<"SceneLoadProfile <scene.duf> <project.json> <output-directory> [--eager|--growth-check]\n";return 2;}
+  const bool growth_check=argc==5&&std::string(argv[4])=="--growth-check",lazy=argc==4||growth_check;
   SetConsoleOutputCP(CP_UTF8);
   const fs::path output=fs::u8path(argv[3]);fs::create_directories(output);
   diagnostics::LoadProfile profile;diagnostics::active=&profile;
@@ -64,6 +65,19 @@ int main(int argc,char **argv) {
     std::unique_ptr<runtime::DeformationRuntime> runtime;
     stage("deformation_construct",[&] {runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);});
     stage("initial_deformation",[&] {runtime->evaluate(snapshot.values,snapshot.poses);});
+    if(growth_check)stage("growth_check",[&] {
+      const auto found=std::find_if(document.catalog.targets.begin(),document.catalog.targets.end(),[](const auto &t){return t.label=="big_01";});
+      if(found==document.catalog.targets.end())throw std::runtime_error("缺少 big_01");const auto t=size_t(found-document.catalog.targets.begin());int skin=-1;
+      for(size_t i=0;i<document.skeletons.skins.size();++i)if(document.skeletons.skins[i].instance==found->instance)skin=int(i);
+      const auto &joints=document.skeletons.skins.at(skin).joints;const auto head=std::find_if(joints.begin(),joints.end(),[](const auto &j){return j.id=="head";});
+      if(head==joints.end())throw std::runtime_error("缺少 head 骨骼");const auto h=size_t(head-joints.begin());
+      const auto before=runtime->effective_poses().at(skin).at(h);const auto properties=snapshot.values[t];auto next=properties.extension;next.kind=runtime::ExtensionKind::growth;next.age+=.25;
+      const auto missing=editor::edit_growth(document,snapshot,t,next);runtime->evaluate(snapshot.values,snapshot.poses);const auto after=runtime->effective_poses().at(skin).at(h);
+      Json controls=Json::array();for(size_t m=0;m<found->morphs.size();++m)if(found->morphs[m].label=="Head Propagating Scale")controls.push_back({{"id",found->morphs[m].id},{"scene_channel",found->morphs[m].scene_channel},{"before",properties.morphs[m]},{"after",snapshot.values[t].morphs[m]}});
+      result["growth_check"]={{"age_before",properties.extension.age},{"age_after",next.age},{"native_channels",found->native_extension_channels},{"head_scale_before",before.general_scale},{"head_scale_after",after.general_scale},{"head_controls",controls},{"missing",missing}};
+      if(properties.extension.age>=1&&properties.extension.age<=3.75&&std::abs(after.general_scale-before.general_scale)>1e-5)throw std::runtime_error("同一头部生长平台段发生额外缩放");
+      snapshot.values[t]=properties;runtime->evaluate(snapshot.values,snapshot.poses);
+    });
     result["graft_seams"]=Json::array();for(const auto &g:runtime->graft_seams()) {
       result["graft_seams"].push_back({{"follower",render_scene.instances[g.follower].id},{"source",render_scene.instances[g.source].id},{"pairs",g.pairs},{"max_gap_m",g.max_gap_m}});
       if(g.max_gap_m>1e-5) throw std::runtime_error("GeoGraft 最终接缝误差超过 0.01 毫米");

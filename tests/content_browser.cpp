@@ -22,6 +22,8 @@
 #include <QTest>
 #include <QTreeView>
 #include <QWheelEvent>
+#include <QMenu>
+#include <QTimer>
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <stdexcept>
@@ -76,6 +78,10 @@ static void checks() {
     search->setEditText({});for(int i=0;i<25;++i) browser.record_use(root+"/pose"+QString::number(i)+".duf","pose");browser.record_use(pose,"pose");browser.record_use(root+"/scene.duf","scene");browser.show_recent();
     require(categories->currentRow()==0&&view->model()->rowCount()==27,"ALL 默认分类或全局记录错误");categories->setCurrentRow(3);require(view->model()->rowCount()==20&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose,"近期分类上限或时间排序错误");
     zoom->setValue(21);require(view->iconSize().width()==224,"最大图标尺寸发生变化");browser.save();
+    bool removed=false;QTimer::singleShot(0,[&]{if(auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget()))if(auto *action=menu->findChild<QAction *>("RemoveRecentContent")){removed=true;menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}});
+    view->customContextMenuRequested(view->visualRect(view->model()->index(0,0)).center());
+    require(removed&&QFileInfo::exists(pose)&&ContentHistory(ui_settings).recent().size()==26,"移除近期记录失败或误删原文件");
+    browser.show_recent();require(view->model()->rowCount()==26,"移除没有刷新 ALL 分类");browser.record_use(pose,"pose");require(view->model()->rowCount()==27,"移除后的资源不能再次记入近期使用");
   }
   {
     ContentBrowser restored(nullptr,ui_settings,cache);restored.set_roots({root});require(restored.findChild<QSlider *>("contentZoom")->value()==21,"图标尺寸重启丢失");restored.show_recent();require(restored.findChild<QListView *>("contentItems")->model()->rowCount()==27,"近期使用重启丢失");require(restored.findChild<QComboBox *>("contentSearch")->itemText(0)=="standing [01]","搜索记录重启丢失");

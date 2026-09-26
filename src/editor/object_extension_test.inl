@@ -43,7 +43,7 @@
     if(test_stage_==1){if(!measured())return;const auto r=measurements_.result().weight;if(!check(r.kg>0&&r.height_cm>0&&r.parts.size()==13,"角色测量未返回身高和部位重量"))return;
       extension_checks_.push_back({{"check","registration-and-background-measurement"},{"height_cm",r.height_cm},{"kg",r.kg},{"missing",r.missing_morphs}});extension_before_=snapshot_.values[extension_figure_];if(!check(scale_control()!=nullptr,"缺少 Scale 控件"))return;extension_scale_before_=scale_control()->value();screen_save("growth-initial.png");extension_panel_->findChild<QDoubleSpinBox *>("GrowthAge")->stepUp();++test_stage_;return;
     }
-    if(test_stage_==2){if(!check(snapshot_.values[extension_figure_].extension.age==3.25,"年龄步长未生效"))return;
+    if(test_stage_==2){if(!check(snapshot_.values[extension_figure_].extension.age==extension_before_.extension.age+.25,"年龄步长未生效"))return;
       if(!check(scale_control()&&extension_scale_before_==90&&scale_control()->value()==92&&scale_control()->text()=="92","Scale 未精确显示 90 → 92"))return;
       extension_checks_.push_back({{"check","scale-decimal-increment"},{"before",extension_scale_before_},{"after",scale_control()->value()},{"text",scale_control()->text().toStdString()}});
       extension_panel_->findChild<QDoubleSpinBox *>("GrowthAge")->stepDown();++test_stage_;return;}
@@ -56,7 +56,7 @@
       extension_favorite_morph_=found->source+"#"+found->id;parameters_->query(QStringLiteral("Body Size"));parameters_->select_parameter(size_t(found-morphs.begin()));star=favorite_button(extension_favorite_morph_);if(!check(star!=nullptr,"缺少 Morph 收藏按钮"))return;
       extension_favorite_added_=star->text()!=QStringLiteral("★");star->click();parameters_->query({});if(!check(snapshot_.revision==revision,"收藏修改触发几何重算"))return;
       extension_checks_.push_back({{"check","fractional-age-roundtrip-and-collapse"},{"passed",true}});choose(extension_other_);chrome->weight_action()->trigger();extension_panel_->findChild<QDoubleSpinBox *>("GrowthAge")->setValue(5);
-      if(!check(snapshot_.values[extension_figure_].extension.age==3&&snapshot_.values[extension_other_].extension.age==5,"不同角色生长参数串值"))return;
+      if(!check(snapshot_.values[extension_figure_].extension.age==extension_before_.extension.age&&snapshot_.values[extension_other_].extension.age==5,"不同角色生长参数串值"))return;
       extension_instances_=document_->loaded.scene.instances.size();extension_meshes_=document_->loaded.scene.meshes.size();
       extension_file_=output_/"review.dufex";save_extension();extension_expected_=snapshot_json(*document_,snapshot_);++test_stage_;load(extension_file_);return;
     }
@@ -66,7 +66,8 @@
       extension_checks_.push_back({{"check","favorite-add-remove-dufex-roundtrip"},{"passed",true}});
       if(!check(document_->loaded.scene.instances.size()==extension_instances_&&document_->loaded.scene.meshes.size()==extension_meshes_,"真实场景保存重开丢失几何"))return;
       extension_checks_.push_back({{"check","character-dufex-roundtrip-and-isolation"},{"passed",true},{"instances",extension_instances_},{"meshes",extension_meshes_}});
-      choose(extension_prop_);chrome->weight_action()->trigger();if(!check(snapshot_.values[extension_prop_].extension.kind==runtime::ExtensionKind::density&&snapshot_.values[extension_prop_].extension.density==1000,"道具未使用新密度默认值"))return;extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->setValue(7890);++test_stage_;return;
+      choose(extension_prop_);chrome->weight_action()->trigger();const auto &native=document_->catalog.targets[extension_prop_].native_extension;const double density=native.kind==runtime::ExtensionKind::density?native.density:1000;
+      if(!check(snapshot_.values[extension_prop_].extension.kind==runtime::ExtensionKind::density&&snapshot_.values[extension_prop_].extension.density==density,"道具密度未继承原生值或默认值"))return;extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->setValue(7890);++test_stage_;return;
     }
     if(test_stage_==5){if(!measured())return;extension_mass_=measurements_.result().weight.kg;extension_geometry_=state.adapter.geometry_updates;if(!check(extension_mass_>0,"道具体积测量为零"))return;screen_save("object-weight.png");extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->setValue(3945);++test_stage_;return;}
     if(test_stage_==6){if(!measured())return;if(!check(std::abs(measurements_.result().weight.kg-extension_mass_*.5)<1e-8&&state.adapter.geometry_updates==extension_geometry_,"密度更改触发几何更新或重量未线性变化"))return;extension_checks_.push_back({{"check","density-multiplier-without-geometry-update"},{"kg",measurements_.result().weight.kg}});save_extension();extension_expected_=snapshot_json(*document_,snapshot_);++test_stage_;load(extension_file_);return;}

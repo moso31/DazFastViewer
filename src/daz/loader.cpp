@@ -341,6 +341,20 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     material.displacement_min=.01f*scalar("Minimum Displacement",-.1f);
     material.displacement_max=.01f*scalar("Maximum Displacement",.1f);
     material.thin_walled=scalar("Thin Walled",0)!=0;
+    material.emission_color=color_value("Emission Color",{0,0,0});
+    material.emission_color_texture=texture(channel("Emission Color"),ir::ColorSpace::srgb,material_file);
+    material.emission_luminance=std::max(0.f,scalar("Luminance",1500));
+    material.emission_luminance_texture=texture(channel("Luminance"),ir::ColorSpace::linear,material_file);
+    material.emission_units=int(scalar("Luminance Units",3));
+    if(material.emission_units<0||material.emission_units>5) {warn("emission_units",material.id,"未知亮度单位，自发光已禁用");material.emission_units=0;material.emission_luminance=0;}
+    material.emission_efficacy=std::max(0.f,scalar("Luminous Efficacy",15));
+    material.emission_temperature=channels.contains("Emission Temperature")?scalar("Emission Temperature",6500):0;
+    if(channels.contains("Emission Temperature")&&material.emission_temperature==0) material.emission_temperature=6500;
+    material.emission_two_sided=material.thin_walled&&scalar("Two Sided Light",0)!=0;
+    const auto profile=channel("Emission Profile");
+    const auto profile_value=profile.value("current_value",profile.value("value",Json("")));
+    if(!profile.value("image_file","").empty()||(profile_value.is_string()&&!profile_value.get<std::string>().empty()))
+      warn("emission_profile_approximation",material.id,"尚未映射 IES 配光文件，保留漫发射照明");
     material.roughness_from_glossiness=legacy_gloss||int(scalar("Base Mixing",0))==1;
     if(material.roughness_from_glossiness) {
       material.roughness=unit("Glossiness",.5f);
@@ -420,6 +434,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     if(material.bump_texture>=0 && !explicit_bump_range)
       warn("bump_distance_approximation",material.id,"资产未提供凹凸高度范围；后端按材质世界面积、UV 面积和纹理分辨率计算两个纹素的高度范围；无法读取尺寸时回退 1 毫米");
     const std::set<std::string> supported={"diffuse","Glossy Roughness","Metallic Weight","Cutout Opacity","Refraction Weight","Refraction Index","Normal Map","Bump Strength","Bump Minimum","Bump Maximum",
+      "Emission Color","Emission Temperature","Two Sided Light","Luminance","Luminance Units","Luminous Efficacy","Emission Profile",
       "Displacement Strength","Displacement Active","Minimum Displacement","Maximum Displacement",
       "Thin Walled","Base Mixing","Glossiness","Glossy Layered Weight","Glossy Weight","Glossy Reflectivity","Glossy Color","Glossy Anisotropy","Glossy Anisotropy Rotations",
       "Translucency Weight","Translucency Color","SSS Direction","Transmitted Color","SSS Color","SSS Mode","SSS Amount","Base Color Effect","SSS Reflectance Tint","Transmitted Measurement Distance","Scattering Measurement Distance",
@@ -432,6 +447,10 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     if(!unmapped.empty()) warn("material_subset",material.id,"仅映射基础 PBR 参数；未映射通道详见 materials.unmapped_channels");
     material_reports.push_back({{"id",material.id},{"groups",instance.value("groups",Json::array())},{"unmapped_channels",unmapped},{"color_texture",material.color_texture},
       {"roughness_texture",material.roughness_texture},{"normal_texture",material.normal_texture},{"bump_texture",material.bump_texture},
+      {"emission_color",{material.emission_color.x,material.emission_color.y,material.emission_color.z}},
+      {"emission_luminance",material.emission_luminance},{"emission_units",material.emission_units},{"emission_temperature_K",material.emission_temperature},
+      {"emission_efficacy",material.emission_efficacy},{"emission_two_sided",material.emission_two_sided},
+      {"emission_color_texture",material.emission_color_texture},{"emission_luminance_texture",material.emission_luminance_texture},
       {"displacement_texture",material.displacement_texture},{"displacement_strength",material.displacement_strength},{"displacement_min_m",material.displacement_min},{"displacement_max_m",material.displacement_max},
       {"hair",material.hair},{"thin_walled",material.thin_walled},{"opacity",material.opacity},{"transmission",material.transmission},{"subsurface_weight",material.subsurface},{"translucency_weight",material.translucency},
       {"subsurface_radius_m",{material.subsurface_radius.x,material.subsurface_radius.y,material.subsurface_radius.z}},{"dual_lobe_weight",material.dual_weight},

@@ -35,6 +35,8 @@ struct Target {
   // DUF 节点收藏：空键为对象本身，其他键为骨骼资产 ID；空集合也代表已保存的列表。
   std::string favorite_scope;
   std::map<std::string,std::set<std::string>> favorites;
+  ObjectExtension native_extension;
+  std::set<std::string> native_extension_channels;
   uint32_t instance=0;
   std::vector<Morph> morphs;
   std::string conform_target;

@@ -1,4 +1,5 @@
 #include "editor/chrome.h"
+#include "editor/ui_scale.h"
 #include <QActionGroup>
 #include <QHBoxLayout>
 #include <QToolButton>
@@ -74,9 +75,14 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
 }
 void EditorChrome::emit_settings() {const bool enabled=settings_.tool==GizmoTool::translate||settings_.tool==GizmoTool::rotate;world_->setEnabled(enabled);local_->setEnabled(enabled);local_->setChecked(settings_.space==GizmoSpace::local);world_->setChecked(settings_.space==GizmoSpace::world);if(changed) changed(settings_);}
 void EditorChrome::bind_ground(bool enabled,double ratio) {ground_->setEnabled(enabled);ground_ratio_->setEnabled(enabled);QSignalBlocker block(ground_ratio_);ground_ratio_->setValue(ratio);}
-void EditorChrome::fit_height() {const int height=std::clamp(modules_->minimumSizeHint().height(),34,160);if(modules_->height()!=height) modules_->setFixedHeight(height);if(this->height()!=height) setFixedHeight(height);}
+void EditorChrome::fit_height() {
+  const int height=std::clamp(modules_->minimumSizeHint().height(),ui_pixels(34),ui_pixels(160));
+  if(modules_->minimumHeight()!=height||modules_->maximumHeight()!=height) modules_->setFixedHeight(height);
+  if(minimumHeight()!=height||maximumHeight()!=height) {setFixedHeight(height);updateGeometry();owner_->layout()->invalidate();}
+}
+void EditorChrome::schedule_fit() {if(fit_pending_)return;fit_pending_=true;QTimer::singleShot(0,this,[this]{fit_pending_=false;fit_height();});}
 bool EditorChrome::eventFilter(QObject *object,QEvent *e) {
-  if(e->type()==QEvent::LayoutRequest||e->type()==QEvent::Resize||e->type()==QEvent::Show||e->type()==QEvent::Hide) QTimer::singleShot(0,this,[this]{fit_height();});
+  if(e->type()==QEvent::LayoutRequest||e->type()==QEvent::Resize||e->type()==QEvent::Show||e->type()==QEvent::Hide||e->type()==QEvent::FontChange||e->type()==QEvent::StyleChange) schedule_fit();
   if(e->type()==QEvent::MouseButtonPress||e->type()==QEvent::MouseButtonDblClick) {
     auto *widget=qobject_cast<QWidget *>(object);auto *mouse=static_cast<QMouseEvent *>(e);
     // 原生子窗口可能先收到客户区鼠标消息，因此 Qt 路径也使用同一套空白区判定。

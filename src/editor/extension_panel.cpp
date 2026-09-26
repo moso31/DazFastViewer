@@ -21,7 +21,7 @@ ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   connect(header_,&QToolButton::toggled,this,[this](bool on){body_->setVisible(on);header_->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
   growth_=new QWidget;body->addWidget(growth_);auto *form=new QVBoxLayout(growth_);form->setContentsMargins(0,0,0,0);form->setSpacing(4);
   auto spin=[&](const char *name,double lo,double hi,double step){auto *s=new NumericSpinBox(false);s->setObjectName(name);s->setDecimals(6);s->setRange(lo,hi);s->setSingleStep(step);s->setKeyboardTracking(false);s->setFocusPolicy(Qt::StrongFocus);s->setMinimumWidth(48);s->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);return s;};
-  age_=spin("GrowthAge",1,20,1);step_=spin("GrowthAgeStep",.001,19,.1);sense_=spin("GrowthSensitivity",-100000,100000,2.5);strength_=spin("GrowthStrength",0,1,.25);density_=spin("ObjectDensity",0,100000,100);
+  age_=spin("GrowthAge",1,20,1);step_=spin("GrowthAgeStep",.001,19,.25);sense_=spin("GrowthSensitivity",-100000,100000,2.5);strength_=spin("GrowthStrength",0,1,.25);density_=spin("ObjectDensity",0,100000,100);
   auto *age_row=new QHBoxLayout;age_row->setSpacing(4);age_row->addWidget(new QLabel(QStringLiteral("年龄")));age_row->addWidget(age_,1);age_row->addSpacing(6);age_row->addWidget(new QLabel(QStringLiteral("步长")));age_row->addWidget(step_,1);form->addLayout(age_row);
   auto *shape_row=new QHBoxLayout;shape_row->setSpacing(4);shape_row->addWidget(new QLabel(QStringLiteral("体格")));shape_row->addWidget(strength_,1);shape_row->addSpacing(6);shape_row->addWidget(new QLabel(QStringLiteral("每年增长")));shape_row->addWidget(sense_,1);
   sense_->setToolTip(QStringLiteral("每增加一岁，实际等比缩放增加的百分点"));

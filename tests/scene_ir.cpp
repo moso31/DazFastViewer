@@ -1,5 +1,6 @@
 #include "daz/loader.h"
 #include "runtime/picking.h"
+#include "render_ir/emission.h"
 #include <zlib.h>
 #include <chrono>
 #include <fstream>
@@ -12,6 +13,7 @@ using Json=nlohmann::json;
 namespace fs=std::filesystem;
 void require(bool ok,const char *message) {if(!ok) throw std::runtime_error(message);}
 void write(const fs::path &p,const Json &j) {std::ofstream file(p);file<<j.dump();}
+#include "emission.inl"
 int main() {
   try {
     dfv::ir::Transform tiny;tiny.value[0]=tiny.value[5]=tiny.value[10]=.00001f;
@@ -95,6 +97,7 @@ int main() {
     require(std::abs(mono.subsurface_radius.x-.002f)<1e-7f&&mono.subsurface_color.x==1&&mono.separate_subsurface_color,"Mono SSS 错误使用隐藏的 SSS Color，或厘米尺度错误");
     sss_duf["material_library"][0]["extra"][0]["channels"][1]["channel"]["value"]=1;write(path,sss_duf);
     require(dfv::daz::load(path).scene.materials[0].subsurface_radius.x<mono.subsurface_radius.x/10,"Chromatic SSS 未按颜色衰减计算");
+    emission_test(path,duf);
     auto bump_duf=duf;
     bump_duf["material_library"][0]["extra"]=Json::parse(R"([{"channels":[
       {"channel":{"id":"Bump Strength","value":0.5,"current_value":2,"image_file":"height.png"}},

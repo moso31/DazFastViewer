@@ -54,6 +54,11 @@ struct Texture {
 struct Material {
   std::string id;
   Vec3 base_color{0.5f,0.5f,0.5f};
+  Vec3 emission_color{};
+  float emission_luminance=0,emission_temperature=0,emission_efficacy=15;
+  // DAZ 单位：cd/m²、kcd/m²、cd/ft²、cd/cm²、lm、W。
+  int emission_units=0,emission_color_texture=-1,emission_luminance_texture=-1;
+  bool emission_two_sided=false;
   float roughness=.5f,metallic=0,opacity=1,transmission=0,ior=1.5f,normal_strength=1;
   // 世界空间高度范围，单位为米；与法线贴图叠加。
   float bump_strength=0,bump_distance=.001f;
@@ -84,7 +89,8 @@ struct Material {
 template<class M> auto texture_indices(M &m) {
   return std::array{&m.color_texture,&m.roughness_texture,&m.opacity_texture,&m.normal_texture,&m.bump_texture,
     &m.specular_texture,&m.translucency_texture,&m.translucency_color_texture,&m.coat_texture,&m.coat_roughness_texture,
-    &m.dual_texture,&m.metallic_texture,&m.transmission_texture,&m.specular_color_texture,&m.coat_color_texture,&m.displacement_texture};
+    &m.dual_texture,&m.metallic_texture,&m.transmission_texture,&m.specular_color_texture,&m.coat_color_texture,&m.displacement_texture,
+    &m.emission_color_texture,&m.emission_luminance_texture};
 }
 struct Triangle {
   std::array<uint32_t,3> vertices{};

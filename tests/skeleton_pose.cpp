@@ -97,6 +97,11 @@ static void unit_tests() {
   modifier["extra"]={{{"type","skin_settings"},{"binding_mode","Local"},{"general_map_mode","Linear"}}};weight.erase("node_weights");weight["local_weights"]={{"x",map},{"y",map},{"z",map}};weight["scale_weights"]=map;
   std::ofstream(dsf)<<local.dump();auto rigid=daz::load_skeletons(input);require(rigid.skins[0].method==runtime::SkinMethod::linear&&rigid.skins[0].weights[0][0].weight==1,"相同轴的刚性 Local 绑定未载入");
   auto posed=rigid.skins[0].initial;posed[1].rotation_degrees.z=90;require(near(runtime::deform(rigid.skins[0],posed,{{1,0,0}})[0],{0,0,1}),"刚性 Local 绑定的实际旋转错误");
+  {auto nested=local;auto child=nested["node_library"][1];child["id"]="child";child["parent"]="#oldId";nested["node_library"].push_back(child);
+    auto child_weights=nested["modifier_library"][0]["skin"]["joints"][0];child_weights["node"]="#child";nested["modifier_library"][0]["skin"]["joints"].push_back(child_weights);std::ofstream(dsf)<<nested.dump();
+    auto chain=daz::load_skeletons(input);const auto &rig=chain.skins[0];require(!rig.static_local_weights&&rig.weights[0].size()==1&&rig.joints[rig.weights[0][0].joint].id=="child","完整祖先链的累计 Local 图未转换");
+    auto pose=rig.initial;pose[1].rotation_degrees.z=30;pose[2].rotation_degrees.z=60;require(near(runtime::deform(rig,pose,{{1,0,0}})[0],{0,0,1}),"累计 Local 图错误地平均了父子旋转");
+    nested["node_library"].back()["parent"]="#root";std::ofstream(dsf)<<nested.dump();rejects([&]{daz::load_skeletons(input);},"兄弟骨骼重叠图被误当作刚性祖先链");}
   weight["local_weights"]["y"]["values"][0][1]=.5;std::ofstream(dsf)<<local.dump();rejects([&] {daz::load_skeletons(input);},"不同轴权重被误当作刚性 General");
   auto scale=asset;scale["modifier_library"][0]["skin"]["joints"][0]["scale_weights"]=map;std::ofstream(dsf)<<scale.dump();require(daz::load_skeletons(input).skins.size()==2,"相同缩放图使 General 绑定失败");
   scale["modifier_library"][0]["skin"]["joints"][0]["scale_weights"]["values"][0][1]=.5;std::ofstream(dsf)<<scale.dump();auto limited=daz::load_skeletons(input);require(limited.skins[0].separate_scale_weights,"独立缩放图能力边界丢失");

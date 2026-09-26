@@ -22,6 +22,9 @@ inline nlohmann::json scene_json(const ir::Scene &scene,int samples) {
   }
   for(const auto &m:scene.materials)
     result["materials"].push_back({{"id",m.id},{"base_color",vec(m.base_color)},
+      {"emission_color",vec(m.emission_color)},{"emission_luminance",m.emission_luminance},{"emission_units",m.emission_units},
+      {"emission_temperature",m.emission_temperature},{"emission_efficacy",m.emission_efficacy},{"emission_two_sided",m.emission_two_sided},
+      {"emission_color_texture",m.emission_color_texture},{"emission_luminance_texture",m.emission_luminance_texture},
       {"roughness",m.roughness},{"metallic",m.metallic},{"opacity",m.opacity},
       {"transmission",m.transmission},{"ior",m.ior},{"normal_strength",m.normal_strength},
       {"color_texture",m.color_texture},{"roughness_texture",m.roughness_texture},

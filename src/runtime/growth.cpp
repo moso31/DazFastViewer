@@ -28,8 +28,14 @@ std::vector<GrowthValue> growth_values(double age,double strength) {
 std::vector<std::string> apply_growth(const Target &target,Properties &values) {
   validate_extension(values.extension);std::vector<std::string> missing;
   for(const auto &v:growth_values(values.extension.age,values.extension.strength)) {
-    auto found=std::find_if(target.morphs.begin(),target.morphs.end(),[&](const auto &m){return m.label==v.label&&m.alias_morph<0&&(m.owner.empty()||m.owner.find('/')==std::string::npos);});
-    if(found==target.morphs.end()) found=std::find_if(target.morphs.begin(),target.morphs.end(),[&](const auto &m){return m.label==v.label&&m.alias_morph<0;});
+    // 商业角色可能附带与原生同名的控制器。优先更新该实例实际引用的参数，
+    // 避免向另一份控制器写值，与 DUF 已保存的 ERC 重复叠加。
+    auto match=[&](const auto &m){return m.label==v.label&&m.alias_morph<0;};
+    auto root=[&](const auto &m){return m.owner.empty()||m.owner.find('/')==std::string::npos;};
+    auto found=target.morphs.end();int best=-1;
+    for(auto i=target.morphs.begin();i!=target.morphs.end();++i)if(match(*i)) {
+      const int rank=(i->scene_channel?4:0)+(root(*i)?2:0);if(rank>best){best=rank;found=i;}
+    }
     if(found==target.morphs.end()||!found->evaluable||!found->unsupported.empty()||found->locked) {missing.push_back(v.label);continue;}
     // 脚本写值也服从资产限位；ERC 仍由正常求值链处理。
     auto value=v.value;if(found->clamped) value=std::clamp(value,double(found->minimum),double(found->maximum));

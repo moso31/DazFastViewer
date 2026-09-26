@@ -27,7 +27,7 @@ void GLContext::destroy() {if(context_) {wglDeleteContext(context_);context_=nul
 static void pixel_format(HDC dc) {
   PIXELFORMATDESCRIPTOR pfd{};pfd.nSize=sizeof(pfd);pfd.nVersion=1;
   pfd.dwFlags=PFD_DRAW_TO_WINDOW|PFD_SUPPORT_OPENGL|PFD_DOUBLEBUFFER;
-  pfd.iPixelType=PFD_TYPE_RGBA;pfd.cColorBits=32;pfd.cAlphaBits=8;pfd.cDepthBits=24;
+  pfd.iPixelType=PFD_TYPE_RGBA;pfd.cColorBits=32;pfd.cAlphaBits=8;pfd.cDepthBits=24;pfd.cStencilBits=8;
   const int format=ChoosePixelFormat(dc,&pfd);
   if(!format || !SetPixelFormat(dc,format,&pfd)) throw std::runtime_error("设置 OpenGL pixel format 失败");
 }

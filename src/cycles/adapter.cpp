@@ -1,4 +1,5 @@
 #include "cycles/adapter.h"
+#include "render_ir/emission.h"
 #include "diagnostics/load_profile.h"
 #include "render_ir/options.h"
 #include "render_ir/sun_sky.h"
@@ -28,7 +29,7 @@ static ccl::Transform transform(const ir::Transform &t) {
   ccl::Transform out;const auto &v=t.value;
   out.x=ccl::make_float4(v[0],v[1],v[2],v[3]);out.y=ccl::make_float4(v[4],v[5],v[6],v[7]);out.z=ccl::make_float4(v[8],v[9],v[10],v[11]);return out;
 }
-void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m,float texel_distance) {
+void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m,float texel_distance,float emission_strength) {
   using namespace ccl;
   auto graph=make_unique<ShaderGraph>();
   auto *uv=graph->create_node<UVMapNode>();uv->set_attribute(ustring("UVMap"));
@@ -188,6 +189,23 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &m,float tex
       surface=mix(surface,translucent->output("BSDF"),scalar(m.translucency_texture,m.translucency));
     }
   }
+  if(emission_strength>0) {
+    auto *emit=graph->create_node<EmissionNode>();auto *tint=color(m.emission_color_texture,m.emission_color);
+    if(m.emission_temperature>0) {
+      auto *blackbody=graph->create_node<BlackbodyNode>();blackbody->set_temperature(m.emission_temperature);
+      auto *multiply=graph->create_node<VectorMathNode>();multiply->set_math_type(NODE_VECTOR_MATH_MULTIPLY);
+      graph->connect(tint,multiply->input("Vector1"));graph->connect(blackbody->output("Color"),multiply->input("Vector2"));tint=multiply->output("Vector");
+    }
+    auto *strength=scalar(m.emission_luminance_texture,emission_strength);
+    if(!m.emission_two_sided) {
+      auto *geometry=graph->create_node<GeometryNode>();auto *front=graph->create_node<MathNode>();front->set_math_type(NODE_MATH_SUBTRACT);front->set_value1(1);
+      graph->connect(geometry->output("Backfacing"),front->input("Value2"));
+      auto *multiply=graph->create_node<MathNode>();multiply->set_math_type(NODE_MATH_MULTIPLY);
+      graph->connect(strength,multiply->input("Value1"));graph->connect(front->output("Value"),multiply->input("Value2"));strength=multiply->output("Value");
+    }
+    graph->connect(tint,emit->input("Color"));graph->connect(strength,emit->input("Strength"));
+    auto *add=graph->create_node<AddClosureNode>();graph->connect(surface,add->input("Closure1"));graph->connect(emit->output("Emission"),add->input("Closure2"));surface=add->output("Closure");
+  }
   if(m.opacity<1||m.opacity_texture>=0) {
     auto *transparent=graph->create_node<TransparentBsdfNode>();transparent->set_color(one_float3());
     surface=mix(transparent->output("BSDF"),surface,scalar(m.opacity_texture,m.opacity));
@@ -301,7 +319,9 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
       }
     }
     auto canonical=edit.value;for(auto *index:ir::texture_indices(canonical)) if(*index>=0) *index=texture_map_.at(size_t(*index));
-    material(*shader,canonical,bump_distances_.at(edit.index));canonical_materials_[edit.index]=std::move(canonical);source_.materials[edit.index]=edit.value;++stats_.material_updates;
+    canonical_materials_[edit.index]=std::move(canonical);source_.materials[edit.index]=edit.value;
+    emission_strengths_=ir::emission_strengths(source_);
+    material(*shader,canonical_materials_[edit.index],bump_distances_.at(edit.index),emission_strengths_[edit.index]);++stats_.material_updates;
   }
   for(const auto &edit:delta.lights) {
     light_power_[edit.index]=edit.value.power;lights_[edit.index]->set_strength(ir::scene_lights(options_)?vector(edit.value.power):ccl::zero_float3());lights_[edit.index]->tag_update(&scene_);
@@ -332,6 +352,13 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
   }
   for(const auto &edit:delta.visibility) {for(auto *object:objects_[edit.index]) {object->set_visibility(edit.visible?ccl::PATH_RAY_VISIBILITY_ALL:0);object->tag_update(&scene_);}source_.instances[edit.index].visible=edit.visible;}
   // 所有对象 Delta 已进入控制网格，再更新共同曲面。显隐只重建所属组合的面列表。
+  if(!delta.meshes.empty()||!delta.instances.empty()) {
+    const auto strengths=ir::emission_strengths(source_);
+    for(size_t m=0;m<strengths.size();++m) if(strengths[m]!=emission_strengths_[m]) {
+      material(*shaders_[m],canonical_materials_[m],bump_distances_[m],strengths[m]);++stats_.material_updates;
+    }
+    emission_strengths_=strengths;
+  }
   std::vector<bool> changed(grafts_.size());
   for(size_t group=0;group<grafts_.size();++group) {
     auto &surface=grafts_[group];bool dirty=false;

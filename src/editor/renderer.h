@@ -5,6 +5,7 @@
 #include "editor/gizmo.h"
 #include "cycles/adapter.h"
 #include "viewport/window.h"
+#include "viewport/quality.h"
 #include "bench/telemetry.h"
 #include <memory>
 #include <thread>
@@ -65,6 +66,7 @@ struct RenderStatus {
   double max_displacement=0;
   int samples=0;
   bool preview=false;
+  ViewportQuality quality;
   int render_width=0,render_height=0;
   uint64_t last_preview_frame=0;
   double present_time=0;
@@ -80,6 +82,7 @@ struct RenderStatus {
 class Renderer {
   std::filesystem::path output_;
   SamplingSettings sampling_;
+  ViewportQuality quality_;
   Telemetry telemetry_;
   std::unique_ptr<Window> window_;
   std::mutex mutex_;
@@ -105,6 +108,7 @@ public:
   ~Renderer();
   void set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene=true);
   void resize(int width,int height);
+  void quality(ViewportQuality value) {std::lock_guard lock(mutex_);value.percent=std::clamp(value.percent,50,100);quality_=value;}
   void pointer(int x,int y,bool click=false,bool toggle=false);
   void automated_pointer() {window_->automated_pointer=true;}
   void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={},bool ik_allowed=false);

@@ -18,14 +18,20 @@ void HoverOverlay::draw_gizmo(const editor::GizmoShape &shape,int width,int heig
   glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
 }
 void HoverOverlay::draw_pose(const CameraState &camera,int width,int height,const ir::Mesh &proxy,const ir::Transform &world,
-  const std::vector<std::pair<ir::Vec3,ir::Vec3>> &bones,ir::Vec3 goal) {
+  const std::vector<std::pair<ir::Vec3,ir::Vec3>> &bones,ir::Vec3 goal,const std::vector<uint32_t> &excluded) {
   glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_CULL_FACE);glDisable(GL_BLEND);
   glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);glClearColor(.055f,.065f,.08f,1);glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);
-  glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadIdentity();const double near=std::max(.00001,double(camera.distance)*1e-5),far=std::max(10000.,double(camera.distance)*4);
-  const double e=std::tan(.4)*near,x=e*std::max(1.,double(width)/height),y=e*std::max(1.,double(height)/width);glFrustum(-x,x,-y,y,near,far);
+  glMatrixMode(GL_PROJECTION);glPushMatrix();projection(camera,width,height,&proxy,&world);
   const auto m=camera.matrix();const float view[]={m[0],m[1],-m[2],0,m[4],m[5],-m[6],0,m[8],m[9],-m[10],0,
     -(m[0]*m[3]+m[4]*m[7]+m[8]*m[11]),-(m[1]*m[3]+m[5]*m[7]+m[9]*m[11]),m[2]*m[3]+m[6]*m[7]+m[10]*m[11],1};
-  glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadMatrixf(view);glBegin(GL_TRIANGLES);
+  glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadMatrixf(view);
+  // 背景使用已缓存的基础网格，包含其他角色和场景，GPU 负责视锥裁切。
+  // 活动角色及其穿戴物由新代理替代，防止把编辑前姿势叠在新姿势上。
+  glEnable(GL_LIGHTING);glEnable(GL_LIGHT0);glEnable(GL_NORMALIZE);glDisable(GL_COLOR_MATERIAL);glLightModeli(GL_LIGHT_MODEL_TWO_SIDE,GL_TRUE);
+  const GLfloat ambient[]={.35f,.35f,.35f,1},diffuse[]={.7f,.7f,.7f,1},direction[]={.3f,-.5f,.8f,0},material[]={.72f,.77f,.82f,1};
+  glLightModelfv(GL_LIGHT_MODEL_AMBIENT,ambient);glLightfv(GL_LIGHT0,GL_DIFFUSE,diffuse);glLightfv(GL_LIGHT0,GL_POSITION,direction);glMaterialfv(GL_FRONT_AND_BACK,GL_AMBIENT_AND_DIFFUSE,material);
+  for(size_t i=0;i<lists_.size();++i)if(visible_[i]&&std::find(excluded.begin(),excluded.end(),uint32_t(i))==excluded.end())draw_instance(i,lists_[i]);
+  glDisable(GL_LIGHTING);glBegin(GL_TRIANGLES);
   for(const auto &t:proxy.triangles) {
     const auto a=world.point(proxy.positions[t.vertices[0]]),b=world.point(proxy.positions[t.vertices[1]]),c=world.point(proxy.positions[t.vertices[2]]);
     const auto n=normalized(cross({b.x-a.x,b.y-a.y,b.z-a.z},{c.x-a.x,c.y-a.y,c.z-a.z}));const float shade=.35f+.55f*std::abs(n.x*.3f+n.y*-.5f+n.z*.8f);glColor3f(shade*.72f,shade*.82f,shade);
@@ -35,20 +41,21 @@ void HoverOverlay::draw_pose(const CameraState &camera,int width,int height,cons
   glPointSize(9);glColor3f(.25f,1,.45f);glBegin(GL_POINTS);glVertex3f(goal.x,goal.y,goal.z);glEnd();
   glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
 }
-void HoverOverlay::release() {std::set<GLuint> unique;for(auto id:lists_) if(id) unique.insert(id);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) unique.insert(part.first);for(auto id:unique) glDeleteLists(id,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();}
+void HoverOverlay::release() {std::set<GLuint> unique;for(auto id:lists_) if(id) unique.insert(id);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) unique.insert(part.first);for(auto id:unique) glDeleteLists(id,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();bounds_.clear();}
 void HoverOverlay::update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions) {
   release();
-  const auto size=scene.instances.size();lists_.resize(size);parts_.resize(size);triangle_counts_.resize(size);transforms_.resize(size);visible_.resize(size);
+  const auto size=scene.instances.size();lists_.resize(size);parts_.resize(size);triangle_counts_.resize(size);transforms_.resize(size);visible_.resize(size);bounds_.resize(size);
   for(size_t i=0;i<size;++i) {transforms_[i]=scene.instances[i].transform;visible_[i]=scene.instances[i].visible;rebuild(scene,regions,i);}
 }
 void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i) {
     const auto &instance=scene.instances[i];
+    bounds_[i]={};for(auto p:scene.meshes[instance.mesh].positions)bounds_[i].add(p);
     if(instance.prototype>=0) {const auto p=size_t(instance.prototype);lists_[i]=lists_[p];parts_[i]=parts_[p];triangle_counts_[i]=triangle_counts_[p];return;}
     if(lists_[i]) glDeleteLists(lists_[i],1);
     for(const auto &[joint,part]:parts_[i]) glDeleteLists(part.first,1);parts_[i].clear();
     const auto id=glGenLists(1);lists_[i]=id;glNewList(id,GL_COMPILE);glBegin(GL_TRIANGLES);
     const auto &mesh=scene.meshes[instance.mesh];
-    auto triangle=[&](const ir::Triangle &face) {for(auto v:face.vertices) {const auto p=mesh.positions[v];glVertex3f(p.x,p.y,p.z);}};
+    auto triangle=[&](const ir::Triangle &face) {const auto a=mesh.positions[face.vertices[0]],b=mesh.positions[face.vertices[1]],c=mesh.positions[face.vertices[2]];const auto n=normalized(cross({b.x-a.x,b.y-a.y,b.z-a.z},{c.x-a.x,c.y-a.y,c.z-a.z}));glNormal3f(n.x,n.y,n.z);for(auto v:face.vertices) {const auto p=mesh.positions[v];glVertex3f(p.x,p.y,p.z);}};
     size_t count=0;for(const auto &face:mesh.triangles) if(mesh.draws(face)) {triangle(face);++count;}
     glEnd();glEndList();
     triangle_counts_[i]=count;
@@ -78,19 +85,38 @@ void HoverOverlay::draw(const CameraState &camera,int width,int height,int hover
   if(joint>=0) {const auto found=parts_[size_t(hovered)].find(joint);if(found==parts_[size_t(hovered)].end()) return;highlight=found->second.first;}
   glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_CULL_FACE);
   glMatrixMode(GL_PROJECTION);glPushMatrix();glLoadIdentity();
-  const double near=std::max(.00001,double(camera.distance)*1e-5),far=std::max(10000.,double(camera.distance)*4);
-  const double e=std::tan(.4)*near,x=e*std::max(1.,double(width)/height),y=e*std::max(1.,double(height)/width);
-  glFrustum(-x,x,-y,y,near,far);
+  projection(camera,width,height);
   const auto m=camera.matrix();const float view[]={m[0],m[1],-m[2],0,m[4],m[5],-m[6],0,m[8],m[9],-m[10],0,
     -(m[0]*m[3]+m[4]*m[7]+m[8]*m[11]),-(m[1]*m[3]+m[5]*m[7]+m[9]*m[11]),m[2]*m[3]+m[6]*m[7]+m[10]*m[11],1};
   glMatrixMode(GL_MODELVIEW);glPushMatrix();glLoadMatrixf(view);
-  glDepthMask(GL_TRUE);glClear(GL_DEPTH_BUFFER_BIT);glEnable(GL_DEPTH_TEST);glDepthFunc(GL_LESS);glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
-  auto draw_instance=[&](size_t i,GLuint list) {const auto &m=transforms_[i].value;const float matrix[]={m[0],m[4],m[8],0,m[1],m[5],m[9],0,m[2],m[6],m[10],0,m[3],m[7],m[11],1};glPushMatrix();glMultMatrixf(matrix);glCallList(list);glPopMatrix();};
-  for(size_t i=0;i<lists_.size();++i) if(visible_[i]) draw_instance(i,lists_[i]);
-  glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_FALSE);glDepthFunc(GL_EQUAL);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);glStencilMask(0xff);glClearStencil(0);glClear(GL_STENCIL_BUFFER_BIT);glDisable(GL_DEPTH_TEST);glColorMask(GL_FALSE,GL_FALSE,GL_FALSE,GL_FALSE);
+  glEnable(GL_STENCIL_TEST);glStencilFunc(GL_ALWAYS,1,0xff);glStencilOp(GL_KEEP,GL_KEEP,GL_REPLACE);
+  // 选区始终透过衣服和其他遮挡物显示；只绘制选中几何的遮罩并合成一次黄色，
+  // 避免深度竞争，也避免前后表面及重叠三角形反复混色。
+  for(size_t i=0;i<lists_.size();++i)if(visible_[i]) {
+    const bool selected=members?std::find(members->begin(),members->end(),uint32_t(i))!=members->end():i==size_t(hovered);
+    if(selected)draw_instance(i,joint>=0?highlight:lists_[i]);
+  }
+  glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_FALSE);glDisable(GL_DEPTH_TEST);glStencilFunc(GL_EQUAL,1,0xff);glStencilOp(GL_KEEP,GL_KEEP,GL_KEEP);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
   glColor4f(1.f,.88f,.32f,.22f);
-  if(members) {for(auto i:*members) if(visible_[i]) draw_instance(i,lists_[i]);}
-  else draw_instance(size_t(hovered),highlight);
+  glMatrixMode(GL_PROJECTION);glLoadIdentity();glMatrixMode(GL_MODELVIEW);glLoadIdentity();glBegin(GL_QUADS);glVertex2f(-1,-1);glVertex2f(1,-1);glVertex2f(1,1);glVertex2f(-1,1);glEnd();
   glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
+}
+void HoverOverlay::draw_instance(size_t i,GLuint list) const {const auto &m=transforms_[i].value;const float matrix[]={m[0],m[4],m[8],0,m[1],m[5],m[9],0,m[2],m[6],m[10],0,m[3],m[7],m[11],1};glPushMatrix();glMultMatrixf(matrix);glCallList(list);glPopMatrix();}
+void HoverOverlay::projection(const CameraState &camera,int width,int height,const ir::Mesh *proxy,const ir::Transform *world) const {
+  const auto eye=camera.eye(),forward=normalized(camera.target-eye);double closest=1e30,farthest=0;bool crossing=false;
+  auto add=[&](const ir::Bounds &b,const ir::Transform &transform){if(b.empty)return;double lo=1e30,hi=-1e30;
+    for(float x:{b.minimum.x,b.maximum.x})for(float y:{b.minimum.y,b.maximum.y})for(float z:{b.minimum.z,b.maximum.z}) {
+      const auto p=transform.point({x,y,z});const double d=(p.x-eye.x)*forward.x+(p.y-eye.y)*forward.y+(p.z-eye.z)*forward.z;lo=std::min(lo,d);hi=std::max(hi,d);
+    }
+    if(hi<=0)return;farthest=std::max(farthest,hi);if(lo<=0)crossing=true;else closest=std::min(closest,lo);
+  };
+  for(size_t i=0;i<bounds_.size();++i)if(visible_[i])add(bounds_[i],transforms_[i]);
+  if(proxy&&world){ir::Bounds b;for(auto p:proxy->positions)b.add(p);add(b,*world);}
+  // 按实际几何收紧裁切范围，避免原来的极小 near / 极大 far 浪费深度精度。
+  double near=closest<1e30?closest*.5:std::max(.00001,double(camera.distance)*.005);
+  if(crossing)near=std::min(near,std::max(.00001,std::min(.01,double(camera.distance)*.005)));
+  near=std::max(.00001,near);const double far=std::max(near*2,farthest*1.1);
+  const double e=std::tan(.4)*near,x=e*std::max(1.,double(width)/height),y=e*std::max(1.,double(height)/width);glLoadIdentity();glFrustum(-x,x,-y,y,near,far);
 }
 }

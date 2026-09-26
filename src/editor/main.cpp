@@ -5,6 +5,8 @@
 #include "editor/content_catalog.h"
 #include "editor/powerpose_panel.h"
 #include "editor/chrome.h"
+#include "editor/ui_scale.h"
+#include "editor/viewport_settings.h"
 #include "editor/extension_panel.h"
 #include "editor/object_extension.h"
 #include "editor/scene_extension.h"
@@ -75,6 +77,7 @@ class Editor final:public EditorWindow {
   #include "editor/powerpose_test.inl"
   #include "editor/pose_test.inl"
   #include "editor/gizmo_test.inl"
+  #include "editor/feedback_test.inl"
   QWidget *host_=nullptr;
   ParameterPanel *parameters_=nullptr;
   ContentBrowser *browser_=nullptr;
@@ -93,6 +96,8 @@ class Editor final:public EditorWindow {
   std::shared_ptr<Document> document_;
   Snapshot snapshot_;
   std::unique_ptr<Renderer> renderer_;
+  UiScale *ui_scale_=nullptr;
+  ViewportSettings *viewport_settings_=nullptr;
   std::jthread loader_;
   std::vector<std::filesystem::path> roots_;
   std::filesystem::path output_;
@@ -1306,6 +1311,7 @@ class Editor final:public EditorWindow {
     apply_ground(state);
     refresh_powerpose(state);
     if(gizmo_test_) {gizmo_tick(state);return;}
+    if(feedback_test_) {feedback_tick(state);return;}
     if(powerpose_test_) {powerpose_tick(state);return;}
     if(pose_edit_test_) {pose_edit_tick(state);return;}
     if(!rebuild_test_file_.empty()) {rebuild_tick(state);return;}
@@ -1802,8 +1808,15 @@ public:
     if(!self_test_) {QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());restoreState(settings.value("window/docks").toByteArray(),1);powerpose_->restore_template(settings.value("powerpose/template","Body").toString());chrome->restore_modules(settings.value("window/topModules").toByteArray());}
     if(!available.contains(frameGeometry())) {resize(std::min(width(),available.width()),std::min(height(),available.height()));move(available.center()-QPoint(width()/2,height()/2));}
     for(auto *d:findChildren<QDockWidget *>()) if(d->isFloating()&&!available.intersects(d->frameGeometry())) d->move(available.topLeft()+QPoint(30,30));
+    auto *settings_menu=chrome->menus()->addMenu(QStringLiteral("设置"));settings_menu->setObjectName("ApplicationSettingsMenu");
+    ui_scale_=new UiScale(!self_test_,{},this);ui_scale_->add_menu(settings_menu);
+    viewport_settings_=new ViewportSettings(!self_test_,{},this);viewport_settings_->add_menu(settings_menu);
+    viewport_settings_->changed=[this](ViewportQuality value){if(renderer_) renderer_->quality(value);};
     show();
+    // 样式首次重建后重新落实默认停靠宽度；已保存的用户布局仍由 restoreState 负责。
+    if(self_test_||QSettings().value("window/docks").toByteArray().isEmpty()) resizeDocks({viewport_dock,property_dock},{850,330},Qt::Horizontal);
     renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_,sampling);
+    renderer_->quality(viewport_settings_->value());
     if(!self_test_){try{measurement_scale_=runtime::measurement_scale(QSettings().value("measurement/scale","1").toString().toStdString());}catch(...){measurement_scale_="1";}}
     extension_panel_->measurement_scale(measurement_scale_);
     parameters_->interaction_changed=[this](bool active){if(renderer_) renderer_->interaction(active);};
@@ -1822,6 +1835,7 @@ public:
   void rebuild_test(const std::filesystem::path &file) {rebuild_test_file_=file;self_test_=true;}
   void subdivision_stress_test() {subdivision_stress_test_=true;self_test_=true;}
   void extension_test(){extension_test_=true;self_test_=true;}
+  void feedback_test(){feedback_test_=true;self_test_=true;}
   void empty_scene(){clear_scene();}
   void empty_test(){empty_test_=self_test_=true;}
   void load(const std::filesystem::path &file,bool preserve=false,bool append=false,std::string attachment_target={},std::filesystem::path entry={}) {
@@ -1940,6 +1954,7 @@ int main(int argc,char **argv) {
   parser.addOption({"content-root",QStringLiteral("内容库目录，可重复"),"directory"});parser.addOption({"output",QStringLiteral("输出目录"),"directory"});
   parser.addOption({"project",QStringLiteral("项目设置文件"),"file"});
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
+  parser.addOption({"feedback-test",QStringLiteral("副屏验证分辨率切换、升采样和 UI 快捷键")});
   parser.addOption({"edit-regression-test",QStringLiteral("副屏验证多选聚焦、细分及 ERC 缩放")});
   parser.addOption({"joint-selection-test",QStringLiteral("副屏验证同角色左右指尖 Ctrl 多选及聚焦")});
   parser.addOption({"workflow-test",QStringLiteral("验证射线、部位 Morph 与视口缩放后退出")});
@@ -2003,6 +2018,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("powerpose-test")) editor.powerpose_test();
     if(parser.isSet("gizmo-test")) editor.gizmo_test();
     if(parser.isSet("extension-test")) editor.extension_test();
+    if(parser.isSet("feedback-test")) editor.feedback_test();
     if(parser.isSet("empty-test")) editor.empty_test();
     if(parser.isSet("joint-selection-test")) editor.joint_selection_test();
     if(parser.isSet("options-test")) editor.options_test();

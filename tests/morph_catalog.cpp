@@ -1,4 +1,6 @@
 #include "daz/morphs.h"
+#include "editor/document.h"
+#include "editor/scene_extension.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -10,9 +12,11 @@ static void write(const fs::path &p,const J &j) {fs::create_directories(p.parent
 static J control(const char *id,const char *label,const char *parent) {
   return {{"id",id},{"parent",parent},{"group","/Pose Controls/Head/Expressions/子级"},{"channel",{{"id","value"},{"type","float"},{"label",label},{"value",0},{"min",0},{"max",1}}}};
 }
+#include "native_extension.inl"
 int wmain(int argc,wchar_t **argv) {
   try {
     using namespace dfv;
+    if(argc<4)native_extension_tests();
     if(argc>=4) {
       daz::LoadOptions options;bool lazy=false;for(int i=3;i<argc;++i) {if(std::wstring(argv[i])==L"--lazy") lazy=true;else options.content_roots.emplace_back(argv[i]);}
       auto loaded=daz::load(fs::path(argv[1]),options);std::vector<fs::path> roots;

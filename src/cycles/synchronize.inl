@@ -53,6 +53,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     texture.id.clear();auto found=std::find(textures_.begin(),textures_.end(),texture);
     if(found==textures_.end()) {texture_map.push_back(int(textures_.size()));textures_.push_back(std::move(texture));}else texture_map.push_back(int(found-textures_.begin()));
   }
+  const auto emission=ir::emission_strengths(source);
   std::vector<Shader *> shaders;std::vector<ir::Material> canonical;std::vector<float> bumps;
   std::set<Shader *> used_shaders,modified_shaders;
   for(auto value:source.materials) {
@@ -61,7 +62,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     for(size_t j=0;j<canonical_materials_.size();++j) if(!used_shaders.contains(shaders_[j])&&canonical_materials_[j].id==value.id) {previous=int(j);break;}
     Shader *shader=previous>=0?shaders_[size_t(previous)]:nullptr;
     float bump=previous>=0?bump_distances_[size_t(previous)]:0;
-    const bool modified=previous<0||canonical_materials_[size_t(previous)]!=value;
+    const bool modified=previous<0||canonical_materials_[size_t(previous)]!=value||emission_strengths_[size_t(previous)]!=emission[canonical.size()];
     if(modified&&value.bump_from_texel_density&&value.bump_texture>=0&&value.bump_strength>0) {
       double world=0,uv=0;const auto material_index=uint32_t(canonical.size());
       for(const auto &instance:source.instances) if(instance.prototype<0) for(const auto &t:source.meshes[instance.mesh].triangles) if(instance.materials[t.material_slot]==material_index) {
@@ -74,7 +75,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
       if(image&&world>0&&uv>0) bump=float(2*std::sqrt(world/(uv*double(image->spec().width)*image->spec().height)));
     }
     if(!shader) {if(retired_shaders_.empty()) shader=scene_.create_node<Shader>();else {shader=retired_shaders_.back();retired_shaders_.pop_back();}}
-    if(modified) {material(*shader,value,bump);modified_shaders.insert(shader);if(loaded_) ++stats_.material_updates;changed=true;}
+    if(modified) {material(*shader,value,bump,emission[canonical.size()]);modified_shaders.insert(shader);if(loaded_) ++stats_.material_updates;changed=true;}
     shaders.push_back(shader);canonical.push_back(std::move(value));bumps.push_back(bump);used_shaders.insert(shader);
   }
   using Key=std::pair<std::string,std::vector<Shader *>>;
@@ -198,7 +199,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   }
   if(!loaded_||environment_!=source.environment||options_!=source.options) {environment_=source.environment;environment(source.options);changed=true;}
   const bool camera_changed=!loaded_||source_.camera.transform!=source.camera.transform||source_.camera.width!=source.camera.width||source_.camera.height!=source.camera.height||source_.camera.fov!=source.camera.fov;
-  texture_map_=std::move(texture_map);shaders_=std::move(shaders);canonical_materials_=std::move(canonical);bump_distances_=std::move(bumps);subdivisions_=std::move(subdivisions);meshes_=std::move(meshes);hairs_=std::move(hairs);objects_=std::move(objects);vertex_counts_=std::move(counts);source_=std::move(saved);loaded_=true;
+  texture_map_=std::move(texture_map);shaders_=std::move(shaders);canonical_materials_=std::move(canonical);bump_distances_=std::move(bumps);emission_strengths_=emission;subdivisions_=std::move(subdivisions);meshes_=std::move(meshes);hairs_=std::move(hairs);objects_=std::move(objects);vertex_counts_=std::move(counts);source_=std::move(saved);loaded_=true;
   grafts_=std::move(grafts);graft_bindings_=std::move(graft_bindings);graft_renders_=std::move(graft_renders);
   stats_.instances=source.instances.size();stats_.materials=source.materials.size();stats_.textures=source.textures.size();++stats_.scene_updates;
   if(camera_changed) {ir::Delta delta;delta.camera=source.camera;apply(delta);changed=true;}

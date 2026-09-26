@@ -61,6 +61,11 @@ static editor::Document growth_document(){
 }
 static void growth(){
   auto d=growth_document();auto s=editor::initial_snapshot(d);s.values[0].extension.kind=runtime::ExtensionKind::growth;s.values[0].transform.translation_cm.y=23;
+  {auto target=d.catalog.targets[0];auto &head=*std::find_if(target.morphs.begin(),target.morphs.end(),[](const auto &m){return m.label=="Head Propagating Scale";});head.scene_channel=true;head.id="native-head";head.initial=-.25f;
+    auto duplicate=head;duplicate.id="vendor-head";duplicate.scene_channel=false;duplicate.initial=0;target.morphs.insert(target.morphs.begin(),duplicate);
+    runtime::Properties values;values.extension.kind=runtime::ExtensionKind::growth;values.extension.age=4;for(const auto &m:target.morphs)values.morphs.push_back(m.initial);
+    runtime::apply_growth(target,values);require(values.morphs.front()==0,"生长误写同名商业控制器，导致头部缩放重复叠加");
+    const auto found=std::find_if(target.morphs.begin(),target.morphs.end(),[](const auto &m){return m.id=="native-head";});near(values.morphs[size_t(found-target.morphs.begin())],-.25,0,"未使用 DUF 实际引用的头部控制器");}
   editor::edit_growth(d,s,0,s.values[0].extension);const auto initial=s.values[0];
   {auto test=s;test.values[0].transform.general_scale=.9/.99;auto next=test.values[0].extension;next.sensitivity=2;next.age+=1;editor::edit_growth(d,test,0,next);near(runtime::decimal_float(.99)*test.values[0].transform.general_scale*100,92,1e-12,"90 + 2 未精确得到 92");}
   for(int i=0;i<100;++i){auto v=s.values[0].extension;v.age+=.125;editor::edit_growth(d,s,0,v);v.age-=.125;editor::edit_growth(d,s,0,v);}
@@ -82,7 +87,7 @@ static editor::Document load(const fs::path &file){editor::Document d;d.source_f
 static void serialization(const fs::path &folder){
   const auto file=write_source(folder);const auto original=daz::read_document_file(file);auto d=load(file);
   ir::add_studio(d.loaded.scene);d.operations.push_back({{"op","studio"}});require(d.loaded.scene.instances.back().id=="preview-floor","未生成预览地面");
-  auto s=editor::initial_snapshot(d);require(s.values[0].extension.kind==runtime::ExtensionKind::none,"继承了废弃 Age 或 Density");
+  auto s=editor::initial_snapshot(d);require(s.values[0].extension.kind==runtime::ExtensionKind::density&&s.values[0].extension.density==99000&&s.values[0].extension.age==3,"原生密度未继承，或道具误继承角色年龄");
   s.values[0].extension.kind=runtime::ExtensionKind::density;s.values[0].extension.density=7800;s.values[1].extension.kind=runtime::ExtensionKind::density;s.values[1].extension.density=2300;s.values[0].transform.translation_cm={12,23,34};s.values[1].visible=false;s.values[0].ground_alignment_ratio=.03;
   const auto isolated=editor::measure_object(d,s,0);const auto &target=d.catalog.targets[0];const auto loaded_world=d.loaded.scene.instances.at(target.instance).transform;
   const auto actual=runtime::parameter_transform(s.values[0].transform,target,loaded_world)*loaded_world;

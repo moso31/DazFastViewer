@@ -121,15 +121,30 @@ void Display::make_program() {
   const auto v=shader(GL_VERTEX_SHADER,"#version 130\nout vec2 uv;void main(){gl_Position=gl_Vertex;uv=gl_MultiTexCoord0.xy;}");
   const auto f=shader(GL_FRAGMENT_SHADER,R"GLSL(#version 130
 uniform sampler2D beauty;
-uniform vec2 texture_scale;
+uniform ivec2 image_size;
+uniform int reconstruction;
 uniform int enabled,per_component;
 uniform vec4 tone; // exposure, burn, crush, saturation
 uniform vec3 white;
 uniform float gamma_value,vignette,aspect;
 in vec2 uv;out vec4 color;
 vec3 compress_color(vec3 x) {return x*(vec3(1)+tone.y*x)/(vec3(1)+x);}
+vec3 pixel(ivec2 p) {return texelFetch(beauty,clamp(p,ivec2(0),image_size-ivec2(1)),0).rgb;}
+// Catmull-Rom 双三次，边缘限制在当前有效图像范围，避免采到复用纹理的旧帧或填充区。
+vec4 cubic(float t) {return vec4(-.5*t+t*t-.5*t*t*t,1-2.5*t*t+1.5*t*t*t,.5*t+2*t*t-1.5*t*t*t,-.5*t*t+.5*t*t*t);}
+vec3 reconstruct() {
+ vec2 p=uv*vec2(image_size)-.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);
+ if(reconstruction==0) return pixel(ivec2(floor(p+.5)));
+ if(reconstruction==1) return mix(mix(pixel(base),pixel(base+ivec2(1,0)),f.x),mix(pixel(base+ivec2(0,1)),pixel(base+ivec2(1,1)),f.x),f.y);
+ vec4 wx=cubic(f.x),wy=cubic(f.y);vec3 sum=vec3(0);
+ for(int y=0;y<4;y++) for(int x=0;x<4;x++) sum+=pixel(base+ivec2(x-1,y-1))*wx[x]*wy[y];
+ // 抑制明亮发光边缘的振铃，仍保留双三次对细节的重建。
+ vec3 lo=min(min(pixel(base),pixel(base+ivec2(1,0))),min(pixel(base+ivec2(0,1)),pixel(base+ivec2(1,1))));
+ vec3 hi=max(max(pixel(base),pixel(base+ivec2(1,0))),max(pixel(base+ivec2(0,1)),pixel(base+ivec2(1,1))));
+ return clamp(sum,lo,hi);
+}
 void main(){
- vec3 x=max(texture(beauty,uv*texture_scale).rgb,vec3(0));
+ vec3 x=max(reconstruct(),vec3(0));
  if(enabled!=0){
    x=x*tone.x/max(white,vec3(.0001));
    vec2 p=(uv*2-1)*vec2(max(aspect,1.0),max(1.0/aspect,1.0))*.422793;
@@ -173,7 +188,8 @@ void Display::draw(const Params &) {
   glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glUseProgram(program_);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,slot.texture);
   glUniform1i(glGetUniformLocation(program_,"beauty"),0);
-  glUniform2f(glGetUniformLocation(program_,"texture_scale"),float(slot.frame.width)/slot.width,float(slot.frame.height)/slot.height);
+  glUniform2i(glGetUniformLocation(program_,"image_size"),slot.frame.width,slot.frame.height);
+  glUniform1i(glGetUniformLocation(program_,"reconstruction"),slot.frame.width==window_.width&&slot.frame.height==window_.height?0:reconstruction_==Reconstruction::bilinear?1:2);
   const auto &n=options_.tonemapper;const auto w=ir::color(n,"White Point");const auto ws=float(ir::number(n,"White Point Scale",1));
   glUniform1i(glGetUniformLocation(program_,"enabled"),!n.id.empty()&&ir::number(n,"Tone Mapping Enable",1));
   glUniform1i(glGetUniformLocation(program_,"per_component"),int(ir::number(n,"Burn Highlights Per Component",1)));

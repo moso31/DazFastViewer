@@ -47,6 +47,9 @@ void validate(const Camera &camera) {
   for(float f:camera.transform.value) if(!std::isfinite(f)) throw std::runtime_error("IR: 相机矩阵包含非有限值");
 }
 void validate(const Material &m,size_t texture_count) {
+  for(float f:{m.emission_color.x,m.emission_color.y,m.emission_color.z,m.emission_luminance,m.emission_temperature,m.emission_efficacy})
+    if(!std::isfinite(f)||f<0) throw std::runtime_error("IR: 自发光参数无效");
+  if(m.emission_units<0||m.emission_units>5) throw std::runtime_error("IR: 自发光亮度单位无效");
   for(float f:{m.displacement_strength,m.displacement_min,m.displacement_max}) if(!std::isfinite(f)) throw std::runtime_error("IR: 置换参数含非有限值");
   for(float f:{m.base_color.x,m.base_color.y,m.base_color.z,m.roughness,m.metallic,m.opacity,m.transmission,m.ior,m.normal_strength,m.bump_strength,m.bump_distance})
     if(!std::isfinite(f)) throw std::runtime_error("IR: 无效材质参数");

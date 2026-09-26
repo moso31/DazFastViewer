@@ -28,6 +28,7 @@ public:
   const QStringList &searches() const {return searches_;}
   void searched(const QString &query);
   void used(const QString &path,const QString &category,qint64 time=0);
+  void remove(const QString &path);
   std::vector<RecentContent> recent(const QString &category="all") const;
 };
 

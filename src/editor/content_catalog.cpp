@@ -73,6 +73,9 @@ void ContentHistory::used(const QString &path,const QString &category,qint64 tim
   std::map<QString,int> counts;size_t rank=0;
   std::erase_if(recent_,[&](const auto &r){const int in_category=++counts[r.category];return rank++>=100&&in_category>20;});save_recent();
 }
+void ContentHistory::remove(const QString &path) {
+  const auto p=content_path(path);std::erase_if(recent_,[&](const auto &r){return r.path.compare(p,Qt::CaseInsensitive)==0;});save_recent();
+}
 void ContentHistory::save_recent() {
   QJsonArray array;for(const auto &r:recent_) array.append(QJsonObject{{"path",r.path},{"category",r.category},{"used",double(r.used)}});
   settings_->setValue("content/recent",QJsonDocument(array).toJson(QJsonDocument::Compact));settings_->sync();

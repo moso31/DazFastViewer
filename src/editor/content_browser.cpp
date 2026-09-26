@@ -1,4 +1,5 @@
 #include "editor/content_browser.h"
+#include "editor/ui_scale.h"
 #include "daz/content_entry.h"
 #include "editor/content_catalog.h"
 #include <QAbstractListModel>
@@ -163,7 +164,17 @@ struct ContentBrowser::Impl {
     QObject::connect(view,&QListView::doubleClicked,o,[this](const QModelIndex &item){activate_item(item);});
     view->installEventFilter(o);
     QObject::connect(view->verticalScrollBar(),&QScrollBar::valueChanged,o,[this]{hide_preview();});
-    QObject::connect(view,&QWidget::customContextMenuRequested,o,[this](const QPoint &point){const auto i=view->indexAt(point);if(!i.isValid()) return;const auto item=model->items[size_t(i.row())];QMenu menu(owner);auto *open=menu.addAction(item.directory?QStringLiteral("打开目录"):QStringLiteral("添加 / 应用 DUF"));auto *locate=menu.addAction(QStringLiteral("在内容库中定位"));auto *system=menu.addAction(QStringLiteral("在资源管理器中打开所在目录"));const auto *selected=menu.exec(view->viewport()->mapToGlobal(point));if(selected==open) activate_item(i);else if(selected==locate) {tabs->setCurrentIndex(0);search->setEditText({});navigate(item.directory?item.path:QFileInfo(item.path).path());}else if(selected==system) QDesktopServices::openUrl(QUrl::fromLocalFile(item.directory?item.path:QFileInfo(item.path).path()));});
+    QObject::connect(view,&QWidget::customContextMenuRequested,o,[this](const QPoint &point){
+      const auto i=view->indexAt(point);if(!i.isValid())return;const auto item=model->items[size_t(i.row())];hide_preview();
+      QMenu menu(owner);auto *open=menu.addAction(item.directory?QStringLiteral("打开目录"):QStringLiteral("添加 / 应用 DUF"));
+      auto *locate=menu.addAction(QStringLiteral("在内容库中定位"));auto *system=menu.addAction(QStringLiteral("在资源管理器中打开所在目录"));
+      QAction *remove=nullptr;if(recent()){menu.addSeparator();remove=menu.addAction(QStringLiteral("从近期使用中移除"));remove->setObjectName("RemoveRecentContent");}
+      const auto *selected=menu.exec(view->viewport()->mapToGlobal(point));
+      if(selected==open)activate_item(i);
+      else if(selected==locate){tabs->setCurrentIndex(0);search->setEditText({});navigate(item.directory?item.path:QFileInfo(item.path).path());}
+      else if(selected==system)QDesktopServices::openUrl(QUrl::fromLocalFile(item.directory?item.path:QFileInfo(item.path).path()));
+      else if(remove&&selected==remove){history.remove(item.path);show_items();}
+    });
     QObject::connect(up,&QAction::triggered,o,[this]{if(recent()) return;const auto root=libraries->currentText();if(directory.compare(root,Qt::CaseInsensitive)!=0) navigate(QFileInfo(directory).path());});
     QObject::connect(refresh,&QAction::triggered,o,[this]{thumbnails.clear();show_items();index.refresh(roots);});
     QObject::connect(tabs,&QComboBox::currentIndexChanged,o,[this]{
@@ -201,8 +212,8 @@ struct ContentBrowser::Impl {
   void apply_zoom() {
     hide_preview();const auto anchor=QPersistentModelIndex(view->currentIndex().isValid()?view->currentIndex():view->indexAt(view->viewport()->rect().center()));
     const int level=zoom->value();files->setFilter(level==0?QDir::AllDirs|QDir::Files|QDir::NoDotAndDotDot:QDir::AllDirs|QDir::NoDotAndDotDot);
-    const int size=level?icon_pixels(level):20;
-    view->setViewMode(level?QListView::IconMode:QListView::ListMode);view->setFlow(level?QListView::LeftToRight:QListView::TopToBottom);view->setWrapping(level!=0);view->setMovement(QListView::Static);view->setWordWrap(level!=0);view->setIconSize(QSize(size,size));view->setGridSize(level?QSize(size+8,size+2*view->fontMetrics().height()+6):QSize());view->setSpacing(0);view->setTextElideMode(Qt::ElideRight);
+    const int size=ui_pixels(level?icon_pixels(level):20);
+    view->setViewMode(level?QListView::IconMode:QListView::ListMode);view->setFlow(level?QListView::LeftToRight:QListView::TopToBottom);view->setWrapping(level!=0);view->setMovement(QListView::Static);view->setWordWrap(level!=0);view->setIconSize(QSize(size,size));view->setGridSize(level?QSize(size+ui_pixels(8),size+2*view->fontMetrics().height()+ui_pixels(6)):QSize());view->setSpacing(0);view->setTextElideMode(Qt::ElideRight);
     update_visibility();
     if(anchor.isValid()) QTimer::singleShot(0,owner,[this,anchor]{if(anchor.isValid()&&view->isVisible()) view->scrollTo(anchor,QAbstractItemView::PositionAtCenter);});
   }
@@ -244,6 +255,7 @@ void ContentBrowser::show_recent() {impl_->tabs->setCurrentIndex(1);impl_->categ
 void ContentBrowser::save() {if(!impl_) return;auto &p=*impl_;auto &settings=p.history.settings();settings.setValue("content/iconSize",icon_pixels(p.zoom->value()));settings.setValue("content/splitter",p.splitter->saveState());settings.setValue("content/directory",p.directory);settings.setValue("content/scope",p.scope->currentIndex());settings.sync();}
 bool ContentBrowser::eventFilter(QObject *object,QEvent *event) {
   if(!impl_) return QWidget::eventFilter(object,event);auto &p=*impl_;
+  if(object==p.view&&(event->type()==QEvent::FontChange||event->type()==QEvent::StyleChange))p.apply_zoom();
   if(event->type()==QEvent::Wheel) {auto *wheel=static_cast<QWheelEvent *>(event);if(wheel->modifiers()&Qt::ControlModifier) {p.wheel_remainder+=wheel->angleDelta().y();const int steps=p.wheel_remainder/120;p.wheel_remainder%=120;if(steps) p.zoom->setValue(std::clamp(p.zoom->value()+steps,0,maximum_zoom));wheel->accept();return true;}}
   if(event->type()==QEvent::KeyPress) {auto *key=static_cast<QKeyEvent *>(event);if(object==p.search->lineEdit()&&key->key()==Qt::Key_Escape) {p.search->setEditText({});return true;}if(object==p.view&&(key->key()==Qt::Key_Return||key->key()==Qt::Key_Enter)) {p.activate_item(p.view->currentIndex());return true;}}
   if(object==p.view->viewport()) {

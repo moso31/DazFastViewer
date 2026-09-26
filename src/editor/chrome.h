@@ -18,7 +18,9 @@ class EditorChrome final:public QWidget {
   GizmoSettings settings_;
   GizmoSpace translation_space_=GizmoSpace::local,rotation_space_=GizmoSpace::local;
   QByteArray defaults_;
+  bool fit_pending_=false;
   void fit_height();
+  void schedule_fit();
   void emit_settings();
 protected:
   bool eventFilter(QObject *,QEvent *) override;

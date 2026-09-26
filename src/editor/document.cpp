@@ -161,7 +161,7 @@ Snapshot initial_snapshot(const Document &document) {
   Snapshot result;result.options=document.loaded.scene.options;result.generation=document.generation;result.revision=1;
   for(const auto &skin:document.skeletons.skins) result.poses.push_back(skin.initial);
   for(const auto &target:document.catalog.targets) {
-    runtime::Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
+    runtime::Properties p;p.extension=target.native_extension;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
     p.visible=document.loaded.scene.instances.at(target.instance).visible;
     runtime::sync_aliases(target,p);result.values.push_back(std::move(p));
   }

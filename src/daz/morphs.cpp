@@ -87,6 +87,7 @@ static std::shared_ptr<runtime::MorphPayload> payload(const fs::path &file,const
   });shared[identity]=p;
   if(shared.size()>16384) std::erase_if(shared,[](const auto &entry){return entry.second.expired();});return p;
 }
+#include "daz/native_extension.inl"
 MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots,const std::function<void(const std::string &)> &progress,bool lazy) {
   struct CacheScope {~CacheScope() {path_keys.clear();resolved_paths.clear();}} cache_scope;
   path_keys.clear();resolved_paths.clear();
@@ -102,6 +103,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
   std::map<std::string,const J *> saved_nodes;
   for(const auto &node:array_member(object_member(scene_document,"scene"),"nodes")) saved_nodes[node.value("id","")]=&node;
   std::set<std::string> object_nodes;for(const auto &object:loaded.objects) object_nodes.insert(object.id);
+  const auto native=native_channels(scene_document,scene_file,roots,out.report["diagnostics"]);
   // 场景覆盖只解析一次；大场景不能为每个 Morph 复制和遍历整个 scene。
   std::map<std::pair<std::string,std::string>,J> overrides;
   if(scene_document.contains("scene")&&scene_document["scene"].contains("modifiers"))
@@ -124,6 +126,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
     runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;target.smoothing=object.smoothing;
     target.favorite_scope=scene_file.empty()?std::string{}:key(scene_file);
+    import_native_extension(target,object,native,out.report["diagnostics"]);
     // 按场景父链归属收藏；相同资产的多角色及其同名骨骼必须彼此隔离。
     for(const auto &[id,node]:saved_nodes) {
       const auto &extras=array_member(*node,"extra");
@@ -167,6 +170,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     };
     auto instance_channels=[&](J &report) {
       report["favorites"]=target.favorites;
+      const auto &v=target.native_extension;report["native_extension"]={{"channels",target.native_extension_channels},{"age",v.age},{"age_step",v.age_step},{"sensitivity",v.sensitivity},{"strength",v.strength},{"density",v.density}};
       for(size_t i=0;i<target.morphs.size();++i) {auto &m=target.morphs[i];apply_override(m);auto &item=report["morphs"][i];
         item["initial"]=m.initial;item["min"]=m.minimum;item["max"]=m.maximum;item["clamped"]=m.clamped;item["step_size"]=m.step;}
     };

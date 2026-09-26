@@ -7,6 +7,8 @@ static void extension_panel(QApplication &app){
   dfv::editor::ExtensionPanel panel;panel.resize(380,540);dfv::runtime::ObjectExtension value;value.kind=dfv::runtime::ExtensionKind::growth;panel.bind(value,true);panel.show();
   panel.changed=[&](auto v,bool,double){value=v;panel.bind(value);};app.processEvents();
   auto *age=panel.findChild<QDoubleSpinBox *>("GrowthAge");auto *step=panel.findChild<QDoubleSpinBox *>("GrowthAgeStep");
+  step->stepUp();require(step->value()==1.25,"步长控件的按钮增量不是 0.25");
+  QWheelEvent step_wheel(step->rect().center(),step->mapToGlobal(step->rect().center()),QPoint{},QPoint(0,-120),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(step,&step_wheel);require(step->value()==1,"步长控件的滚轮增量不是 0.25");
   step->setValue(.25);age->stepUp();require(age->value()==3.25,"年龄上下按钮不遵循步长");
   QWheelEvent wheel(age->rect().center(),age->mapToGlobal(age->rect().center()),QPoint{},QPoint(0,120),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(age,&wheel);require(age->value()==3.5,"年龄滚轮不遵循步长");
   step->setValue(2);age->stepDown();require(age->value()==1.5,"步长变更未立即生效");age->stepDown();require(age->value()==1,"年龄步进越过下界");

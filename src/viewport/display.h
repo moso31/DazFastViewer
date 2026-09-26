@@ -5,6 +5,7 @@
 #include <epoxy/gl.h>
 #include <array>
 #include "render_ir/options.h"
+#include "viewport/quality.h"
 
 namespace dfv {
 class Display final:public ccl::DisplayDriver {
@@ -24,6 +25,7 @@ class Display final:public ccl::DisplayDriver {
   GLsync upload_=nullptr;
   bool allow_readback_;
   ir::RenderOptions options_;
+  Reconstruction reconstruction_=Reconstruction::bicubic;
   Frame last_drawn_;
   uint64_t last_presented_=0;
   std::atomic<bool> failed_{false};
@@ -45,6 +47,7 @@ public:
   void graphics_interop_activate() override {window_.render_context.activate();}
   void graphics_interop_deactivate() override {window_.render_context.deactivate();}
   void set_options(const ir::RenderOptions &options) {options_=options;}
+  void set_reconstruction(Reconstruction value) {reconstruction_=value;}
   void after_swap();
   Frame drawn_frame() const {return last_drawn_;}
   void hud(const std::string &text);

@@ -14,6 +14,9 @@ class HoverOverlay {
   std::vector<std::map<int,std::pair<GLuint,size_t>>> parts_;
   std::vector<ir::Transform> transforms_;
   std::vector<bool> visible_;
+  std::vector<ir::Bounds> bounds_;
+  void draw_instance(size_t instance,GLuint list) const;
+  void projection(const CameraState &camera,int width,int height,const ir::Mesh *proxy=nullptr,const ir::Transform *world=nullptr) const;
   void rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i);
 public:
   void draw_gizmo(const editor::GizmoShape &shape,int width,int height,int active=-1,float dpi=1);
@@ -23,6 +26,6 @@ public:
   size_t triangle_count(int hovered,int joint=-1) const;
   void release();
   void draw_pose(const CameraState &camera,int width,int height,const ir::Mesh &proxy,const ir::Transform &world,
-    const std::vector<std::pair<ir::Vec3,ir::Vec3>> &bones,ir::Vec3 goal);
+    const std::vector<std::pair<ir::Vec3,ir::Vec3>> &bones,ir::Vec3 goal,const std::vector<uint32_t> &excluded={});
 };
 }

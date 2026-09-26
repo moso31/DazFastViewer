@@ -122,9 +122,26 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       if(w.contains("scale_weights")&&weight_map(w.at("scale_weights"))!=weights) skin.separate_scale_weights=true;
       for(const auto &[vertex,value]:weights) {skin.weights[vertex].push_back({uint32_t(index),value});++weight_count;}
     }
-    // 各轴与缩放图一致且每个顶点只属于一个关节时，Local 与刚性 Linear 变换等价。
-    if(binding_mode=="Local") for(const auto &weights:skin.weights) if(!weights.empty()&&(weights.size()!=1||weights.front().weight!=1))
-      skin.static_local_weights=true;
+    // Local 图可能把子骨骼的整片区域也记在父骨骼下（例如开关及面板）。
+    // 各轴一致、权重全为 1、影响组成完整祖先链时，最深关节的世界矩阵
+    // 已包含这些父变换；不能把父、子矩阵平均，否则会削弱开关旋转。
+    bool cumulative_local=false;
+    if(binding_mode=="Local") {
+      auto rigid=skin.weights;bool valid=!skin.static_local_weights;
+      for(auto &weights:rigid) {
+        if(weights.empty())continue;
+        if(std::any_of(weights.begin(),weights.end(),[](const auto &w){return w.weight!=1;})){valid=false;break;}
+        if(weights.size()==1)continue;
+        const auto deepest=std::max_element(weights.begin(),weights.end(),[](const auto &a,const auto &b){return a.joint<b.joint;})->joint;
+        std::set<uint32_t> influences;for(const auto &w:weights)influences.insert(w.joint);
+        auto joint=int(deepest);while(joint>=0) {
+          if(!influences.erase(uint32_t(joint))&&skin.joints[joint].parent>=0){valid=false;break;}
+          joint=skin.joints[joint].parent;
+        }
+        if(!influences.empty()){valid=false;break;}weights={{deepest,1}};cumulative_local=true;
+      }
+      if(valid)skin.weights=std::move(rigid);else {skin.static_local_weights=true;cumulative_local=false;}
+    }
     // 无权重的控制骨也可能挂着刚性饰品，不能只保留 skin 权重表里出现的骨骼。
     for(const auto &[id,n]:nodes) if(!indices.contains(id)) {
       auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
@@ -146,6 +163,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     Json formulas=Json::array();
     for(const auto &joint:skin.joints) for(const auto &formula:nodes.at(joint.id).value("formulas",Json::array())) formulas.push_back(formula);
     catalog.report["skins"].back()["node_formulas"]=formulas.size();
+    if(cumulative_local)catalog.report["skins"].back()["weight_conversion"]="rigid-cumulative-axis-maps";
     if(skin.separate_scale_weights) catalog.report["skins"].back()["limitation"]="独立缩放权重未求值；当前所有骨骼缩放为单位值，平移与刚性旋转可正常应用；拒绝后续非单位骨骼缩放";
     if(skin.static_local_weights) catalog.report["skins"].back()["limitation"]="TriAx 轴权重未求值；当前没有骨骼变换，保留静态/Morph 几何；拒绝后续需要 TriAx 的骨骼姿势";
     catalog.node_formulas.push_back(std::move(formulas));catalog.skins.push_back(std::move(skin));

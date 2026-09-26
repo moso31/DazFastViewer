@@ -103,11 +103,12 @@ void Renderer::run(std::stop_token stop) {
     params.use_resolution_divider=false;params.use_auto_tile=false;params.threads=8;
     BufferParams buffers;buffers.width=buffers.full_width=window_->width;buffers.height=buffers.full_height=window_->height;
     bool preview=false;
+    ViewportQuality quality;int applied_percent=0;
     int camera_width=0,camera_height=0;
     auto set_quality=[&](bool moving) {
       preview=moving;params.samples=moving?2:sampling_.samples;
-      buffers.width=buffers.full_width=moving?std::max(1,window_->width.load()/4):window_->width.load();
-      buffers.height=buffers.full_height=moving?std::max(1,window_->height.load()/4):window_->height.load();
+      const auto [width,height]=render_size(window_->width,window_->height,quality.percent,moving);
+      buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;applied_percent=quality.percent;
     };
     Snapshot desired;bool edit_affects_render=false;
     while(!stop.stop_requested()) {
@@ -118,7 +119,7 @@ void Renderer::run(std::stop_token stop) {
       runtime::PowerPoseInput powerpose;
       GizmoSettings gizmo_settings;
       {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
-      {std::lock_guard lock(mutex_);powerpose=powerpose_input_;gizmo_settings=gizmo_settings_;}
+      {std::lock_guard lock(mutex_);powerpose=powerpose_input_;gizmo_settings=gizmo_settings_;quality=quality_;}
       const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
         window_->width=width;window_->height=height;
@@ -180,6 +181,12 @@ void Renderer::run(std::stop_token stop) {
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       auto &render_scene=*render_scene_ptr;
+      auto proxy_excluded=[&](int selected) {
+        std::vector<uint32_t> result;if(selected<0||size_t(selected)>=current->catalog.targets.size())return result;
+        const auto &targets=current->catalog.targets;auto node=[](const auto &t){return "#"+t.id.substr(0,t.id.rfind('/'));};std::set<std::string> family{node(targets[selected])};
+        bool changed=true;while(changed){const auto before=family.size();for(const auto &t:targets)if(family.contains(t.parent)||family.contains(t.conform_target)||std::any_of(t.ancestors.begin(),t.ancestors.end(),[&](const auto &p){return family.contains(p);}))family.insert(node(t));changed=family.size()!=before;}
+        for(const auto &t:targets)if(family.contains(node(t)))result.push_back(t.instance);return result;
+      };
       if(pose_recovery.active&&pose_recovery.generation!=current->generation) pose_recovery.active=false;
       const auto pointer=window_->pose_pointer();
       const auto input_camera=window_->mailbox.latest();
@@ -233,7 +240,7 @@ void Renderer::run(std::stop_token stop) {
         } else if(gizmo_drag.moved) {
           if(!pose_paused) {session->set_pause(true);pose_paused=true;}
           window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
-          overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot());
+          overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot(),proxy_excluded(gizmo_drag.target));
           const auto shape=gizmo_shape(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.pivot(),gizmo_drag.orientation(),gizmo_settings,gizmo_dpi,gizmo_drag.enabled);
           overlay.draw_gizmo(shape,window_->width,window_->height,gizmo_drag.handle,gizmo_dpi);state.gizmo_shape=shape;
           SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;
@@ -280,7 +287,7 @@ void Renderer::run(std::stop_token stop) {
           if(!pose_paused) {session->set_pause(true);pose_paused=true;telemetry_.event("powerpose_preview_begin");}
           window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
           const auto goal=powerpose_drag.bones.empty()?powerpose_drag.world.point({}):powerpose_drag.bones.front().second;
-          overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal);
+          overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal,proxy_excluded(powerpose_drag.press.target));
           SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;state.pose_powerpose=true;state.pose_skin=powerpose.skin;
           if(updated) {state.pose_latency_ms=(now()-powerpose.input_seconds)*1000;telemetry_.event("powerpose_proxy_present",{},state.pose_latency_ms);}
           {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
@@ -327,7 +334,7 @@ void Renderer::run(std::stop_token stop) {
         } else if(pose_drag.moved) {
           if(!pose_paused) {session->set_pause(true);pose_paused=true;telemetry_.event("ik_preview_begin");}
           window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
-          overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position));
+          overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position),proxy_excluded(pose_drag.target));
           SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;state.pose_joint=pose_drag.joint;state.pose_skin=pose_drag.skin;
           if(updated) {state.pose_latency_ms=(now()-pointer.input_seconds)*1000;telemetry_.event("ik_proxy_present",{},state.pose_latency_ms);}
           {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
@@ -345,12 +352,13 @@ void Renderer::run(std::stop_token stop) {
       const bool navigation_preview=camera.needs_preview(camera_epoch,now())||size_changed||now()<resize_until;
       bool wanted_preview=navigation_preview||(!pose_recovery.active&&((edit_affects_render&&(editing||now()<preview_until))||
         (edit_pending&&!state.pending_payloads&&state.resource_error.empty())));
-      const bool quality_changed=wanted_preview!=preview;
+      const bool resolution_changed=quality.percent!=applied_percent;
+      const bool quality_changed=wanted_preview!=preview||resolution_changed;
       ir::Delta delta;bool new_render_edit=false,subdivision_edit=false;
       std::vector<ir::SubdivisionSettings> previous_subdivision;
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
       if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending) &&
-         ((wanted_preview&&!preview)||((telemetry_.displayed_epoch.load()>=epoch||
+         (resolution_changed||(wanted_preview&&!preview)||((telemetry_.displayed_epoch.load()>=epoch||
            (pose_recovery.active&&display->drawn_frame().epoch>=epoch))&&session->ready_to_reset()))) {
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
           try {
@@ -390,7 +398,7 @@ void Renderer::run(std::stop_token stop) {
         if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);render_scene.camera=*delta.camera;camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
         wanted_preview=navigation_preview||(!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
-        if(wanted_preview!=preview||subdivision_edit||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
+        if(wanted_preview!=preview||resolution_changed||subdivision_edit||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
           {const auto begin=now();thread_scoped_lock lock(session->scene->mutex);timing("scene_lock",begin,applied_revision);const auto apply_begin=now();
             if(subdivision_edit) {
               try {adapter->synchronize(render_scene);} catch(const std::exception &e) {
@@ -405,6 +413,7 @@ void Renderer::run(std::stop_token stop) {
         state.applied_revision=applied_revision;
       }
       window_->present_context.activate();
+      display->set_reconstruction(quality.reconstruction);
       const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
       if(geometry_dirty) {instance_groups.emplace(render_scene);auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
       else if(bounds_dirty) {auto begin=now();overlay.apply(render_scene,regions,delta);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
@@ -432,12 +441,12 @@ void Renderer::run(std::stop_token stop) {
       // 松手后的等待使用本次手势的白模和输入版本，不能借用另一种工具的旧状态。
       if(pose_recovery.active) {
         if(pose_recovery.gizmo) {
-          overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot());
+          overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot(),proxy_excluded(gizmo_drag.target));
           overlay.draw_gizmo(gizmo_shape(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.pivot(),gizmo_drag.orientation(),gizmo_drag.settings,gizmo_dpi,gizmo_drag.enabled),window_->width,window_->height,gizmo_drag.handle,gizmo_dpi);
         } else if(pose_recovery.powerpose) {
           const auto goal=powerpose_drag.bones.empty()?powerpose_drag.world.point({}):powerpose_drag.bones.front().second;
-          overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal);
-        } else overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position));
+          overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal,proxy_excluded(powerpose_drag.press.target));
+        } else overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position),proxy_excluded(pose_drag.target));
       }
       state.camera=camera;state.pointer_x=window_->pointer_x;state.pointer_y=window_->pointer_y;
       auto hover=preview?runtime::PickHit{}:picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
@@ -517,7 +526,7 @@ void Renderer::run(std::stop_token stop) {
       const auto shown=display->drawn_frame();
       if(sampling_.rebuild_probe&&(shown.id==0)!=blank_presented) {blank_presented=shown.id==0;telemetry_.event(blank_presented?"blank_present_begin":"blank_present_end");}
       state.present_time=telemetry_.last_present_time;state.sessions=sessions;
-      state.preview=preview;state.render_width=shown.width;state.render_height=shown.height;
+      state.preview=preview;state.quality=quality;state.render_width=shown.width;state.render_height=shown.height;
       if(shown.id&&shown.width==std::max(1,window_->width.load()/4)&&shown.height==std::max(1,window_->height.load()/4)) state.last_preview_frame=shown.id;
       if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
