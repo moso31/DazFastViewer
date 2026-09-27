@@ -21,6 +21,7 @@ class Telemetry {
   std::mutex mutex_;
   std::ofstream events_;
   std::ofstream swaps_;
+  std::ofstream graphics_;
 public:
   std::atomic<uint64_t> produced{0}, submitted{0}, displayed_epoch{0}, readback_bytes{0}, skipped{0};
   std::atomic<int> displayed_samples{0};
@@ -36,11 +37,20 @@ public:
     swaps_.open(directory/"swaps.csv");
     if(!swaps_) throw std::runtime_error("不能写入呈现日志");
     swaps_<<"swap_id,qpc_begin,qpc_end,frame_id,camera_epoch\n";
+    graphics_.open(directory/"graphics-recovery.log",std::ios::app);
   }
   void swap(uint64_t id,int64_t begin,int64_t end,const Frame &frame) {
     swaps_<<id<<','<<begin<<','<<end<<','<<frame.id<<','<<frame.epoch<<'\n';
   }
   void flush() {std::lock_guard lock(mutex_);events_.flush();}
+  // 故障即时落盘；诊断失败不能打断析构或再次覆盖原始异常。
+  void graphics(const char *stage,const std::string &message) noexcept {
+    try {
+      std::lock_guard lock(mutex_);
+      const auto utc_ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+      graphics_<<std::fixed<<std::setprecision(6)<<now()<<" utc_ms="<<utc_ms<<" "<<stage<<" "<<message<<std::endl;
+    } catch(...) {}
+  }
   void event(const char *kind,const Frame &frame={},double duration_ms=0) {
     std::lock_guard lock(mutex_);
     events_<<kind<<','<<now()<<','<<frame.id<<','<<frame.epoch<<','<<frame.samples<<','

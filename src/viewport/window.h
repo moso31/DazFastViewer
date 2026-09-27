@@ -9,21 +9,50 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <stdexcept>
 #include "bench/camera.h"
 #include "runtime/pose_edit.h"
 
 namespace dfv {
 class Telemetry;
+class GraphicsError:public std::runtime_error {public:using std::runtime_error::runtime_error;};
 class GLContext {
   HDC dc_{};
   HGLRC context_{};
   std::recursive_mutex mutex_;
   unsigned depth_=0;
+  DWORD owner_=0;
+  Telemetry *telemetry_=nullptr;
+  const char *name_="unknown";
+  std::atomic<bool> failed_{false};
+  mutable std::mutex error_mutex_;
+  std::string error_;
+  std::string failure(const char *operation,DWORD code);
+#ifdef DFV_GL_RECOVERY_TEST
 public:
+  enum class Fault {none,activate_once,context_lost,persistent,create_once,release_once};
+  void inject(Fault value) {fault_=value;}
+private:
+  std::atomic<Fault> fault_{Fault::none};
+#endif
+public:
+  // 同一线程可嵌套使用；异常路径和正常路径都准确解除一次绑定。
+  class Binding {
+    GLContext *context_;
+  public:
+    explicit Binding(GLContext &context):context_(&context) {context_->activate();}
+    Binding(const Binding &)=delete;
+    Binding &operator=(const Binding &)=delete;
+    ~Binding() {release();}
+    void release() noexcept {if(context_) {context_->deactivate();context_=nullptr;}}
+  };
+  void diagnostics(Telemetry *telemetry,const char *name) {telemetry_=telemetry;name_=name;}
   void initialize(HDC dc,HGLRC share=nullptr);
   void activate();
-  void deactivate();
-  void destroy();
+  void deactivate() noexcept;
+  bool destroy() noexcept;
+  bool failed() const {return failed_.load();}
+  std::string error() const {std::lock_guard lock(error_mutex_);return error_;}
   HGLRC handle() const {return context_;}
 };
 class Window {
@@ -61,6 +90,10 @@ public:
   bool embedded=false;
   Window(int width,int height,bool fullscreen,Telemetry *telemetry=nullptr,int monitor=2,HWND parent=nullptr);
   ~Window();
+  // 仅在呈现作用域退出、Cycles 会话及其工作线程全部销毁之后调用。
+  void recreate_contexts();
+  void check_graphics() const;
+  void swap();
   void poll();
   void publish();
 };

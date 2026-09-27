@@ -1428,6 +1428,7 @@ class Editor final:public EditorWindow {
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"reopened-scene.png").wstring()));finish_test(true);return;
     }
     if(!loading_&&document_&&state.generation==document_->generation&&state.clicks!=clicks_) {clicks_=state.clicks;choose(state.hit_target,state.hit_joint,state.hit_toggle);}
+    if(state.graphics_recovering) {statusBar()->showMessage(QStringLiteral("正在恢复渲染（%1/2）… 场景修改已保留").arg(std::max(1u,state.graphics_attempts)));return;}
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision) {effective_roots_=state.effective_roots;effective_generation_=state.generation;if(selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);}
@@ -1841,6 +1842,7 @@ public:
     auto *create=chrome->menus()->addMenu(QStringLiteral("创建"));
     connect(create->addAction(QStringLiteral("面光源")),&QAction::triggered,this,[this] {add_light();});
     auto *view=chrome->menus()->addMenu(QStringLiteral("视图"));for(auto *d:findChildren<QDockWidget *>()) view->addAction(d->toggleViewAction());
+    connect(view->addAction(QStringLiteral("重启渲染")),&QAction::triggered,this,[this] {if(renderer_)renderer_->restart_render();});
     connect(view->addAction(QStringLiteral("框选当前对象")),&QAction::triggered,this,[this] {frame_pending_=true;});
     connect(hierarchy_,&QTreeWidget::itemSelectionChanged,this,[this] {sync_selection();});
     connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this] {sync_selection();});

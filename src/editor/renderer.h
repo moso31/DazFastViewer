@@ -30,6 +30,9 @@ struct RenderProbe {
   std::vector<std::string> hidden;
 };
 struct RenderStatus {
+  bool graphics_recovering=false,graphics_blocked=false;
+  unsigned graphics_attempts=0;
+  uint64_t graphics_recoveries=0;
   SamplingSettings sampling;
   uint64_t probe_serial=0;
   size_t gpu_device_bytes=0,gpu_host_bytes=0;
@@ -111,6 +114,7 @@ class Renderer {
   uint64_t material_hover_generation_=0;
   std::vector<std::pair<size_t,size_t>> material_hover_;
   uint64_t retry_resources_=0;
+  std::atomic<uint64_t> render_restarts_{0};
   bool edit_active_=false;
   std::vector<runtime::PosePin> pose_pins_;
   runtime::PowerPoseInput powerpose_input_;
@@ -140,6 +144,10 @@ public:
   void gizmo(GizmoSettings settings) {std::lock_guard lock(mutex_);gizmo_settings_=settings;++window_->pose_selection;}
   void pose_pins(std::vector<runtime::PosePin> pins) {std::lock_guard lock(mutex_);pose_pins_=std::move(pins);++window_->pose_selection;}
   void retry_resources();
+  void restart_render() {++render_restarts_;}
+#ifdef DFV_GL_RECOVERY_TEST
+  void inject_graphics_failure(bool upload,GLContext::Fault fault) {(upload?window_->render_context:window_->present_context).inject(fault);}
+#endif
   RenderStatus status();
   CameraState input_camera();
   void orbit(float x,float y);

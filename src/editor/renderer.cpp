@@ -73,7 +73,13 @@ void Renderer::run(std::stop_token stop) {
       sampling_report={{"denoise",integrator.get_use_denoise()},{"max_samples",sampling_.samples},{"adaptive_sampling",integrator.get_use_adaptive_sampling()},
         {"adaptive_threshold",integrator.get_adaptive_threshold()},{"min_bounces",integrator.get_min_bounce()},{"transparent_min_bounces",integrator.get_transparent_min_bounce()},
         {"sampling_pattern",sampling_.blue_noise?"blue_noise_first":"tabulated_sobol"},{"background_mis",background.use_mis},{"background_map_resolution",{background.map_res_x,background.map_res_y}}};
-      window_->present_context.activate();overlay.release();if(display) display->release_present_resources();window_->present_context.deactivate();
+      try {
+        GLContext::Binding binding(window_->present_context);overlay.release();if(display) display->release_present_resources();
+      } catch(const std::exception &e) {
+        telemetry_.graphics("cleanup_failure",e.what());
+        // 无法访问的 GL 对象留给旧共享组销毁，CPU 侧不能沿用旧编号。
+        overlay=HoverOverlay{};
+      }
       sampling_report["update_interval_seconds"]=sampling_.update_interval_seconds;sampling_report["prune_hidden"]=sampling_.prune_hidden;sampling_report["texture_limit"]=sampling_.texture_limit;
       sampling_report["subsurface"]=sampling_.subsurface;sampling_report["bump_and_normal"]=sampling_.bump_and_normal;
       sampling_report["transparent_bounces"]=integrator.get_transparent_max_bounce();
@@ -86,6 +92,15 @@ void Renderer::run(std::stop_token stop) {
     }
   };
   RenderStatus state;
+  bool graphics_pending=false,graphics_recovering=false,graphics_blocked=false;
+  unsigned graphics_attempts=0;
+  uint64_t graphics_recoveries=0,render_restart=0,failed_generation=0;
+  double next_graphics_attempt=0,graphics_stable_since=0;
+  auto publish_state=[&] {
+    state.graphics_recovering=graphics_recovering;state.graphics_blocked=graphics_blocked;
+    state.graphics_attempts=graphics_attempts;state.graphics_recoveries=graphics_recoveries;
+    std::lock_guard lock(mutex_);status_=state;
+  };
   double next_state_report=0;
   PoseDrag pose_drag;uint64_t pose_serial=0,pose_commits=0,pose_previews=0;bool pose_paused=false;
   PowerPoseDrag powerpose_drag;uint64_t powerpose_serial=0,powerpose_selection=0;
@@ -122,6 +137,14 @@ void Renderer::run(std::stop_token stop) {
       buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;applied_percent=quality.percent;
     };
     Snapshot desired;InstanceGrounds applied_instance_ground;bool edit_affects_render=false;
+    auto reset_render_state=[&] {
+      runtime.reset();render_scene_ptr.reset();pending_runtime.reset();pending_scene.reset();pending_document.reset();
+      current.reset();picking={};regions.clear();pickable.clear();instance_groups.reset();geometry_dirty=true;
+      previous_positions.clear();displacements.clear();powerpose_reference.clear();
+      pose_drag.active=powerpose_drag.active=gizmo_drag.active=false;pose_recovery={};pose_paused=false;gizmo_valid=false;
+      ++window_->pose_selection;pose_serial=window_->pose_pointer().serial;gizmo_selection=gizmo_revision=UINT64_MAX;
+      state={};state.clicks=clicks;telemetry_.displayed_epoch=0;telemetry_.displayed_samples=0;
+    };
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;
       std::vector<Selection> selections;int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
@@ -138,6 +161,26 @@ void Renderer::run(std::stop_token stop) {
         window_->width=width;window_->height=height;
       }
       if(!document) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+      const auto restart=render_restarts_.load();
+      if(restart!=render_restart||(graphics_blocked&&document->generation!=failed_generation)) {
+        render_restart=restart;graphics_attempts=0;graphics_blocked=false;graphics_pending=true;graphics_recovering=true;
+        next_graphics_attempt=0;state.error.clear();telemetry_.graphics("restart_requested","重新启动当前场景的渲染");
+      }
+      if(graphics_blocked) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+      if(graphics_pending&&now()<next_graphics_attempt) {std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+      try {
+      if(graphics_pending) {
+        if(graphics_attempts>=2) {
+          graphics_pending=graphics_recovering=false;graphics_blocked=true;failed_generation=document->generation;
+          state.error="自动恢复渲染失败，已停止重试。可保存场景，然后使用“视图 → 重启渲染”。最后错误："+state.error;
+          telemetry_.graphics("recovery_exhausted",state.error);publish_state();continue;
+        }
+        ++graphics_attempts;graphics_recovering=true;publish_state();
+        telemetry_.graphics("recovery_begin","attempt="+std::to_string(graphics_attempts)+" generation="+std::to_string(document->generation));
+        cleanup();reset_render_state();window_->recreate_contexts();graphics_pending=false;
+        graphics_stable_since=0;last_progress.clear();
+      }
+      window_->check_graphics();
       RenderQuality render_quality;{std::lock_guard lock(mutex_);render_quality=requested_render_quality_;}
       if(render_quality!=static_cast<const RenderQuality &>(sampling_)) {
         // 先停止旧 GPU 会话并销毁 ImageManager/设备，再创建新纹理。
@@ -151,7 +194,6 @@ void Renderer::run(std::stop_token stop) {
         // 导入等级过高等可恢复错误：允许用户降低等级后重新准备场景。
         state.error.clear();
       }
-      try {
       if(current!=document||!session) {
         diagnostics::EventProfile profile(sampling_.rebuild_probe,[&](const char *name,double ms){telemetry_.event(name,{},ms);});
         if(pending_document!=document||!pending_runtime) {
@@ -162,7 +204,7 @@ void Renderer::run(std::stop_token stop) {
         }
         const auto resources=pending_runtime->prepare(desired.values,desired.poses,retry_payloads);retried=retry;
         state.pending_payloads=resources.pending;state.resource_error=resources.error;
-        if(resources.pending||!resources.error.empty()) {{std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+        if(resources.pending||!resources.error.empty()) {publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
         {diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(desired.values,desired.poses);}
         pending_scene->lights=desired.lights;pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
         apply_material_overrides(*pending_scene,document->loaded.scene,desired.material_overrides);
@@ -267,13 +309,13 @@ void Renderer::run(std::stop_token stop) {
           gizmo_drag.active=false;state.pose_dragging=false;gizmo_revision=UINT64_MAX;
         } else if(gizmo_drag.moved) {
           if(!pose_paused) {session->set_pause(true);pose_paused=true;}
-          window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
+          GLContext::Binding binding(window_->present_context);glViewport(0,0,window_->width,window_->height);
           overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot(),proxy_excluded(gizmo_drag.target));
           const auto shape=gizmo_shape(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.pivot(),gizmo_drag.orientation(),gizmo_settings,gizmo_dpi,gizmo_drag.enabled);
           overlay.draw_gizmo(shape,window_->width,window_->height,gizmo_drag.handle,gizmo_dpi);state.gizmo_shape=shape;
-          SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;
+          window_->swap();binding.release();window_->check_graphics();state.pose_dragging=true;
           if(updated) {state.pose_latency_ms=(now()-pointer.input_seconds)*1000;telemetry_.event("gizmo_proxy_present",{},state.pose_latency_ms);}
-          {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
+          publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
         }
       }
       if(powerpose_drag.active&&(powerpose_drag.press.generation!=current->generation||powerpose_drag.press.revision!=desired.revision||
@@ -313,12 +355,12 @@ void Renderer::run(std::stop_token stop) {
           powerpose_drag.active=false;state.pose_dragging=false;
         } else if(powerpose_drag.moved) {
           if(!pose_paused) {session->set_pause(true);pose_paused=true;telemetry_.event("powerpose_preview_begin");}
-          window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
+          GLContext::Binding binding(window_->present_context);glViewport(0,0,window_->width,window_->height);
           const auto goal=powerpose_drag.bones.empty()?powerpose_drag.world.point({}):powerpose_drag.bones.front().second;
           overlay.draw_pose(powerpose_drag.camera,window_->width,window_->height,powerpose_drag.proxy,powerpose_drag.world,powerpose_drag.bones,goal,proxy_excluded(powerpose_drag.press.target));
-          SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;state.pose_powerpose=true;state.pose_skin=powerpose.skin;
+          window_->swap();binding.release();window_->check_graphics();state.pose_dragging=true;state.pose_powerpose=true;state.pose_skin=powerpose.skin;
           if(updated) {state.pose_latency_ms=(now()-powerpose.input_seconds)*1000;telemetry_.event("powerpose_proxy_present",{},state.pose_latency_ms);}
-          {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
+          publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
         }
       }
       if(pose_drag.active&&(pose_drag.generation!=current->generation||pose_drag.revision!=desired.revision||pointer.cancelled||pointer.selection!=window_->pose_selection||pointer.serial!=pose_drag.press.serial||input_camera.epoch!=pose_drag.camera().epoch||window_->width!=state.width||window_->height!=state.height)) {
@@ -361,11 +403,11 @@ void Renderer::run(std::stop_token stop) {
           pose_drag.active=false;state.pose_dragging=false;
         } else if(pose_drag.moved) {
           if(!pose_paused) {session->set_pause(true);pose_paused=true;telemetry_.event("ik_preview_begin");}
-          window_->present_context.activate();glViewport(0,0,window_->width,window_->height);
+          GLContext::Binding binding(window_->present_context);glViewport(0,0,window_->width,window_->height);
           overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position),proxy_excluded(pose_drag.target));
-          SwapBuffers(window_->dc);window_->present_context.deactivate();state.pose_dragging=true;state.pose_joint=pose_drag.joint;state.pose_skin=pose_drag.skin;
+          window_->swap();binding.release();window_->check_graphics();state.pose_dragging=true;state.pose_joint=pose_drag.joint;state.pose_skin=pose_drag.skin;
           if(updated) {state.pose_latency_ms=(now()-pointer.input_seconds)*1000;telemetry_.event("ik_proxy_present",{},state.pose_latency_ms);}
-          {std::lock_guard lock(mutex_);status_=state;}std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
+          publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
         }
       }
       if(pose_paused) {session->set_pause(false);pose_paused=false;telemetry_.event("ik_preview_end");}
@@ -373,7 +415,7 @@ void Renderer::run(std::stop_token stop) {
       std::string progress,detail;session->progress.get_status(progress,detail);
       progress+=" | "+detail;
       if(progress!=last_progress) {progress_log<<now()<<" "<<progress<<std::endl;last_progress=progress;}
-      if(display->failed()) throw std::runtime_error(display->error());
+      if(display->failed()) throw GraphicsError(display->error());
       auto camera=window_->mailbox.latest();
       const bool size_changed=camera_width!=window_->width||camera_height!=window_->height;
       const bool edit_pending=desired.generation==current->generation&&desired.revision!=attempted_revision;
@@ -461,7 +503,7 @@ void Renderer::run(std::stop_token stop) {
           session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
         state.probe_serial=probe.serial;Frame f;f.id=probe.serial;f.epoch=epoch;telemetry_.event("render_probe",f);
       }
-      window_->present_context.activate();
+      GLContext::Binding binding(window_->present_context);
       display->set_reconstruction(quality.reconstruction);
       const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
       if(geometry_dirty) {instance_groups.emplace(render_scene);auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
@@ -571,9 +613,19 @@ void Renderer::run(std::stop_token stop) {
       }
       state.width=window_->width;state.height=window_->height;
       state.visible.clear();for(const auto &instance:render_scene.instances) state.visible.push_back(instance.visible);
-      if(!SwapBuffers(window_->dc)) {window_->present_context.deactivate();throw std::runtime_error("Qt 视口 SwapBuffers 失败");}
-      if(!pose_recovery.active) display->after_swap();window_->present_context.deactivate();
+      if(const auto code=glGetError();code!=GL_NO_ERROR) throw GraphicsError("OpenGL 呈现失败; gl="+std::to_string(code));
+      window_->swap();
+      if(!pose_recovery.active) display->after_swap();binding.release();window_->check_graphics();
       const auto shown=display->drawn_frame();
+      if(shown.id&&shown.epoch>=epoch) {
+        if(graphics_recovering) {
+          graphics_recovering=false;++graphics_recoveries;state.error.clear();
+          telemetry_.graphics("recovery_succeeded","session="+std::to_string(sessions)+" epoch="+std::to_string(epoch));
+        }
+        if(!graphics_stable_since) graphics_stable_since=now();
+        // 短时间反复故障累计到同一预算；稳定显示 30 秒后再开放自动恢复。
+        if(now()-graphics_stable_since>=30) graphics_attempts=0;
+      }
       if(sampling_.rebuild_probe&&(shown.id==0)!=blank_presented) {blank_presented=shown.id==0;telemetry_.event(blank_presented?"blank_present_begin":"blank_present_end");}
       state.present_time=telemetry_.last_present_time;state.sessions=sessions;
       state.preview=preview;state.quality=quality;state.render_width=shown.width;state.render_height=shown.height;
@@ -588,6 +640,7 @@ void Renderer::run(std::stop_token stop) {
         const auto &c=state.camera;
         const nlohmann::json report={{"seconds",now()},{"generation",state.generation},{"sessions",sessions},
           {"requested_epoch",epoch},{"presented_epoch",state.presented_epoch},{"samples",state.samples},{"preview",preview},
+          {"graphics_recoveries",graphics_recoveries},{"graphics_attempts",graphics_attempts},{"graphics_recovering",graphics_recovering},
           {"render_size",{state.render_width,state.render_height}},{"viewport_size",{state.width,state.height}},
           {"camera",{c.target.x,c.target.y,c.target.z,c.distance,c.yaw,c.pitch}},
           {"gpu_device_bytes",state.gpu_device_bytes},{"gpu_host_bytes",state.gpu_host_bytes},
@@ -630,18 +683,24 @@ void Renderer::run(std::stop_token stop) {
         state.max_displacement=displacements.empty()?0:*std::max_element(displacements.begin(),displacements.end());
         timing("diagnostic_bounds",diagnostic_begin,applied_revision);
       }
-      {std::lock_guard lock(mutex_);status_=state;}
+      publish_state();
       } catch(const std::exception &e) {
-        const std::string error=e.what();cleanup();runtime.reset();render_scene_ptr.reset();pending_runtime.reset();pending_scene.reset();pending_document.reset();picking={};regions={};pickable={};
+        const std::string error=e.what();
+        const bool graphics=dynamic_cast<const GraphicsError *>(&e)||window_->present_context.failed()||window_->render_context.failed()||(display&&display->failed());
+        telemetry_.graphics(graphics?"render_graphics_failure":"render_failure",error);
+        cleanup();reset_render_state();
         current=document;failed_revision=desired.revision;state={};state.generation=document->generation;state.clicks=clicks;state.error=error;
-        std::lock_guard lock(mutex_);status_=state;
+        if(graphics) {graphics_pending=graphics_recovering=true;graphics_stable_since=0;next_graphics_attempt=now()+.25;}
+        else graphics_recovering=false;
+        publish_state();
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
     cleanup();
   } catch(const std::exception &e) {
+    telemetry_.graphics("render_thread_failure",e.what());
     state.error=e.what();try {cleanup();} catch(...) {}
-    std::lock_guard lock(mutex_);status_=state;
+    graphics_recovering=false;publish_state();
   }
   nlohmann::json report={{"generation",state.generation},{"applied_revision",state.applied_revision},{"presented_revision",state.presented_revision},
     {"mesh_creations",state.adapter.meshes},{"instances",state.adapter.instances},{"unique_triangles",state.adapter.unique_triangles},{"instanced_triangles",state.adapter.triangles},{"curves",state.adapter.curves},{"geometry_updates",state.adapter.geometry_updates},{"instance_updates",state.adapter.instance_updates},
@@ -654,6 +713,8 @@ void Renderer::run(std::stop_token stop) {
     {"max_displacement_m",state.max_displacement},{"frames",state.frames},{"interop_readback_bytes",telemetry_.readback_bytes.load()},
     {"requested_epoch",state.requested_epoch},{"presented_epoch",state.presented_epoch},{"error",state.error},{"visible_fps","NOT_MEASURED"},
     {"navigation_preview",{{"width_divisor",4},{"height_divisor",4},{"samples",2},{"idle_seconds",.15}}}};
-  report["sessions"]=sessions;report["sampling"]=sampling_report;std::ofstream(output_/"editor-render.json")<<report.dump(2);
+  report["sessions"]=sessions;report["sampling"]=sampling_report;
+  report["graphics_recoveries"]=graphics_recoveries;report["graphics_attempts"]=graphics_attempts;report["graphics_blocked"]=graphics_blocked;
+  std::ofstream(output_/"editor-render.json")<<report.dump(2);
 }
 }

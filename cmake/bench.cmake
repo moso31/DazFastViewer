@@ -53,6 +53,13 @@ target_include_directories(RendererMaterialsTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererMaterialsTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_compile_definitions(RendererMaterialsTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
 target_compile_options(RendererMaterialsTest PRIVATE /utf-8)
+add_executable(RendererRecoveryTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_recovery.cpp"
+  "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
+  "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
+target_include_directories(RendererRecoveryTest PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(RendererRecoveryTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
+target_compile_definitions(RendererRecoveryTest PRIVATE DFV_GL_RECOVERY_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_options(RendererRecoveryTest PRIVATE /utf-8)
 add_executable(ProjectSettingsTest "${DFV_ROOT}/tests/project_settings.cpp" "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/application_settings.cpp")
 target_include_directories(ProjectSettingsTest PRIVATE "${DFV_ROOT}/src" "${DFV_ROOT}/third_party")
 target_link_libraries(ProjectSettingsTest PRIVATE Qt6::Widgets)

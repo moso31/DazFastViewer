@@ -5,12 +5,33 @@ namespace dfv {
 Display::Display(Window &window,Telemetry &telemetry,std::atomic<uint64_t> &epoch,std::atomic<int> &samples,bool readback)
  :window_(window),telemetry_(telemetry),epoch_(epoch),samples_(samples),allow_readback_(readback) {}
 Display::~Display() {
-  window_.render_context.activate();glFinish();
+  // Cycles 已先注销 CUDA interop。失效上下文的 GL 对象随整个共享组销毁，
+  // 不能让析构异常穿出 Cycles 工作线程，也不能用新上下文删除旧对象编号。
+  if(window_.render_context.failed()) return;
+  try {
+  GLContext::Binding binding(window_.render_context);glFinish();
   for(auto &s:slots_) {if(s.fence) glDeleteSync(s.fence);if(s.texture) glDeleteTextures(1,&s.texture);}
   if(upload_) glDeleteSync(upload_);
   if(pbo_) glDeleteBuffers(1,&pbo_);
   if(retired_pbo_) glDeleteBuffers(1,&retired_pbo_);
-  window_.render_context.deactivate();
+  } catch(const std::exception &e) {fail(e.what());}
+}
+void Display::fail(const std::string &message) noexcept {
+  try {
+    std::lock_guard lock(error_mutex_);
+    if(failed_) return;
+    error_=message;failed_=true;telemetry_.graphics("display_failure",message);
+  } catch(...) {failed_=true;}
+}
+void Display::finish_update() noexcept {
+  if(writing_>=0) {std::lock_guard lock(slots_mutex_);slots_[writing_].state=State::idle;writing_=-1;}
+  update_binding_.reset();
+}
+void Display::graphics_interop_activate() {
+  // 此回调用于 Cycles 销毁互操作资源。激活失败时仍让 CUDA 注销继续，
+  // 避免析构抛异常；随后统一销毁旧 GL 共享组。
+  try {interop_binding_.emplace(window_.render_context);}
+  catch(const std::exception &e) {fail(e.what());}
 }
 void Display::allocate(int width,int height) {
   // 只扩容，不随几个像素或预览 / 完整质量切换反复分配。
@@ -30,14 +51,16 @@ void Display::allocate(int width,int height) {
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
   }
   glBindTexture(GL_TEXTURE_2D,0);
-  if(glGetError()!=GL_NO_ERROR) throw std::runtime_error("分配 OpenGL 输出资源失败");
+  if(const auto code=glGetError();code!=GL_NO_ERROR) throw GraphicsError("分配 OpenGL 输出资源失败; gl="+std::to_string(code));
 }
 bool Display::update_begin(const Params &p,int width,int height) {
+  if(failed_) return false;
+  try {
   const auto begin=now();
   if(width<1 || height<1 || p.size.x!=width || p.size.y!=height) {
-    error_="渲染尺寸与输出缓冲不一致";failed_=true;return false;
+    fail("渲染尺寸与输出缓冲不一致");return false;
   }
-  window_.render_context.activate();
+  update_binding_.emplace(window_.render_context);
   {
     std::lock_guard lock(slots_mutex_);
     for(int i=0;i<3;++i) {
@@ -47,7 +70,7 @@ bool Display::update_begin(const Params &p,int width,int height) {
         if(result==GL_ALREADY_SIGNALED || result==GL_CONDITION_SATISFIED) {
           glDeleteSync(s.fence);s.fence=nullptr;s.state=State::idle;
         }
-        else if(result==GL_WAIT_FAILED) {error_="OpenGL fence 查询失败";failed_=true;}
+        else if(result==GL_WAIT_FAILED) throw GraphicsError("OpenGL fence 查询失败; gl="+std::to_string(glGetError()));
       }
       if(s.state==State::idle) {writing_=i;s.state=State::writing;break;}
     }
@@ -66,15 +89,17 @@ bool Display::update_begin(const Params &p,int width,int height) {
       }
     }
   }
-  if(writing_<0) {telemetry_.skipped++;window_.render_context.deactivate();return false;}
+  if(writing_<0) {telemetry_.skipped++;update_binding_.reset();return false;}
   if(upload_) {glWaitSync(upload_,0,GL_TIMEOUT_IGNORED);glDeleteSync(upload_);upload_=nullptr;}
   allocate(width,height);
   auto &s=slots_[writing_];const auto samples=samples_.load();
   s.frame={samples>0?telemetry_.produced.fetch_add(1)+1:0,epoch_.load(),samples,width,height,now()};
   telemetry_.event("display_begin",s.frame,(now()-begin)*1000);
   return true;
+  } catch(const std::exception &e) {fail(e.what());finish_update();return false;}
 }
 void Display::update_end() {
+  try {
   const auto begin=now();
   // Cycles 在写入新 PBO 前已注销旧 CUDA 注册；现在才释放旧 GL 对象。
   if(retired_pbo_) {glDeleteBuffers(1,&retired_pbo_);retired_pbo_=0;}
@@ -83,7 +108,7 @@ void Display::update_end() {
   // 正常完成驱动回调，避免把主动丢弃误报为 interop 初始化失败。
   if(s.frame.samples<=0) {
     {std::lock_guard lock(slots_mutex_);s.state=State::idle;}
-    telemetry_.skipped++;writing_=-1;window_.render_context.deactivate();return;
+    telemetry_.skipped++;writing_=-1;update_binding_.reset();return;
   }
   glBindTexture(GL_TEXTURE_2D,s.texture);glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
   glTexSubImage2D(GL_TEXTURE_2D,0,0,0,s.frame.width,s.frame.height,GL_RGBA,GL_HALF_FLOAT,nullptr);
@@ -94,10 +119,12 @@ void Display::update_end() {
     s.fence=glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE,0);s.state=State::ready;
   }
   glFlush();telemetry_.event("display_upload",s.frame,(now()-begin)*1000);telemetry_.event("produced",s.frame);
-  writing_=-1;window_.render_context.deactivate();
+  if(const auto code=glGetError();code!=GL_NO_ERROR) throw GraphicsError("OpenGL 上传失败; gl="+std::to_string(code));
+  writing_=-1;update_binding_.reset();
+  } catch(const std::exception &e) {fail(e.what());finish_update();}
 }
 ccl::half4 *Display::map_texture_buffer() {
-  if(!allow_readback_) {error_="GPU interop 不可用；显式 --allow-readback 才允许诊断回读";failed_=true;return nullptr;}
+  if(!allow_readback_) {fail("GPU interop 不可用；显式 --allow-readback 才允许诊断回读");return nullptr;}
   telemetry_.readback_bytes+=size_t(slots_[writing_].frame.width)*slots_[writing_].frame.height*sizeof(ccl::half4);
   glBindBuffer(GL_PIXEL_UNPACK_BUFFER,pbo_);
   return static_cast<ccl::half4 *>(glMapBuffer(GL_PIXEL_UNPACK_BUFFER,GL_WRITE_ONLY));
@@ -114,7 +141,7 @@ void Display::graphics_interop_update_buffer() {
 static GLuint shader(GLenum type,const char *source) {
   const GLuint id=glCreateShader(type);glShaderSource(id,1,&source,nullptr);glCompileShader(id);
   GLint ok;glGetShaderiv(id,GL_COMPILE_STATUS,&ok);
-  if(!ok) {char log[2048];glGetShaderInfoLog(id,2048,nullptr,log);throw std::runtime_error(log);}
+  if(!ok) {char log[2048];glGetShaderInfoLog(id,2048,nullptr,log);glDeleteShader(id);throw GraphicsError(log);}
   return id;
 }
 void Display::make_program() {
@@ -159,7 +186,7 @@ void main(){
 })GLSL");
   program_=glCreateProgram();glAttachShader(program_,v);glAttachShader(program_,f);glLinkProgram(program_);
   glDeleteShader(v);glDeleteShader(f);
-  GLint ok;glGetProgramiv(program_,GL_LINK_STATUS,&ok);if(!ok) throw std::runtime_error("显示着色器链接失败");
+  GLint ok;glGetProgramiv(program_,GL_LINK_STATUS,&ok);if(!ok) throw GraphicsError("显示着色器链接失败");
 }
 void Display::draw(const Params &) {
   int candidate=-1;
@@ -170,6 +197,7 @@ void Display::draw(const Params &) {
       if(state==GL_ALREADY_SIGNALED || state==GL_CONDITION_SATISFIED) {
         if(candidate<0 || slots_[i].frame.id>slots_[candidate].frame.id) candidate=i;
       }
+      else if(state==GL_WAIT_FAILED) throw GraphicsError("呈现 OpenGL fence 查询失败; gl="+std::to_string(glGetError()));
     }
     if(candidate>=0) {
       for(int i=0;i<3;++i) if(i!=candidate && slots_[i].state==State::ready && slots_[i].frame.id<slots_[candidate].frame.id) {

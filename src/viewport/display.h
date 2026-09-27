@@ -4,6 +4,7 @@
 #include "session/display_driver.h"
 #include <epoxy/gl.h>
 #include <array>
+#include <optional>
 #include "render_ir/options.h"
 #include "viewport/quality.h"
 
@@ -29,7 +30,11 @@ class Display final:public ccl::DisplayDriver {
   Frame last_drawn_;
   uint64_t last_presented_=0;
   std::atomic<bool> failed_{false};
+  mutable std::mutex error_mutex_;
   std::string error_;
+  std::optional<GLContext::Binding> update_binding_,interop_binding_;
+  void fail(const std::string &message) noexcept;
+  void finish_update() noexcept;
   void allocate(int width,int height);
   void make_program();
 public:
@@ -44,8 +49,8 @@ public:
   void draw(const Params &) override;
   ccl::GraphicsInteropDevice graphics_interop_get_device() override;
   void graphics_interop_update_buffer() override;
-  void graphics_interop_activate() override {window_.render_context.activate();}
-  void graphics_interop_deactivate() override {window_.render_context.deactivate();}
+  void graphics_interop_activate() override;
+  void graphics_interop_deactivate() override {interop_binding_.reset();}
   void set_options(const ir::RenderOptions &options) {options_=options;}
   void set_reconstruction(Reconstruction value) {reconstruction_=value;}
   void after_swap();
@@ -53,6 +58,6 @@ public:
   void hud(const std::string &text);
   void release_present_resources();
   bool failed() const {return failed_.load();}
-  const std::string &error() const {return error_;}
+  std::string error() const {std::lock_guard lock(error_mutex_);return error_;}
 };
 }

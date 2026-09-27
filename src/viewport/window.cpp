@@ -5,24 +5,70 @@
 #include <vector>
 #include <iostream>
 #include <algorithm>
+#include <sstream>
 
 namespace dfv {
+std::string GLContext::failure(const char *operation,DWORD code) {
+  std::ostringstream out;
+  out<<"OpenGL "<<name_<<" "<<operation<<" 失败; win32="<<code<<" thread="<<GetCurrentThreadId()
+     <<" owner="<<owner_<<" depth="<<depth_<<" context="<<context_<<" dc="<<dc_
+     <<" current_context="<<wglGetCurrentContext()<<" current_dc="<<wglGetCurrentDC()
+     <<" window_valid="<<bool(IsWindow(WindowFromDC(dc_)));
+  auto message=out.str();
+  {std::lock_guard lock(error_mutex_);if(!failed_) error_=message;failed_=true;}
+  if(telemetry_) telemetry_->graphics("wgl_failure",message);
+  return message;
+}
 void GLContext::initialize(HDC dc,HGLRC share) {
+  std::lock_guard lock(mutex_);
+  if(context_) throw GraphicsError(failure("initialize_existing_context",ERROR_BUSY));
+#ifdef DFV_GL_RECOVERY_TEST
+  if(fault_==Fault::context_lost) fault_=Fault::none;
+  if(fault_==Fault::create_once) {fault_=Fault::none;throw GraphicsError(failure("injected_create",ERROR_NOT_ENOUGH_MEMORY));}
+#endif
   dc_=dc;context_=wglCreateContext(dc_);
-  if(!context_ || (share && !wglShareLists(share,context_)))
-    throw std::runtime_error("创建或共享 OpenGL context 失败");
+  if(!context_) throw GraphicsError(failure("wglCreateContext",GetLastError()));
+  if(share&&!wglShareLists(share,context_)) {const auto code=GetLastError();auto message=failure("wglShareLists",code);destroy();throw GraphicsError(message);}
+  {std::lock_guard error_lock(error_mutex_);error_.clear();failed_=false;}
 }
 void GLContext::activate() {
-  mutex_.lock();
-  if(depth_++==0 && !wglMakeCurrent(dc_,context_)) {
-    --depth_;mutex_.unlock();throw std::runtime_error("激活 OpenGL context 失败");
+  std::unique_lock lock(mutex_);
+#ifdef DFV_GL_RECOVERY_TEST
+  const auto fault=fault_.load();
+  if(fault==Fault::activate_once||fault==Fault::context_lost||fault==Fault::persistent) {
+    if(fault==Fault::activate_once) fault_=Fault::none;
+    throw GraphicsError(failure("injected_activate",ERROR_BUSY));
   }
+#endif
+  if(!context_) throw GraphicsError(failure("activate_null_context",ERROR_INVALID_HANDLE));
+  if(depth_&&wglGetCurrentContext()!=context_) throw GraphicsError(failure("nested_context_changed",ERROR_INVALID_STATE));
+  if(!depth_&&!wglMakeCurrent(dc_,context_)) {const auto code=GetLastError();throw GraphicsError(failure("wglMakeCurrent",code));}
+  ++depth_;owner_=GetCurrentThreadId();lock.release();
 }
-void GLContext::deactivate() {
-  if(--depth_==0) wglMakeCurrent(nullptr,nullptr);
+void GLContext::deactivate() noexcept {
+  // 调用者仍持有 activate 对应的递归锁；不允许下溢或跨线程解锁。
+  if(!depth_||owner_!=GetCurrentThreadId()) {try {failure("unbalanced_release",ERROR_INVALID_STATE);} catch(...) {}return;}
+  if(--depth_==0) {
+    DWORD code=0;
+    if(!wglMakeCurrent(nullptr,nullptr)) code=GetLastError();
+#ifdef DFV_GL_RECOVERY_TEST
+    if(fault_==Fault::release_once) {fault_=Fault::none;code=ERROR_BUSY;}
+#endif
+    if(code) {try {failure("wglMakeCurrent_release",code);} catch(...) {failed_=true;}}
+    owner_=0;
+  }
   mutex_.unlock();
 }
-void GLContext::destroy() {if(context_) {wglDeleteContext(context_);context_=nullptr;}}
+bool GLContext::destroy() noexcept {
+  try {
+    std::lock_guard lock(mutex_);
+    if(!context_) return true;
+    if(depth_) {failure("destroy_bound_context",ERROR_BUSY);return false;}
+    if(wglGetCurrentContext()==context_&&!wglMakeCurrent(nullptr,nullptr)) {failure("release_before_destroy",GetLastError());return false;}
+    if(!wglDeleteContext(context_)) {failure("wglDeleteContext",GetLastError());return false;}
+    context_=nullptr;dc_=nullptr;return true;
+  } catch(...) {return false;}
+}
 
 static void pixel_format(HDC dc) {
   PIXELFORMATDESCRIPTOR pfd{};pfd.nSize=sizeof(pfd);pfd.nVersion=1;
@@ -61,7 +107,8 @@ Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor,HWND
   if(!hwnd || !hidden) throw std::runtime_error("创建窗口失败");
   if(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONULL)!=selected.handle) throw std::runtime_error("窗口未位于指定显示器，拒绝显示");
   dc=GetDC(hwnd);render_dc=GetDC(hidden);pixel_format(dc);pixel_format(render_dc);
-  present_context.initialize(dc);render_context.initialize(render_dc,present_context.handle());
+  present_context.diagnostics(telemetry_,"present");render_context.diagnostics(telemetry_,"upload");
+  recreate_contexts();
   ShowWindow(hwnd,SW_SHOWNOACTIVATE);
   SetWindowPos(hwnd,HWND_TOP,parent?0:left,parent?0:top,outer_width,outer_height,SWP_NOACTIVATE);
   std::cout<<"Window monitor "<<monitor<<" "<<monitor_device<<" at "<<left<<","<<top<<" client "<<w<<"x"<<h<<std::endl;
@@ -77,6 +124,29 @@ void Window::publish() {
   if(!camera.navigating) camera.preview_until=camera.input_seconds+.15;
   if(telemetry_) {Frame frame;frame.epoch=camera.epoch;telemetry_->event("camera_input",frame);}
   mailbox.publish(camera);
+}
+void Window::recreate_contexts() {
+  const bool render_destroyed=render_context.destroy(),present_destroyed=present_context.destroy();
+  if(!render_destroyed||!present_destroyed) throw GraphicsError("旧 OpenGL 上下文未能安全释放；"+render_context.error()+" "+present_context.error());
+  if(!IsWindow(hwnd)||!IsWindow(hidden)||WindowFromDC(dc)!=hwnd||WindowFromDC(render_dc)!=hidden)
+    throw GraphicsError("OpenGL 视口窗口或设备上下文已失效，需要重新打开窗口");
+  try {
+    present_context.initialize(dc);render_context.initialize(render_dc,present_context.handle());
+    {GLContext::Binding binding(present_context);}
+    {GLContext::Binding binding(render_context);}
+    check_graphics();
+  } catch(...) {render_context.destroy();present_context.destroy();throw;}
+  if(telemetry_) telemetry_->graphics("contexts_created","present 与 upload 共享上下文已创建并验证");
+}
+void Window::check_graphics() const {
+  if(present_context.failed()) throw GraphicsError(present_context.error());
+  if(render_context.failed()) throw GraphicsError(render_context.error());
+}
+void Window::swap() {
+  if(!SwapBuffers(dc)) {
+    const auto code=GetLastError();const auto message="SwapBuffers 失败; win32="+std::to_string(code)+" thread="+std::to_string(GetCurrentThreadId());
+    if(telemetry_) telemetry_->graphics("swap_failure",message);throw GraphicsError(message);
+  }
 }
 void Window::update_navigation() {
   camera.navigating=dragging_||middle_dragging_||back_dragging_||std::any_of(std::begin(keys_),std::end(keys_),[](bool k){return k;});
