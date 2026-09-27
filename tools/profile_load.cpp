@@ -12,8 +12,9 @@
 // 无窗口复现编辑器的 CPU 加载与首次形变；不把结果称为 GPU 首帧耗时。
 int main(int argc,char **argv) {
   using namespace dfv;using Json=nlohmann::json;namespace fs=std::filesystem;
-  if(argc<4||argc>5) {std::cerr<<"SceneLoadProfile <scene.duf> <project.json> <output-directory> [--eager|--growth-check]\n";return 2;}
-  const bool growth_check=argc==5&&std::string(argv[4])=="--growth-check",lazy=argc==4||growth_check;
+  const bool attachment=argc==6&&std::string(argv[4])=="--attach-to";
+  if(argc<4||(argc>5&&!attachment)) {std::cerr<<"SceneLoadProfile <scene.duf> <project.json> <output-directory> [--eager|--growth-check|--attach-to <host.duf>]\n";return 2;}
+  const bool growth_check=argc==5&&std::string(argv[4])=="--growth-check",lazy=argc==4||growth_check||attachment;
   SetConsoleOutputCP(CP_UTF8);
   const fs::path output=fs::u8path(argv[3]);fs::create_directories(output);
   diagnostics::LoadProfile profile;diagnostics::active=&profile;
@@ -38,8 +39,10 @@ int main(int argc,char **argv) {
   try {
     Json project;std::ifstream(fs::u8path(argv[2]))>>project;std::vector<fs::path> roots;
     for(const auto &root:project.at("content_roots")) roots.push_back(fs::u8path(root.get<std::string>()));
-    editor::Document document;document.generation=1;
-    stage("geometry_materials",[&] {document.loaded=daz::load(fs::u8path(argv[1]),{roots,false});});
+    editor::Document document,host;document.generation=1;size_t host_target=0;
+    if(attachment)stage("host_load",[&]{host.loaded=daz::load(fs::u8path(argv[5]),{roots,false});host.catalog=daz::discover_morphs(host.loaded,roots,{},true);host.skeletons=daz::load_skeletons(host.loaded);host.formulas=daz::enable_formulas(host.catalog,host.skeletons);editor::release_load_data(host);
+      while(host_target<host.catalog.targets.size()){try{if(editor::attachment_host(host,host_target)==host_target)break;}catch(const std::exception &){}++host_target;}if(host_target==host.catalog.targets.size())throw std::runtime_error("缺少兼容穿戴宿主");});
+    stage("geometry_materials",[&] {document.loaded=daz::load(fs::u8path(argv[1]),{roots,false,attachment});});
     roots.clear();for(const auto &root:document.loaded.report.at("content_roots")) roots.push_back(fs::u8path(root.get<std::string>()));
     stage("morph_discovery",[&] {document.catalog=daz::discover_morphs(document.loaded,roots,[&](const std::string &s) {std::cout<<elapsed()<<" "<<s<<std::endl;},lazy);});
     stage("skeletons",[&] {document.skeletons=daz::load_skeletons(document.loaded);});
@@ -58,6 +61,7 @@ int main(int argc,char **argv) {
       result["objects"].push_back({{"id",t.id},{"label",t.label},{"morphs",t.morphs.size()},{"initial_nonzero",initial},{"offsets",offsets},{"vertices",mesh.positions.size()},{"triangles",mesh.triangles.size()},{"curves",mesh.curves.size()}});
     }
     stage("release_load_data",[&] {editor::release_load_data(document);});
+    if(attachment){const auto first=host.catalog.targets.size();stage("append_document",[&]{editor::append_document(host,std::move(document));document=std::move(host);});stage("attach_import",[&]{editor::attach_import(document,first,host_target);});}
     editor::Snapshot snapshot;stage("initial_snapshot",[&] {snapshot=editor::initial_snapshot(document);});
     ir::Scene render_scene;stage("render_scene_copy",[&] {render_scene=document.loaded.scene;});
     std::vector<runtime::JointRegions> regions(render_scene.instances.size());

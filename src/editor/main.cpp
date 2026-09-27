@@ -320,7 +320,8 @@ class Editor final:public EditorWindow {
   std::optional<std::array<float,6>> capture_view_;
   bool lifecycle_test_=false;
   std::filesystem::path scene_reopen_file_;
-  std::filesystem::path wear_test_file_;
+  std::filesystem::path wear_test_file_,wear_test_material_;
+  size_t wear_test_material_operations_=0;
   std::filesystem::path rebuild_test_file_;
   size_t rebuild_host_=0,rebuild_first_=0;
   int rebuild_level_=0,rebuild_render_level_=0;
@@ -560,9 +561,9 @@ class Editor final:public EditorWindow {
   }
   void apply_surface_material_file(const std::filesystem::path &file,const std::vector<MaterialSurface> &surfaces){
     if(loading_||!document_)return;
-    try{auto preset=daz::load(file,{roots_,false});auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;
+    try{const auto asset=daz::content_asset(file,roots_);auto preset=daz::load(asset,{roots_,false});auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;
       apply_surface_materials(*next,snapshot,preset,surfaces);next->generation=++generation_;next->loaded.scene.lights=snapshot.lights;document_=std::move(next);snapshot_=std::move(snapshot);snapshot_.generation=document_->generation;++snapshot_.revision;
-      select(selected_,selected_joint_,selected_light_);renderer_->set_document(document_,submitted_snapshot(),false);if(!self_test_)browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*daz::document_view(file)));
+      select(selected_,selected_joint_,selected_light_);renderer_->set_document(document_,submitted_snapshot(),false);if(!self_test_)browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*daz::document_view(asset)));
     }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("材质预设应用失败"),text(e.what()));}
   }
   void apply_material_file(const std::filesystem::path &file) {
@@ -903,7 +904,7 @@ class Editor final:public EditorWindow {
     if(joint_selection_test_) {report["scope"]="same-figure-joint-ctrl-selection-and-focus";report["checks"]=regression_checks_;}
     if(!visibility_label_.isEmpty()) {report["scope"]="hierarchy-visibility-toggle-restore";report["visible"]=status.visible;report["checks"]=visibility_checks_;}
     if(lifecycle_test_) {report["scope"]="append-delete-clear-replace-resource-lifetime-and-render-error-recovery";report["samples"]=lifecycle_samples_;report["retired_document_expired"]=retired_document_.expired();}
-    if(!wear_test_file_.empty()&&document_) {report["scope"]="wearable-browser-import-detach-rebind";report["added_targets"]=document_->catalog.targets.size()-wear_test_first_;report["attachment_groups"]=document_->attachments.size();}
+    if(!wear_test_file_.empty()&&document_) {report["scope"]="wearable-browser-import-detach-rebind";report["added_targets"]=document_->catalog.targets.size()-wear_test_first_;report["attachment_groups"]=document_->attachments.size();if(!wear_test_material_.empty())report["material_link_applied"]=test_stage_==5&&document_->operations.size()>wear_test_material_operations_;}
     report["hierarchy"]=hierarchy_report();report["options"]=ir::options_json(snapshot_.options);
     report["graft_seams"]=nlohmann::json::array();for(const auto &g:status.graft_seams) report["graft_seams"].push_back({{"follower",document_->loaded.scene.instances.at(g.follower).id},{"source",document_->loaded.scene.instances.at(g.source).id},{"pairs",g.pairs},{"max_gap_m",g.max_gap_m}});
     if(!scene_reopen_file_.empty()) {report["scope"]="open-new-empty-open-from-content-browser";report["checks"]=scene_reopen_checks_;}
@@ -1467,6 +1468,10 @@ class Editor final:public EditorWindow {
       }
       if(document_->attachments.back().host.empty()) {finish_test(false,"界面重新绑定没有生效");return;}
       for(const auto &g:state.graft_seams) if(g.max_gap_m>1e-5) {finish_test(false,"自动挂接后的接缝不连续");return;}
+      if(!wear_test_material_.empty()) {
+        if(test_stage_==4){wear_test_material_operations_=document_->operations.size();choose(int(wear_test_first_));++test_stage_;open_asset(wear_test_material_);return;}
+        if(document_->operations.size()<=wear_test_material_operations_){finish_test(false,"穿戴后材质链接没有应用");return;}
+      }
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"wear-rebound.png").wstring()));finish_test(true);return;
     }
     if(edit_regression_test_) {edit_regression_tick(state);return;}
@@ -1791,6 +1796,7 @@ public:
     auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
     materials_=new MaterialPanel;materials_->changed=[this]{if(!loading_&&renderer_)send();};materials_->interaction_changed=[this](bool active){if(renderer_)renderer_->interaction(active);};
     materials_->preset_requested=[this](const auto &file,const auto &surfaces){apply_surface_material_file(file,surfaces);};
+    materials_->locate_file=[this](const QString &file){if(browser_->locate(file)){if(auto *dock=qobject_cast<QDockWidget *>(browser_->parentWidget())){dock->show();dock->raise();}}else statusBar()->showMessage(QStringLiteral("文件不存在：%1").arg(file),5000);};
     materials_->hovered=[this](const auto &surfaces){if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
     auto *material_dock=dock(QStringLiteral("材质"),materials_,Qt::RightDockWidgetArea);material_dock->setObjectName("Materials");tabifyDockWidget(property_dock,material_dock);
     powerpose_=new PowerPosePanel;auto *powerpose_dock=dock(QStringLiteral("PowerPose"),powerpose_,Qt::RightDockWidgetArea);tabifyDockWidget(property_dock,powerpose_dock);powerpose_dock->raise();
@@ -1803,7 +1809,7 @@ public:
     connect(chrome->ground_action(),&QAction::triggered,this,[this]{request_ground();});
     connect(chrome->weight_action(),&QAction::triggered,this,[this]{enable_extension();});
     auto *file_menu=chrome->menus()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
-    connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 资源 (*.duf *.dufex *.dse)"));if(!file.isEmpty()) open_asset(file_path(file));});
+    connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 资源 (*.duf *.dufex *.djl *.dse)"));if(!file.isEmpty()) open_asset(file_path(file));});
     auto *save=file_menu->addAction(QStringLiteral("保存场景修改"));save->setShortcut(QKeySequence::Save);connect(save,&QAction::triggered,this,[this]{save_extension();});
     connect(file_menu->addAction(QStringLiteral("场景修改另存为…")),&QAction::triggered,this,[this]{save_extension(true);});
     connect(file_menu->addAction(QStringLiteral("近期使用…")),&QAction::triggered,this,[this,explorer_dock]{explorer_dock->show();explorer_dock->raise();browser_->show_recent();});
@@ -1881,7 +1887,7 @@ public:
   void keep_open_after_test() {keep_open_after_test_=true;}
   void attachment_test() {attachment_test_=self_test_=true;}
   void lazy_test() {lazy_test_=self_test_=true;}
-  void wear_test(const std::filesystem::path &file) {wear_test_file_=file;self_test_=true;}
+  void wear_test(const std::filesystem::path &file,const std::filesystem::path &material={}) {wear_test_file_=file;wear_test_material_=material;self_test_=true;}
   void rebuild_test(const std::filesystem::path &file) {rebuild_test_file_=file;self_test_=true;}
   void subdivision_stress_test() {subdivision_stress_test_=true;self_test_=true;}
   void extension_test(){extension_test_=true;self_test_=true;}
@@ -2035,6 +2041,7 @@ int main(int argc,char **argv) {
   parser.addOption({"lifecycle-rounds",QStringLiteral("生命周期验证轮数"),"count","8"});
   parser.addOption({"scene-reopen-test",QStringLiteral("验证打开、新建空场景、从内容库再次打开指定场景"),"file"});
   parser.addOption({"wear-test",QStringLiteral("验证移动 / 摆姿势后自动穿戴、解除及重新绑定"),"file"});
+  parser.addOption({"wear-material-test",QStringLiteral("穿戴验证后应用指定的材质 DUF / DJL 链接"),"file"});
   parser.addOption({"rebuild-test",QStringLiteral("副屏测量细分修改、自动穿戴和删除的全场景重建耗时"),"file"});
   parser.addOption({"subdivision-stress-test",QStringLiteral("副屏验证细分反复切换、快速输入及预算限制")});
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
@@ -2102,7 +2109,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("visibility-test")) editor.visibility_test(parser.values("visibility-test"));
     if(parser.isSet("lifecycle-test")) editor.lifecycle_test(file_path(parser.value("file")),file_path(parser.value("lifecycle-test")),parser.value("lifecycle-rounds").toInt());
     if(parser.isSet("scene-reopen-test")) editor.scene_reopen_test(file_path(parser.value("scene-reopen-test")));
-    if(parser.isSet("wear-test")) editor.wear_test(file_path(parser.value("wear-test")));
+    if(parser.isSet("wear-test")) editor.wear_test(file_path(parser.value("wear-test")),parser.isSet("wear-material-test")?file_path(parser.value("wear-material-test")):std::filesystem::path{});
     if(parser.isSet("rebuild-test")) editor.rebuild_test(file_path(parser.value("rebuild-test")));
     if(parser.isSet("subdivision-stress-test")) editor.subdivision_stress_test();
     if(parser.isSet("render-profile-start-empty")) {

@@ -51,7 +51,10 @@ QString content_category(const nlohmann::json &document) {
 }
 QStringList preview_candidates(const QString &asset,bool tooltip) {
   const QFileInfo file(asset);const auto base=file.path()+"/"+file.completeBaseName();
-  const QStringList icons={asset+".png",base+".png"},tips={base+".tip.png",asset+".tip.png"};
+  if(file.isDir())return {asset+".png",asset+"/folder.png",asset+"/Folder.jpg",asset+"/.folder.png",asset+"/"+file.fileName()+".png",asset+".tip.png"};
+  QStringList icons={asset+".png",base+".png"},tips={base+".tip.png",asset+".tip.png"};
+  if(file.suffix().compare("djl",Qt::CaseInsensitive)==0){const QFileInfo linked(base);icons.append(linked.path()+"/"+linked.completeBaseName()+".png");tips.prepend(linked.path()+"/"+linked.completeBaseName()+".tip.png");}
+  if(QStringList{"png","jpg","jpeg","tif","tiff","bmp","webp","hdr","exr"}.contains(file.suffix().toLower()))icons.prepend(asset);
   return tooltip?tips+icons:icons+tips;
 }
 ContentHistory::ContentHistory(const QString &file):settings_(file.isEmpty()?std::make_unique<QSettings>():std::make_unique<QSettings>(file,QSettings::IniFormat)) {

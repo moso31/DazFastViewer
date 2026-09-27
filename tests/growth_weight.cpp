@@ -53,13 +53,14 @@ static void volume(){
 static editor::Document growth_document(){
   editor::Document d;d.generation=1;d.loaded.scene.meshes={cube()};ir::Instance instance;instance.id="figure/mesh";d.loaded.scene.instances={instance};
   runtime::Target t;t.id=instance.id;t.instance=0;for(const auto &v:runtime::growth_values(3,.5)){runtime::Morph m;m.id=m.label=v.label;m.evaluable=true;m.minimum=-2;m.maximum=2;t.morphs.push_back(m);}d.catalog.targets={t};
-  runtime::Skin skin;skin.id="figure";skin.joints.resize(1);skin.joints[0].id="root";skin.initial.resize(1);d.skeletons.skins={skin};
+  runtime::Skin skin;skin.id="figure";skin.joints.resize(1);skin.joints[0].id="root";skin.initial.resize(1);d.skeletons.skins={skin};daz::AssetObject actor;actor.figure=true;actor.content_type="Actor/Character";d.loaded.objects={actor};
   runtime::FormulaGraph graph;graph.skin=0;for(size_t i=0;i<t.morphs.size();++i){runtime::Channel c;c.binding.index=uint32_t(i);graph.morph_channels.push_back(int(graph.channels.size()));graph.channels.push_back(c);}
   runtime::Channel root;root.binding={runtime::Property::general_scale,0,0};root.initial=1;graph.channels.push_back(root);
   // 模拟旧 DAZ 通道中的 -1% ERC，用实际缩放校准验证不再需要脚本补偿。
   runtime::Expression e;e.owner=0;e.output=uint32_t(graph.channels.size()-1);e.code={{runtime::Op::constant,-.01}};graph.expressions.push_back(e);graph.prepare();d.formulas.graphs={graph};return d;
 }
 static void growth(){
+  {auto d=growth_document();require(editor::growth_character(d,0),"角色元数据未被识别");d.loaded.objects[0].content_type="Prop";require(!editor::growth_character(d,0),"带骨架道具被误判角色");d.loaded.objects[0].content_type.clear();require(!editor::growth_character(d,0),"单链骨架被误判角色");d.loaded.objects[0].content_type="Follower/Hair";require(!editor::growth_character(d,0),"头发被误判角色");}
   auto d=growth_document();auto s=editor::initial_snapshot(d);s.values[0].extension.kind=runtime::ExtensionKind::growth;s.values[0].transform.translation_cm.y=23;
   {auto target=d.catalog.targets[0];auto &head=*std::find_if(target.morphs.begin(),target.morphs.end(),[](const auto &m){return m.label=="Head Propagating Scale";});head.scene_channel=true;head.id="native-head";head.initial=-.25f;
     auto duplicate=head;duplicate.id="vendor-head";duplicate.scene_channel=false;duplicate.initial=0;target.morphs.insert(target.morphs.begin(),duplicate);

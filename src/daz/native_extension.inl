@@ -38,7 +38,7 @@ static NativeChannels native_channels(const J &document,const fs::path &scene_fi
   return result;
 }
 static void import_native_extension(runtime::Target &target,const AssetObject &object,const NativeChannels &channels,J &diagnostics) {
-  const bool character=object.figure&&object.conform_target.empty()&&!object.content_type.starts_with("Follower/");
+  const bool character=object.figure&&object.conform_target.empty()&&(object.content_type.empty()||object.content_type=="Actor"||object.content_type.starts_with("Actor/"));
   std::map<std::string,std::vector<double>> values;
   for(const auto &owner:{"#"+object.id,"#"+object.geometry_instance_id})if(auto i=channels.find(owner);i!=channels.end())
     for(const auto &[name,v]:i->second)values[name].insert(values[name].end(),v.begin(),v.end());

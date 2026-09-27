@@ -38,7 +38,7 @@ void HoverOverlay::draw_pose(const CameraState &camera,int width,int height,cons
     for(auto p:{a,b,c}) glVertex3f(p.x,p.y,p.z);
   }
   glEnd();glDisable(GL_DEPTH_TEST);glLineWidth(3);glColor3f(1,.75f,.18f);glBegin(GL_LINES);for(const auto &[a,b]:bones) {glVertex3f(a.x,a.y,a.z);glVertex3f(b.x,b.y,b.z);}glEnd();
-  glPointSize(9);glColor3f(.25f,1,.45f);glBegin(GL_POINTS);glVertex3f(goal.x,goal.y,goal.z);glEnd();
+  if(!proxy.positions.empty()||!bones.empty()){glPointSize(9);glColor3f(.25f,1,.45f);glBegin(GL_POINTS);glVertex3f(goal.x,goal.y,goal.z);glEnd();}
   glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
 }
 void HoverOverlay::release() {std::set<GLuint> unique;for(auto id:lists_) if(id) unique.insert(id);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) unique.insert(part.first);for(auto id:unique) glDeleteLists(id,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();bounds_.clear();}

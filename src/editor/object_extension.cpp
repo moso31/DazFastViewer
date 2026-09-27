@@ -77,9 +77,17 @@ public:
 };
 }
 bool growth_character(const Document &d,size_t t){
-  const auto instance=d.catalog.targets.at(t).instance;
-  for(const auto &o:d.loaded.objects)if(o.instance==instance)return o.figure&&o.conform_target.empty()&&!o.content_type.starts_with("Follower/")&&skin_index(d,t)>=0;
-  return skin_index(d,t)>=0&&d.catalog.targets[t].conform_target.empty();
+  const auto instance=d.catalog.targets.at(t).instance;const int index=skin_index(d,t);
+  if(index<0||!d.catalog.targets[t].conform_target.empty())return false;
+  for(const auto &o:d.loaded.objects)if(o.instance==instance){
+    if(!o.figure||!o.conform_target.empty())return false;
+    if(o.content_type=="Actor"||o.content_type.starts_with("Actor/"))return true;
+    if(!o.content_type.empty())return false;
+  }
+  // 缺少元数据的旧资产只接受完整的人形骨架，不能用 figure / skin 判定道具。
+  const auto &skin=d.skeletons.skins[size_t(index)];
+  auto has=[&](std::initializer_list<const char *> names){for(const auto &j:skin.joints)for(auto name:names)if(j.id==name||j.name==name)return true;return false;};
+  return has({"hip","pelvis"})&&has({"head"})&&has({"lHand"})&&has({"rHand"})&&has({"lFoot"})&&has({"rFoot"});
 }
 std::vector<std::string> edit_growth(const Document &d,Snapshot &snapshot,size_t t,runtime::ObjectExtension next,bool apply_shape,double scale_step){
   runtime::validate_extension(next);if(!growth_character(d,t))throw std::runtime_error("请选择角色本体或其骨骼");

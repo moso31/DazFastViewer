@@ -9,10 +9,11 @@ static void native_extension_tests() {
   add("invalid","bad-age","Age",22);add("invalid","zero-sense","Age Sensitivity",0);
   add("conflict","age-one","Age",2);add("conflict","age-two","Age",5);
   add("prop","density","Density",7500);
+  add("prop","prop-age","Age",12);
   instances[0]["channel"]={{"current_value",6.25}};
   J document={{"modifier_library",library},{"scene",{{"nodes",J::array()},{"modifiers",instances}}}};write(scene,document);
   daz::LoadedScene loaded;ir::Mesh mesh;mesh.positions={{0,0,0},{1,1,1}};loaded.scene.meshes={mesh};loaded.report["input"]=scene.generic_string();
-  for(const char *id:{"none","partial","full","invalid","conflict","prop"}) {const auto index=uint32_t(loaded.scene.instances.size());ir::Instance instance;instance.id=id;loaded.scene.instances.push_back(instance);daz::AssetObject object;object.id=object.label=id;object.instance=index;object.geometry_file=asset;object.geometry_id="geometry";object.geometry_instance_id=std::string(id)+"-geometry";object.figure=std::string(id)!="prop";loaded.objects.push_back(object);}
+  for(const char *id:{"none","partial","full","invalid","conflict","prop"}) {const auto index=uint32_t(loaded.scene.instances.size());ir::Instance instance;instance.id=id;loaded.scene.instances.push_back(instance);daz::AssetObject object;object.id=object.label=id;object.instance=index;object.geometry_file=asset;object.geometry_id="geometry";object.geometry_instance_id=std::string(id)+"-geometry";object.figure=true;object.content_type=std::string(id)=="prop"?"Prop":"Actor/Character";loaded.objects.push_back(object);}
   auto catalog=daz::discover_morphs(loaded,{root});auto &targets=catalog.targets;
   require(targets[0].native_extension.kind==runtime::ExtensionKind::none,"未匹配角色被自动注册");
   const auto &partial=targets[1].native_extension;require(partial.kind==runtime::ExtensionKind::growth&&partial.age==6.25&&partial.strength==.75&&partial.age_step==1&&partial.sensitivity==5,"部分匹配或实例覆盖、缺失默认值错误");

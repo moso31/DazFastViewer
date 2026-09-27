@@ -15,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <string_view>
 
 namespace dfv::daz {
 using Json=nlohmann::json;
@@ -78,6 +79,14 @@ struct Repository {
     const auto hash=uri.find('#');if(hash==std::string::npos) fail("资产引用缺少 fragment: "+uri);
     const auto id=decode(uri.substr(hash+1));const auto file=path(uri,owner);const auto &doc=document(file);
     if(doc.contains(library)) for(const auto &entry:doc.at(library)) if(entry.value("id","")==id) return {file,&entry};
+    // 产品更新后默认 UV 的生成 ID 可能只改变十六进制后缀；仅在同一文件中唯一匹配时兼容。
+    if(std::string_view(library)=="uv_set_library"&&doc.contains(library)) {
+      auto stable=[](const std::string &value){const auto suffix=value.rfind("-0x");if(suffix==std::string::npos||suffix+3==value.size())return value;
+        if(!std::all_of(value.begin()+suffix+3,value.end(),[](char c){return (c>='0'&&c<='9')||(c>='a'&&c<='f')||(c>='A'&&c<='F');}))return value;return value.substr(0,suffix);};
+      const auto name=stable(id);const Json *matched=nullptr;bool ambiguous=false;
+      if(!name.empty()&&name!=id)for(const auto &entry:doc.at(library))if(stable(entry.value("id",""))==name){if(matched){ambiguous=true;break;}matched=&entry;}
+      if(matched&&!ambiguous)return {file,matched};
+    }
     fail("资产 ID 不存在: "+uri+" in "+library);
   }
 };

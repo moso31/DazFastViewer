@@ -26,6 +26,7 @@
 #include <QWheelEvent>
 #include <QMenu>
 #include <QTimer>
+#include <QToolButton>
 #include <nlohmann/json.hpp>
 #include <iostream>
 #include <stdexcept>
@@ -64,6 +65,27 @@ static void source_checks() {
   until([&]{return view->currentIndex().data(Qt::UserRole).toString()==entry;});
   auto *files=qobject_cast<QFileSystemModel *>(tree->model());until([&]{return files->filePath(tree->currentIndex())==QFileInfo(entry).path()&&tree_label_visible(tree);});
   require(search->currentText()=="unrelated search","模型定位清空了搜索文本");
+}
+
+static void navigation_checks(){
+  QTemporaryDir temp;const auto root=temp.path()+"/library",folder=root+"/People/Hair/Styles/Very long folder name/Current";
+  QDir().mkpath(folder);QImage icon(32,32,QImage::Format_RGB32);icon.fill(Qt::magenta);require(icon.save(folder+"/folder.png"),"目录图标创建失败");
+  const auto texture=folder+"/texture.jpg";require(icon.save(texture),"纹理创建失败");write(folder+"/style.duf");write(folder+"/style.duf.djl",R"({"path":"People/Hair/Styles/Very long folder name/Current/style.duf"})");
+  ContentBrowser browser(nullptr,temp.path()+"/ui.ini",temp.path()+"/cache");browser.resize(780,480);browser.set_roots({root});browser.show();require(browser.locate(texture),"不能定位非 DUF 文件");
+  auto *view=browser.findChild<QListView *>("contentItems");until([&]{return view->currentIndex().data(Qt::UserRole).toString()==texture;});
+  auto *crumbs=browser.findChild<QWidget *>("contentBreadcrumbs");require(crumbs,"缺少面包屑");
+  auto *overflow=crumbs->findChild<QToolButton *>("contentBreadcrumbOverflow");browser.resize(460,480);QTest::qWait(40);require(overflow->isVisible()&&!overflow->menu()->actions().empty(),"窄窗口未折叠前部面包屑");
+  QToolButton *parent=nullptr;for(auto *button:crumbs->findChildren<QToolButton *>())if(button->property("contentBreadcrumbPath").toString()==QFileInfo(folder).path())parent=button;
+  require(parent,"上级目录缺少导航入口");parent->click();until([&]{for(int i=0;i<view->model()->rowCount();++i)if(view->model()->index(i,0).data(Qt::UserRole).toString()==folder)return true;return false;});
+  until([&]{const auto image=qvariant_cast<QIcon>(view->model()->index(0,0).data(Qt::DecorationRole)).pixmap(32,32).toImage();return !image.isNull()&&image.pixelColor(16,16)==QColor(Qt::magenta);});
+  // 新展开的目录由 QFileSystemModel 异步填充，列宽不能停留在上次定位时的值。
+  const auto expanded=root+"/General/aniMate - full folder name after asynchronous expansion",entry=expanded+"/A long content filename without truncation.duf";write(entry);
+  browser.findChild<QSlider *>("contentZoom")->setValue(0);browser.resize(1100,480);require(browser.locate(root),"无法回到目录树根");
+  auto *tree=browser.findChild<QTreeView *>("contentTree");auto *files=qobject_cast<QFileSystemModel *>(tree->model());
+  until([&]{return files->index(root+"/General").isValid();});tree->expand(files->index(root+"/General"));until([&]{return files->index(expanded).isValid();});tree->expand(files->index(expanded));
+  until([&]{const auto i=files->index(entry);return i.isValid()&&tree->visualRect(i).width()>=tree->fontMetrics().horizontalAdvance(QFileInfo(entry).fileName())+30;});
+  browser.resize(340,480);QTest::qWait(40);browser.resize(1100,480);QTest::qWait(40);const auto i=files->index(entry);
+  require(tree->visualRect(i).width()>=tree->fontMetrics().horizontalAdvance(QFileInfo(entry).fileName())+30,"拉宽目录树后文件名仍被旧列宽截断");
 }
 
 static void checks() {
@@ -169,26 +191,26 @@ static void visual() {
 
 static void locate_real() {
   QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens())if(screen!=QGuiApplication::primaryScreen()){secondary=screen;break;}require(secondary,"缺少第二屏");
-  const QString output="artifacts/content-locate",scene="H:/G1/Scenes/test9.duf",expected="H:/G1/People/Genesis 8 Female/Clothing/dForce H&C Long skirt outfit/LSO Heels.duf";
+  const QString output="artifacts/content-interaction/locate",scene="H:/G1/Scenes/test9.duf",expected="H:/G1/People/Genesis 8 Female/Clothing/dForce H&C Long skirt outfit/LSO Heels.duf";
   QDir().mkpath(output);QTemporaryDir temp;ContentBrowser browser(nullptr,temp.path()+"/ui.ini","artifacts/content-browser/benchmark-index");
   browser.setAttribute(Qt::WA_ShowWithoutActivating);browser.resize(1180,850);browser.move(secondary->availableGeometry().topLeft()+QPoint(20,20));browser.set_roots({"H:/G1","H:/G3"});browser.show();
   auto *view=browser.findChild<QListView *>("contentItems");auto *tree=browser.findChild<QTreeView *>("contentTree");auto *files=qobject_cast<QFileSystemModel *>(tree->model());auto *search=browser.findChild<QComboBox *>("contentSearch");
   search->setEditText("existing search text");QJsonArray checks;
   const auto doc=dfv::daz::document_view(std::filesystem::path(scene.toStdWString()));
   for(const auto &node:dfv::daz::array_member(dfv::daz::object_member(*doc,"scene"),"nodes")){
-    const auto label=QString::fromStdString(node.value("label",std::string{}));if(!label.startsWith("LSO Heels"))continue;
+    const auto label=QString::fromStdString(node.value("label",std::string{}));const bool hair=label=="FE Low Ponytail Base Hair";if(!label.startsWith("LSO Heels")&&!hair)continue;const auto expected_entry=hair?QString("H:/G1/People/Genesis 8 Female/Hair/FeSoul/FE Low Ponytail Base Hair/!FE Low Ponytail Base Hair.duf"):expected;
     ContentOrigin origin{scene,QString::fromStdString(node.at("id").get<std::string>()),label,{}};
-    for(const auto &g:dfv::daz::array_member(node,"geometries")){const auto url=QString::fromStdString(dfv::daz::decode_uri(g.at("url").get<std::string>()));const auto hash=url.indexOf('#');origin.geometries.emplace_back("H:/G3"+url.left(hash),url.mid(hash+1));}
-    browser.locate_asset(origin);until([&]{return browser.property("contentLocateState").toString()!="resolving";},120000);
-    require(browser.property("contentLocatedPath").toString().compare(expected,Qt::CaseInsensitive)==0,"test9 鞋子没有定位到正确的加载入口");
-    until([&]{return view->currentIndex().data(Qt::UserRole).toString().compare(expected,Qt::CaseInsensitive)==0&&view->viewport()->rect().contains(view->visualRect(view->currentIndex()).center())&&files->filePath(tree->currentIndex()).compare(QFileInfo(expected).path(),Qt::CaseInsensitive)==0&&tree_label_visible(tree);});
-    require(search->currentText()=="existing search text","真实资源定位丢失搜索文本");QTest::qWait(300);browser.grab().save(output+"/"+origin.node+".png");checks.append(QJsonObject{{"node",origin.node},{"label",label},{"located",browser.property("contentLocatedPath").toString()},{"tree_and_icon_visible",true},{"search_preserved",true}});
+    for(const auto &g:dfv::daz::array_member(node,"geometries")){const auto url=QString::fromStdString(dfv::daz::decode_uri(g.at("url").get<std::string>()));const auto hash=url.indexOf('#');origin.geometries.emplace_back((QFileInfo("H:/G1"+url.left(hash)).isFile()?"H:/G1":"H:/G3")+url.left(hash),url.mid(hash+1));}
+    until([&]{return browser.property("contentIndexSize").toULongLong()>10000;},120000);QElapsedTimer timer;timer.start();browser.locate_asset(origin);until([&]{return browser.property("contentLocateState").toString()!="resolving";},120000);
+    require(browser.property("contentLocatedPath").toString().compare(expected_entry,Qt::CaseInsensitive)==0,"test9 鞋子没有定位到正确的加载入口");
+    until([&]{return view->currentIndex().data(Qt::UserRole).toString().compare(expected_entry,Qt::CaseInsensitive)==0&&view->viewport()->rect().contains(view->visualRect(view->currentIndex()).center())&&files->filePath(tree->currentIndex()).compare(QFileInfo(expected_entry).path(),Qt::CaseInsensitive)==0&&tree_label_visible(tree);});
+    require(search->currentText()=="existing search text","真实资源定位丢失搜索文本");QTest::qWait(300);browser.grab().save(output+"/"+origin.node+".png");checks.append(QJsonObject{{"elapsed_ms",double(timer.elapsed())},{"node",origin.node},{"label",label},{"located",browser.property("contentLocatedPath").toString()},{"tree_and_icon_visible",true},{"search_preserved",true}});
   }
-  require(checks.size()==2,"test9 中两个鞋子实例未全部检查");write(output+"/test9.json",QJsonDocument(QJsonObject{{"result","PASS"},{"checks",checks}}).toJson());
+  require(checks.size()==3,"test9 中两个鞋子和头发未全部检查");write(output+"/test9.json",QJsonDocument(QJsonObject{{"result","PASS"},{"checks",checks}}).toJson());
   std::cout<<"test9 LSO Heels / exact DUF / both panes visible / query preserved: PASS\n";
 }
 int main(int argc,char **argv) {
   QApplication app(argc,argv);app.setApplicationName("DazFastViewerContentTest");app.setOrganizationName("DazFastViewerTests");app.setFont(QFont(QStringLiteral("Microsoft YaHei UI"),9));
-  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else {source_checks();checks();}return 0;}
+  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else {source_checks();checks();navigation_checks();}return 0;}
   catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}
 }

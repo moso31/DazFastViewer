@@ -1,5 +1,6 @@
 #include "editor/document.h"
 #include "daz/pose.h"
+#include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -21,6 +22,22 @@ static FormulaGraph graph(const Target &t,int skin) {
   g.prepare();return g;
 }
 
+static void surface_cache_checks() {
+  ir::Scene scene;ir::Mesh body;body.positions={{0,0,7},{2,0,7},{0,2,7}};body.triangles={{{0,1,2}}};auto cloth=body;cloth.positions={{.2f,.2f,7.3f},{.5f,.2f,7.3f},{.2f,.5f,7.3f}};
+  scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;Target a;a.id="cache-body/mesh";Target b;b.id="cache-cloth/mesh";b.instance=1;b.conform_target="#cache-body";
+  const std::vector<Target> targets={a,b};const std::vector<Skin> skins;const std::vector<FormulaGraph> graphs={graph(a,-1),graph(b,-1)};
+  ConformRuntime initial(scene,targets,skins,graphs);const auto before=initial.link(1)->surface;
+  diagnostics::LoadProfile profile;struct Reset {diagnostics::LoadProfile *previous=diagnostics::active;~Reset(){diagnostics::active=previous;}} reset;diagnostics::active=&profile;
+  auto hits=[&]{size_t count=0;for(const auto &[name,value]:profile.timings)if(name.ends_with("conform_binding_cache_hit"))count+=value.calls;return count;};
+  ConformRuntime repeated(scene,targets,skins,graphs);require(hits()==1,"重复静止几何没有复用最近点绑定");
+  for(size_t i=0;i<before.size();++i){const auto &after=repeated.link(1)->surface[i];require(after.vertices==before[i].vertices&&after.barycentric==before[i].barycentric&&after.offset_coordinates==before[i].offset_coordinates,"绑定复用改变了表面坐标");}
+  auto changed=scene;changed.instances[1].transform=ir::Transform::translate({0,0,2});ConformRuntime translated(changed,targets,skins,graphs);
+  require(hits()==1&&std::abs(translated.link(1)->surface[0].distance-before[0].distance-2)<1e-5,"相对矩阵变化错误复用绑定");
+  changed=scene;for(auto &p:changed.meshes[0].positions)p.z+=.1f;ConformRuntime moved(changed,targets,skins,graphs);require(hits()==1&&std::abs(moved.link(1)->surface[0].distance-before[0].distance+.1f)<1e-5,"宿主顶点变化错误复用绑定");
+  changed=scene;changed.meshes[0].triangles[0].vertices={0,2,1};ConformRuntime topology(changed,targets,skins,graphs);require(hits()==1&&topology.link(1)->surface[0].vertices==std::array<uint32_t,3>{0,2,1},"拓扑变化错误复用绑定");
+  changed=scene;for(auto &p:changed.meshes[1].positions)p.z+=.2f;ConformRuntime follower(changed,targets,skins,graphs);require(hits()==1&&std::abs(follower.link(1)->surface[0].distance-before[0].distance-.2f)<1e-5,"附件顶点变化错误复用绑定");
+  auto invalid=targets;invalid[0].conform_target="#cache-cloth";rejects([&]{ConformRuntime cyclic(scene,invalid,skins,graphs);},"缓存绕过 Fit To 循环检查");
+}
 static void mesh_collision() {
   ir::Scene scene;ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};
   ir::Triangle f;f.vertices={0,1,2};body.triangles.push_back(f);f.vertices={0,2,3};body.triangles.push_back(f);
@@ -168,6 +185,7 @@ static void graft_collision_restore() {
   require(distance(scene.meshes[2].positions,cloth.positions)<1e-6,"服装碰撞没有使用当前接缝位置");
 }
 static void unit() {
+  surface_cache_checks();
   graft_collision_restore();
   {
     // 共同祖先的平移 / 旋转 / 缩放应完全保留碰撞缓存，包括 GeoGraft。

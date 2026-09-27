@@ -1,4 +1,5 @@
 #include "editor/material_panel.h"
+#include "editor/folder_icon.h"
 #include "editor/numeric_slider.h"
 #include "editor/numeric_spinbox.h"
 #include <QTreeWidget>
@@ -55,7 +56,7 @@ MaterialPanel::MaterialPanel(QWidget *parent):QWidget(parent){
   setObjectName("MaterialPanel");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(4,4,4,4);
   auto *toolbar=new QHBoxLayout;scope_=new QComboBox;scope_->setObjectName("materialScope");scope_->addItems({QStringLiteral("当前角色 / 对象"),QStringLiteral("全部场景对象")});toolbar->addWidget(scope_);
   auto *reset_all=new QPushButton(QStringLiteral("还原所选材质"));reset_all->setToolTip(QStringLiteral("还原至加载场景或最近应用的材质预设"));toolbar->addWidget(reset_all);toolbar->addStretch();layout->addLayout(toolbar);
-  auto *preset=new QPushButton(QStringLiteral("应用材质 / Shader 预设…"));layout->addWidget(preset);connect(preset,&QPushButton::clicked,this,[this]{const auto selected=surfaces();if(selected.empty()||!preset_requested)return;auto file=QFileDialog::getOpenFileName(this,QStringLiteral("应用到所选表面"),{},QStringLiteral("DAZ 材质预设 (*.duf)"));if(!file.isEmpty())preset_requested(std::filesystem::path(file.toStdWString()),selected);});
+  auto *preset=new QPushButton(QStringLiteral("应用材质 / Shader 预设…"));layout->addWidget(preset);connect(preset,&QPushButton::clicked,this,[this]{const auto selected=surfaces();if(selected.empty()||!preset_requested)return;auto file=QFileDialog::getOpenFileName(this,QStringLiteral("应用到所选表面"),{},QStringLiteral("DAZ 材质预设 (*.duf *.djl)"));if(!file.isEmpty())preset_requested(std::filesystem::path(file.toStdWString()),selected);});
   auto *splitter=new QSplitter(Qt::Horizontal);splitter->setObjectName("materialSplitter");splitter->setChildrenCollapsible(false);layout->addWidget(splitter,1);
   tree_=new QTreeWidget;tree_->setObjectName("materialSurfaces");tree_->setHeaderLabel(QStringLiteral("对象与子材质"));tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);tree_->setMinimumWidth(100);tree_->setTextElideMode(Qt::ElideMiddle);splitter->addWidget(tree_);
   tree_->setIndentation(14);tree_->setMouseTracking(true);tree_->viewport()->installEventFilter(this);installEventFilter(this);
@@ -171,6 +172,7 @@ void MaterialPanel::rebuild_properties(){
         if(action==clear)commit(*parameter,J{});else if(action==browse){auto file=QFileDialog::getOpenFileName(this,QStringLiteral("选择材质贴图"),{},QStringLiteral("图像 (*.png *.jpg *.jpeg *.tif *.tiff *.exr *.hdr *.bmp *.tga *.webp);;所有文件 (*)"));if(file.isEmpty())return;commit(*parameter,J{{"file",utf8(QFileInfo(file).absoluteFilePath())}});}else commit(*parameter,available.at(action));schedule_properties();});
     }
     if(p.kind==P::texture){auto *preview=new QLabel;thumbnail(preview,!mixed&&!current.is_null()?text(current.at("file").get<std::string>()):QString{});controls->addWidget(preview);if(auto *button=row->findChild<QPushButton *>()){button->setMinimumWidth(45);button->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}}
+    if(p.kind==P::texture){auto *locate=new QToolButton;locate->setObjectName("materialLocate/"+text(p.id));locate->setIcon(folder_icon());locate->setToolTip(QStringLiteral("在内容库中定位"));locate->setFixedWidth(22);locate->setEnabled(!mixed&&!current.is_null());horizontal->insertWidget(horizontal->count()-1,locate);connect(locate,&QToolButton::clicked,this,[this,parameter]{const auto selected=surfaces();if(selected.empty()||!locate_file)return;const auto v=value(selected.front(),*parameter);if(!v.is_null())locate_file(text(v.at("file").get<std::string>()));});}
     if(p.kind==P::color)if(auto *button=row->findChild<QPushButton *>()){button->setFixedWidth(24);button->setText(mixed?QStringLiteral("*"):QString{});button->setToolTip(QStringLiteral("选择颜色；HDR 分量可在右侧直接输入"));}
     if(p.kind==P::choice)if(auto *combo=row->findChild<QComboBox *>()){combo->setMinimumWidth(40);combo->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}
     auto children=row->findChildren<QWidget *>();children.push_back(row);for(auto *child:children){child->setProperty("materialWheelRow",text(p.id));child->installEventFilter(this);}

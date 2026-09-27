@@ -1,4 +1,5 @@
 #include "editor/document.h"
+#include "editor/render_edit_queue.h"
 #include "render_ir/options_json.h"
 #include "bench/camera.h"
 #include "render_ir/sun_sky.h"
@@ -21,6 +22,10 @@ static void local_pivot(const std::filesystem::path &folder) {
   for(size_t i=0;i<a.size();++i) require(std::abs(a[i]-b[i])<2e-5,"编辑没有绕 DAZ 中心和局部轴旋转 / 缩放");
 }
 int main() {try {
+  {editor::RenderEditQueue queue;ir::Delta first;first.visibility={{0,false},{1,true}};first.meshes={{0,{{1,2,3}}}};queue.merge(first);
+    ir::Delta last;last.visibility={{0,true}};last.meshes={{0,{{4,5,6}}}};queue.merge(last,true);
+    require(queue.pending&&queue.synchronize&&queue.delta.visibility.size()==2&&queue.delta.visibility[0].visible&&queue.delta.visibility[1].visible&&queue.delta.meshes.size()==1&&queue.delta.meshes[0].positions[0].x==4,"等待期间丢失显隐或最新几何");queue.clear();require(!queue.pending&&!queue.synchronize&&queue.delta.meshes.empty(),"提交后残留过期编辑");}
+
   const auto folder=std::filesystem::temp_directory_path()/"dfv-render-options";std::filesystem::create_directories(folder);
   const auto file=folder/"scene.duf";std::ofstream(folder/"studio.hdr")<<"fixture";
   J tone=J::array(),env=J::array();

@@ -5,7 +5,10 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <list>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <numeric>
 #include <stdexcept>
 #include <ppl.h>
@@ -59,6 +62,34 @@ public:
   }
 };
 bool transferable(const Morph &m) {return m.evaluable&&m.auto_follow&&m.kind!="alias"&&m.alias_morph<0&&m.has_offsets();}
+// 导入校验和渲染准备使用相同静止几何，复用最近点绑定，避免再次逐顶点搜索。
+// 缓存只保存几何结果；骨骼、Morph 和 Fit To 依赖仍按当前文档重新校验。
+struct CachedSurface {
+  uint64_t key=0;size_t bytes=0;
+  std::vector<SurfaceBinding> surface;
+  std::vector<std::vector<uint32_t>> neighbors;
+};
+class SurfaceCache {
+  std::mutex mutex_;
+  std::list<std::shared_ptr<const CachedSurface>> entries_;
+  size_t bytes_=0;
+  static constexpr size_t budget=128*1024*1024;
+public:
+  std::shared_ptr<const CachedSurface> get(uint64_t key) {
+    std::lock_guard lock(mutex_);
+    for(auto i=entries_.begin();i!=entries_.end();++i)if((*i)->key==key){auto result=*i;entries_.splice(entries_.end(),entries_,i);return result;}
+    return {};
+  }
+  void put(const ConformLink &link) {
+    size_t cost=sizeof(CachedSurface)+link.surface.size()*sizeof(SurfaceBinding)+link.neighbors.size()*sizeof(std::vector<uint32_t>);
+    for(const auto &neighbors:link.neighbors)cost+=neighbors.size()*sizeof(uint32_t);if(cost>budget)return;
+    auto saved=std::make_shared<CachedSurface>();saved->key=link.geometry_key;saved->bytes=cost;saved->surface=link.surface;saved->neighbors=link.neighbors;
+    std::lock_guard lock(mutex_);for(const auto &entry:entries_)if(entry->key==saved->key)return;
+    while(!entries_.empty()&&(bytes_+cost>budget||entries_.size()>=32)){bytes_-=entries_.front()->bytes;entries_.pop_front();}
+    bytes_+=cost;entries_.push_back(std::move(saved));
+  }
+};
+SurfaceCache surface_cache;
 }
 ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse):targets_(targets) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("Fit To 公式图数量不一致");
@@ -104,6 +135,7 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     GeometryKey key;key.points(body.positions);key.topology(body);key.points(cloth.positions);key.topology(cloth);key.add(follower_to_source);l.geometry_key=key.value;
     const ConformLink *cached=nullptr;if(reuse) for(const auto &old:reuse->links_) if(old.geometry_key==l.geometry_key&&reuse->targets_[old.follower].id==follower.id&&reuse->targets_[old.source].id==source.id) {cached=&old;break;}
     if(cached) {l.surface=cached->surface;l.neighbors=cached->neighbors;stats_.bindings+=l.surface.size();continue;}
+    if(const auto saved=surface_cache.get(l.geometry_key)){diagnostics::Scope cache_hit("conform_binding_cache_hit");l.surface=saved->surface;l.neighbors=saved->neighbors;stats_.bindings+=l.surface.size();continue;}
     auto &cached_index=surface_indexes[a.mesh];if(!cached_index) cached_index=std::make_unique<SurfaceIndex>(body);const auto &index=*cached_index;l.surface.reserve(cloth.positions.size());
     l.neighbors.resize(cloth.positions.size());
     for(const auto &triangle:cloth.triangles) for(size_t i=0;i<3;++i) for(size_t j=0;j<3;++j) if(i!=j) l.neighbors[triangle.vertices[i]].push_back(triangle.vertices[j]);
@@ -117,7 +149,7 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
       if(det>1e-12*aa*bb) binding.offset_coordinates={float((bb*u-ab*v)/det),float((aa*v-ab*u)/det),dot(offset,binding.normal)};
       l.surface.push_back(binding);
     }
-    stats_.bindings+=l.surface.size();
+    surface_cache.put(l);stats_.bindings+=l.surface.size();
   }
   previous_weights_.resize(links_.size());source_revisions_.resize(links_.size(),std::numeric_limits<uint64_t>::max());
 }

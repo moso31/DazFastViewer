@@ -1,0 +1,33 @@
+# 内容链接、内容导航与连续姿态编辑
+
+2026-09-27。
+
+## 本次修改
+
+- 内容浏览器和打开资源入口支持 `.djl`，包括 `.duf.djl`。读取 JSON `path` 后优先在所属资源库、再在其他配置库解析；支持 URI 转义、连续链接，并拒绝循环、缺失目标和错误结构。目标继续按 DUF 内容分派到模型、材质、姿势或 Morph 预设入口。链接本身并非仅用于切换头发。
+- 文件夹和文件使用同名 PNG、目录内 `folder.png` 等预览图；DJL 可继承目标缩略图，图像文件可显示自身。左侧目录树和右侧图标均异步加载，缺少图像时使用默认图标。
+- 资源库选择框与搜索框之间增加可点击面包屑。宽度不足时保留末级路径，隐藏的祖先放入 `»` 菜单；保留已有搜索文本与定位后的临时目录视图。
+- 材质贴图参数在还原按钮前增加文件夹按钮。按当前值定位到内容浏览器，选中贴图文件；多选值不一致或无贴图时禁用。
+- 模型定位先按有辨识度的名称筛选，最多核验 32 个候选，候选核验约 750 毫秒预算；避免解析大型保存场景及大型引用定义。引用匹配且名称准确的成套头发可直接返回入口，不继续遍历整个库。找不到精确入口且候选很多时，可退到最相关的产品目录。单个文件读取不支持中途打断，因此此预算不是硬实时上限。
+- 生长参数优先使用 Actor 元数据；Prop、Follower 等类型不作为角色。缺少元数据时，需要完整的人形骨骼结构。原生扩展导入也排除明确声明为 Prop 的骨架道具，保留其密度属性。
+
+## 白模与光追交接
+
+几何、实例和显隐编辑产生白模预览。参数求值、OpenGL 白模和拾取更新不再等待光追首帧；拖动期间积累最新修改，松手后尝试取得 Cycles 场景锁。锁繁忙时继续接收输入，各对象的修改按最新值合并，不排队播放中间结果。
+
+姿态提交后的恢复状态只在等待 UI 确认时限制再次启动；新姿态完成 CPU 求值后，IK、FK 和 PowerPose 可立即再次开始。等待期间沿用当前白模，只有匹配最新输入版本和渲染 epoch 的画面就绪后才切回。普通参数引起的显隐修改使用同一规则。
+
+工程实际使用 Cycles / OptiX。这里修复的是光追首帧等待造成的交互阻塞；大型场景的 CPU 完整形变、服装碰撞、资源首次读取仍有其计算成本。
+
+## 验证
+
+- 26 项工程回归通过。新增覆盖链接链、循环和坏链接，Prop 与 Actor 分类，显隐／几何修改合并，非 DUF 贴图定位，目录图标与窄窗口面包屑导航。
+- 实际 Xanthe G8 头发通过 `.duf.djl` 引用 G9 目录下的 Style 14 预设，67 个 Morph 通道全部匹配，零未应用通道；不是仅检查扩展名。
+- `dbxxx-Realistic dildo 2` 实际导入不再被识别为生长角色。
+- `test9.duf` 的低马尾及两个 LSO Heels 均定位到正确加载文件。最后一轮从请求到目录展开、资源选中和截图的耗时分别约 768、775、944 毫秒，包含测试固定等待的 300 毫秒。此测量使用已有内容索引，首次全库扫描另计。
+- 新增 `RendererInteractionTest` 在副屏运行实际 Renderer / OptiX，仅该测试编译版本将首帧场景锁延长 500 毫秒。覆盖连续显隐／FK 属性修改，以及 IK、FK、PowerPose 在首帧等待期间再次拖动。再次拖动响应分别约 18、17、19 毫秒，属性复编辑约 31 毫秒；最终版本为 11，全程一个会话。该数据来自小型受控场景，不能外推为大型场景的全部变形耗时。
+- 额外运行正式程序的 `test9.duf` PowerPose 全流程：前 11 组拖动、松手等待白模和姿势恢复检查通过。第 12 组要求首个角色髋部 Y 位移，但原场景的 `hip.translation.y` 明确设置了 `locked: true`，脚本因无法产生拖动而等待，随后关闭本次测试窗口。该扩展检查未全部完成，不计为全量通过；原场景锁定保持不变，记录见 `artifacts/content-interaction/test9-powerpose/validation-note.json`。
+
+证据：`artifacts/content-interaction/gpu/result.json`、`artifacts/content-interaction/locate/test9.json`、`artifacts/content-interaction-djl.log`、`artifacts/content-interaction-growth.log`。全量构建与测试记录为 `artifacts/content-interaction-full-build.log`；构建包装脚本将 CMake 的开发者警告记录为 PowerShell `NativeCommandError`，日志中的编译、26 项检查和运行文件暂存均已完成。最终补充修改的构建与 26 项检查记录为 `artifacts/content-interaction-final-build.log`、`artifacts/content-interaction-final-tests.log`。`out/DazFastViewer.exe` 已更新，构建、部署清单和实际程序的哈希一致，226 个源码文件与部署清单一致，记录见 `artifacts/content-interaction/validation.json`。
+
+用户原始 DUF 与内容库保持只读；本轮没有创建 Git 提交。

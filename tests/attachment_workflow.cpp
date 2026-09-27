@@ -1,5 +1,6 @@
 #include "editor/document.h"
 #include "daz/content_entry.h"
+#include "daz/pose.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -28,6 +29,19 @@ static void unit() {
   fs::create_directories(backing.parent_path());std::ofstream(backing)<<"{}";
   require(daz::supported_content_entry(entry)&&daz::content_asset(entry,{folder})==backing,"产品入口没有解析到基础 DUF");
   rejects([&]{daz::content_asset(folder/"unknown.dse",{folder});},"任意 DAZ 脚本被错误接受");
+  {
+    const auto link=folder/"hair.duf.djl",chain=folder/"chain.djl";
+    std::ofstream(link)<<J{{"path",fs::relative(backing,folder).generic_string()}};
+    std::ofstream(chain)<<J{{"path","hair.duf.djl"}};
+    require(daz::supported_content_entry(link)&&daz::content_asset(chain,{folder})==backing,"DJL 双扩展或链式链接未解析");
+    const auto missing=folder/"missing.djl";std::ofstream(missing)<<R"({"path":"missing.duf"})";
+    rejects([&]{daz::content_asset(missing,{folder});},"失效链接未报错");
+    const auto cycle=folder/"cycle.djl";std::ofstream(cycle)<<R"({"path":"cycle.djl"})";
+    rejects([&]{daz::content_asset(cycle,{folder});},"循环链接未报错");
+    const auto invalid=folder/"invalid.djl";std::ofstream(invalid)<<R"({"path":42})";
+    rejects([&]{daz::content_asset(invalid,{folder});},"错误链接结构未报错");
+    require(daz::content_asset(link,{folder/"other",folder})==backing,"跨库链接未解析");
+  }
   const auto base=J::parse(R"({"node_library":[{"id":"figure","type":"figure","presentation":{"type":"Actor/Character","auto_fit_base":"/Genesis 8.1/Female","extended_bases":["/Genesis 8/Female"]}},{"id":"bone","name":"head","type":"bone","parent":"#figure"}],
     "geometry_library":[{"id":"mesh","vertices":{"count":3,"values":[[10,0,0],[100,0,0],[0,100,0]]},"polygon_material_groups":{"count":1,"values":["Skin"]},"polylist":{"count":1,"values":[[0,0,0,1,2]]},"default_uv_set":"#uv"}],
     "uv_set_library":[{"id":"uv","vertex_count":3,"uvs":{"count":3,"values":[[0,0],[1,0],[0,1]]}}],
@@ -124,4 +138,13 @@ static void actual(const fs::path &host,const fs::path &wear,const std::vector<f
   std::cout<<"Rebinding attachment"<<std::endl;editor::fit_attachment(d,first,int(target));evaluate(d,snapshot);
   std::cout<<J({{"status","PASS"},{"added_targets",d.catalog.targets.size()-first},{"attachment_groups",d.attachments.size()},{"host",d.catalog.targets[target].id}}).dump()<<std::endl;
 }
-int wmain(int argc,wchar_t **argv) {try {if(argc>=5&&std::wstring(argv[1])==L"--actual") {std::vector<fs::path> roots;for(int i=4;i<argc;++i) roots.emplace_back(argv[i]);actual(argv[2],argv[3],roots);}else unit();return 0;}catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}}
+int wmain(int argc,wchar_t **argv) {try {
+  if(argc>=5&&std::wstring(argv[1])==L"--material-link"){
+    std::vector<fs::path> roots;for(int i=4;i<argc;++i)roots.emplace_back(argv[i]);const auto file=daz::content_asset(argv[3],roots);auto d=load(argv[2],roots,true);auto s=editor::initial_snapshot(d);
+    const auto preset=daz::load(file,{roots,false});const auto applied=editor::apply_materials(d,0,preset,&s);require(applied>0,"实际材质链接未匹配头发表面");d.loaded.scene.validate();std::cout<<J{{"status","PASS"},{"link",fs::path(argv[3]).generic_string()},{"resolved",file.generic_string()},{"applied_surfaces",applied}}.dump(2)<<std::endl;
+  }else if(argc>=5&&std::wstring(argv[1])==L"--link"){
+    std::vector<fs::path> roots;for(int i=4;i<argc;++i)roots.emplace_back(argv[i]);const auto file=daz::content_asset(argv[3],roots);auto d=load(argv[2],roots,true);auto s=editor::initial_snapshot(d);require(!d.skeletons.skins.empty(),"头发没有骨架");
+    const auto &skin=d.skeletons.skins.front();size_t t=0;while(t<d.catalog.targets.size()&&d.catalog.targets[t].instance!=skin.instance)++t;require(t<d.catalog.targets.size(),"头发缺少目标");
+    const auto applied=daz::apply_pose(daz::read_pose(file),skin,s.poses[0],d.catalog.targets[t],s.values[t]);require(applied.report.at("applied_morph_channels").get<int>()>0&&applied.report.at("unapplied").empty(),"实际 Style 链接没有完整匹配头发参数");require(applied.properties.morphs!=s.values[t].morphs,"Style 没有改变头发参数");std::cout<<applied.report.dump(2)<<std::endl;
+  }else if(argc>=5&&std::wstring(argv[1])==L"--actual") {std::vector<fs::path> roots;for(int i=4;i<argc;++i) roots.emplace_back(argv[i]);actual(argv[2],argv[3],roots);}else unit();return 0;
+}catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}}

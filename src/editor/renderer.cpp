@@ -1,6 +1,7 @@
 #include "editor/renderer.h"
 #include "editor/pose_drag.h"
 #include "editor/powerpose_drag.h"
+#include "editor/render_edit_queue.h"
 #include "viewport/display.h"
 #include "viewport/overlay.h"
 #include "runtime/picking.h"
@@ -137,11 +138,15 @@ void Renderer::run(std::stop_token stop) {
       buffers.width=buffers.full_width=width;buffers.height=buffers.full_height=height;applied_percent=quality.percent;
     };
     Snapshot desired;InstanceGrounds applied_instance_ground;bool edit_affects_render=false;
+    RenderEditQueue queued;bool clay_wait=false;uint64_t gpu_revision=0;
+    std::vector<ir::SubdivisionSettings> queued_subdivision_before;
     auto reset_render_state=[&] {
       runtime.reset();render_scene_ptr.reset();pending_runtime.reset();pending_scene.reset();pending_document.reset();
       current.reset();picking={};regions.clear();pickable.clear();instance_groups.reset();geometry_dirty=true;
       previous_positions.clear();displacements.clear();powerpose_reference.clear();
       pose_drag.active=powerpose_drag.active=gizmo_drag.active=false;pose_recovery={};pose_paused=false;gizmo_valid=false;
+      queued.clear();clay_wait=false;gpu_revision=0;
+      queued_subdivision_before.clear();
       ++window_->pose_selection;pose_serial=window_->pose_pointer().serial;gizmo_selection=gizmo_revision=UINT64_MAX;
       state={};state.clicks=clicks;telemetry_.displayed_epoch=0;telemetry_.displayed_samples=0;
     };
@@ -229,6 +234,10 @@ void Renderer::run(std::stop_token stop) {
         scene.integrator->set_sampling_pattern(sampling_.blue_noise?SAMPLING_PATTERN_BLUE_NOISE_FIRST:SAMPLING_PATTERN_TABULATED_SOBOL);
         scene.integrator->set_min_bounce(sampling_.min_bounces);scene.integrator->set_transparent_min_bounce(sampling_.transparent_min_bounces);
         session->dfv_event=[&](const char *name,uint64_t epoch,double ms) {
+#ifdef DFV_RENDER_INTERACTION_TEST
+          // 仅 GPU 回归程序延长首帧场景锁，验证此时白模输入仍可推进。
+          if(std::string_view(name)=="scene_data_dirty")std::this_thread::sleep_for(std::chrono::milliseconds(500));
+#endif
           Frame frame;frame.epoch=epoch;frame.samples=session->dfv_render_samples.load();telemetry_.event(name,frame,ms);
           if(std::string_view(name)=="path_trace") {const auto *gpu=static_cast<GPUDevice *>(session->device.get());gpu_device_bytes=gpu->dfv_device_bytes();gpu_host_bytes=gpu->dfv_host_bytes();}
         };
@@ -247,6 +256,8 @@ void Renderer::run(std::stop_token stop) {
         for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene_ptr->meshes.at(render_scene_ptr->instances.at(skin.instance).mesh),skin);
         geometry_dirty=true;edit_affects_render=false;previous_positions.clear();
         applied_revision=attempted_revision=desired.revision;
+        gpu_revision=applied_revision;queued.clear();clay_wait=false;pose_recovery={};
+        queued_subdivision_before.clear();
         {Frame f;f.epoch=epoch;f.id=applied_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);}
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
@@ -258,6 +269,7 @@ void Renderer::run(std::stop_token stop) {
         for(const auto &t:targets)if(family.contains(node(t)))result.push_back(t.instance);return result;
       };
       if(pose_recovery.active&&pose_recovery.generation!=current->generation) pose_recovery.active=false;
+      if(pose_recovery.active&&desired.revision>pose_recovery.revision&&applied_revision==desired.revision)pose_recovery.active=false;
       const auto pointer=window_->pose_pointer();
       const auto input_camera=window_->mailbox.latest();
       const float gizmo_dpi=GetDpiForWindow(window_->hwnd)/96.f;
@@ -286,7 +298,7 @@ void Renderer::run(std::stop_token stop) {
       }
       state.gizmo_available=gizmo_valid&&gizmo_settings.tool!=GizmoTool::select;
       if(gizmo_valid&&!gizmo_drag.active&&!pose_recovery.active) gizmo_drag.layout(input_camera,window_->width,window_->height,gizmo_settings,gizmo_dpi);
-      if(pointer.serial!=gizmo_serial) {
+      if(pointer.serial!=gizmo_serial&&!pose_recovery.active&&desired.revision==applied_revision) {
         gizmo_serial=pointer.serial;
         if(gizmo_valid&&gizmo_settings.tool!=GizmoTool::select&&!pose_drag.active&&!powerpose_drag.active&&!pose_recovery.active&&
           pointer.held&&!pointer.cancelled&&pointer.selection==window_->pose_selection&&current==document&&desired.revision==applied_revision&&!input_camera.navigating) {
@@ -304,7 +316,7 @@ void Renderer::run(std::stop_token stop) {
             state.pose_joint=gizmo_drag.joint;state.pose_target=gizmo_drag.target;state.pose_light=gizmo_light;state.pose_figure=gizmo_drag.joint<0;
             state.pose_transform=gizmo_drag.transform;state.pose_input=gizmo_drag.poses;state.pose_error=state.pose_angle_error=0;
             if(gizmo_light>=0) state.gizmo_light_transform=gizmo_drag.world;
-            pose_recovery={true,false,gizmo_drag.generation,gizmo_drag.revision,true};telemetry_.event("gizmo_commit");
+            pose_recovery={true,false,gizmo_drag.generation,gizmo_drag.revision,true};clay_wait=true;telemetry_.event("gizmo_commit");
           }
           gizmo_drag.active=false;state.pose_dragging=false;gizmo_revision=UINT64_MAX;
         } else if(gizmo_drag.moved) {
@@ -350,7 +362,7 @@ void Renderer::run(std::stop_token stop) {
             state.pose_commit=++pose_commits;state.pose_generation=powerpose.generation;state.pose_revision=powerpose.revision;state.pose_skin=powerpose.skin;state.pose_joint=powerpose_drag.bound.joints.empty()?-1:powerpose_drag.bound.joints.front();
             state.pose_gizmo=false;state.pose_powerpose=true;state.pose_figure=powerpose_drag.bound.figure;state.pose_target=powerpose.target;state.pose_transform=powerpose_drag.transform;
             state.pose_error=powerpose_drag.result.error;state.pose_angle_error=powerpose_drag.result.angle_error_degrees;
-            pose_recovery={true,true,powerpose.generation,powerpose.revision};telemetry_.event("powerpose_commit");
+            pose_recovery={true,true,powerpose.generation,powerpose.revision};clay_wait=true;telemetry_.event("powerpose_commit");
           }
           powerpose_drag.active=false;state.pose_dragging=false;
         } else if(powerpose_drag.moved) {
@@ -366,11 +378,11 @@ void Renderer::run(std::stop_token stop) {
       if(pose_drag.active&&(pose_drag.generation!=current->generation||pose_drag.revision!=desired.revision||pointer.cancelled||pointer.selection!=window_->pose_selection||pointer.serial!=pose_drag.press.serial||input_camera.epoch!=pose_drag.camera().epoch||window_->width!=state.width||window_->height!=state.height)) {
         pose_drag.active=false;state.pose_dragging=false;clicks=window_->clicks.load();
       }
-      if(pointer.serial!=pose_serial) {
+      if(pointer.serial!=pose_serial&&!pose_recovery.active&&desired.revision==applied_revision) {
         pose_serial=pointer.serial;
         // 只使用按下时已经存在的单选身份；首次选中、Ctrl 多选和过期场景不能启动 IK。
         if(!gizmo_drag.active&&gizmo_consumed!=pointer.serial&&!powerpose_drag.active&&!pose_recovery.active&&ik_allowed&&pointer.held&&!pointer.cancelled&&!geometry_dirty&&current==document&&desired.revision==applied_revision&&
-           selection_generation==current->generation&&pointer.selection==window_->pose_selection&&telemetry_.displayed_epoch.load()>=epoch&&!preview&&selections.size()==1) {
+           selection_generation==current->generation&&pointer.selection==window_->pose_selection&&(clay_wait||(telemetry_.displayed_epoch.load()>=epoch&&!preview))&&selections.size()==1) {
           const auto hit=picking.screen(input_camera,pointer.start_x,pointer.start_y,window_->width,window_->height);
           int hit_target=-1;for(size_t t=0;t<current->catalog.targets.size();++t) if(int(current->catalog.targets[t].instance)==hit.instance) hit_target=int(t);
           int skin_index=-1;for(size_t s=0;s<current->skeletons.skins.size();++s) if(int(current->skeletons.skins[s].instance)==hit.instance) skin_index=int(s);
@@ -387,7 +399,7 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       if(pose_drag.active) {
-        state.pose_gizmo=false;
+        state.pose_gizmo=false;state.pose_powerpose=false;
         const auto begin=now();const bool updated=pose_drag.update(pointer);
         if(updated) {state.pose_solve_ms=(now()-begin)*1000;state.pose_error=pose_drag.result.error;state.pose_angle_error=pose_drag.result.angle_error_degrees;state.pose_previews=++pose_previews;telemetry_.event("ik_proxy_update",{},state.pose_solve_ms);}
         if(!pointer.held) {
@@ -398,7 +410,7 @@ void Renderer::run(std::stop_token stop) {
             state.pose_commit=++pose_commits;state.pose_generation=pose_drag.generation;state.pose_revision=pose_drag.revision;state.pose_skin=pose_drag.skin;state.pose_joint=pose_drag.joint;
             state.pose_gizmo=false;state.pose_powerpose=false;state.pose_figure=false;
             clicks=window_->clicks.load();telemetry_.event("ik_commit");
-            pose_recovery={true,false,pose_drag.generation,pose_drag.revision};
+            pose_recovery={true,false,pose_drag.generation,pose_drag.revision};clay_wait=true;
           }
           pose_drag.active=false;state.pose_dragging=false;
         } else if(pose_drag.moved) {
@@ -420,15 +432,16 @@ void Renderer::run(std::stop_token stop) {
       const bool size_changed=camera_width!=window_->width||camera_height!=window_->height;
       const bool edit_pending=desired.generation==current->generation&&desired.revision!=attempted_revision;
       const bool navigation_preview=camera.needs_preview(camera_epoch,now())||size_changed||now()<resize_until;
-      bool wanted_preview=navigation_preview||(!pose_recovery.active&&((edit_affects_render&&(editing||now()<preview_until))||
+      bool wanted_preview=navigation_preview||(!clay_wait&&!pose_recovery.active&&((edit_affects_render&&(editing||now()<preview_until))||
         (edit_pending&&!state.pending_payloads&&state.resource_error.empty())));
+      if(clay_wait)wanted_preview=false;
       const bool resolution_changed=quality.percent!=applied_percent;
       const bool quality_changed=wanted_preview!=preview||resolution_changed;
       ir::Delta delta;bool new_render_edit=false,subdivision_edit=false,material_layout_edit=false;
       std::vector<ir::SubdivisionSettings> previous_subdivision;
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
       if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending) &&
-         (resolution_changed||(wanted_preview&&!preview)||((telemetry_.displayed_epoch.load()>=epoch||
+         (edit_pending||clay_wait||resolution_changed||(wanted_preview&&!preview)||((telemetry_.displayed_epoch.load()>=epoch||
            (pose_recovery.active&&display->drawn_frame().epoch>=epoch))&&session->ready_to_reset()))) {
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
           try {
@@ -460,7 +473,7 @@ void Renderer::run(std::stop_token stop) {
             material_layout_edit=apply_material_overrides(render_scene,current->loaded.scene,desired.material_overrides,&delta);
             if(desired.instance_ground!=applied_instance_ground){apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta);applied_instance_ground=desired.instance_ground;}
             new_render_edit=material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
-            edit_affects_render=new_render_edit;applied_revision=desired.revision;state.edit_error.clear();}
+            edit_affects_render=new_render_edit;applied_revision=desired.revision;if(!new_render_edit&&!queued.pending)gpu_revision=applied_revision;state.edit_error.clear();}
           }
           catch(const std::exception &e) {
             for(size_t m=0;m<previous_subdivision.size();++m) render_scene.meshes[m].subdivision=previous_subdivision[m];
@@ -469,20 +482,25 @@ void Renderer::run(std::stop_token stop) {
         }
         if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);render_scene.camera=*delta.camera;camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
-        wanted_preview=navigation_preview||(!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
-        if(wanted_preview!=preview||resolution_changed||material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||delta.camera||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty())
-          {const auto begin=now();thread_scoped_lock lock(session->scene->mutex);timing("scene_lock",begin,applied_revision);const auto apply_begin=now();
-            if(subdivision_edit||material_layout_edit) {
-              try {adapter->synchronize(render_scene);} catch(const std::exception &e) {
-                for(size_t m=0;m<previous_subdivision.size();++m) render_scene.meshes[m].subdivision=previous_subdivision[m];
-                state.edit_error=e.what();subdivision_edit=false;adapter->apply(delta);
-              }
-              // 同一输入还可能带有相机修改；同步使用最新相机。
-              ir::Delta camera_only;camera_only.camera=delta.camera;adapter->apply(camera_only);
-            } else adapter->apply(delta);
-            timing("adapter_apply",apply_begin,applied_revision);set_quality(wanted_preview);session->dfv_requested_epoch=++epoch;const auto reset_begin=now();session->reset(params,buffers);timing("session_reset",reset_begin,applied_revision);
-            Frame f;f.epoch=epoch;f.id=applied_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);}
+        wanted_preview=navigation_preview||(!clay_wait&&!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
+        if(!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty())clay_wait=true;
+        if(clay_wait)wanted_preview=false;
+        if(subdivision_edit&&queued_subdivision_before.empty())queued_subdivision_before=previous_subdivision;
+        if(wanted_preview!=preview||resolution_changed||new_render_edit||delta.camera)queued.merge(delta,subdivision_edit||material_layout_edit);
         state.applied_revision=applied_revision;
+      }
+      // 拖动期间只更新白模；松手后尝试提交，锁繁忙时保留最新 Delta，下一轮继续处理输入。
+      if(queued.pending&&!(clay_wait&&editing)) {
+        thread_scoped_lock lock(session->scene->mutex,std::try_to_lock);
+        if(lock.owns_lock()) {
+          const auto begin=now();if(queued.synchronize){
+            try{adapter->synchronize(render_scene);}catch(const std::exception &e){for(size_t m=0;m<queued_subdivision_before.size();++m)render_scene.meshes[m].subdivision=queued_subdivision_before[m];state.edit_error=e.what();adapter->apply(queued.delta);}
+            ir::Delta camera_only;camera_only.camera=queued.delta.camera;adapter->apply(camera_only);
+          }else adapter->apply(queued.delta);
+          timing("adapter_apply",begin,applied_revision);set_quality(clay_wait?false:wanted_preview);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);gpu_revision=applied_revision;queued.clear();
+          queued_subdivision_before.clear();
+          Frame f;f.epoch=epoch;f.id=gpu_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);
+        }
       }
       RenderProbe probe;{std::lock_guard lock(mutex_);probe=probe_;}
       if(probe.serial!=state.probe_serial&&session->ready_to_reset()) {
@@ -527,8 +545,10 @@ void Renderer::run(std::stop_token stop) {
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
       session->draw();
       const auto beauty=display->drawn_frame();
-      if(pose_recovery.active&&desired.revision>pose_recovery.revision&&applied_revision==desired.revision&&beauty.epoch>=epoch) pose_recovery.active=false;
-      state.pose_restoring=pose_recovery.active;
+      if(pose_recovery.active&&desired.revision>pose_recovery.revision&&applied_revision==desired.revision)pose_recovery.active=false;
+      if(clay_wait&&!editing&&!pose_recovery.active&&!queued.pending&&gpu_revision==desired.revision&&beauty.epoch>=epoch){std::lock_guard lock(mutex_);if(snapshot_.revision==desired.revision&&snapshot_.generation==desired.generation&&!edit_active_)clay_wait=false;}
+      state.pose_restoring=pose_recovery.active||clay_wait;
+      if(clay_wait&&!pose_recovery.active){overlay.draw_pose(camera,window_->width,window_->height,{}, {},{},{});Frame f;f.id=applied_revision;telemetry_.event("edit_clay_present",f);}
       // 松手后的等待使用本次手势的白模和输入版本，不能借用另一种工具的旧状态。
       if(pose_recovery.active) {
         if(pose_recovery.gizmo) {
@@ -540,7 +560,7 @@ void Renderer::run(std::stop_token stop) {
         } else overlay.draw_pose(pose_drag.camera(),window_->width,window_->height,pose_drag.proxy,pose_drag.world(),pose_drag.bones,pose_drag.world().point(pose_drag.goal.position),proxy_excluded(pose_drag.target));
       }
       state.camera=camera;state.pointer_x=window_->pointer_x;state.pointer_y=window_->pointer_y;
-      auto hover=preview?runtime::PickHit{}:picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
+      auto hover=preview&&!clay_wait?runtime::PickHit{}:picking.screen(camera,state.pointer_x,state.pointer_y,window_->width,window_->height);
       bool editable=hover.instance>=0&&render_scene.instances.at(size_t(hover.instance)).prototype>=0;for(const auto &target:current->catalog.targets) if(int(target.instance)==hover.instance) editable=true;
       if(!editable) hover={};
       state.hovered_detail_joint=hover.instance>=0&&hover.triangle>=0&&size_t(hover.triangle)<regions[size_t(hover.instance)].detail.size()?regions[size_t(hover.instance)].detail[size_t(hover.triangle)]:-1;
@@ -595,7 +615,7 @@ void Renderer::run(std::stop_token stop) {
       state.hovered=region.instance;state.hovered_joint=region.joint;state.hovered_triangles=overlay.triangle_count(region.instance,region.joint);
       const auto *members=region.instance>=0&&region.joint<0?&instance_groups->members[size_t(region.instance)]:nullptr;
       if(members) {state.hovered_triangles=0;for(auto i:*members) state.hovered_triangles+=overlay.triangle_count(int(i));}
-      const bool presented=telemetry_.displayed_epoch.load()>=epoch&&camera.epoch==camera_epoch;
+      const bool presented=(clay_wait||telemetry_.displayed_epoch.load()>=epoch)&&camera.epoch==camera_epoch;
       if(material_hover_generation!=current->generation)material_hover.clear();state.material_hover_primitives=0;for(auto [i,slot]:material_hover)state.material_hover_primitives+=overlay.surface_count(i,slot);
       if(presented&&!preview&&!pose_recovery.active) overlay.draw(camera,window_->width,window_->height,region.instance,region.joint,members,material_hover.empty()?nullptr:&material_hover);
       state.gizmo_shape={};
@@ -615,7 +635,7 @@ void Renderer::run(std::stop_token stop) {
       state.visible.clear();for(const auto &instance:render_scene.instances) state.visible.push_back(instance.visible);
       if(const auto code=glGetError();code!=GL_NO_ERROR) throw GraphicsError("OpenGL 呈现失败; gl="+std::to_string(code));
       window_->swap();
-      if(!pose_recovery.active) display->after_swap();binding.release();window_->check_graphics();
+      if(!pose_recovery.active&&!clay_wait) display->after_swap();binding.release();window_->check_graphics();
       const auto shown=display->drawn_frame();
       if(shown.id&&shown.epoch>=epoch) {
         if(graphics_recovering) {
@@ -630,7 +650,7 @@ void Renderer::run(std::stop_token stop) {
       state.present_time=telemetry_.last_present_time;state.sessions=sessions;
       state.preview=preview;state.quality=quality;state.render_width=shown.width;state.render_height=shown.height;
       if(shown.id&&shown.width==std::max(1,window_->width.load()/4)&&shown.height==std::max(1,window_->height.load()/4)) state.last_preview_frame=shown.id;
-      if(telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
+      if(!queued.pending&&!clay_wait&&telemetry_.displayed_epoch.load()>=epoch) state.presented_revision=applied_revision;
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.gpu_device_bytes=gpu_device_bytes;state.gpu_host_bytes=gpu_host_bytes;
       state.sampling=sampling_;
