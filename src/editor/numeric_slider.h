@@ -40,9 +40,10 @@ protected:
     else {e->ignore();return;}e->accept();
   }
 public:
+  void cancel_drag() {dragging_=false;setSliderDown(false);}
   std::function<void(double)> edited;
   std::function<void(QWheelEvent *)> wheeled;
-  NumericSlider():QSlider(Qt::Horizontal) {setRange(0,1000);}
+  NumericSlider():QSlider(Qt::Horizontal) {setRange(0,1000);setProperty("historyInput",true);}
   void sync(double value,double low,double high,double step) {
     value_=value;step_=std::max(.000001,std::abs(step));span_=std::max({std::abs(high-low),step_*100,std::abs(value)*.5});
     const double center=value<low||value>high?value:(low+high)*.5;

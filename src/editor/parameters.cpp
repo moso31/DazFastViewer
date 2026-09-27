@@ -197,10 +197,10 @@ void ParameterPanel::mount() {
     connect(favorite,&QToolButton::clicked,this,[this,i]{toggle_favorite(size_t(i));});
     auto *line=new QHBoxLayout;line->setSpacing(4);layout->addLayout(line);
     if(c.format==ParameterControl::Format::date) {
-      auto *date=new QDateEdit;date->setObjectName("valueDate");date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setDateRange(QDate(1,1,1),QDate(9999,12,31));date->setDate(QDate::fromJulianDay(qRound64(c.read())));date->setKeyboardTracking(false);date->setEnabled(c.enabled);line->addWidget(date);
+      auto *date=new QDateEdit;date->setObjectName("valueDate");date->setProperty("historyInput",true);date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setDateRange(QDate(1,1,1),QDate(9999,12,31));date->setDate(QDate::fromJulianDay(qRound64(c.read())));date->setKeyboardTracking(false);date->setEnabled(c.enabled);line->addWidget(date);
       connect(date,&QDateEdit::dateChanged,this,[this,i](QDate value){current_=i;controls_[i].write(double(value.toJulianDay()));update_rows();});
     } else if(c.format==ParameterControl::Format::time) {
-      auto *time=new QTimeEdit;time->setObjectName("valueTime");time->setDisplayFormat("HH:mm:ss");time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)));time->setKeyboardTracking(false);time->setEnabled(c.enabled);line->addWidget(time);
+      auto *time=new QTimeEdit;time->setObjectName("valueTime");time->setProperty("historyInput",true);time->setDisplayFormat("HH:mm:ss");time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)));time->setKeyboardTracking(false);time->setEnabled(c.enabled);line->addWidget(time);
       connect(time,&QTimeEdit::timeChanged,this,[this,i](QTime value){current_=i;controls_[i].write(QTime(0,0).secsTo(value));update_rows();});
     } else if(!c.choices.empty()) {
       auto *combo=new QComboBox;combo->setObjectName("valueChoice");for(const auto &choice:c.choices) combo->addItem(text(choice));combo->setCurrentIndex(int(c.read()));combo->setEnabled(c.enabled);line->addWidget(combo);

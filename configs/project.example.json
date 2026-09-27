@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "history_limit": 50,
   "content_roots": [
     "H:/g1",
     "H:/g3",

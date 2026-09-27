@@ -34,7 +34,7 @@ QIcon tool_icon(int kind) {
   const auto ink=QGuiApplication::palette().color(QPalette::ButtonText);p.setPen(QPen(ink,1.6,Qt::SolidLine,Qt::RoundCap,Qt::RoundJoin));
   if(kind==0) {p.setBrush(ink);p.drawPolygon(QPolygonF{{5,3},{6,19},{10,14},{15,20},{18,18},{13,12},{20,11}});}
   if(kind==1) {p.drawLine(3,12,21,12);p.drawLine(12,3,12,21);for(int i=0;i<4;++i) {p.save();p.translate(12,12);p.rotate(i*90);p.drawPolyline(QPolygonF{{-3,-6},{0,-9},{3,-6}});p.restore();}}
-  if(kind==2) {p.drawArc(QRectF(4,4,16,16),35*16,285*16);p.drawPolyline(QPolygonF{{17,2},{20,7},{14,7}});}
+  if(kind==2||kind==7||kind==8) {p.save();if(kind==7) {p.translate(24,0);p.scale(-1,1);}p.drawArc(QRectF(4,4,16,16),35*16,285*16);p.drawPolyline(QPolygonF{{17,2},{20,7},{14,7}});p.restore();}
   if(kind==3) {p.drawRect(QRectF(4,13,7,7));p.drawLine(11,13,20,4);p.drawPolyline(QPolygonF{{13,4},{20,4},{20,11}});}
   if(kind==4) {p.setPen(QPen(QColor("#54baff"),2));p.drawPolygon(QPolygonF{{12,2},{21,7},{21,17},{12,22},{3,17},{3,7}});p.drawPolyline(QPolygonF{{3,7},{12,12},{21,7}});p.drawLine(12,12,12,22);}
   if(kind==5) {p.drawEllipse(QRectF(6,2,4,4));p.drawLine(8,7,8,13);p.drawLine(4,9,12,9);p.drawLine(8,13,4,18);p.drawLine(8,13,12,18);p.drawLine(18,4,18,17);p.drawPolyline(QPolygonF{{15,14},{18,17},{21,14}});p.drawLine(2,21,22,21);}
@@ -48,6 +48,9 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
   modules_=new QMainWindow(this);modules_->setWindowFlags(Qt::Widget);modules_->setObjectName("ToolbarModules");modules_->setContentsMargins(0,0,0,0);modules_->setContextMenuPolicy(Qt::PreventContextMenu);modules_->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);modules_->installEventFilter(this);row->addWidget(modules_,1);
   menus_=new ModuleToolBar(QStringLiteral("菜单模块"),modules_);menus_->setObjectName("MenuModule");menus_->setAllowedAreas(Qt::TopToolBarArea|Qt::BottomToolBarArea);menus_->setMinimumHeight(34);modules_->addToolBar(menus_);
   menu_=new QMenuBar(menus_);menu_->setNativeMenuBar(false);menu_->setSizePolicy(QSizePolicy::Minimum,QSizePolicy::Preferred);menus_->addWidget(menu_);
+  history_=new ModuleToolBar(QStringLiteral("撤销／重做模块"),modules_);history_->setObjectName("HistoryModule");history_->setAllowedAreas(Qt::TopToolBarArea|Qt::BottomToolBarArea);history_->setMinimumHeight(34);history_->setIconSize({20,20});modules_->addToolBar(history_);
+  undo_=history_->addAction(tool_icon(7),QStringLiteral("撤销"));undo_->setObjectName("Undo");undo_->setEnabled(false);
+  redo_=history_->addAction(tool_icon(8),QStringLiteral("重做"));redo_->setObjectName("Redo");redo_->setEnabled(false);
   tools_=new ModuleToolBar(QStringLiteral("3D 操作模块"),modules_);tools_->setObjectName("TransformModule");tools_->setAllowedAreas(Qt::TopToolBarArea|Qt::BottomToolBarArea);tools_->setMinimumHeight(34);tools_->setIconSize({20,20});modules_->addToolBar(tools_);
   auto *group=new QActionGroup(this);const QString names[]={QStringLiteral("选择 / IK"),QStringLiteral("平移"),QStringLiteral("旋转"),QStringLiteral("缩放")};
   for(int i=0;i<4;++i) {auto *a=tools_->addAction(tool_icon(i),names[i]);a->setObjectName("GizmoTool"+QString::number(i));a->setCheckable(true);group->addAction(a);a->setChecked(i==0);a->setToolTip(names[i]+(i==3?QStringLiteral(" · 本地轴；中心方框等比缩放"):i==1?QStringLiteral(" · 拖动轴或平面方块；Esc 取消"):i==2?QStringLiteral(" · 拖动旋转环；Esc 取消"):QStringLiteral(" · 选择与左键 IK"))+(i>0?QStringLiteral("；未命中手柄时可拖动 IK"):QString{}));connect(a,&QAction::triggered,this,[this,i]{settings_.tool=GizmoTool(i);settings_.space=i==1?translation_space_:i==2?rotation_space_:GizmoSpace::local;emit_settings();});}
@@ -60,6 +63,7 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
   ground_->setToolTip(QStringLiteral("对齐到地面（Ctrl+D）：沿世界 Y 移动选中对象，使底部高度等于当前世界包围盒高度 × 地面对齐比例"));
   ground_ratio_=new QDoubleSpinBox(functions_);ground_ratio_->setObjectName("GroundAlignmentRatio");ground_ratio_->setAccessibleName(QStringLiteral("地面对齐比例"));ground_ratio_->setPrefix(QStringLiteral("比例 "));ground_ratio_->setDecimals(5);ground_ratio_->setRange(-1000,1000);ground_ratio_->setSingleStep(.01);ground_ratio_->setKeyboardTracking(false);ground_ratio_->setMaximumWidth(146);
   ground_ratio_->setToolTip(QStringLiteral("地面对齐比例（每个对象独立）：0 贴地；0.01 使底部高出地面当前对象高度的 1%；负值下沉。修改后点击对齐到地面生效。"));functions_->addWidget(ground_ratio_);
+  ground_ratio_->setProperty("historyInput",true);
   connect(ground_ratio_,&QDoubleSpinBox::valueChanged,this,[this](double ratio){if(ground_ratio_changed) ground_ratio_changed(ratio);});bind_ground(false,0);emit_settings();
   connect(ground_,&QAction::triggered,this,[this]{ground_ratio_->interpretText();});
   weight_=functions_->addAction(tool_icon(6),QStringLiteral("添加生长或密度参数"));weight_->setObjectName("ObjectWeight");weight_->setEnabled(false);weight_->setToolTip(QStringLiteral("为选中角色添加生长与体重参数，为普通网格添加密度与重量参数"));
@@ -67,7 +71,7 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
   const QStyle::StandardPixmap icons[]={QStyle::SP_TitleBarMinButton,QStyle::SP_TitleBarMaxButton,QStyle::SP_TitleBarCloseButton};
   const QString labels[]={QStringLiteral("最小化"),QStringLiteral("最大化 / 还原"),QStringLiteral("关闭")};
   for(int i=0;i<3;++i) {auto *button=new QToolButton(this);button->setObjectName("WindowControl"+QString::number(i));button->setFixedSize(42,34);button->setIcon(style()->standardIcon(icons[i]));button->setToolTip(labels[i]);button->setAccessibleName(labels[i]);row->addWidget(button,0,Qt::AlignTop);connect(button,&QToolButton::clicked,owner,[owner,i]{if(i==0) owner->showMinimized();else if(i==1) owner->isMaximized()?owner->showNormal():owner->showMaximized();else owner->close();});}
-  for(auto *bar:{menus_,tools_,functions_}) {bar->installEventFilter(this);connect(bar,&QToolBar::topLevelChanged,this,[this]{QTimer::singleShot(0,this,[this]{fit_height();});});connect(bar,&QToolBar::visibilityChanged,this,[this]{QTimer::singleShot(0,this,[this]{fit_height();});});}
+  for(auto *bar:{menus_,history_,tools_,functions_}) {bar->installEventFilter(this);connect(bar,&QToolBar::topLevelChanged,this,[this]{QTimer::singleShot(0,this,[this]{fit_height();});});connect(bar,&QToolBar::visibilityChanged,this,[this]{QTimer::singleShot(0,this,[this]{fit_height();});});}
   menu_->installEventFilter(this);grip_->installEventFilter(this);installEventFilter(this);
   defaults_=modules_->saveState(1);add_layout_actions(app_menu);app_menu->addSeparator();connect(app_menu->addAction(QStringLiteral("关闭")),&QAction::triggered,owner,&QWidget::close);
   setContextMenuPolicy(Qt::CustomContextMenu);connect(this,&QWidget::customContextMenuRequested,this,[this](QPoint p){QMenu menu(this);add_layout_actions(&menu);menu.exec(mapToGlobal(p));});
@@ -76,6 +80,9 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
 void EditorChrome::emit_settings() {const bool enabled=settings_.tool==GizmoTool::translate||settings_.tool==GizmoTool::rotate;world_->setEnabled(enabled);local_->setEnabled(enabled);local_->setChecked(settings_.space==GizmoSpace::local);world_->setChecked(settings_.space==GizmoSpace::world);if(changed) changed(settings_);}
 void EditorChrome::bind_ground(bool enabled,double ratio) {ground_->setEnabled(enabled);ground_ratio_->setEnabled(enabled);QSignalBlocker block(ground_ratio_);ground_ratio_->setValue(ratio);}
 void EditorChrome::fit_height() {
+  // 恢复旧工具栏布局会重置最小宽度；重新按当前缩放保留两个按钮的空间。
+  const int history_width=history_->sizeHint().width();
+  if(history_->minimumWidth()!=history_width) history_->setMinimumWidth(history_width);
   const int height=std::clamp(modules_->minimumSizeHint().height(),ui_pixels(34),ui_pixels(160));
   if(modules_->minimumHeight()!=height||modules_->maximumHeight()!=height) modules_->setFixedHeight(height);
   if(minimumHeight()!=height||maximumHeight()!=height) {setFixedHeight(height);updateGeometry();owner_->layout()->invalidate();}
@@ -97,7 +104,7 @@ bool EditorChrome::caption_at(QPoint position) const {
   if(!rect().contains(position)) return false;
   auto *child=childAt(position);if(!child||child==grip_||child==modules_) return true;
   if(child==menu_) return !menu_->actionAt(menu_->mapFrom(this,position));
-  for(auto *bar:{menus_,tools_,functions_}) if(!bar->isFloating()&&(child==bar||bar->isAncestorOf(child))) {
+  for(auto *bar:{menus_,history_,tools_,functions_}) if(!bar->isFloating()&&(child==bar||bar->isAncestorOf(child))) {
     const auto point=bar->mapFrom(this,position);
     if(static_cast<ModuleToolBar *>(bar)->handle_at(point)) return false;
     if(auto *action=bar->actionAt(point)) return action->isSeparator();
@@ -108,8 +115,8 @@ bool EditorChrome::caption_at(QPoint position) const {
 }
 QByteArray EditorChrome::save_modules() const {return modules_->saveState(1);}
 bool EditorChrome::restore_modules(const QByteArray &state) {const bool ok=modules_->restoreState(state,1);QTimer::singleShot(0,this,[this]{fit_height();});return ok;}
-void EditorChrome::reset_modules() {restore_modules(defaults_);menus_->show();tools_->show();functions_->show();}
-void EditorChrome::add_layout_actions(QMenu *menu) {menu->addAction(menus_->toggleViewAction());menu->addAction(tools_->toggleViewAction());menu->addAction(functions_->toggleViewAction());connect(menu->addAction(QStringLiteral("恢复顶部模块布局")),&QAction::triggered,this,[this]{reset_modules();});}
+void EditorChrome::reset_modules() {restore_modules(defaults_);menus_->show();history_->show();tools_->show();functions_->show();}
+void EditorChrome::add_layout_actions(QMenu *menu) {menu->addAction(menus_->toggleViewAction());menu->addAction(history_->toggleViewAction());menu->addAction(tools_->toggleViewAction());menu->addAction(functions_->toggleViewAction());connect(menu->addAction(QStringLiteral("恢复顶部模块布局")),&QAction::triggered,this,[this]{reset_modules();});}
 void EditorWindow::install_chrome() {
   chrome=new EditorChrome(this);setMenuWidget(chrome);
   if(QGuiApplication::platformName()!=QStringLiteral("windows")) return;

@@ -41,6 +41,8 @@ ProjectSettings ProjectSettings::load(const QString &path) {
   QJsonParseError error;const auto doc=QJsonDocument::fromJson(file.readAll(),&error);
   if(error.error!=QJsonParseError::NoError || !doc.isObject()) fail(QStringLiteral("项目设置 JSON 无效：")+error.errorString());
   const auto object=doc.object();
+  settings.history_limit=object.value("history_limit").toInt(50);
+  if(settings.history_limit<1||settings.history_limit>500)fail(QStringLiteral("历史记录条数必须在 1 到 500 之间"));
   if(object.value("version").toInt()!=1 || !object.value("content_roots").isArray()) fail(QStringLiteral("不支持的项目设置格式"));
   for(const auto &root:object.value("content_roots").toArray()) {
     if(!root.isString()) fail(QStringLiteral("内容库路径必须是字符串"));settings.content_roots.append(root.toString());
@@ -48,9 +50,10 @@ ProjectSettings ProjectSettings::load(const QString &path) {
   settings.content_roots=normalize(settings.content_roots);return settings;
 }
 void ProjectSettings::save() const {
+  if(history_limit<1||history_limit>500)fail(QStringLiteral("历史记录条数必须在 1 到 500 之间"));
   QJsonArray paths;for(const auto &root:normalize(content_roots)) paths.append(root);
   QSaveFile output(file);if(!output.open(QIODevice::WriteOnly)) fail(QStringLiteral("无法保存项目设置：")+output.errorString());
-  const auto bytes=QJsonDocument(QJsonObject{{"version",1},{"content_roots",paths}}).toJson(QJsonDocument::Indented);
+  const auto bytes=QJsonDocument(QJsonObject{{"version",1},{"content_roots",paths},{"history_limit",history_limit}}).toJson(QJsonDocument::Indented);
   if(output.write(bytes)!=bytes.size() || !output.commit()) fail(QStringLiteral("项目设置保存失败：")+output.errorString());
 }
 bool edit_project_settings(QWidget *parent,ProjectSettings &settings,ApplicationSettings &application,const QString &application_file,bool persistent,const std::function<void(bool)> &applied) {
@@ -82,6 +85,10 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
   auto *save_layout=new QVBoxLayout(section(resources,"saveFile",QStringLiteral("保存文件")));
   auto *location=new QLineEdit(QDir::toNativeSeparators(settings.file));location->setObjectName("ProjectSaveFile");location->setReadOnly(true);save_layout->addWidget(location);
   note(save_layout,QStringLiteral("资源库路径保存在此项目文件中。界面和渲染偏好随应用保存，下次启动自动恢复。"));
+  auto *history_form=new QFormLayout;save_layout->addLayout(history_form);
+  auto *history_limit=new QSpinBox;history_limit->setObjectName("HistoryLimit");history_limit->setRange(1,500);history_limit->setValue(settings.history_limit);history_limit->setSuffix(QStringLiteral(" 条"));history_limit->setKeyboardTracking(false);
+  history_form->addRow(QStringLiteral("撤销历史上限"),history_limit);
+  note(save_layout,QStringLiteral("默认 50 条。拖动与复合操作各计一条；降低上限会释放超出的历史。场景恢复点自动保存在本机，异常退出后可恢复，不覆盖手动保存的场景。"));
 
   auto *render=page(QStringLiteral("渲染"),"ProjectRenderPage");
   auto *display=new QFormLayout(section(render,"display",QStringLiteral("界面与视口")));
@@ -116,11 +123,12 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
     try {
       auto updated=settings;updated.content_roots.clear();for(int i=0;i<list->count();++i) updated.content_roots.append(list->item(i)->text());updated.content_roots=ProjectSettings::normalize(updated.content_roots);
       auto preferences=application;preferences.ui_percent=ui_percent->value();preferences.viewport={percent->value(),filter->currentIndex()==0?Reconstruction::bicubic:Reconstruction::bilinear};
+      updated.history_limit=history_limit->value();
       preferences.render={limit->currentData().toInt(),transparent->value(),sss->isChecked(),bump->isChecked()};preferences.settings_tab=tabs->currentIndex();
       for(auto i=headers.cbegin();i!=headers.cend();++i) preferences.expanded[i.key()]=i.value()->isChecked();
       // 应用可能已更新内存中的路径，保存时仍需写入磁盘。
       if(save&&persistent) {
-        if(!QFileInfo::exists(updated.file)||ProjectSettings::load(updated.file).content_roots!=updated.content_roots) updated.save();
+        if(!QFileInfo::exists(updated.file)||ProjectSettings::load(updated.file).content_roots!=updated.content_roots||ProjectSettings::load(updated.file).history_limit!=updated.history_limit) updated.save();
         preferences.save(application_file);
       }
       settings=std::move(updated);application=std::move(preferences);if(applied)applied(save);

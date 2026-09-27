@@ -126,17 +126,32 @@ void MaterialPanel::rebuild_tree(){
   if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}rebuild_properties();
 }
 J MaterialPanel::value(Surface s,const P &p)const{auto textures=document_->loaded.scene.textures;auto m=effective_material(document_->loaded.scene,snapshot_->material_overrides,s.instance,s.slot,textures);return material_value(m,textures,p);}
+std::vector<std::pair<std::string,std::string>> MaterialPanel::selection_ids() const {
+  std::vector<std::pair<std::string,std::string>> result;if(!document_)return result;
+  const auto &scene=document_->loaded.scene;for(auto s:surfaces()){const auto &i=scene.instances.at(s.instance);result.emplace_back(i.id,scene.meshes.at(i.mesh).material_slots.at(s.slot));}return result;
+}
+void MaterialPanel::restore_selection(const std::vector<std::pair<std::string,std::string>> &selection) {
+  if(!document_)return;
+  {QSignalBlocker block(tree_);tree_->clearSelection();for(QTreeWidgetItemIterator it(tree_);*it;++it){auto *item=*it;if(!item->data(0,Qt::UserRole+1).isValid())continue;
+    const auto &scene=document_->loaded.scene;const auto &i=scene.instances.at(size_t(item->data(0,Qt::UserRole).toULongLong()));const auto &slot=scene.meshes.at(i.mesh).material_slots.at(size_t(item->data(0,Qt::UserRole+1).toULongLong()));
+    if(std::find(selection.begin(),selection.end(),std::make_pair(i.id,slot))!=selection.end()){item->setSelected(true);for(auto *p=item->parent();p;p=p->parent())p->setExpanded(true);}}}
+  if(scope_->currentIndex()==0&&selection_ids().size()<selection.size()){scope_->setCurrentIndex(1);restore_selection(selection);return;}
+  rebuild_properties();
+}
 void MaterialPanel::schedule_properties(){if(refresh_pending_)return;refresh_pending_=true;QTimer::singleShot(0,this,[this]{refresh_pending_=false;rebuild_properties();});}
 void MaterialPanel::commit(const P &p,const J &v,int component){
   if(!document_||!snapshot_)return;
   try{auto next=snapshot_->material_overrides;const auto &scene=document_->loaded.scene;
     for(auto s:surfaces()){auto textures=scene.textures;auto m=effective_material(scene,next,s.instance,s.slot,textures);auto input=v;if(component>=0){input=material_value(m,textures,p);input.at(size_t(component))=v;}set_material_value(m,textures,p,input);ir::validate(m,textures.size());const auto &i=scene.instances.at(s.instance);next[i.id][scene.meshes.at(i.mesh).material_slots.at(s.slot)][p.id]=input;}
-    if(next==snapshot_->material_overrides)return;snapshot_->material_overrides=std::move(next);status_->clear();if(changed)changed();
+    if(next==snapshot_->material_overrides)return;
+    auto apply=[&]{snapshot_->material_overrides=std::move(next);status_->clear();if(changed)changed();};
+    if(edit_requested)edit_requested(QStringLiteral("修改材质：")+text(p.label),apply);else apply();
     // 数字输入期间保留焦点和拖动状态；仅更新筛选状态。
     filter();
   }catch(const std::exception &e){status_->setText(text(e.what()));schedule_properties();}
 }
 void MaterialPanel::reset(const std::string &parameter){
+  if(edit_requested){auto callback=std::move(edit_requested);callback(parameter.empty()?QStringLiteral("还原所选表面"):QStringLiteral("还原材质参数"),[&]{reset(parameter);});edit_requested=std::move(callback);return;}
   if(!document_||!snapshot_)return;auto previous=snapshot_->material_overrides;const auto &scene=document_->loaded.scene;
   for(auto s:surfaces()){const auto &i=scene.instances.at(s.instance);auto object=snapshot_->material_overrides.find(i.id);if(object==snapshot_->material_overrides.end())continue;const auto &slot=scene.meshes.at(i.mesh).material_slots.at(s.slot);if(parameter.empty())object->second.erase(slot);else if(auto patch=object->second.find(slot);patch!=object->second.end())patch->second.erase(parameter);}
   prune_material_overrides(scene,snapshot_->material_overrides);if(previous!=snapshot_->material_overrides&&changed)changed();schedule_properties();

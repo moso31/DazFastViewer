@@ -31,6 +31,8 @@ int main(int argc,char **argv) {
     bool rejected=false;try {loaded.content_roots={"relative/path"};loaded.save();} catch(...) {rejected=true;}
     require(rejected && dfv::editor::ProjectSettings::load(file).content_roots==QStringList{b,a},"无效写入损坏已有配置");
     loaded.content_roots={b,a};
+    require(loaded.history_limit==50,"旧项目默认历史条数不是 50");loaded.history_limit=80;loaded.save();require(dfv::editor::ProjectSettings::load(file).history_limit==80,"历史上限没有保存");
+    loaded.history_limit=0;rejected=false;try{loaded.save();}catch(...){rejected=true;}require(rejected&&dfv::editor::ProjectSettings::load(file).history_limit==80,"无效历史上限损坏配置");loaded.history_limit=80;
     const auto preferences_file=temp.filePath("application.ini");
     {QSettings legacy(preferences_file,QSettings::IniFormat);legacy.setValue("ui/scalePercent",125);legacy.setValue("viewport/renderPercent",67);legacy.setValue("viewport/reconstruction","bilinear");}
     auto preferences=dfv::editor::ApplicationSettings::load(preferences_file);
@@ -46,6 +48,7 @@ int main(int argc,char **argv) {
     auto buttons=[](QDialog *d){return d->findChild<QDialogButtonBox *>("ProjectSettingsButtons");};
     require(dialog_test([&](QDialog *d){
       auto *tabs=d->findChild<QTabWidget *>("ProjectSettingsTabs");require(tabs&&tabs->count()==2&&tabs->tabText(1)==QStringLiteral("渲染"),"项目设置未按功能拆成选项卡");
+      auto *history=d->findChild<QSpinBox *>("HistoryLimit");require(history&&history->value()==80,"资源与保存缺少历史上限");history->setValue(60);
       auto *libraries=d->findChild<QToolButton *>("librariesCollapse"),*save_file=d->findChild<QToolButton *>("saveFileCollapse");
       require(libraries&&save_file&&libraries->isChecked()&&save_file->isChecked(),"资源页缺少两个折叠模块");
       if(argc>1){QDir().mkpath(QString::fromLocal8Bit(argv[1]));d->grab().save(QString::fromLocal8Bit(argv[1])+"/resources.png");}

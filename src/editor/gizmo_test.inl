@@ -6,6 +6,8 @@
   runtime::TransformValues gz_ground_transform_;
   double gz_at_=0;
   Snapshot gz_initial_;
+  std::optional<EditState> gz_history_before_;
+  int gz_history_index_=0;
   RenderStatus gz_before_;
   RenderStatus gz_drag_before_;
   QPoint gz_point_;
@@ -95,7 +97,7 @@
       if(c.plane&&!state.gizmo_shape.planes.empty()) {ir::Vec2 center{};for(auto p:state.gizmo_shape.planes.front().corners) {center.x+=p.x/4;center.y+=p.y/4;}gz_point_={qRound(center.x),qRound(center.y)};gz_index_=state.gizmo_shape.hit(float(gz_point_.x()),float(gz_point_.y()))==handle?0:-1;}
       if(gz_index_<0) {finish_test(false,"没有可见手柄供实际命中");return;}
       if(gz_case_==2||gz_case_==3) screen()->grabWindow(winId()).save(QString::fromStdWString((output_/("gizmo-"+std::to_string(gz_case_)+"-ready.png")).wstring()));
-      gz_steps_=0;gz_at_=now();gz_drag_before_=state;mouse(WM_LBUTTONDOWN,gz_point_);gz_phase_=3;return;
+      gz_steps_=0;gz_at_=now();gz_drag_before_=state;gz_history_before_=capture_edit();gz_history_index_=history_->stack().index();mouse(WM_LBUTTONDOWN,gz_point_);gz_phase_=3;return;
     }
     if(gz_phase_==3&&now()-gz_at_>.08) {
       ++gz_steps_;QPoint p=gz_point_;
@@ -112,6 +114,8 @@
       const auto base=gz_initial_.values[gz_target_].transform;auto expected=base;expected.rotation_degrees={15,25,35};
       const bool changed=c.light?snapshot_.lights!=gz_initial_.lights:c.bone?snapshot_.poses!=gz_initial_.poses:runtime::make_transform(snapshot_.values[gz_target_].transform)!=runtime::make_transform(expected);
       if(changed==bool(c.cancel)) {finish_test(false,c.cancel?"取消 Gizmo 后仍改写参数":"松手未提交 Gizmo 变换");return;}
+      if(history_->stack().index()!=gz_history_index_+(c.cancel?0:1)){finish_test(false,"Gizmo 拖动未对应一条历史或取消仍入栈");return;}
+      if(!c.cancel){const auto after=capture_edit();const auto camera=renderer_->input_camera();history_move(false);if(!same_edit(capture_edit(),*gz_history_before_)){finish_test(false,"真实 Gizmo 拖动无法撤销");return;}history_move(true);if(!same_edit(capture_edit(),after)||renderer_->input_camera().epoch!=camera.epoch){finish_test(false,"真实 Gizmo 拖动重做错误或改变相机");return;}}
       gz_checks_.push_back({{"tool",int(c.tool)},{"space",int(c.space)},{"bone",c.bone},{"light",c.light},{"plane",c.plane},{"cancel",c.cancel},{"solve_ms",state.pose_solve_ms},{"input_to_present_ms",state.pose_latency_ms}});
       snapshot_.values=gz_initial_.values;snapshot_.values[gz_target_].transform.rotation_degrees={15,25,35};snapshot_.poses=gz_initial_.poses;snapshot_.lights=gz_initial_.lights;send();++gz_case_;gz_phase_=0;return;
     }

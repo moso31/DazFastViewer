@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <functional>
 #include <stdexcept>
 #include "bench/camera.h"
 #include "runtime/pose_edit.h"
@@ -73,6 +74,8 @@ class Window {
   void cancel_pose();
 public:
   std::atomic<uint64_t> pose_selection{0};
+  std::function<void(bool)> history_requested;
+  void cancel_edit() {cancel_pose();++pose_selection;}
   std::atomic<bool> automated_pointer{false}; // 仅诊断入口：不抢占用户系统光标。
   runtime::PosePointer pose_pointer() {std::lock_guard lock(pose_mutex_);return pose_pointer_;}
   HWND hwnd{},hidden{};

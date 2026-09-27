@@ -12,7 +12,7 @@ using runtime::decimal_float;
 class NumericSpinBox final:public QDoubleSpinBox {
   bool float_backed_;
 public:
-  explicit NumericSpinBox(bool float_backed,QWidget *parent=nullptr):QDoubleSpinBox(parent),float_backed_(float_backed) {}
+  explicit NumericSpinBox(bool float_backed,QWidget *parent=nullptr):QDoubleSpinBox(parent),float_backed_(float_backed) {setProperty("historyInput",true);}
   void sync(double value) {
     // 百分比换算等可能再引入一个 ULP；保留用户刚提交的等价十进制输入。
     if(float_backed_&&std::abs(value-this->value())<=2*std::numeric_limits<float>::epsilon()*std::abs(value)) return;

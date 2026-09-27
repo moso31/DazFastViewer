@@ -52,12 +52,14 @@ struct Target {
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
   double general_scale=1;
+  bool operator==(const TransformValues &) const = default;
 };
 struct Properties {
   std::optional<FavoriteState> favorites;
   ObjectExtension extension;
   std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;
   double ground_alignment_ratio=0; // 每个对象独立的操作设置，修改比例本身不触发几何求值。
+  bool operator==(const Properties &) const = default;
 };
 void validate_transform(const TransformValues &value);
 ir::Transform make_transform(const TransformValues &value,const std::string &rotation_order="XYZ");

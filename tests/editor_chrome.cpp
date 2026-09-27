@@ -42,6 +42,8 @@ int main(int argc,char **argv) {
     // 后台启动测试进程时，消耗 STARTUPINFO 的隐藏状态，再显式显示副屏测试窗口。
     if(native) {ShowWindow(HWND(window.winId()),SW_SHOWNOACTIVATE);ShowWindow(HWND(window.winId()),SW_SHOWNOACTIVATE);QTest::qWait(80);}
     auto *menu=chrome->findChild<QToolBar *>("MenuModule"),*tools=chrome->findChild<QToolBar *>("TransformModule");check(menu&&tools,"模块没有独立身份");check(std::abs(menu->y()-tools->y())<3&&chrome->height()<50,"默认不是同一行");
+    auto *history=chrome->findChild<QToolBar *>("HistoryModule");check(history&&history->actions()==QList<QAction *>{chrome->undo_action(),chrome->redo_action()},"撤销重做没有独立工具组");check(history->x()>menu->x()&&history->x()<tools->x()&&history->y()==tools->y(),"撤销重做组默认位置错误");
+    check(!chrome->undo_action()->icon().isNull()&&!chrome->redo_action()->icon().isNull()&&!chrome->undo_action()->isEnabled()&&!chrome->redo_action()->isEnabled(),"撤销重做初始图标或禁用状态错误");
     GizmoSettings last;int calls=0;chrome->changed=[&](auto settings){last=settings;++calls;};chrome->findChild<QAction *>("GizmoTool2")->trigger();check(calls==1&&last.tool==GizmoTool::rotate,"旋转按钮未接通");for(auto *action:tools->actions()) if(action->text()=="World") action->trigger();check(last.space==GizmoSpace::world,"World 没有切换");
     auto tool=[&](int i){chrome->findChild<QAction *>("GizmoTool"+QString::number(i))->trigger();};auto space=[&](const char *name){for(auto *a:tools->actions()) if(a->text()==name) a->trigger();};
     tool(1);check(last.space==GizmoSpace::local,"T 被 R 的世界模式污染");tool(3);tool(2);check(last.space==GizmoSpace::world,"R 切换回来丢失世界模式");
@@ -50,6 +52,7 @@ int main(int argc,char **argv) {
     auto caption=[&](QWidget *widget,QPoint p){return chrome->caption_at(widget->mapTo(chrome,p));};
     check(caption(functions,toolbar_blank(functions)),"工具栏尾部空白不能拖动窗口");
     check(!caption(tools,{5,17}),"模块拖动把手被当作窗口标题栏");
+    check(!caption(history,{5,17})&&!caption(history,history->actionGeometry(chrome->undo_action()).center()),"撤销重做的把手或按钮被当作窗口标题栏");
     check(!caption(tools,tools->actionGeometry(tools->actions().front()).center())&&!caption(ratio,ratio->rect().center()),"工具按钮或输入框被当作窗口标题栏");
     check(!caption(chrome->menus(),chrome->menus()->actionGeometry(chrome->menus()->actions().front()).center()),"菜单按钮被当作窗口标题栏");
     for(const char *name:{"ApplicationIcon","WindowControl0","WindowControl1","WindowControl2"}) {auto *b=chrome->findChild<QToolButton *>(name);check(!caption(b,b->rect().center()),"应用图标或窗口按钮被当作窗口标题栏");}
@@ -57,6 +60,7 @@ int main(int argc,char **argv) {
     check(chrome->ground_action()->shortcut()==QKeySequence(Qt::CTRL|Qt::Key_D)&&!chrome->ground_action()->icon().isNull(),"对齐图标或快捷键缺失");
     ratio->findChild<QLineEdit *>()->setText(ratio->prefix()+"0.035");chrome->ground_action()->trigger();check(value==.035,"点击对齐没有提交尚未回车的比例输入");
     functions->hide();auto function_state=chrome->save_modules();chrome->reset_modules();chrome->restore_modules(function_state);QTest::qWait(50);check(functions->isHidden(),"功能组显隐未保存");chrome->reset_modules();
+    history->hide();auto history_state=chrome->save_modules();chrome->reset_modules();check(history->isVisible(),"恢复布局没有显示撤销重做组");chrome->restore_modules(history_state);QTest::qWait(50);check(history->isHidden(),"撤销重做组显隐未保存");chrome->reset_modules();
     auto *host=chrome->findChild<QMainWindow *>("ToolbarModules");host->insertToolBarBreak(tools);QTest::qWait(100);check(tools->y()>menu->y()&&chrome->height()>50,"模块不能分行");auto saved=chrome->save_modules();chrome->reset_modules();QTest::qWait(50);check(tools->y()==menu->y(),"重置未合并行");check(chrome->restore_modules(saved),"模块布局未恢复");QTest::qWait(50);check(tools->y()>menu->y(),"模块顺序／换行未保存");
     check(chrome->findChild<QToolButton *>("ApplicationIcon")->y()==0&&chrome->findChild<QToolButton *>("WindowControl2")->y()==0,"分行后应用图标或窗口按钮离开顶部");
     check(caption(functions,toolbar_blank(functions)),"换行后的工具栏空白不能拖动窗口");

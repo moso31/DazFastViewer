@@ -8,6 +8,7 @@ namespace dfv::editor {
 struct ProjectSettings {
   QString file;
   QStringList content_roots;
+  int history_limit=50;
   static ProjectSettings load(const QString &file);
   static QStringList normalize(const QStringList &roots);
   void save() const;

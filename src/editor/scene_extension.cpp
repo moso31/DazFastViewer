@@ -79,6 +79,9 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   const auto instance_ground=j.value("instance_ground",J::object());next.instance_ground.clear();for(const auto &[id,v]:instance_ground.items())next.instance_ground[id]={v.at("offset_m").get<double>(),v.at("ratio").get<double>()};validate_instance_ground(d.loaded.scene,next.instance_ground);
   next.control_favorites=read_favorites(j.value("control_favorites",J{}));s=std::move(next);
 }
+J scene_extension_json(const Document &d,const Snapshot &s){
+  return {{"schema","daz-fast-viewer-scene-extension"},{"version",1},{"source",path_string(d.source_file)},{"operations",d.operations},{"state",snapshot_json(d,s)}};
+}
 void save_scene_extension(const fs::path &file,const Document &d,const Snapshot &s){
   const auto destination=fs::absolute(file).lexically_normal();if(destination.extension()!=L".dufex")throw std::runtime_error("扩展文件必须使用 .dufex 后缀");
   if(!d.source_file.empty()&&fs::equivalent(destination.parent_path(),d.source_file.parent_path())&&destination.filename()==d.source_file.filename())throw std::runtime_error("不能覆盖源场景");
@@ -95,9 +98,12 @@ void save_scene_extension(const fs::path &file,const Document &d,const Snapshot 
 }
 RestoredScene load_scene_extension(const fs::path &file,const std::vector<fs::path> &roots,uint64_t generation,const std::function<void(const std::string &)> &progress){
   J j;std::ifstream stream(file,std::ios::binary);if(!stream)throw std::runtime_error("无法读取 DUFEX");stream>>j;
+  return restore_scene_extension(j,fs::absolute(file).parent_path(),roots,generation,progress);
+}
+RestoredScene restore_scene_extension(const J &j,const fs::path &folder,const std::vector<fs::path> &roots,uint64_t generation,const std::function<void(const std::string &)> &progress){
   if(j.at("schema")!="daz-fast-viewer-scene-extension"||j.at("version")!=1)throw std::runtime_error("不支持的 DUFEX 格式或版本");
-  auto source=fs::u8path(j.at("source").get<std::string>());if(!source.empty()&&source.is_relative())source=fs::absolute(file).parent_path()/source;
-  auto d=load_source(source,roots,progress);d->generation=generation;replay(*d,j.at("operations"),roots,fs::absolute(file).parent_path(),progress);
+  auto source=fs::u8path(j.at("source").get<std::string>());if(!source.empty()&&source.is_relative())source=folder/source;
+  auto d=load_source(source,roots,progress);d->generation=generation;replay(*d,j.at("operations"),roots,folder,progress);
   auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
 }
 }

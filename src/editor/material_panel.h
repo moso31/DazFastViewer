@@ -37,11 +37,14 @@ class MaterialPanel final:public QWidget {
 public:
   explicit MaterialPanel(QWidget *parent=nullptr);
   std::function<void()> changed;
+  std::function<void(const QString &,const std::function<void()> &)> edit_requested;
   std::function<void(bool)> interaction_changed;
   std::function<void(const std::vector<MaterialSurface> &)> hovered;
   std::function<void(const std::filesystem::path &,const std::vector<MaterialSurface> &)> preset_requested;
   std::function<void(const QString &)> locate_file;
   std::vector<MaterialSurface> selected_surfaces() const{return surfaces();}
+  std::vector<std::pair<std::string,std::string>> selection_ids() const;
+  void restore_selection(const std::vector<std::pair<std::string,std::string>> &selection);
   void bind(std::shared_ptr<const Document> document,Snapshot *snapshot,int target);
 };
 }

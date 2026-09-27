@@ -10,10 +10,10 @@ namespace dfv::editor {
 // 应用标识和系统按钮固定，菜单／工具由独立 QToolBar 承载，可移动、浮动、隐藏。
 class EditorChrome final:public QWidget {
   QMainWindow *owner_,*modules_;
-  QToolBar *menus_,*tools_,*functions_;
+  QToolBar *menus_,*history_,*tools_,*functions_;
   QMenuBar *menu_;
   QWidget *grip_;
-  QAction *local_,*world_,*ground_,*weight_;
+  QAction *undo_,*redo_,*local_,*world_,*ground_,*weight_;
   QDoubleSpinBox *ground_ratio_;
   GizmoSettings settings_;
   GizmoSpace translation_space_=GizmoSpace::local,rotation_space_=GizmoSpace::local;
@@ -28,6 +28,8 @@ public:
   explicit EditorChrome(QMainWindow *owner);
   std::function<void(GizmoSettings)> changed;
   std::function<void(double)> ground_ratio_changed;
+  QAction *undo_action() const {return undo_;}
+  QAction *redo_action() const {return redo_;}
   QAction *ground_action() const {return ground_;}
   QAction *weight_action() const {return weight_;}
   void bind_ground(bool enabled,double ratio);

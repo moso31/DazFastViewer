@@ -24,6 +24,7 @@
     }sync_selection();
   }
   void powerpose_action(const runtime::BoundPosePoint &point,int operation,bool enabled) {
+    auto edit=history_edit(QStringLiteral("PowerPose 恢复与固定"));
     const int index=selected_skin();if(index<0||point.joints.empty()) return;
     if(operation==0) {select_powerpose(point);auto *d=findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"));if(d) {d->show();d->raise();}return;}
     if(operation>=2) {pin_joint(index,point.joints.front(),enabled,operation==3);refresh_powerpose(renderer_->status());return;}

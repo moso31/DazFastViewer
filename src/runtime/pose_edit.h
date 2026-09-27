@@ -10,7 +10,7 @@ bool editable_channel(const Skin &skin,size_t joint,int channel);
 // 所有目标点使用角色局部 Render IR 坐标（米）；对象矩阵在交互边界转换。
 ir::Vec3 joint_point(const Skin &skin,const std::vector<JointPose> &poses,int joint,bool end=false);
 struct IkGoal {int joint=-1;bool end=true;ir::Vec3 position{};float weight=1;bool fix_position=true,fix_orientation=false;ir::Transform orientation;};
-struct PosePin {int skin=-1,joint=-1;ir::Vec3 world;bool position=true,angle=false;ir::Transform world_orientation;};
+struct PosePin {int skin=-1,joint=-1;ir::Vec3 world;bool position=true,angle=false;ir::Transform world_orientation;bool operator==(const PosePin &) const = default;};
 struct IkResult {double error=0;int iterations=0;bool changed=false;double angle_error_degrees=0;};
 ir::Transform rotation_frame(const ir::Transform &transform);
 ir::Transform joint_orientation(const Skin &skin,const std::vector<JointPose> &poses,int joint);

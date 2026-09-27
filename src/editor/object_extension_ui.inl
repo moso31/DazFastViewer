@@ -25,11 +25,13 @@
     if(!extension_panel_)return;extension_panel_->bind(t>=0?snapshot_.values.at(t).extension:runtime::ObjectExtension{},extension_bound_!=t);extension_bound_=t;
   }
   void enable_extension() {
+    auto edit=history_edit(QStringLiteral("添加生长或密度参数"));
     const int t=extension_target();if(t<0)return;auto &v=snapshot_.values.at(t);
     if(v.extension.kind==runtime::ExtensionKind::none){v.extension={};v.extension.kind=growth_character(*document_,size_t(t))?runtime::ExtensionKind::growth:runtime::ExtensionKind::density;send();}
     bind_extension();extension_panel_->expand();auto *d=findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"));if(d){d->show();d->raise();}
   }
   void change_extension(runtime::ObjectExtension next,bool shape,double step) {
+    auto edit=history_edit(QStringLiteral("修改生长与密度参数"));
     const int t=extension_target();if(t<0)return;
     try {
       runtime::validate_extension(next);std::vector<std::string> missing;
@@ -59,9 +61,11 @@
   }
   void save_extension(bool save_as=false) {
     if(loading_||!document_)return;
+    accept_pose_commit(renderer_->status());
+    if(history_)history_->finish_gesture();
     initialize_favorites();
     auto path=extension_file_;if(path.empty()&&!document_->source_file.empty())path=extension_path(document_->source_file);
     if(save_as||path.empty()){const auto file=QFileDialog::getSaveFileName(this,QStringLiteral("保存场景修改"),QString::fromStdWString(path.wstring()),QStringLiteral("场景扩展 (*.dufex)"));if(file.isEmpty())return;path=file_path(file);if(path.extension().empty())path+=L".dufex";}
-    try{auto saved=snapshot_;saved.pose_pins=pose_pins_;save_scene_extension(path,*document_,saved);extension_file_=path;statusBar()->showMessage(QStringLiteral("场景修改已保存：")+QString::fromStdWString(path.wstring()),8000);}
+    try{apply_parameters();auto saved=snapshot_;saved.pose_pins=pose_pins_;save_scene_extension(path,*document_,saved);extension_file_=path;if(history_)history_->mark_saved();checkpoint();statusBar()->showMessage(QStringLiteral("场景修改已保存：")+QString::fromStdWString(path.wstring()),8000);}
     catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("保存失败"),text(e.what()));}
   }

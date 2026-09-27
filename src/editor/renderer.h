@@ -144,6 +144,8 @@ public:
   void gizmo(GizmoSettings settings) {std::lock_guard lock(mutex_);gizmo_settings_=settings;++window_->pose_selection;}
   void pose_pins(std::vector<runtime::PosePin> pins) {std::lock_guard lock(mutex_);pose_pins_=std::move(pins);++window_->pose_selection;}
   void retry_resources();
+  void history_requests(std::function<void(bool)> callback) {window_->history_requested=std::move(callback);}
+  void cancel_edit() {window_->cancel_edit();std::lock_guard lock(mutex_);powerpose_input_.cancelled=true;edit_active_=false;}
   void restart_render() {++render_restarts_;}
 #ifdef DFV_GL_RECOVERY_TEST
   void inject_graphics_failure(bool upload,GLContext::Fault fault) {(upload?window_->render_context:window_->present_context).inject(fault);}
