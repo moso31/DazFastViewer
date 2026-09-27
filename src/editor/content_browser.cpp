@@ -1,6 +1,5 @@
 #include "editor/content_browser.h"
 #include "editor/ui_scale.h"
-#include "editor/folder_icon.h"
 #include "daz/content_entry.h"
 #include "editor/content_catalog.h"
 #include <QAbstractListModel>
@@ -88,7 +87,7 @@ class ContentModel final:public QAbstractListModel {
 public:
   std::vector<Item> items;
   explicit ContentModel(Thumbnails &thumbnails,QObject *parent):QAbstractListModel(parent),thumbnails_(thumbnails) {
-    folder_=folder_icon();file_=QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+    folder_=QApplication::style()->standardIcon(QStyle::SP_DirIcon);file_=QApplication::style()->standardIcon(QStyle::SP_FileIcon);
   }
   int rowCount(const QModelIndex &parent={}) const override {return parent.isValid()?0:int(items.size());}
   QVariant data(const QModelIndex &index,int role) const override {
@@ -104,11 +103,10 @@ public:
 QToolButton *button(const QString &text,const QString &tip,QWidget *parent) {auto *b=new QToolButton(parent);b->setText(text);b->setToolTip(tip);return b;}
 class ContentFiles final:public QFileSystemModel {
   Thumbnails &thumbnails_;
-  QIcon folder_=folder_icon();
 public:
   ContentFiles(Thumbnails &thumbnails,QObject *parent):QFileSystemModel(parent),thumbnails_(thumbnails){}
   QVariant data(const QModelIndex &index,int role=Qt::DisplayRole)const override {
-    if(role==Qt::DecorationRole&&index.isValid()&&index.column()==0){const auto image=thumbnails_.get(filePath(index));if(!image.isNull())return QIcon(image);if(isDir(index))return folder_;}
+    if(role==Qt::DecorationRole&&index.column()==0){const auto image=thumbnails_.get(filePath(index));if(!image.isNull())return QIcon(image);}
     return QFileSystemModel::data(index,role);
   }
 };
