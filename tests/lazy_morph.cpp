@@ -40,6 +40,14 @@ int main() {
     resources();
     const auto folder=fs::temp_directory_path()/("dfv-lazy-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto base=folder/"data/figure.dsf";
+    {const auto embedded=folder/"embedded.duf";auto data=J{{"geometry_library",J::array({{{"vertices",{{"values",{{0,0,0}}}}}}})},{"scene",{{"nodes",J::array({{{"id","saved"}}})}}},{"modifier_library",J::array({shape("embedded-a",0,12),shape("embedded-b",1,34)})}};
+      write(embedded,data);auto loaded=daz::prefetch_documents(std::vector<fs::path>{embedded,embedded},daz::DocumentView::payload);
+      const auto a=loaded[0].get(),b=loaded[1].get();require(a==b,"同一文档的并发差值请求没有共享解析结果");
+      require(a->at("geometry_library").empty()&&a->at("scene").empty(),"差值视图构造了无关几何或场景 DOM");
+      require(a->at("modifier_library")[1]["morph"]["deltas"]["values"][0][1]==34,"差值视图丢失了其他 Morph 的数据");
+      data["modifier_library"][0]["morph"]["deltas"]["values"][0][1]=123.5;write(embedded,data);
+      require(daz::document_view(embedded,daz::DocumentView::payload)->at("modifier_library")[0]["morph"]["deltas"]["values"][0][1]==123.5,"修改内嵌差值后仍返回旧缓存");
+    }
     write(base,J::parse(R"({"node_library":[{"id":"figure","type":"figure"}],"geometry_library":[{"id":"geometry","vertices":{"values":[[0,0,0],[100,0,0],[0,100,0]]}}]})"));
     auto a=shape("A",0,10),b=shape("B",1,20),control=parameter("Controller");
     control["formulas"]=J::array();for(const auto id:{"A","B"}) control["formulas"].push_back({{"output",std::string("figure:/data/Morphs/")+id+".dsf#"+id+"?value"},{"operations",{{{"op","push"},{"url","figure:#Controller?value"}}}}});

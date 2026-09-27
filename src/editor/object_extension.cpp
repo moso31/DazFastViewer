@@ -39,7 +39,7 @@ public:
     if(document_!=&d||target_!=target){
       runtime_.reset();topology_.reset();cached_valid_=false;scene_={};targets_={d.catalog.targets.at(target)};auto &t=targets_[0];
       const auto &instance=d.loaded.scene.instances.at(t.instance);scene_.meshes={d.loaded.scene.meshes.at(instance.mesh)};scene_.meshes[0].subdivision={};scene_.meshes[0].graft_vertex_pairs.clear();scene_.meshes[0].graft_hidden_polygons.clear();scene_.meshes[0].graft_target_vertices=0;
-      scene_.instances={instance};scene_.instances[0].mesh=0;scene_.instances[0].graft_source=-1;scene_.instances[0].prototype=-1;
+      scene_.instances={instance};scene_.instances[0].mesh=0;scene_.instances[0].graft_source=-1;scene_.instances[0].shell_source=-1;scene_.instances[0].shell_root=-1;scene_.instances[0].prototype=-1;
       t.instance=0;t.parent.clear();t.ancestors.clear();t.conform_target.clear();t.rigid_follow={};t.smoothing.enabled=false;t.attachment_bind_rest=false;
       skins_.clear();const auto s=skin_index(d,target);if(s>=0){skins_={d.skeletons.skins[size_t(s)]};skins_[0].instance=0;}
       graphs_={d.formulas.graphs.at(target)};graphs_[0].skin=s>=0?0:-1;

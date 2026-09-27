@@ -150,6 +150,7 @@ void Display::make_program() {
 uniform sampler2D beauty;
 uniform ivec2 image_size;
 uniform int reconstruction;
+uniform float sharpen_strength;
 uniform int enabled,per_component;
 uniform vec4 tone; // exposure, burn, crush, saturation
 uniform vec3 white;
@@ -159,8 +160,8 @@ vec3 compress_color(vec3 x) {return x*(vec3(1)+tone.y*x)/(vec3(1)+x);}
 vec3 pixel(ivec2 p) {return texelFetch(beauty,clamp(p,ivec2(0),image_size-ivec2(1)),0).rgb;}
 // Catmull-Rom 双三次，边缘限制在当前有效图像范围，避免采到复用纹理的旧帧或填充区。
 vec4 cubic(float t) {return vec4(-.5*t+t*t-.5*t*t*t,1-2.5*t*t+1.5*t*t*t,.5*t+2*t*t-1.5*t*t*t,-.5*t*t+.5*t*t*t);}
-vec3 reconstruct() {
- vec2 p=uv*vec2(image_size)-.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);
+vec3 reconstruct(vec2 coordinate) {
+ vec2 p=coordinate*vec2(image_size)-.5;ivec2 base=ivec2(floor(p));vec2 f=fract(p);
  if(reconstruction==0) return pixel(ivec2(floor(p+.5)));
  if(reconstruction==1) return mix(mix(pixel(base),pixel(base+ivec2(1,0)),f.x),mix(pixel(base+ivec2(0,1)),pixel(base+ivec2(1,1)),f.x),f.y);
  vec4 wx=cubic(f.x),wy=cubic(f.y);vec3 sum=vec3(0);
@@ -171,7 +172,16 @@ vec3 reconstruct() {
  return clamp(sum,lo,hi);
 }
 void main(){
- vec3 x=max(reconstruct(),vec3(0));
+ vec3 x=reconstruct(uv);
+ if(sharpen_strength>0.0){
+   vec2 step_size=1.0/vec2(image_size);
+   vec3 n=reconstruct(uv+vec2(0,step_size.y)),s=reconstruct(uv-vec2(0,step_size.y));
+   vec3 e=reconstruct(uv+vec2(step_size.x,0)),w=reconstruct(uv-vec2(step_size.x,0));
+   // 在重建后的线性图像上增强局部对比度；限制在邻域范围，抑制亮边和暗边光晕。
+   vec3 lo=min(x,min(min(n,s),min(e,w))),hi=max(x,max(max(n,s),max(e,w)));
+   x=clamp(x+sharpen_strength*(x-.25*(n+s+e+w)),lo,hi);
+ }
+ x=max(x,vec3(0));
  if(enabled!=0){
    x=x*tone.x/max(white,vec3(.0001));
    vec2 p=(uv*2-1)*vec2(max(aspect,1.0),max(1.0/aspect,1.0))*.422793;
@@ -216,6 +226,7 @@ void Display::draw(const Params &) {
   glDisable(GL_DEPTH_TEST);glDisable(GL_BLEND);glUseProgram(program_);
   glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,slot.texture);
   glUniform1i(glGetUniformLocation(program_,"beauty"),0);
+  glUniform1f(glGetUniformLocation(program_,"sharpen_strength"),sharpen_);
   glUniform2i(glGetUniformLocation(program_,"image_size"),slot.frame.width,slot.frame.height);
   glUniform1i(glGetUniformLocation(program_,"reconstruction"),slot.frame.width==window_.width&&slot.frame.height==window_.height?0:reconstruction_==Reconstruction::bilinear?1:2);
   const auto &n=options_.tonemapper;const auto w=ir::color(n,"White Point");const auto ws=float(ir::number(n,"White Point Scale",1));

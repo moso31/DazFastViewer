@@ -8,6 +8,7 @@
 #include <list>
 #include <unordered_map>
 #include <thread>
+#include <future>
 #include <cstdlib>
 #include <iomanip>
 #include <sstream>
@@ -74,15 +75,19 @@ struct MetadataSax : nlohmann::json_sax<J> {
   bool end_array() override{return finish(false);}
   bool key(string_t &v) override {
     if(skipped) return true;key_name=v;
-    skip_next=(parents.size()==1&&(v=="geometry_library"||v=="uv_set_library"))||
-      (v=="values"&&!parents.empty()&&parents.back()=="deltas")||
-      (view==DocumentView::metadata&&v=="joints"&&!parents.empty()&&parents.back()=="skin");
+    skip_next=(parents.size()==1&&(v=="geometry_library"||v=="uv_set_library"||
+      (view==DocumentView::payload&&(v=="scene"||v=="node_library"||v=="material_library"||v=="image_library"))))||
+      (view!=DocumentView::payload&&v=="values"&&!parents.empty()&&parents.back()=="deltas")||
+      (view!=DocumentView::skeleton&&v=="joints"&&!parents.empty()&&parents.back()=="skin");
     return dom.key(v);
   }
   bool parse_error(size_t p,const std::string &s,const nlohmann::detail::exception &e) override{return dom.parse_error(p,s,e);}
 };
 struct Entry {std::shared_ptr<const J> value;size_t cost=0;std::list<std::string>::iterator position;};
 std::mutex cache_mutex;std::unordered_map<std::string,Entry> cache;std::list<std::string> recent;size_t cache_bytes=0;
+std::unordered_map<std::string,std::weak_ptr<const J>> parsed_documents;
+std::unordered_map<std::string,std::shared_future<std::shared_ptr<const J>>> in_flight;
+std::string document_key(const fs::path &file) {auto path=utf8(fs::absolute(file).lexically_normal());for(auto &c:path)if(c>='A'&&c<='Z')c+=32;return path;}
 constexpr size_t memory_budget=192*1024*1024;
 fs::path cache_directory() {
   if(const auto *override_path=std::getenv("DFV_ASSET_CACHE")) return fs::u8path(override_path)/"metadata-v2";
@@ -94,14 +99,26 @@ fs::path cache_path(const std::string &key) {
   std::ostringstream name;name<<std::hex<<std::setw(16)<<std::setfill('0')<<hash;return cache_directory()/(name.str()+".cbor");
 }
 }
+void remember_document(const fs::path &file,const std::string &version,const std::shared_ptr<const J> &document) {
+  const auto key=document_key(file)+"|"+version;std::lock_guard lock(cache_mutex);parsed_documents[key]=document;
+  if(parsed_documents.size()>2048)std::erase_if(parsed_documents,[](const auto &item){return item.second.expired();});
+}
 std::shared_ptr<const J> document_view(const fs::path &file,DocumentView view) {
   diagnostics::Scope scope("metadata_document");
-  auto path=utf8(fs::absolute(file).lexically_normal());for(auto &c:path) if(c>='A'&&c<='Z') c+=32;
-  const auto version=file_version(file);const auto key=path+"|"+std::to_string(int(view))+"|"+version;
-  {std::lock_guard lock(cache_mutex);if(auto i=cache.find(key);i!=cache.end()) {recent.splice(recent.end(),recent,i->second.position);return i->second.value;}}
+  auto path=document_key(file);
+  const auto version=[&] {diagnostics::Scope check("source_version");return file_version(file);}();const auto key=path+"|"+std::to_string(int(view))+"|"+version;
+  {std::lock_guard lock(cache_mutex);if(auto i=parsed_documents.find(path+"|"+version);i!=parsed_documents.end())if(auto value=i->second.lock())return value;}
+  std::shared_ptr<std::promise<std::shared_ptr<const J>>> producer;std::shared_future<std::shared_ptr<const J>> pending;
+  {std::lock_guard lock(cache_mutex);if(auto i=cache.find(key);i!=cache.end()) {recent.splice(recent.end(),recent,i->second.position);return i->second.value;}
+    if(auto i=in_flight.find(key);i!=in_flight.end())pending=i->second;
+    else {producer=std::make_shared<std::promise<std::shared_ptr<const J>>>();pending=producer->get_future().share();in_flight.emplace(key,pending);}
+  }
+  if(!producer)return pending.get();
+  try {const auto loaded=[&]() -> std::shared_ptr<const J> {
   J document;std::vector<uint8_t> binary;const auto cached=cache_path(path+"|"+std::to_string(int(view)));size_t cache_size=0;
   try {
     if(fs::is_regular_file(cached)&&fs::file_size(cached)<128*1024*1024) {
+      diagnostics::Scope decode("disk_cache_decode");
       cache_size=size_t(fs::file_size(cached));std::ifstream input(cached,std::ios::binary);std::vector<uint8_t> bytes(cache_size);
       if(!input.read(reinterpret_cast<char *>(bytes.data()),std::streamsize(bytes.size()))) throw std::runtime_error("元数据缓存读取不完整");
       auto envelope=J::from_cbor(bytes);
@@ -109,6 +126,7 @@ std::shared_ptr<const J> document_view(const fs::path &file,DocumentView view) {
     }
   } catch(...) {document=nullptr;}
   if(document.is_null()) {
+    diagnostics::Scope parse("source_metadata_parse");
     auto bytes=document_bytes(file);MetadataSax sax(document,view);
     if(!J::sax_parse(bytes,&sax)) throw std::runtime_error("资源元数据解析失败："+path);
     if(file_version(file)!=version) throw std::runtime_error("读取期间资源已变化，请刷新参数目录："+path);
@@ -122,14 +140,21 @@ std::shared_ptr<const J> document_view(const fs::path &file,DocumentView view) {
   }
   auto result=std::make_shared<const J>(std::move(document));
   const size_t cost=(binary.empty()?cache_size:binary.size())*6;
+  std::vector<std::shared_ptr<const J>> retired;
   {std::lock_guard lock(cache_mutex);if(auto i=cache.find(key);i!=cache.end()) return i->second.value;
     recent.push_back(key);cache.emplace(key,Entry{result,cost,std::prev(recent.end())});cache_bytes+=cost;
-    while(cache_bytes>memory_budget&&cache.size()>1) {auto oldest=cache.find(recent.front());cache_bytes-=oldest->second.cost;cache.erase(oldest);recent.pop_front();}}
+    while(cache_bytes>memory_budget&&cache.size()>1) {auto oldest=cache.find(recent.front());cache_bytes-=oldest->second.cost;retired.push_back(std::move(oldest->second.value));cache.erase(oldest);recent.pop_front();}}
   return result;
+  }();producer->set_value(loaded);{std::lock_guard lock(cache_mutex);in_flight.erase(key);}return loaded;
+  }catch(...){producer->set_exception(std::current_exception());{std::lock_guard lock(cache_mutex);in_flight.erase(key);}throw;}
 }
-void prefetch_documents(const std::vector<fs::path> &files) {
-  std::atomic<size_t> next=0;std::vector<std::jthread> workers;
+std::vector<DocumentResult> prefetch_documents(std::span<const fs::path> files,DocumentView view) {
+  diagnostics::Scope scope("metadata_prefetch");
+  std::vector<DocumentResult> results(files.size());std::atomic<size_t> next=0;
   const auto count=std::min<size_t>(4,files.size());
-  for(size_t worker=0;worker<count;++worker) workers.emplace_back([&] {for(;;) {auto i=next.fetch_add(1);if(i>=files.size()) break;try {document_view(files[i]);} catch(...) {/* 主线程按稳定顺序报告错误。 */}}});
+  {std::vector<std::jthread> workers;
+    for(size_t worker=0;worker<count;++worker) workers.emplace_back([&] {for(;;) {auto i=next.fetch_add(1);if(i>=files.size()) break;try {results[i].value=document_view(files[i],view);} catch(...) {results[i].error=std::current_exception();}}});
+  }
+  return results;
 }
 }

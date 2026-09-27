@@ -141,6 +141,8 @@ struct Mesh {
   std::vector<std::array<uint32_t,2>> graft_vertex_pairs;
   // 原拓扑供 Morph/蒙皮核对；遮盖仅影响绘制和选取，Visible 不恢复宿主面。
   std::vector<uint32_t> hidden_polygons;
+  // Shell 自身的面组/材质显隐，独立于宿主的 GeoGraft 遮盖。
+  std::vector<uint32_t> shell_hidden_polygons;
   std::string id;
   std::vector<Vec3> positions;
   std::vector<Triangle> triangles;
@@ -166,6 +168,9 @@ struct Instance {
   int prototype=-1;
   // GeoGraft 的直接宿主实例；与可编辑对象身份独立，供渲染侧共同细分。
   int graft_source=-1;
+  int shell_source=-1;
+  int shell_root=-1;
+  float shell_offset=0;
   std::string instance_node;
   // 一个 DAZ Instance / 散布条目的所有渲染零件共用此键。
   std::string instance_group,instance_label;

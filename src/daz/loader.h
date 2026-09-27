@@ -2,6 +2,7 @@
 #include "render_ir/scene.h"
 #include "runtime/rigid_follow.h"
 #include <nlohmann/json.hpp>
+#include <memory>
 
 namespace dfv::daz {
 struct LoadOptions {std::vector<std::filesystem::path> content_roots;bool strict=false;bool defer_selection=false;};
@@ -30,7 +31,7 @@ struct AssetObject {
   bool attachment_bind_rest=false;
 };
 struct AssetNode {std::string id,parent,label;bool group=false;};
-struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;};
+struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;std::vector<std::shared_ptr<const nlohmann::json>> source_documents;};
 struct DufContents {bool instantiate=false,materials=false,properties=false,requires_selection=false;};
 DufContents inspect_contents(const nlohmann::json &document);
 LoadedScene load(const std::filesystem::path &file,const LoadOptions &options={});

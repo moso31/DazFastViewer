@@ -7,6 +7,8 @@
 #include <map>
 #include <limits>
 #include <set>
+#include <atomic>
+#include <thread>
 
 namespace dfv::daz {
 namespace fs=std::filesystem;
@@ -14,9 +16,16 @@ using J=nlohmann::json;
 static std::string path_string(const fs::path &p) {auto s=p.generic_u8string();return {s.begin(),s.end()};}
 static std::string lower(std::string s) {for(char &c:s) if(c>='A'&&c<='Z') c+=32;return s;}
 static thread_local std::map<fs::path,std::string> path_keys;
+static thread_local std::map<fs::path,fs::path> canonical_parents;
 static thread_local std::map<std::pair<fs::path,std::string>,fs::path> resolved_paths;
+static fs::path canonical_path(const fs::path &p) {
+  auto [parent,fresh]=canonical_parents.try_emplace(p.parent_path());if(fresh)parent->second=fs::weakly_canonical(p.parent_path());
+  return fs::is_symlink(fs::symlink_status(p))?fs::weakly_canonical(p):(parent->second/p.filename()).lexically_normal();
+}
 static std::string key(const fs::path &p) {
-  auto [it,inserted]=path_keys.try_emplace(p);if(inserted) it->second=lower(path_string(fs::weakly_canonical(p)));return it->second;
+  auto [it,inserted]=path_keys.try_emplace(p);if(inserted) {
+    it->second=lower(path_string(canonical_path(p)));
+  }return it->second;
 }
 static float number(const J &j,const char *name,float value) {const auto i=j.find(name);if(i==j.end()) return value;return i->is_boolean()?(i->get<bool>()?1.f:0.f):i->is_number()?i->get<float>():value;}
 struct Reference {std::string file,id,property;};
@@ -31,13 +40,13 @@ static fs::path resolve_uncached(const std::string &raw,const fs::path &owner,co
   if(raw.empty()) return owner;
   auto relative=fs::u8path(raw.starts_with('/')?raw.substr(1):raw).lexically_normal();
   if(relative.is_absolute() || relative.has_root_name() || (!relative.empty() && *relative.begin()=="..")) return {};
-  if(!raw.starts_with('/') && fs::is_regular_file(owner.parent_path()/relative)) return fs::weakly_canonical(owner.parent_path()/relative);
-  for(const auto &root:roots) if(fs::is_regular_file(root/relative)) return fs::weakly_canonical(root/relative);
+  if(!raw.starts_with('/') && fs::is_regular_file(owner.parent_path()/relative)) return canonical_path(owner.parent_path()/relative);
+  for(const auto &root:roots) if(fs::is_regular_file(root/relative)) return canonical_path(root/relative);
   return {};
 }
 static fs::path resolve(const std::string &raw,const fs::path &owner,const std::vector<fs::path> &roots) {
   if(raw.empty()) return owner;
-  const auto cache_key=std::make_pair(raw.starts_with('/')?fs::path{}:owner.parent_path(),raw);
+  const auto cache_key=std::make_pair(raw.starts_with('/')?fs::path{}:owner.parent_path(),lower(raw));
   auto [it,inserted]=resolved_paths.try_emplace(cache_key);if(inserted) it->second=resolve_uncached(raw,owner,roots);return it->second;
 }
 static fs::path relative_to_roots(const fs::path &path,const std::vector<fs::path> &roots) {
@@ -81,16 +90,25 @@ static std::shared_ptr<runtime::MorphPayload> payload(const fs::path &file,const
   std::lock_guard lock(mutex);if(auto p=shared[identity].lock()) return p;
   auto p=std::make_shared<runtime::MorphPayload>(identity,count,vertices,[file,id,version,vertices] {
     if(file_version(file)!=version) throw std::runtime_error("资源已变化，请刷新参数目录："+path_string(file));
-    const auto doc=read_document_file(file);runtime::OffsetBuffer result;bool found=false;
+    const auto handle=document_view(file,DocumentView::payload);const auto &doc=*handle;runtime::OffsetBuffer result;bool found=false;
     for(const auto &m:array_member(doc,"modifier_library")) if(m.value("id","")==id) {if(found) throw std::runtime_error("重复的 Morph ID");result=offsets(m.at("morph"),vertices);found=true;}
     if(!found||file_version(file)!=version) throw std::runtime_error("Morph 缺失或读取期间资源已变化："+id);return result;
   });shared[identity]=p;
   if(shared.size()>16384) std::erase_if(shared,[](const auto &entry){return entry.second.expired();});return p;
 }
 #include "daz/native_extension.inl"
-MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &input_roots,const std::function<void(const std::string &)> &progress,bool lazy) {
-  struct CacheScope {~CacheScope() {path_keys.clear();resolved_paths.clear();}} cache_scope;
-  path_keys.clear();resolved_paths.clear();
+struct DiscoveryContext {
+  std::shared_ptr<const J> scene;
+  fs::path file;
+  NativeChannels native;
+  std::map<std::string,const J *> saved_nodes;
+  std::set<std::string> object_nodes;
+  std::map<std::pair<std::string,std::string>,J> overrides;
+  J diagnostics=J::array();
+};
+static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::path> &input_roots,const std::function<void(const std::string &)> &progress,bool lazy,std::span<const size_t> objects,const DiscoveryContext &context) {
+  struct CacheScope {~CacheScope() {path_keys.clear();resolved_paths.clear();canonical_parents.clear();}} cache_scope;
+  path_keys.clear();resolved_paths.clear();canonical_parents.clear();
   MorphCatalog out;out.report={{"targets",J::array()},{"diagnostics",J::array()},{"files_scanned",0},{"skipped_types",J::object()},
     {"content_roots",J::array()},{"file_overrides",J::array()},{"empty_overrides",J::array()},{"root_scans",J::array()}};
   std::vector<fs::path> roots;std::set<std::string> root_keys;
@@ -98,31 +116,16 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     roots.push_back(fs::weakly_canonical(root));out.report["content_roots"].push_back({{"path",path_string(root)},{"exists",fs::is_directory(root)}});
   }
   auto skipped=[&](const std::string &type) {out.report["skipped_types"][type]=out.report["skipped_types"].value(type,0)+1;};
-  fs::path scene_file;J scene_document=J::object();
-  if(loaded.report.contains("input")) {scene_file=fs::u8path(loaded.report.at("input").get<std::string>());scene_document=*document_view(scene_file);}
-  std::map<std::string,const J *> saved_nodes;
-  for(const auto &node:array_member(object_member(scene_document,"scene"),"nodes")) saved_nodes[node.value("id","")]=&node;
-  std::set<std::string> object_nodes;for(const auto &object:loaded.objects) object_nodes.insert(object.id);
-  const auto native=native_channels(scene_document,scene_file,roots,out.report["diagnostics"]);
-  // 场景覆盖只解析一次；大场景不能为每个 Morph 复制和遍历整个 scene。
-  std::map<std::pair<std::string,std::string>,J> overrides;
-  if(scene_document.contains("scene")&&scene_document["scene"].contains("modifiers"))
-    for(const auto &item:scene_document["scene"]["modifiers"]) {
-      const auto uri=item.value("url","");if(uri.empty()) continue;
-      const auto ref=reference(uri);const auto path=resolve(ref.file,scene_file,roots);if(path.empty()) continue;
-      overrides[{decode_uri(item.value("parent","")),key(path)+"#"+ref.id}]=item.value("channel",J::object());
-    }
-  std::set<uint32_t> used_meshes;
+  const auto &scene_file=context.file;const auto &scene_document=*context.scene;
+  const auto &saved_nodes=context.saved_nodes;const auto &object_nodes=context.object_nodes;
+  const auto &native=context.native;const auto &overrides=context.overrides;
   struct CachedTarget {runtime::Target target;FormulaSource formulas;J report;};
   std::map<std::string,CachedTarget> cached_targets;
-  for(const auto &object:loaded.objects) {
+  for(const auto object_index:objects) {
+    const auto &object=loaded.objects[object_index];
     diagnostics::Scope object_scope(diagnostics::active?object.id:std::string{});
     if(progress) progress("正在发现参数："+object.label);
     auto &instance=loaded.scene.instances.at(object.instance);
-    if(!used_meshes.insert(instance.mesh).second) {
-      auto copy=loaded.scene.meshes.at(instance.mesh);copy.id+="/"+object.id;
-      instance.mesh=uint32_t(loaded.scene.meshes.size());loaded.scene.meshes.push_back(std::move(copy));
-    }
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
     runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;target.smoothing=object.smoothing;
     target.favorite_scope=scene_file.empty()?std::string{}:key(scene_file);
@@ -155,6 +158,10 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
       if(std::find(target.ancestors.begin(),target.ancestors.end(),parent)!=target.ancestors.end()) throw std::runtime_error("附件父节点链形成循环");
       target.ancestors.push_back(parent);auto found=std::find_if(loaded.nodes.begin(),loaded.nodes.end(),[&](const auto &node){return "#"+node.id==parent;});
       parent=found==loaded.nodes.end()?std::string{}:found->parent;
+    }
+    if(instance.shell_source>=0) {
+      out.report["targets"].push_back({{"id",target.id},{"label",target.label},{"morphs",J::array()},{"geometry_shell",true}});
+      out.targets.push_back(std::move(target));out.formulas.emplace_back();continue;
     }
     const auto target_key=key(object.geometry_file)+"#"+object.geometry_id;
     auto apply_override=[&](runtime::Morph &m) {
@@ -242,15 +249,19 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
     if(!scene_file.empty() && scene_document.contains("modifier_library")) files["$scene"]=scene_file;
     std::vector<fs::path> queue;std::set<std::string> queued,empty_files,ids;
     for(const auto &[relative,path]:files) if(queued.insert(key(path)).second) queue.push_back(path);
-    if(lazy) prefetch_documents(queue);
+    std::vector<DocumentResult> batch;size_t batch_start=0;
     std::vector<std::set<std::string>> dependencies;
     std::map<std::string,std::string> declared_assets;
     for(size_t file_index=0;file_index<queue.size();++file_index) {
+      if(lazy&&(batch.empty()||file_index>=batch_start+batch.size())) {
+        batch.clear();batch_start=file_index;
+        batch=prefetch_documents(std::span<const fs::path>(queue).subspan(file_index,std::min<size_t>(64,queue.size()-file_index)));
+      }
       diagnostics::Scope resource_scope("parameter_resources");
       if(progress&&file_index%(mesh.curves.empty()?250:10)==0) progress(object.label+" · 参数资源 "+std::to_string(file_index)+" / "+std::to_string(queue.size()));
       const auto path=queue[file_index];
       try {
-        const auto handle=lazy?document_view(path):std::make_shared<const J>(read_document_file(path));const auto &doc=*handle;out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+1;
+        const auto handle=lazy?batch[file_index-batch_start].get():std::make_shared<const J>(read_document_file(path));const auto &doc=*handle;out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+1;
         declared_assets[key(path)]=asset_uri(doc.value("asset_info",J::object()).value("id",""));
         if(!doc.contains("modifier_library") || doc["modifier_library"].empty()) {
           skipped("empty_override");empty_files.insert(key(path));out.report["empty_overrides"].push_back(path_string(path));
@@ -287,7 +298,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
           if(source.contains("deltas")) morph.source_offset_count=source["deltas"].value("count",size_t(0));
           if(lazy&&source.contains("deltas")) {
             const auto &deltas=source["deltas"];
-            if(deltas.value("_dfv_rows",size_t(0))!=morph.source_offset_count) throw std::runtime_error("Morph 差值 count 不一致");
+            if(deltas.value("_dfv_rows",array_member(deltas,"values").size())!=morph.source_offset_count) throw std::runtime_error("Morph 差值 count 不一致");
           }
           morph.group=modifier.value("group","");morph.minimum=number(channel,"min",0);morph.maximum=number(channel,"max",1);
           morph.initial=number(channel,"current_value",number(channel,"value",0));morph.step=number(channel,"step_size",.01f);
@@ -406,14 +417,59 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &in
         {"unsupported",m.unsupported},{"visible",m.visible},{"auto_follow",m.auto_follow},{"initial",m.initial},{"min",m.minimum},{"max",m.maximum},
         {"dependency_count",dependencies[i].size()},{"node_dependencies",nodes},{"parameter_dependencies",parameters},{"unresolved_dependencies",unresolved}});
     }
-    out.report["targets"].push_back({{"id",target.id},{"label",target.label},{"morphs",items},{"compatible_assets",allowed.size()},{"reference_repairs",repairs}});
+    J target_report={{"id",target.id},{"label",target.label},{"compatible_assets",allowed.size()}};
+    target_report["morphs"]=std::move(items);target_report["reference_repairs"]=std::move(repairs);out.report["targets"].push_back(std::move(target_report));
+    formula_source.interned.clear();formula_source.interned.rehash(0);
     // 缓存资产原始通道，实例的数值、限幅与步长都在复制之后应用。
-    cached_targets[target_key]={target,formula_source,out.report["targets"].back()};
+    if(objects.size()>1)cached_targets[target_key]={target,formula_source,out.report["targets"].back()};
     instance_channels(out.report["targets"].back());
     out.targets.push_back(std::move(target));
-    formula_source.interned.clear();formula_source.interned.rehash(0);out.formulas.push_back(std::move(formula_source));
+    out.formulas.push_back(std::move(formula_source));
   }
-  sync_instance_meshes(loaded.scene);
   return out;
+}
+MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &roots,const std::function<void(const std::string &)> &progress,bool lazy) {
+  struct Paths {Paths(){path_keys.clear();resolved_paths.clear();canonical_parents.clear();}~Paths(){path_keys.clear();resolved_paths.clear();canonical_parents.clear();}} paths;
+  // 主线程先固定网格和实例布局；工作线程只读场景，按独立资产族建立参数目录。
+  std::set<uint32_t> used;std::vector<std::vector<size_t>> groups;std::map<std::string,size_t> by_asset;
+  for(size_t i=0;i<loaded.objects.size();++i) {
+    const auto &object=loaded.objects[i];auto &instance=loaded.scene.instances.at(object.instance);
+    if(!used.insert(instance.mesh).second) {auto copy=loaded.scene.meshes.at(instance.mesh);copy.id+="/"+object.id;instance.mesh=uint32_t(loaded.scene.meshes.size());loaded.scene.meshes.push_back(std::move(copy));}
+    const auto identity=lower(path_string(fs::weakly_canonical(object.geometry_file)))+"#"+object.geometry_id;
+    auto [it,inserted]=by_asset.emplace(identity,groups.size());if(inserted)groups.emplace_back();groups[it->second].push_back(i);
+  }
+  // 无对象的材质预设仍需保留完整的报告结构。
+  if(groups.empty())groups.emplace_back();
+  const auto scene_handle=loaded.report.contains("input")?document_view(fs::u8path(loaded.report.at("input").get<std::string>())):std::make_shared<const J>(J::object());
+  DiscoveryContext context;context.scene=scene_handle;
+  if(loaded.report.contains("input"))context.file=fs::u8path(loaded.report.at("input").get<std::string>());
+  for(const auto &node:array_member(object_member(*scene_handle,"scene"),"nodes"))context.saved_nodes[node.value("id","")]=&node;
+  for(const auto &object:loaded.objects)context.object_nodes.insert(object.id);
+  context.native=native_channels(*scene_handle,context.file,roots,context.diagnostics);
+  for(const auto &item:array_member(object_member(*scene_handle,"scene"),"modifiers")) {
+    const auto uri=item.value("url","");if(uri.empty())continue;
+    const auto ref=reference(uri);const auto path=resolve(ref.file,context.file,roots);if(path.empty())continue;
+    context.overrides[{decode_uri(item.value("parent","")),key(path)+"#"+ref.id}]=item.value("channel",J::object());
+  }
+  path_keys.clear();resolved_paths.clear();
+  std::vector<MorphCatalog> results(groups.size());std::vector<std::exception_ptr> errors(groups.size());std::atomic<size_t> next=0;std::mutex progress_mutex;
+  auto update=[&](const std::string &message) {if(progress){std::lock_guard lock(progress_mutex);progress(message);}};
+  auto work=[&] {for(;;){const auto i=next.fetch_add(1);if(i>=groups.size())break;try{results[i]=discover_group(loaded,roots,update,lazy,groups[i],context);}catch(...){errors[i]=std::current_exception();}}};
+  if(!lazy||groups.size()==1)work();
+  else {std::vector<std::jthread> workers;for(size_t i=0;i<std::min<size_t>(4,groups.size());++i)workers.emplace_back(work);}
+  for(const auto &error:errors)if(error)std::rethrow_exception(error);
+  MorphCatalog out;out.report=std::move(results.front().report);
+  out.targets.resize(loaded.objects.size());out.formulas.resize(loaded.objects.size());J reports=J::array();reports.get_ref<J::array_t &>().resize(loaded.objects.size());
+  for(size_t g=0;g<groups.size();++g) {
+    auto &result=results[g];auto &report=g?result.report:out.report;
+    for(size_t i=0;i<groups[g].size();++i) {const auto index=groups[g][i];out.targets[index]=std::move(result.targets[i]);out.formulas[index]=std::move(result.formulas[i]);reports[index]=std::move(report["targets"][i]);}
+    if(g) {
+      out.report["files_scanned"]=out.report["files_scanned"].get<size_t>()+report["files_scanned"].get<size_t>();
+      for(auto it=report["skipped_types"].begin();it!=report["skipped_types"].end();++it)out.report["skipped_types"][it.key()]=out.report["skipped_types"].value(it.key(),size_t(0))+it.value().get<size_t>();
+      for(const char *field:{"diagnostics","file_overrides","empty_overrides","root_scans"})for(auto &entry:report[field])out.report[field].push_back(std::move(entry));
+    }
+  }
+  for(auto &entry:context.diagnostics)out.report["diagnostics"].push_back(std::move(entry));
+  out.report["targets"]=std::move(reports);sync_instance_meshes(loaded.scene);return out;
 }
 }

@@ -64,7 +64,11 @@ int main(int argc,char **argv) {
     const RenderQuality fast{1024,8,false,false};renderer.render_quality(fast);const auto fast_state=ready(++sessions,fast);
     check(!fast_state.sampling.subsurface&&!fast_state.sampling.bump_and_normal&&fast_state.sampling.transparent_bounces==8,"额外画质选项没有应用到渲染线程");
     check(scene.materials[0]==material&&scene.textures[0].file==texture,"渲染设置改写原场景资源");
-    std::ofstream(output/"result.json")<<nlohmann::json{{"result","PASS"},{"released_bytes",original-reduced},{"sessions",sessions},{"final_transparent_bounces",8},{"final_subsurface",false},{"final_bump_and_normal",false}}.dump(2);
+    const auto stable=renderer.status();ViewportQuality viewport=stable.quality;viewport.sharpen=20.f;renderer.quality(viewport);
+    const auto sharpen_start=now();RenderStatus sharpened;
+    do {app.processEvents();QThread::msleep(10);sharpened=renderer.status();check(sharpened.error.empty(),sharpened.error.c_str());}while(sharpened.quality!=viewport&&now()-sharpen_start<10);
+    check(sharpened.quality==viewport&&sharpened.sessions==stable.sessions&&sharpened.requested_epoch==stable.requested_epoch&&sharpened.samples>=stable.samples,"锐化没有应用，或导致渲染会话/采样重置");
+    std::ofstream(output/"result.json")<<nlohmann::json{{"result","PASS"},{"released_bytes",original-reduced},{"sessions",sessions},{"final_transparent_bounces",8},{"final_subsurface",false},{"final_bump_and_normal",false},{"sharpen_strength",sharpened.quality.sharpen},{"sharpen_preserved_sampling",true}}.dump(2);
     std::cout<<"纹理全部档位、释放与恢复、编辑和相机保留：PASS\n";return 0;
   }catch(const std::exception &e){std::ofstream(output/"error.txt")<<e.what();std::cerr<<e.what()<<'\n';return 1;}
 }

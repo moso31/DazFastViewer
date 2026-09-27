@@ -1,4 +1,5 @@
 #include "runtime/skeleton.h"
+#include <ppl.h>
 #include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
@@ -99,11 +100,11 @@ std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose
   if(source.size()!=skin.weights.size()) throw std::runtime_error("蒙皮权重与网格顶点数不一致");
   bool neutral=true;for(const auto &p:pose) neutral=neutral&&same(p.translation_cm,{})&&same(p.rotation_degrees,{})&&same(p.scale,{1,1,1})&&p.general_scale==1;
   auto result=source;
-  for(size_t i=0;i<source.size();++i) {
+  auto vertex=[&](size_t i) {
     if(!finite(source[i])) throw std::runtime_error("蒙皮输入包含非有限顶点");
     const auto &weights=skin.weights[i];double sum=0;size_t reference=0;
     for(size_t k=0;k<weights.size();++k) {const auto &w=weights[k];if(w.joint>=pose.size()||!std::isfinite(w.weight)||w.weight<=0) throw std::runtime_error("无效蒙皮权重");sum+=w.weight;if(w.weight>weights[reference].weight) reference=k;}
-    if(neutral||weights.empty()) continue;
+    if(neutral||weights.empty()) return;
     const V original{source[i].x*100.,source[i].z*100.,-source[i].y*100.};V out;
     if(skin.method==SkinMethod::linear) {
       for(const auto &w:weights) {const auto &m=palettes[w.joint];out=out+(m.matrix*original+m.translation)*(w.weight/sum);}
@@ -115,7 +116,9 @@ std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose
     }
     result[i]={float(out.x*.01),float(-out.z*.01),float(out.y*.01)};
     if(!finite(result[i])) throw std::runtime_error("蒙皮结果包含非有限顶点");
-  }
+  };
+  if(source.size()>=4096)Concurrency::parallel_for(size_t(0),(source.size()+511)/512,[&](size_t block){for(size_t i=block*512;i<std::min(source.size(),(block+1)*512);++i)vertex(i);});
+  else for(size_t i=0;i<source.size();++i)vertex(i);
   return result;
 }
 SkinningRuntime::SkinningRuntime(ir::Scene &scene,const std::vector<Skin> &skins):scene_(scene),skins_(skins) {

@@ -130,7 +130,7 @@ public:
   ~Renderer();
   void set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene=true);
   void resize(int width,int height);
-  void quality(ViewportQuality value) {std::lock_guard lock(mutex_);value.percent=std::clamp(value.percent,50,100);quality_=value;}
+  void quality(ViewportQuality value) {std::lock_guard lock(mutex_);value.percent=std::clamp(value.percent,50,100);value.sharpen=value.sharpen>=0?std::min(value.sharpen,max_viewport_sharpen):0.f;quality_=value;}
   void render_quality(RenderQuality value) {std::lock_guard lock(mutex_);requested_render_quality_=value;}
   void render_probe(RenderProbe value) {std::lock_guard lock(mutex_);probe_=std::move(value);}
   void pointer(int x,int y,bool click=false,bool toggle=false);

@@ -32,21 +32,21 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   for(size_t i=0;i<source.instances.size();++i) if(graft_bindings[i].group<0&&(!prune_hidden_||source.instances[i].visible)) ordinary_mesh[source.instances[i].mesh]=true;
   std::map<std::string,size_t> old_meshes;
   for(size_t i=0;i<source_.meshes.size();++i) old_meshes.emplace(source_.meshes[i].id,i);
-  std::vector<runtime::Subdivision> subdivisions;std::vector<int> previous_mesh(source.meshes.size(),-1);
-  std::vector<bool> topology_changed(source.meshes.size(),true);
+  std::vector<runtime::Subdivision> subdivisions(source.meshes.size());std::vector<int> previous_mesh(source.meshes.size(),-1);
+  std::vector<uint8_t> topology_changed(source.meshes.size(),true);
   {
     diagnostics::Scope scope("subdivision_build");
-    for(size_t i=0;i<source.meshes.size();++i) {
+    Concurrency::parallel_for(size_t(0),source.meshes.size(),[&](size_t i) {
       if(auto old=old_meshes.find(source.meshes[i].id);old!=old_meshes.end()) {
         previous_mesh[i]=int(old->second);topology_changed[i]=!same_topology(source.meshes[i],source_.meshes[old->second]);
       }
-      if(!ordinary_mesh[i]) subdivisions.emplace_back();
-      else if(!topology_changed[i]&&subdivisions_.at(size_t(previous_mesh[i])).active()==(source.meshes[i].subdivision.enabled&&source.meshes[i].subdivision.level>0)) subdivisions.push_back(subdivisions_.at(size_t(previous_mesh[i])));
-      else subdivisions.emplace_back(source.meshes[i],final_render_);
-    }
+      if(!ordinary_mesh[i])return;
+      if(!topology_changed[i]&&subdivisions_.at(size_t(previous_mesh[i])).active()==(source.meshes[i].subdivision.enabled&&source.meshes[i].subdivision.level>0)) subdivisions[i]=subdivisions_.at(size_t(previous_mesh[i]));
+      else subdivisions[i]=runtime::Subdivision(source.meshes[i],final_render_);
+    });
   }
   std::vector<std::vector<ir::Vec3>> refined(source.meshes.size());
-  for(size_t i=0;i<source.meshes.size();++i) if(subdivisions[i].active()&&(topology_changed[i]||source.meshes[i].positions!=source_.meshes[size_t(previous_mesh[i])].positions)) refined[i]=subdivisions[i].evaluate(source.meshes[i].positions);
+  Concurrency::parallel_for(size_t(0),source.meshes.size(),[&](size_t i) {if(subdivisions[i].active()&&(topology_changed[i]||source.meshes[i].positions!=source_.meshes[size_t(previous_mesh[i])].positions)) refined[i]=subdivisions[i].evaluate(source.meshes[i].positions);});
   bool changed=!loaded_;
   std::vector<int> texture_map;
   for(auto texture:source.textures) {
@@ -61,6 +61,19 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     for(const auto &c:mesh.curves) active_materials[instance.materials[c.material_slot]]=true;
   }
   std::vector<Shader *> shaders;std::vector<ir::Material> canonical;std::vector<float> bumps;
+  // 一次遍历累计所有材质的面积，避免为每个凹凸材质重扫整个场景。
+  std::vector<std::pair<double,double>> bump_areas;
+  std::map<std::filesystem::path,std::pair<int,int>> image_dimensions;
+  auto prepare_bump_areas=[&] {
+    if(!bump_areas.empty())return;bump_areas.resize(source.materials.size());
+    for(const auto &instance:source.instances)if(instance.prototype<0)for(const auto &t:source.meshes[instance.mesh].triangles) {
+      const auto m=instance.materials[t.material_slot];const auto &material=source.materials[m];if(!material.bump_from_texel_density||material.bump_texture<0||material.bump_strength<=0)continue;
+      auto &[world,uv]=bump_areas[m];const auto &p=source.meshes[instance.mesh].positions;const auto a=instance.transform.point(p[t.vertices[0]]),b=instance.transform.point(p[t.vertices[1]]),c=instance.transform.point(p[t.vertices[2]]);
+      const double x1=b.x-a.x,y1=b.y-a.y,z1=b.z-a.z,x2=c.x-a.x,y2=c.y-a.y,z2=c.z-a.z;
+      world+=std::hypot(y1*z2-z1*y2,z1*x2-x1*z2,x1*y2-y1*x2);
+      uv+=std::abs(((t.uv[1].x-t.uv[0].x)*(t.uv[2].y-t.uv[0].y)-(t.uv[1].y-t.uv[0].y)*(t.uv[2].x-t.uv[0].x))*material.uv_scale.x*material.uv_scale.y);
+    }
+  };
   std::set<Shader *> used_shaders,modified_shaders;
   for(auto value:source.materials) {
     // 保留材质索引和原场景快照；未使用的占位着色器不引用纹理。
@@ -72,15 +85,9 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     float bump=previous>=0?bump_distances_[size_t(previous)]:0;
     const bool modified=previous<0||canonical_materials_[size_t(previous)]!=value||emission_strengths_[size_t(previous)]!=emission[canonical.size()];
     if(modified&&value.bump_from_texel_density&&value.bump_texture>=0&&value.bump_strength>0) {
-      double world=0,uv=0;const auto material_index=uint32_t(canonical.size());
-      for(const auto &instance:source.instances) if(instance.prototype<0) for(const auto &t:source.meshes[instance.mesh].triangles) if(instance.materials[t.material_slot]==material_index) {
-        const auto &p=source.meshes[instance.mesh].positions;const auto a=instance.transform.point(p[t.vertices[0]]),b=instance.transform.point(p[t.vertices[1]]),c=instance.transform.point(p[t.vertices[2]]);
-        const double x1=b.x-a.x,y1=b.y-a.y,z1=b.z-a.z,x2=c.x-a.x,y2=c.y-a.y,z2=c.z-a.z;
-        world+=std::hypot(y1*z2-z1*y2,z1*x2-x1*z2,x1*y2-y1*x2);
-        uv+=std::abs(((t.uv[1].x-t.uv[0].x)*(t.uv[2].y-t.uv[0].y)-(t.uv[1].y-t.uv[0].y)*(t.uv[2].x-t.uv[0].x))*value.uv_scale.x*value.uv_scale.y);
-      }
-      const auto p=textures_[size_t(value.bump_texture)].file.u8string();auto image=OIIO::ImageInput::open(std::string(p.begin(),p.end()));
-      if(image&&world>0&&uv>0) bump=float(2*std::sqrt(world/(uv*double(image->spec().width)*image->spec().height)));
+      prepare_bump_areas();const auto [world,uv]=bump_areas[canonical.size()];const auto &path=textures_[size_t(value.bump_texture)].file;
+      auto [dimensions,inserted]=image_dimensions.try_emplace(path);if(inserted){const auto p=path.u8string();auto image=OIIO::ImageInput::open(std::string(p.begin(),p.end()));if(image)dimensions->second={image->spec().width,image->spec().height};}
+      const auto [width,height]=dimensions->second;if(width>0&&height>0&&world>0&&uv>0)bump=float(2*std::sqrt(world/(uv*double(width)*height)));
     }
     if(!shader) {if(retired_shaders_.empty()) shader=scene_.create_node<Shader>();else {shader=retired_shaders_.back();retired_shaders_.pop_back();}}
     if(modified) {material(*shader,value,bump,emission[canonical.size()]);modified_shaders.insert(shader);if(loaded_) ++stats_.material_updates;changed=true;}

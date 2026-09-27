@@ -18,6 +18,8 @@
 #include <QScrollArea>
 #include <QToolButton>
 #include <QSpinBox>
+#include <QSlider>
+#include <QHBoxLayout>
 #include <QComboBox>
 #include <QCheckBox>
 #include <QLineEdit>
@@ -98,6 +100,12 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
   display->addRow(QStringLiteral("视口渲染倍率"),percent);
   auto *filter=new QComboBox;filter->setObjectName("ViewportReconstruction");filter->addItems({QStringLiteral("双三次（较清晰）"),QStringLiteral("双线性（较柔和）")});filter->setCurrentIndex(application.viewport.reconstruction==Reconstruction::bicubic?0:1);
   display->addRow(QStringLiteral("升采样方式"),filter);
+  auto *sharpen_row=new QWidget;auto *sharpen_layout=new QHBoxLayout(sharpen_row);sharpen_layout->setContentsMargins(0,0,0,0);
+  auto *sharpen=new QSlider(Qt::Horizontal);sharpen->setObjectName("ViewportSharpenStrength");sharpen->setRange(0,int(max_viewport_sharpen*100));sharpen->setSingleStep(1);sharpen->setPageStep(10);sharpen->setValue(qRound(application.viewport.sharpen*100));
+  sharpen->setAccessibleName(QStringLiteral("视口锐化强度"));sharpen->setToolTip(QStringLiteral("增强视口画面的边缘和局部对比度，0.00 关闭，最大 20.00。方向键微调 0.01。仅影响显示，不改变模型或材质；过高可能放大噪点。"));
+  auto *sharpen_value=new QLabel;sharpen_value->setObjectName("ViewportSharpenValue");sharpen_value->setAlignment(Qt::AlignRight|Qt::AlignVCenter);sharpen_value->setMinimumWidth(sharpen_value->fontMetrics().horizontalAdvance("20.00"));
+  auto show_sharpen=[=](int value){sharpen_value->setText(QString::number(value/100.,'f',2));};show_sharpen(sharpen->value());QObject::connect(sharpen,&QSlider::valueChanged,&dialog,show_sharpen);
+  sharpen_layout->addWidget(sharpen,1);sharpen_layout->addWidget(sharpen_value);display->addRow(QStringLiteral("视口锐化强度"),sharpen_row);
   note(display,QStringLiteral("界面缩放只调整文字和控件。渲染倍率 50% 对应约四分之一像素，可更快刷新，但细节较少。"));
   auto *reset_ui=new QPushButton(QStringLiteral("界面恢复 100%"));reset_ui->setObjectName("UiZoomReset");auto *reset_view=new QPushButton(QStringLiteral("渲染倍率恢复 100%"));
   display->addRow(reset_ui,reset_view);QObject::connect(reset_ui,&QPushButton::clicked,&dialog,[=]{ui_percent->setValue(100);});QObject::connect(reset_view,&QPushButton::clicked,&dialog,[=]{percent->setValue(100);});
@@ -122,7 +130,7 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
   auto submit=[&](bool save) {
     try {
       auto updated=settings;updated.content_roots.clear();for(int i=0;i<list->count();++i) updated.content_roots.append(list->item(i)->text());updated.content_roots=ProjectSettings::normalize(updated.content_roots);
-      auto preferences=application;preferences.ui_percent=ui_percent->value();preferences.viewport={percent->value(),filter->currentIndex()==0?Reconstruction::bicubic:Reconstruction::bilinear};
+      auto preferences=application;preferences.ui_percent=ui_percent->value();preferences.viewport={percent->value(),filter->currentIndex()==0?Reconstruction::bicubic:Reconstruction::bilinear,sharpen->value()/100.f};
       updated.history_limit=history_limit->value();
       preferences.render={limit->currentData().toInt(),transparent->value(),sss->isChecked(),bump->isChecked()};preferences.settings_tab=tabs->currentIndex();
       for(auto i=headers.cbegin();i!=headers.cend();++i) preferences.expanded[i.key()]=i.value()->isChecked();

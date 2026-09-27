@@ -27,6 +27,7 @@ class Display final:public ccl::DisplayDriver {
   bool allow_readback_;
   ir::RenderOptions options_;
   Reconstruction reconstruction_=Reconstruction::bicubic;
+  float sharpen_=0;
   Frame last_drawn_;
   uint64_t last_presented_=0;
   std::atomic<bool> failed_{false};
@@ -53,6 +54,7 @@ public:
   void graphics_interop_deactivate() override {interop_binding_.reset();}
   void set_options(const ir::RenderOptions &options) {options_=options;}
   void set_reconstruction(Reconstruction value) {reconstruction_=value;}
+  void set_sharpen(float value) {sharpen_=value>=0?std::min(value,max_viewport_sharpen):0.f;}
   void after_swap();
   Frame drawn_frame() const {return last_drawn_;}
   void hud(const std::string &text);

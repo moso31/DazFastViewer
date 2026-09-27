@@ -5,6 +5,7 @@
 #include "render_ir/options_json.h"
 #include "render_ir/options.h"
 #include "daz/documents.h"
+#include "runtime/geometry_shell.h"
 #include "diagnostics/load_profile.h"
 #include <zlib.h>
 #include <algorithm>
@@ -16,6 +17,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <atomic>
+#include <thread>
 
 namespace dfv::daz {
 using Json=nlohmann::json;
@@ -51,11 +54,20 @@ const Json &values(const Json &object) {
 }
 struct Repository {
   std::vector<fs::path> roots;
-  std::map<std::string,Json> documents;
+  std::map<std::string,std::shared_ptr<const Json>> documents;
   std::set<std::string> dependencies;
+  std::map<std::pair<fs::path,std::string>,fs::path> resolved_paths;
+  std::map<fs::path,std::string> document_keys;
+  static std::shared_ptr<const Json> parse(const fs::path &file) {
+    const auto version=file_version(file);auto value=std::make_shared<const Json>(read_document(file));
+    if(file_version(file)!=version)fail("读取期间资源已变化："+utf8(file));remember_document(file,version,value);return value;
+  }
   fs::path path(const std::string &uri,const fs::path &owner) {
+    diagnostics::Scope scope("resolve_asset_path");
     std::string raw=uri.substr(0,uri.find('#'));
     if(raw.empty()) return owner;
+    const auto cache_key=std::make_pair(raw.starts_with('/')?fs::path{}:owner.parent_path(),raw);
+    if(auto found=resolved_paths.find(cache_key);found!=resolved_paths.end()) return found->second;
     if(raw.find('?')!=std::string::npos || raw.find(':')!=std::string::npos) fail("不支持的资产 URI: "+uri);
     raw=decode(raw);
     const bool absolute=raw.starts_with('/');
@@ -67,15 +79,24 @@ struct Repository {
     for(const auto &root:roots) candidates.push_back(root/relative);
     if(raw.starts_with("resources/")) for(const auto *installation:{L"DAZStudio4",L"DAZStudio6",L"DAZStudio4 Public Build",L"DAZStudio6 Public Build"})
       candidates.push_back(fs::path(L"C:/Program Files/DAZ 3D")/installation/L"shaders/iray"/relative);
-    for(const auto &p:candidates) if(fs::is_regular_file(p)) {auto file=fs::weakly_canonical(p);dependencies.insert(utf8(file));return file;}
+    for(const auto &p:candidates) if(fs::is_regular_file(p)) {auto file=fs::weakly_canonical(p);dependencies.insert(utf8(file));resolved_paths.emplace(cache_key,file);return file;}
     throw MissingAsset("DSON: 依赖缺失: "+uri+"（来源 "+utf8(owner)+"）");
   }
   const Json &document(const fs::path &path) {
-    const auto key=utf8(fs::weakly_canonical(path));dependencies.insert(key);
-    auto found=documents.find(key);if(found==documents.end()) found=documents.emplace(key,read_document(path)).first;
-    return found->second;
+    diagnostics::Scope scope("resolve_document");
+    auto [key_it,inserted]=document_keys.try_emplace(path);if(inserted)key_it->second=utf8(fs::weakly_canonical(path));
+    const auto &key=key_it->second;dependencies.insert(key);
+    auto found=documents.find(key);if(found==documents.end())found=documents.emplace(key,parse(path)).first;
+    return *found->second;
+  }
+  void prefetch(const std::vector<fs::path> &files) {
+    diagnostics::Scope scope("parallel_documents");
+    std::vector<std::shared_ptr<const Json>> values(files.size());std::vector<std::exception_ptr> errors(files.size());std::atomic<size_t> next=0;
+    {std::vector<std::jthread> workers;for(size_t worker=0;worker<std::min<size_t>(4,files.size());++worker)workers.emplace_back([&]{for(;;){const auto i=next.fetch_add(1);if(i>=files.size())break;try{values[i]=parse(files[i]);}catch(...){errors[i]=std::current_exception();}}});}
+    for(size_t i=0;i<files.size();++i) {if(errors[i])std::rethrow_exception(errors[i]);const auto key=utf8(files[i]);dependencies.insert(key);document_keys[files[i]]=key;documents.emplace(key,std::move(values[i]));}
   }
   std::pair<fs::path,const Json *> asset(const std::string &uri,const fs::path &owner,const char *library) {
+    diagnostics::Scope scope("asset_lookup");
     const auto hash=uri.find('#');if(hash==std::string::npos) fail("资产引用缺少 fragment: "+uri);
     const auto id=decode(uri.substr(hash+1));const auto file=path(uri,owner);const auto &doc=document(file);
     if(doc.contains(library)) for(const auto &entry:doc.at(library)) if(entry.value("id","")==id) return {file,&entry};
@@ -114,7 +135,7 @@ Json merge_node(Json base,const Json &instance) {
         auto old=std::find_if(extras.begin(),extras.end(),[&](const Json &e) {return e.value("type","")==entry.value("type","");});
         if(old==extras.end()) {extras.push_back(entry);continue;}
         auto channels=old->value("channels",Json::array());old->update(entry);
-        for(const auto &c:entry.value("channels",Json::array())) {
+        for(const auto &c:array_member(entry,"channels")) {
           auto found=std::find_if(channels.begin(),channels.end(),[&](const Json &a) {return a.at("channel").value("id","")==c.at("channel").value("id","");});
           if(found==channels.end()) channels.push_back(c);else (*found)["channel"].update(c.at("channel"));
         }
@@ -163,7 +184,7 @@ void add_channels(Channels &channels,const Json &material,const fs::path &owner)
   // DAZ Default/3Delight 把标准通道直接放在材质上，Iray 通道通常位于 extra。
   for(auto field=material.begin();field!=material.end();++field) if(field.value().is_object()&&field.value().contains("channel"))
     merge(channels[field.key()],field.value().at("channel"));
-  for(const auto &extra:material.value("extra",Json::array())) for(const auto &entry:extra.value("channels",Json::array())) {
+  for(const auto &extra:array_member(material,"extra")) for(const auto &entry:array_member(extra,"channels")) {
     if(!entry.contains("channel")) continue;
     const auto &c=entry["channel"];const auto id=c.at("id").get<std::string>();
     if(!channels.contains(id)) channels[id]=Json::object();merge(channels[id],c);
@@ -440,6 +461,7 @@ void apply_graft_masks(LoadedScene &loaded,bool defer_selection) {
   for(auto &instance:scene.instances) instance.graft_source=-1;
   std::map<uint32_t,std::set<uint32_t>> masks;
   for(const auto &object:loaded.objects) {
+    if(scene.instances.at(object.instance).shell_source>=0)continue;
     const auto &graft=scene.meshes.at(scene.instances.at(object.instance).mesh);
     if(!graft.graft_target_vertices||object.conform_target.empty()) continue;
     if(defer_selection&&selection_reference(object.conform_target)) continue;
@@ -456,6 +478,13 @@ void apply_graft_masks(LoadedScene &loaded,bool defer_selection) {
     for(auto polygon:graft.graft_hidden_polygons) {if(polygon>=count) fail("GeoGraft 遮盖面越界："+object.id);masks[host->instance].insert(polygon);}
   }
   // 相同资产的不同角色可以挂接不同插件，遮盖不得泄漏给另一个角色。
+  for(const auto &object:loaded.objects) {
+    auto &shell=scene.instances.at(object.instance);if(shell.shell_source<0)continue;
+    const auto &source=scene.instances.at(size_t(shell.shell_source));
+    auto &mask=masks[object.instance];const auto &own=scene.meshes.at(shell.mesh).shell_hidden_polygons;mask.insert(own.begin(),own.end());
+    const auto &inherited=masks[uint32_t(shell.shell_source)];mask.insert(inherited.begin(),inherited.end());
+    if(source.graft_source>=0)for(const auto &candidate:loaded.objects)if(candidate.id==object.id&&scene.instances.at(candidate.instance).shell_source==source.graft_source){shell.graft_source=int(candidate.instance);break;}
+  }
   std::map<std::pair<uint32_t,std::vector<uint32_t>>,uint32_t> variants;
   std::set<uint32_t> used;
   for(uint32_t i=0;i<scene.instances.size();++i) {
@@ -481,9 +510,9 @@ DufContents inspect_contents(const Json &document) {
   for(const auto *field:{"nodes","modifiers"}) if(auto i=scene.find(field);i!=scene.end()) selection(*i);
   const auto type=document.value("asset_info",Json::object()).value("type","");
   result.materials=!scene.value("materials",Json::array()).empty();
-  for(const auto &animation:scene.value("animations",Json::array())){if(material_animation(animation))result.materials=true;else result.properties=true;}
+  for(const auto &animation:array_member(scene,"animations")){if(material_animation(animation))result.materials=true;else result.properties=true;}
   if(type=="preset_hierarchical_material"||type=="preset_material"||type=="preset_shader"||type=="preset_layered_image"){result.materials=true;result.properties=false;return result;}
-  for(const auto &node:scene.value("nodes",Json::array())) {
+  for(const auto &node:array_member(scene,"nodes")) {
     const auto kind=node.value("type","");
     result.instantiate|=!node.value("geometries",Json::array()).empty()||kind=="light"||kind=="camera";
   }
@@ -504,19 +533,26 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   const bool hierarchical_material=document.value("asset_info",Json::object()).value("type","")=="preset_hierarchical_material";
   const auto asset_type=document.value("asset_info",Json::object()).value("type","");const bool material_only=hierarchical_material||asset_type=="preset_material"||asset_type=="preset_shader"||asset_type=="preset_layered_image";
   std::map<std::string,Json> material_owners;
-  if(hierarchical_material){for(const auto &node:source.value("nodes",Json::array()))for(const auto &geometry:node.value("geometries",Json::array()))material_owners["#"+node.value("id",std::string{})]=node,material_owners["#"+geometry.value("id",std::string{})]=node;source["nodes"]=Json::array();source["modifiers"]=Json::array();}
+  if(hierarchical_material){for(const auto &node:array_member(source,"nodes"))for(const auto &geometry:array_member(node,"geometries"))material_owners["#"+node.value("id",std::string{})]=node,material_owners["#"+geometry.value("id",std::string{})]=node;source["nodes"]=Json::array();source["modifiers"]=Json::array();}
   if(material_only){source["nodes"]=Json::array();source["modifiers"]=Json::array();}
+  {
+    std::vector<fs::path> files;std::set<fs::path> queued;
+    auto enqueue=[&](const Json &entry){if(!entry.contains("url")||selection_reference(entry.at("url").get<std::string>()))return;try{const auto path=repo.path(entry.at("url"),file);if(!repo.documents.contains(utf8(path))&&queued.insert(path).second)files.push_back(path);}catch(const MissingAsset &){/* 保留各调用处的缺失资源处理。 */}};
+    for(const auto &node:array_member(source,"nodes")){enqueue(node);for(const auto &geometry:array_member(node,"geometries"))enqueue(geometry);}
+    repo.prefetch(files);
+  }
   auto deferred=[&](const std::string &uri) {return options.defer_selection&&selection_reference(uri);};
   Json warnings=Json::array(),material_reports=Json::array(),geometry_reports=Json::array(),subdivision_reports=Json::array();
   auto warn=[&](const std::string &code,const std::string &asset,const std::string &detail) {warnings.push_back({{"code",code},{"asset",asset},{"detail",detail}});};
   struct Binding {uint32_t material;std::string uv;};
   std::map<std::pair<std::string,std::string>,Binding> bindings;
   const bool shader_preset=document.value("asset_info",Json::object()).value("type","")=="preset_shader";
-  std::vector<MaterialAnimation> material_edits;for(const auto &animation:source.value("animations",Json::array()))if(auto edit=material_animation(animation))material_edits.push_back(std::move(*edit));
+  std::vector<MaterialAnimation> material_edits;for(const auto &animation:array_member(source,"animations"))if(auto edit=material_animation(animation))material_edits.push_back(std::move(*edit));
   auto material_instances=source.value("materials",Json::array());
   if(material_instances.empty()){std::set<std::string> groups;for(const auto &edit:material_edits)groups.insert(edit.group);for(const auto &group:groups)material_instances.push_back({{"id",group},{"groups",Json::array({group})}});}
   Json split_instances=Json::array();for(const auto &instance:material_instances){const auto groups=instance.value("groups",Json::array());if(groups.size()>1&&!material_edits.empty()){for(const auto &group:groups){auto split=instance;split["groups"]=Json::array({group});split_instances.push_back(std::move(split));}}else split_instances.push_back(instance);}
   for(auto instance:split_instances) {
+    diagnostics::Scope scope("material_convert");
     Channels channels,authored;fs::path material_file=file;
     if(instance.contains("url")) {
       try {auto [base_file,base]=repo.asset(instance.at("url"),file,"material_library");material_file=base_file;add_channels(channels,*base,base_file);if(base_file==file)add_channels(authored,*base,base_file);if(!instance.contains("id"))instance["id"]=base->value("id","material");if(!instance.contains("groups")&&base->contains("groups"))instance["groups"]=base->at("groups");}
@@ -546,7 +582,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   }
   std::map<std::string,Json> nodes;
   auto node_visible=[&](const Json &n) {bool visible=true;
-    for(const auto &e:n.value("extra",Json::array())) for(const auto &c:e.value("channels",Json::array())) {
+    for(const auto &e:array_member(n,"extra")) for(const auto &c:array_member(e,"channels")) {
       const auto &v=c.at("channel");if(v.value("id","")=="Visible"||v.value("id","")=="Renderable") visible&=number(v,1)!=0;
     }return visible;
   };
@@ -556,19 +592,20 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       const auto p=decode(n.value("parent",""));if(!p.starts_with('#')) break;id=p.substr(1);
     }return true;
   };
-  for(const auto &instance:source.value("nodes",Json::array())) {
+  for(const auto &instance:array_member(source,"nodes")) {
+    diagnostics::Scope scope("node_merge");
     Json base=Json::object();if(instance.contains("url")) base=*repo.asset(instance.at("url"),file,"node_library").second;
     nodes.emplace(instance.at("id").get<std::string>(),merge_node(base,instance));
   }
   // 无网格的选项节点仍属于场景状态，保留参数元数据。
   for(const auto &[id,node]:nodes) {
     bool environment=false,tone=false;
-    for(const auto &e:node.value("extra",Json::array())) {environment|=e.value("type","")=="studio/node/environment";tone|=e.value("type","")=="studio/node/tone_mapper";}
+    for(const auto &e:array_member(node,"extra")) {environment|=e.value("type","")=="studio/node/environment";tone|=e.value("type","")=="studio/node/tone_mapper";}
     if(!environment&&!tone) continue;
     auto &options=environment?scene.options.environment:scene.options.tonemapper;options.id=id;options.label=node.value("label",id);
     const std::set<std::string> supported=environment?std::set<std::string>{"Environment Mode","Environment Intensity","Environment Map","Environment Tint","Draw Dome","Dome Orientation X","Dome Orientation Y","Dome Orientation Z","Dome Rotation","SS Latitude","SS Longitude","SS Day","SS Time","SS UTC Offset","SS Sun Disk Intensity","SS Physically Scaled Sun","SS Sun Disk Scale","SS Haze","SS Multiplier","SS RGB Unit Conversion"}:
       std::set<std::string>{"Tone Mapping Enable","Exposure Value","Shutter Speed","Aperture","Film ISO","cm2 Factor","Vignetting","White Point Scale","White Point","Burn Highlights Per Component","Burn Highlights","Crush Blacks","Saturation","Gamma"};
-    for(const auto &e:node.value("extra",Json::array())) for(const auto &entry:e.value("channels",Json::array())) {
+    for(const auto &e:array_member(node,"extra")) for(const auto &entry:array_member(e,"channels")) {
       const auto &c=entry.at("channel");ir::Option p;p.id=c.at("id");p.label=c.value("label",p.id);p.group=entry.value("group","");p.type=c.value("type","float");p.visible=c.value("visible",true);p.supported=supported.contains(p.id);p.image_uri=c.value("image_file","");
       const auto value=c.value("current_value",c.value("value",Json()));
       if(value.is_array()) {for(const auto &v:value) if(v.is_number()) p.value.push_back(v.get<double>());}
@@ -595,19 +632,19 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     if(environment&&int(ir::number(options,"Environment Mode",0))==2) warn("sun_sky_approximation",id,"Sun-Sky Only 使用 Cycles 多次散射天空与日期/经纬度太阳方向；保留场景灯光/贴图忽略语义。未等价复现 Iray 测光、Sun Node、穹顶倾斜、辉光、色调、地平线和地面参数。");
   }
   for(const auto &[id,node]:nodes) {
-    bool group=false;for(const auto &extra:node.value("extra",Json::array())) {
+    bool group=false;for(const auto &extra:array_member(node,"extra")) {
       const auto type=extra.value("type","");group|=type=="studio/node/group_node"||type=="studio/node/group_instance";
     }
     out.nodes.push_back({id,decode(node.value("parent","")),node.value("label",node.value("name",id)),group});
   }
   std::map<std::string,runtime::RigidFollow> rigid_groups;
-  for(const auto &[id,node]:nodes) for(const auto &e:node.value("extra",Json::array())) if(e.value("type","")=="studio/node/rigid_follow"&&e.contains("rigidity_group")) {
+  for(const auto &[id,node]:nodes) for(const auto &e:array_member(node,"extra")) if(e.value("type","")=="studio/node/rigid_follow"&&e.contains("rigidity_group")) {
     const auto &group=e.at("rigidity_group");runtime::RigidFollow follow;follow.vertex_count=e.value("vertex_count",size_t(0));
     follow.vertices=values(group.at("reference_vertices")).get<std::vector<uint32_t>>();follow.rotate=group.value("rotation_mode","full")!="none";
     bool supported=group.value("rotation_mode","full")=="full"||!follow.rotate;
-    for(const auto &mode:group.value("scale_modes",Json::array())) supported&=mode=="none";
+    for(const auto &mode:array_member(group,"scale_modes")) supported&=mode=="none";
     if(!supported) {warn("rigid_follow_mode",id,"刚性跟随的轴向缩放模式尚未实现");continue;}
-    for(const auto &extra:node.value("extra",Json::array())) for(const auto &entry:extra.value("channels",Json::array())) {
+    for(const auto &extra:array_member(node,"extra")) for(const auto &entry:array_member(extra,"channels")) {
       const auto &c=entry.at("channel");if(c.value("id","")=="Follow Target"&&c.contains("node")&&c["node"].is_string()) follow.target=decode(c["node"].get<std::string>());
     }
     if(follow.target.empty()) {auto parent=decode(node.value("parent",""));while(parent.starts_with('#')&&nodes.contains(parent.substr(1))) {const auto &p=nodes.at(parent.substr(1));if(p.contains("geometries")) {follow.target=parent;break;}parent=decode(p.value("parent",""));}}
@@ -641,6 +678,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     visiting.erase(id);transforms.emplace(id,matrix);return matrix;
   };
   std::map<std::string,uint32_t> mesh_cache;
+  struct Shell {std::string id;Json instance;fs::path file;const Json *geometry;};std::vector<Shell> shells;
   std::map<std::string,ir::Transform> fitted;std::set<std::string> fitting;
   std::function<ir::Transform(const std::string &)> fitted_world=[&](const std::string &id) {
     if(fitted.contains(id)) return fitted.at(id);
@@ -664,7 +702,20 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     }
     fitting.erase(id);fitted[id]=result;return result;
   };
-  for(const auto &instance:source.value("nodes",Json::array())) {
+  {
+    std::vector<fs::path> files;std::set<fs::path> queued;
+    for(const auto &node:array_member(source,"nodes"))if(!collapsed(node.at("id").get<std::string>()))for(const auto &geometry:array_member(node,"geometries")) {
+      const auto [owner,g]=repo.asset(geometry.at("url"),file,"geometry_library");
+      if(!g->contains("polygon_material_groups"))continue;
+      for(const auto &group:values(g->at("polygon_material_groups"))) {
+        const auto binding=bindings.find({"#"+geometry.at("id").get<std::string>(),group.get<std::string>()});
+        const auto uri=binding==bindings.end()||binding->second.uv.empty()?g->value("default_uv_set",""):binding->second.uv;if(uri.empty())continue;
+        const auto path=repo.path(uri,uri.starts_with('#')?owner:file);if(!repo.documents.contains(utf8(path))&&queued.insert(path).second)files.push_back(path);
+      }
+    }
+    repo.prefetch(files);
+  }
+  for(const auto &instance:array_member(source,"nodes")) {
     const auto id=instance.at("id").get<std::string>();const auto &node=nodes.at(id);
     if(collapsed(id)) {if(instance.contains("geometries")) warn("collapsed_geometry",id,"零缩放对象不产生可绘制表面，跳过其几何");continue;}
     if(node.value("type","")=="camera") warn("scene_camera",id,"保留编辑器观察相机，未切换到保存的 DAZ 相机");
@@ -686,8 +737,11 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       const auto r=axes(node,"rotation",{}),t=axes(node,"translation",{});
       if(std::abs(r.x)+std::abs(r.y)+std::abs(r.z)+std::abs(t.x)+std::abs(t.y)+std::abs(t.z)>1e-6f) warn("bone_pose",id,"本阶段显示静态基础网格，未应用骨骼变形");
     }
-    for(const auto &geometry_instance:instance.value("geometries",Json::array())) {
+    for(const auto &geometry_instance:array_member(instance,"geometries")) {
+      diagnostics::Scope scope("geometry_build");
       const auto uri=geometry_instance.at("url").get<std::string>();const auto [geometry_file,gptr]=repo.asset(uri,file,"geometry_library");const auto &g=*gptr;
+      auto shell_geometry=[](const Json &v){const auto &extras=array_member(v,"extra");return std::any_of(extras.begin(),extras.end(),[](const auto &e){return e.value("type","")=="studio/geometry/shell";});};
+      if(shell_geometry(g)||shell_geometry(geometry_instance)){shells.push_back({id,geometry_instance,geometry_file,gptr});continue;}
       ir::Mesh mesh;mesh.id=uri;
       mesh.subdivision=subdivision_settings(g,geometry_instance);
       if(g.contains("graft")&&g["graft"].contains("vertex_count")) {
@@ -728,7 +782,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
           if(u.at("vertex_count").get<size_t>()!=mesh.positions.size()) fail("UV Set 顶点数与网格不符: "+ref);
           UV uv;
           for(const auto &p:values(u.at("uvs"))) {if(!p.is_array()||p.size()!=2) fail("无效 UV 坐标");uv.values.push_back({p[0].get<float>(),p[1].get<float>()});}
-          for(const auto &s:u.value("polygon_vertex_indices",Json::array())) {
+          for(const auto &s:array_member(u,"polygon_vertex_indices")) {
             if(s.size()!=3) fail("无效 UV 接缝记录");uv.seams[{s[0].get<uint32_t>(),s[1].get<uint32_t>()}]=s[2].get<uint32_t>();
           }
           uv_cache.emplace(ref,std::move(uv));
@@ -745,7 +799,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
           mesh.curves.push_back(std::move(curve));
         }
         if(!mesh.curves.empty()) for(const auto &modifier:repo.document(geometry_file).value("modifier_library",Json::array()))
-          for(const auto &extra:modifier.value("extra",Json::array())) if(extra.value("type","")=="studio/modifier/dynamic_generate_hair"&&extra.value("generates_for_render",false))
+          for(const auto &extra:array_member(modifier,"extra")) if(extra.value("type","")=="studio/modifier/dynamic_generate_hair"&&extra.value("generates_for_render",false))
             warn("strand_render_generator",geometry_id,"已导入资产保存的发丝曲线与蒙皮；额外渲染发丝生成及 dForce 模拟尚未复现");
         for(size_t p=0;p<polygons.size();++p) {
           const auto &polygon=polygons[p];if(polygon.size()<5 || polygon.size()>6) fail("仅支持 DSON 三角形和四边形");
@@ -798,6 +852,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       if(subdivision.enabled&&subdivision.normal_smoothing!=0) warn("subdivision_normals",geometry_id,"已保留 Preserve Cage 设置；当前没有完整的 DAZ 基础网格分裂法线，使用网格平滑法线");
     }
   }
+  #include "daz/geometry_shell.inl"
   // 普通实例和 UltraScatter 的打包实例均引用源对象的完整子树。
   // 只追加 Object/矩阵，几何和材质继续共享源对象最终求值结果。
   Json instance_reports=Json::array();
@@ -812,7 +867,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     const auto &n=nodes.at(id);
     if(!expanded.contains(id)&&!collapsed(id)) {
       bool is_instance=false;const Json *items=nullptr;
-      for(const auto &e:n.value("extra",Json::array())) {
+      for(const auto &e:array_member(n,"extra")) {
         is_instance|=e.value("type","")=="studio/node/instance"||e.value("type","")=="studio/node/group_instance";
       }
       // 使用文档中的稳定引用，不能指向 value() 产生的临时副本。
@@ -866,20 +921,39 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     expanding.erase(id);return result;
   };
   for(const auto &[id,n]:nodes) if(!expanded.contains(id)) expand(id);
-  for(const auto &instance:source.value("modifiers",Json::array())) {
+  // 只保存 Modifier 的设置。相同资产在多个角色上的实例不应反复解码整份参数文档。
+  std::map<fs::path,std::map<std::string,Json>> modifier_settings;
+  {
+    diagnostics::Scope scope("modifier_settings_index");std::vector<fs::path> files;
+    for(const auto &instance:array_member(source,"modifiers")) if(!instance.contains("channel")&&!instance.contains("skin")&&instance.contains("url")) {
+      const auto path=repo.path(instance.at("url").get<std::string>(),file);
+      if(modifier_settings.try_emplace(path).second)files.push_back(path);
+    }
+    for(size_t start=0;start<files.size();start+=64) {
+      auto batch=prefetch_documents(std::span<const fs::path>(files).subspan(start,std::min<size_t>(64,files.size()-start)));
+      for(size_t i=0;i<batch.size();++i) {
+        const auto handle=batch[i].get();auto &index=modifier_settings.at(files[start+i]);
+        for(const auto &entry:array_member(*handle,"modifier_library")) {
+          Json settings=Json::object();if(entry.contains("extra"))settings["extra"]=entry.at("extra");
+          index.try_emplace(entry.value("id",""),std::move(settings));
+        }
+      }
+    }
+  }
+  for(const auto &instance:array_member(source,"modifiers")) {
+    diagnostics::Scope scope("modifier_settings");
     if(instance.contains("channel")||instance.contains("skin")) continue;
     Json modifier=instance;
     if(instance.contains("url")) {
       const auto uri=instance.at("url").get<std::string>();const auto hash=uri.find('#');if(hash==std::string::npos) fail("Modifier 引用缺少 fragment");
-      const auto handle=document_view(repo.path(uri,file));const auto id=decode(uri.substr(hash+1));const Json *base=nullptr;
-      for(const auto &entry:array_member(*handle,"modifier_library")) if(entry.value("id","")==id) {base=&entry;break;}
-      if(!base) fail("Modifier ID 不存在："+uri);
-      Json settings=Json::object();if(base->contains("extra")) settings["extra"]=base->at("extra");modifier=merge_node(std::move(settings),instance);
+      const auto &index=modifier_settings.at(repo.path(uri,file));const auto base=index.find(decode(uri.substr(hash+1)));
+      if(base==index.end()) fail("Modifier ID 不存在："+uri);
+      modifier=merge_node(base->second,instance);
     }
     bool smoothing=false;std::map<std::string,Json> channels;
-    for(const auto &extra:modifier.value("extra",Json::array())) {
+    for(const auto &extra:array_member(modifier,"extra")) {
       smoothing|=extra.value("type","")=="studio/modifier/smoothing";
-      for(const auto &entry:extra.value("channels",Json::array())) if(entry.contains("channel")) {const auto &c=entry["channel"];channels[c.at("id").get<std::string>()]=c;}
+      for(const auto &entry:array_member(extra,"channels")) if(entry.contains("channel")) {const auto &c=entry["channel"];channels[c.at("id").get<std::string>()]=c;}
     }
     if(!smoothing) continue;
     auto value=[&](const char *id,float fallback) {auto c=channels.find(id);return c==channels.end()?fallback:number(c->second,fallback);};
@@ -938,6 +1012,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   for(const auto &object:out.objects) for(const auto &source:object.geometry_sources)
     out.report["geometry_sources"].push_back({{"object",object.id},{"file",utf8(source.file)},{"geometry",source.id},{"topology_verified",true}});
   if(options.strict && !warnings.empty()) fail("严格模式拒绝未支持语义；请先用 --inspect 查看诊断");
+  for(auto &[path,document]:repo.documents)out.source_documents.push_back(std::move(document));
   return out;
 }
 }

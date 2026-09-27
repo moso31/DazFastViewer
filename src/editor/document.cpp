@@ -72,6 +72,7 @@ std::string node_id(const runtime::Target &target) {return target.id.substr(0,ta
 bool refers_to(const std::string &uri,const std::set<std::string> &ids) {return uri.starts_with('#')&&ids.contains(uri.substr(1));}
 }
 void release_load_data(Document &document) {
+  document.loaded.source_documents.clear();
   // 原始公式和完整诊断已写入加载报告；运行时只保留已编译的图与可编辑数据。
   document.catalog.formulas={};document.skeletons.node_formulas={};
   document.catalog.report={{"targets",document.catalog.targets.size()}};
@@ -108,17 +109,17 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   std::vector<bool> instances(scene.instances.size(),true);
   for(const auto &object:document.loaded.objects) if(removed.contains(object.id)) instances.at(object.instance)=false;
   for(const auto &t:document.catalog.targets) if(removed.contains(node_id(t))) instances.at(t.instance)=false;
-  for(size_t i=0;i<scene.instances.size();++i) {const auto &v=scene.instances[i];if(v.prototype>=0&&(!instances.at(size_t(v.prototype))||removed.contains(v.instance_node))) instances[i]=false;}
+  for(size_t i=0;i<scene.instances.size();++i) {const auto &v=scene.instances[i];if((v.shell_source>=0&&!instances.at(size_t(v.shell_source)))||(v.prototype>=0&&(!instances.at(size_t(v.prototype))||removed.contains(v.instance_node)))) instances[i]=false;}
   std::vector<bool> targets,skins;
   for(const auto &t:document.catalog.targets) targets.push_back(instances.at(t.instance));
   for(const auto &s:document.skeletons.skins) skins.push_back(instances.at(s.instance));
   const auto instance_map=retain(scene.instances,instances),skin_map=retain(document.skeletons.skins,skins);
-  for(auto &i:scene.instances) {if(i.prototype>=0) i.prototype=instance_map.at(size_t(i.prototype));if(i.graft_source>=0) i.graft_source=instance_map.at(size_t(i.graft_source));}
+  for(auto &i:scene.instances) {if(i.prototype>=0) i.prototype=instance_map.at(size_t(i.prototype));if(i.graft_source>=0) i.graft_source=instance_map.at(size_t(i.graft_source));if(i.shell_source>=0)i.shell_source=instance_map.at(size_t(i.shell_source));if(i.shell_root>=0)i.shell_root=instance_map.at(size_t(i.shell_root));}
   retain(snapshot.poses,skins);retain(document.catalog.targets,targets);retain(snapshot.values,targets);retain(document.formulas.graphs,targets);
   for(auto &t:document.catalog.targets) {t.instance=uint32_t(instance_map.at(t.instance));if(refers_to(t.smoothing.collision_target,removed)) t.smoothing.collision_target.clear();}
   for(auto &s:document.skeletons.skins) s.instance=uint32_t(instance_map.at(s.instance));
   for(auto &g:document.formulas.graphs) if(g.skin>=0) g.skin=skin_map.at(size_t(g.skin));
-  std::erase_if(document.loaded.objects,[&](const auto &o) {return removed.contains(o.id);});
+  std::erase_if(document.loaded.objects,[&](const auto &o) {return removed.contains(o.id)||instance_map.at(o.instance)<0;});
   for(auto &o:document.loaded.objects) {o.instance=uint32_t(instance_map.at(o.instance));if(refers_to(o.smoothing.collision_target,removed)) o.smoothing.collision_target.clear();}
   std::erase_if(document.loaded.nodes,[&](const auto &n) {return removed.contains(n.id);});
   for(auto &binding:document.attachments) {
@@ -206,7 +207,7 @@ void append_document(Document &destination,Document source,const std::string &id
     a.materials.push_back(std::move(m));
   }
   for(auto &m:b.meshes) {m.id=prefix+m.id;a.meshes.push_back(std::move(m));}
-  for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;if(i.prototype>=0) i.prototype+=int(instances);if(i.graft_source>=0) i.graft_source+=int(instances);if(!i.instance_node.empty()) i.instance_node=prefix+i.instance_node;if(!i.instance_group.empty()) i.instance_group=prefix+i.instance_group;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
+  for(auto i:b.instances) {i.id=prefix+i.id;i.mesh+=meshes;if(i.prototype>=0) i.prototype+=int(instances);if(i.graft_source>=0) i.graft_source+=int(instances);if(i.shell_source>=0)i.shell_source+=int(instances);if(i.shell_root>=0)i.shell_root+=int(instances);if(!i.instance_node.empty()) i.instance_node=prefix+i.instance_node;if(!i.instance_group.empty()) i.instance_group=prefix+i.instance_group;for(auto &m:i.materials) m+=materials;a.instances.push_back(std::move(i));}
   for(auto l:b.lights) {l.id=prefix+l.id;a.lights.push_back(std::move(l));}
   for(auto n:source.loaded.nodes) {n.id=prefix+n.id;if(n.parent.starts_with('#')) n.parent="#"+prefix+n.parent.substr(1);destination.loaded.nodes.push_back(std::move(n));}
   for(auto o:source.loaded.objects) {if(o.rigid_follow.target.starts_with('#')) o.rigid_follow.target="#"+prefix+o.rigid_follow.target.substr(1);o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);if(o.smoothing.collision_target.starts_with('#')) o.smoothing.collision_target="#"+prefix+o.smoothing.collision_target.substr(1);destination.loaded.objects.push_back(std::move(o));}

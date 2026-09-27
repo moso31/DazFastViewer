@@ -140,15 +140,18 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     l.neighbors.resize(cloth.positions.size());
     for(const auto &triangle:cloth.triangles) for(size_t i=0;i<3;++i) for(size_t j=0;j<3;++j) if(i!=j) l.neighbors[triangle.vertices[i]].push_back(triangle.vertices[j]);
     for(auto &neighbors:l.neighbors) {std::sort(neighbors.begin(),neighbors.end());neighbors.erase(std::unique(neighbors.begin(),neighbors.end()),neighbors.end());}
-    for(auto p:cloth.positions) {
+    l.surface.resize(cloth.positions.size());
+    auto bind_vertex=[&](size_t vertex) {const auto p=cloth.positions[vertex];
       const auto query=follower_to_source.point(p);auto binding=index.nearest(query);const auto a=body.positions[binding.vertices[0]],b=body.positions[binding.vertices[1]],c=body.positions[binding.vertices[2]];
       binding.edge1=sub(b,a);binding.edge2=sub(c,a);binding.normal=normal(binding.edge1,binding.edge2);
       const auto offset=sub(query,add(add(mul(a,binding.barycentric.x),mul(b,binding.barycentric.y)),mul(c,binding.barycentric.z)));
       binding.distance=std::sqrt(dot(offset,offset));
       const double aa=dot(binding.edge1,binding.edge1),bb=dot(binding.edge2,binding.edge2),ab=dot(binding.edge1,binding.edge2),u=dot(offset,binding.edge1),v=dot(offset,binding.edge2),det=aa*bb-ab*ab;
       if(det>1e-12*aa*bb) binding.offset_coordinates={float((bb*u-ab*v)/det),float((aa*v-ab*u)/det),dot(offset,binding.normal)};
-      l.surface.push_back(binding);
-    }
+      l.surface[vertex]=binding;
+    };
+    if(cloth.positions.size()>=4096)Concurrency::parallel_for(size_t(0),(cloth.positions.size()+255)/256,[&](size_t block){for(size_t i=block*256;i<std::min(cloth.positions.size(),(block+1)*256);++i)bind_vertex(i);});
+    else for(size_t i=0;i<cloth.positions.size();++i)bind_vertex(i);
     surface_cache.put(l);stats_.bindings+=l.surface.size();
   }
   previous_weights_.resize(links_.size());source_revisions_.resize(links_.size(),std::numeric_limits<uint64_t>::max());

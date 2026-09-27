@@ -97,6 +97,19 @@ static void unit_tests() {
   modifier["extra"]={{{"type","skin_settings"},{"binding_mode","Local"},{"general_map_mode","Linear"}}};weight.erase("node_weights");weight["local_weights"]={{"x",map},{"y",map},{"z",map}};weight["scale_weights"]=map;
   std::ofstream(dsf)<<local.dump();auto rigid=daz::load_skeletons(input);require(rigid.skins[0].method==runtime::SkinMethod::linear&&rigid.skins[0].weights[0][0].weight==1,"相同轴的刚性 Local 绑定未载入");
   auto posed=rigid.skins[0].initial;posed[1].rotation_degrees.z=90;require(near(runtime::deform(rigid.skins[0],posed,{{1,0,0}})[0],{0,0,1}),"刚性 Local 绑定的实际旋转错误");
+  {auto soft=local;auto &entries=soft["modifier_library"][0]["skin"]["joints"];
+    auto parent=entries[0];parent["node"]="#root";entries.push_back(parent);
+    for(size_t i=0;i<2;++i) {const double value=i==0?.75:.25;
+      for(const char *axis:{"x","y","z"}) entries[i]["local_weights"][axis]["values"][0][1]=value;
+      entries[i]["scale_weights"]["values"][0][1]=value;
+    }
+    std::ofstream(dsf)<<soft.dump();auto normalized=daz::load_skeletons(input);const auto &rig=normalized.skins[0];
+    require(!rig.static_local_weights&&!rig.separate_scale_weights,"归一化且各轴一致的柔性 Local 权重被误拒绝");
+    auto pose=rig.initial;pose[1].rotation_degrees.z=90;
+    require(near(runtime::deform(rig,pose,{{1,0,0}})[0],{.25,0,.75}),"柔性 Local 权重没有正确混合父子关节");
+    pose[1].scale={2,2,2};pose[1].rotation_degrees={};
+    require(near(runtime::deform(rig,pose,{{1,0,0}})[0],{1.75,0,0}),"相同缩放权重未正确混合");
+  }
   {auto nested=local;auto child=nested["node_library"][1];child["id"]="child";child["parent"]="#oldId";nested["node_library"].push_back(child);
     auto child_weights=nested["modifier_library"][0]["skin"]["joints"][0];child_weights["node"]="#child";nested["modifier_library"][0]["skin"]["joints"].push_back(child_weights);std::ofstream(dsf)<<nested.dump();
     auto chain=daz::load_skeletons(input);const auto &rig=chain.skins[0];require(!rig.static_local_weights&&rig.weights[0].size()==1&&rig.joints[rig.weights[0][0].joint].id=="child","完整祖先链的累计 Local 图未转换");

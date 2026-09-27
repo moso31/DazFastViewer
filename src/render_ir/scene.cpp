@@ -71,7 +71,7 @@ void Scene::validate() const {
   require(finite(environment),"IR: 无效环境颜色");
   for(const auto &m:materials) ir::validate(m,textures.size());
   for(const auto &mesh:meshes) {
-    require(!mesh.positions.empty() && !mesh.material_slots.empty(),"IR: 网格为空或没有材质槽");
+    if(mesh.positions.empty()||(mesh.material_slots.empty()&&(!mesh.triangles.empty()||!mesh.curves.empty())))throw std::runtime_error("IR: 网格为空或可绘制表面没有材质槽："+mesh.id);
     for(auto p:mesh.positions) require(finite(p),"IR: 顶点包含非有限值");
     for(const auto &curve:mesh.curves) {
       require(curve.vertices.size()>=2&&curve.material_slot<mesh.material_slots.size(),"IR: 发丝长度或材质槽无效");
@@ -85,6 +85,9 @@ void Scene::validate() const {
     }
   }
   for(const auto &i:instances) {
+    require(i.shell_source>=-1&&(i.shell_source<0||(size_t(i.shell_source)<instances.size()&& &instances[size_t(i.shell_source)]!=&i)),"IR: Geometry Shell 宿主引用无效");
+    require(i.shell_source<0||(i.shell_root>=0&&size_t(i.shell_root)<instances.size()),"IR: Geometry Shell 根宿主引用无效");
+    require(std::isfinite(i.shell_offset),"IR: Geometry Shell 偏移无效");
     require(i.graft_source>=-1&&(i.graft_source<0||(size_t(i.graft_source)<instances.size()&& &instances[size_t(i.graft_source)]!=&i)),"IR: GeoGraft 宿主引用无效");
     require(i.prototype>=-1&&(i.prototype<0||(size_t(i.prototype)<instances.size()&&instances[size_t(i.prototype)].prototype<0)),"IR: 实例原型引用无效");
     require(i.mesh<meshes.size(),"IR: 实例网格索引越界");

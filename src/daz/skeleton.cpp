@@ -48,10 +48,11 @@ void joint_channels(runtime::Joint &joint,const Json &node) {
 }
 SkinCatalog load_skeletons(const LoadedScene &loaded) {
   SkinCatalog catalog;catalog.report={{"skins",Json::array()}};
-  Json saved=Json::object();if(loaded.report.contains("input")) saved=document_view(std::filesystem::u8path(loaded.report.at("input").get<std::string>()))->value("scene",Json::object());
-  std::map<std::string,Json> instances;std::set<std::string> figures;
-  for(const auto &n:saved.value("nodes",Json::array())) {const auto id=n.value("id","");instances[id]=n;
-    if(n.value("type","")=="figure"||n.value("preview",Json::object()).value("type","")=="figure"||n.contains("geometries")) figures.insert(id);}
+  const auto saved_handle=loaded.report.contains("input")?document_view(std::filesystem::u8path(loaded.report.at("input").get<std::string>())):std::make_shared<const Json>(Json::object());
+  const auto &saved=object_member(*saved_handle,"scene");
+  std::map<std::string,const Json *> instances;std::set<std::string> figures;
+  for(const auto &n:array_member(saved,"nodes")) {const auto id=n.value("id","");instances[id]=&n;
+    if(n.value("type","")=="figure"||object_member(n,"preview").value("type","")=="figure"||n.contains("geometries"))figures.insert(id);}
   for(const auto &o:loaded.objects) if(o.figure) figures.insert(o.id);
   for(const auto &object:loaded.objects) {
     if(!object.figure) continue;
@@ -94,7 +95,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     };
     add(root);
     skin.root_general_scale=number(nodes.at(root).value("general_scale",Json::object()),1);
-    if(instances.contains(object.id)&&instances.at(object.id).contains("general_scale")) skin.root_general_scale=number(instances.at(object.id).at("general_scale"),skin.root_general_scale);
+    if(instances.contains(object.id)&&instances.at(object.id)->contains("general_scale")) skin.root_general_scale=number(instances.at(object.id)->at("general_scale"),skin.root_general_scale);
     if(!std::isfinite(skin.root_general_scale)||skin.root_general_scale<=0) throw std::runtime_error("Figure 保存缩放必须大于零");
     const auto vertex_count=loaded.scene.meshes.at(loaded.scene.instances.at(object.instance).mesh).positions.size();
     if(binding->at("vertex_count").get<size_t>()!=vertex_count) throw std::runtime_error("SkinBinding 顶点数量不匹配");skin.weights.resize(vertex_count);
@@ -125,8 +126,13 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     // Local 图可能把子骨骼的整片区域也记在父骨骼下（例如开关及面板）。
     // 各轴一致、权重全为 1、影响组成完整祖先链时，最深关节的世界矩阵
     // 已包含这些父变换；不能把父、子矩阵平均，否则会削弱开关旋转。
-    bool cumulative_local=false;
+    bool cumulative_local=false,normalized_local=false;
     if(binding_mode=="Local") {
+      normalized_local=!skin.static_local_weights&&std::all_of(skin.weights.begin(),skin.weights.end(),[](const auto &weights) {
+        double sum=0;for(const auto &w:weights) sum+=w.weight;
+        return weights.empty()||std::abs(sum-1)<=1e-5;
+      });
+      if(!normalized_local) {
       auto rigid=skin.weights;bool valid=!skin.static_local_weights;
       for(auto &weights:rigid) {
         if(weights.empty())continue;
@@ -141,6 +147,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
         if(!influences.empty()){valid=false;break;}weights={{deepest,1}};cumulative_local=true;
       }
       if(valid)skin.weights=std::move(rigid);else {skin.static_local_weights=true;cumulative_local=false;}
+      }
     }
     // 无权重的控制骨也可能挂着刚性饰品，不能只保留 skin 权重表里出现的骨骼。
     for(const auto &[id,n]:nodes) if(!indices.contains(id)) {
@@ -149,9 +156,9 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       if(parent==root) add(id);
     }
     // 保存场景中的骨骼实例覆盖值只可作用于所属 Figure，不能按名称跨角色覆盖。
-    for(const auto &[id,n]:instances) {
+    for(const auto &[id,node]:instances) {const auto &n=*node;
       if(id==object.id) {joint_channels(skin.joints[indices.at(root)],n);continue;}auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
-      while(!parent.empty()&&parent!=object.id&&!figures.contains(parent)&&instances.contains(parent)&&seen.insert(parent).second) parent=fragment(instances.at(parent).value("parent",""));
+      while(!parent.empty()&&parent!=object.id&&!figures.contains(parent)&&instances.contains(parent)&&seen.insert(parent).second) parent=fragment(instances.at(parent)->value("parent",""));
       if(parent!=object.id) continue;const auto bone=fragment(n.value("url",""));if(indices.contains(bone)) {
         const auto index=indices.at(bone);joint_channels(skin.joints[index],n);pose_channels(skin.initial[index],n);skin.joints[index].scene_id=id;
       }
@@ -164,6 +171,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     for(const auto &joint:skin.joints) for(const auto &formula:nodes.at(joint.id).value("formulas",Json::array())) formulas.push_back(formula);
     catalog.report["skins"].back()["node_formulas"]=formulas.size();
     if(cumulative_local)catalog.report["skins"].back()["weight_conversion"]="rigid-cumulative-axis-maps";
+    if(normalized_local)catalog.report["skins"].back()["weight_conversion"]="normalized-identical-axis-maps";
     if(skin.separate_scale_weights) catalog.report["skins"].back()["limitation"]="独立缩放权重未求值；当前所有骨骼缩放为单位值，平移与刚性旋转可正常应用；拒绝后续非单位骨骼缩放";
     if(skin.static_local_weights) catalog.report["skins"].back()["limitation"]="TriAx 轴权重未求值；当前没有骨骼变换，保留静态/Morph 几何；拒绝后续需要 TriAx 的骨骼姿势";
     catalog.node_formulas.push_back(std::move(formulas));catalog.skins.push_back(std::move(skin));

@@ -7,6 +7,7 @@
 #include <QSpinBox>
 #include <QWidgetAction>
 #include <memory>
+#include <cmath>
 
 namespace dfv::editor {
 static std::unique_ptr<QSettings> settings(const QString &file) {
@@ -14,16 +15,19 @@ static std::unique_ptr<QSettings> settings(const QString &file) {
 }
 ViewportSettings::ViewportSettings(bool persistent,const QString &file,QObject *parent):QObject(parent),persistent_(persistent),settings_file_(file) {
   if(persistent_) {auto s=settings(file);value_.percent=std::clamp(s->value("viewport/renderPercent",100).toInt(),50,100);
-    value_.reconstruction=s->value("viewport/reconstruction","bicubic").toString()=="bilinear"?Reconstruction::bilinear:Reconstruction::bicubic;}
+    value_.reconstruction=s->value("viewport/reconstruction","bicubic").toString()=="bilinear"?Reconstruction::bilinear:Reconstruction::bicubic;
+    const float sharpen=s->value("viewport/sharpenStrength",s->value("viewport/sharpenPercent",0).toFloat()/100.f).toFloat();
+    value_.sharpen=std::isfinite(sharpen)?std::clamp(sharpen,0.f,max_viewport_sharpen):0.f;}
 }
 void ViewportSettings::set(ViewportQuality value) {
   value.percent=std::clamp(value.percent,50,100);
+  value.sharpen=std::isfinite(value.sharpen)?std::clamp(value.sharpen,0.f,max_viewport_sharpen):0.f;
   if(value.reconstruction!=Reconstruction::bilinear) value.reconstruction=Reconstruction::bicubic;
   const bool modified=value_!=value;value_=value;
   if(percent_) {QSignalBlocker block(percent_);percent_->setValue(value.percent);}
   if(reconstruction_) {QSignalBlocker block(reconstruction_);reconstruction_->setCurrentIndex(value.reconstruction==Reconstruction::bicubic?0:1);}
   if(menu_) menu_->setTitle(QStringLiteral("视口渲染（%1%）").arg(value.percent));
-  if(modified&&persistent_) {auto s=settings(settings_file_);s->setValue("viewport/renderPercent",value.percent);s->setValue("viewport/reconstruction",value.reconstruction==Reconstruction::bicubic?"bicubic":"bilinear");}
+  if(modified&&persistent_) {auto s=settings(settings_file_);s->setValue("viewport/renderPercent",value.percent);s->setValue("viewport/reconstruction",value.reconstruction==Reconstruction::bicubic?"bicubic":"bilinear");s->setValue("viewport/sharpenStrength",value.sharpen);}
   if(modified&&changed) changed(value_);
 }
 void ViewportSettings::add_menu(QMenu *parent) {

@@ -7,6 +7,8 @@
 #include <QToolButton>
 #include <QComboBox>
 #include <QSpinBox>
+#include <QSlider>
+#include <QLabel>
 #include <QCheckBox>
 #include <QListWidget>
 #include <QPushButton>
@@ -38,6 +40,9 @@ int main(int argc,char **argv) {
     auto preferences=dfv::editor::ApplicationSettings::load(preferences_file);
     require(preferences.ui_percent==125&&preferences.viewport.percent==67&&preferences.viewport.reconstruction==dfv::Reconstruction::bilinear,"旧菜单偏好没有继承");
     require(preferences.render==dfv::RenderQuality{},"默认画质必须保持无限制纹理和原材质");
+    require(preferences.viewport.sharpen==0,"旧偏好应默认关闭锐化");
+    {QSettings legacy(preferences_file,QSettings::IniFormat);legacy.setValue("viewport/sharpenPercent",75);}
+    require(dfv::editor::ApplicationSettings::load(preferences_file).viewport.sharpen==.75f,"旧百分数锐化未换算为小数");
     int apply_count=0,save_count=0;dfv::editor::ApplicationSettings active_preferences=preferences;QStringList active_roots=loaded.content_roots;
     auto dialog_test=[&](auto action) {
       std::exception_ptr failure;
@@ -57,16 +62,21 @@ int main(int argc,char **argv) {
       for(int value:{512,1024,2048,4096,0}) require(limit->findData(value)>=0,"纹理档位缺失");
       limit->setCurrentIndex(limit->findData(2048));d->findChild<QSpinBox *>("UiScalePercent")->setValue(140);
       d->findChild<QSpinBox *>("ViewportRenderPercent")->setValue(75);d->findChild<QComboBox *>("ViewportReconstruction")->setCurrentIndex(0);
+      auto *sharpen=d->findChild<QSlider *>("ViewportSharpenStrength");require(sharpen&&d->findChild<QWidget *>("displaySection")->isAncestorOf(sharpen),"锐化没有放在界面与视口模块");sharpen->setValue(350);
+      auto *sharpen_value=d->findChild<QLabel *>("ViewportSharpenValue");require(sharpen->orientation()==Qt::Horizontal&&sharpen->maximum()==2000&&sharpen_value&&sharpen_value->text()=="3.50","锐化滑块范围或小数显示错误");
+      sharpen->triggerAction(QAbstractSlider::SliderSingleStepAdd);require(sharpen_value->text()=="3.51","滑块微调没有更新小数显示");sharpen->setValue(2000);require(sharpen_value->text()=="20.00","滑块上限未显示 20.00");sharpen->setValue(350);
       d->findChild<QCheckBox *>("RenderSubsurface")->setChecked(false);d->findChild<QCheckBox *>("RenderBumpNormal")->setChecked(false);d->findChild<QSpinBox *>("RenderTransparentBounces")->setValue(8);
       if(argc>1)d->grab().save(QString::fromLocal8Bit(argv[1])+"/render.png");
       buttons(d)->button(QDialogButtonBox::Save)->click();
     }),"保存项目选项卡失败");
     require(dfv::editor::ApplicationSettings::load(preferences_file)==preferences,"重开丢失画质、界面、选项卡或折叠状态");
+    require(preferences.viewport.sharpen==3.5f,"锐化强度没有保存");
     require(preferences.render.texture_limit==2048&&!preferences.render.subsurface&&!preferences.render.bump_and_normal&&preferences.render.transparent_bounces==8,"渲染参数没有保存");
     const auto before=preferences;const auto before_roots=loaded.content_roots;
     require(!dialog_test([&](QDialog *d){
       require(d->findChild<QTabWidget *>("ProjectSettingsTabs")->currentIndex()==1&&!d->findChild<QToolButton *>("librariesCollapse")->isChecked(),"对话框没有恢复页签与折叠状态");
       require(d->findChild<QComboBox *>("RenderTextureLimit")->currentData().toInt()==2048,"对话框纹理值没有恢复");
+      require(d->findChild<QSlider *>("ViewportSharpenStrength")->value()==350,"对话框锐化值没有恢复");d->findChild<QSlider *>("ViewportSharpenStrength")->setValue(900);
       d->findChild<QComboBox *>("RenderTextureLimit")->setCurrentIndex(0);d->findChild<QListWidget *>("ProjectContentRoots")->clear();buttons(d)->button(QDialogButtonBox::Cancel)->click();
     }),"取消错误地保存了设置");
     require(preferences==before&&loaded.content_roots==before_roots&&dfv::editor::ApplicationSettings::load(preferences_file)==before,"取消污染当前或持久设置");
@@ -74,8 +84,10 @@ int main(int argc,char **argv) {
     require(!dialog_test([&](QDialog *d){
       auto *box=buttons(d);require(box->button(QDialogButtonBox::Apply)&&box->button(QDialogButtonBox::Apply)->text()==QStringLiteral("应用")&&box->button(QDialogButtonBox::Save)->text()==QStringLiteral("保存"),"应用和保存按钮没有拆分");
       d->findChild<QComboBox *>("RenderTextureLimit")->setCurrentIndex(0);d->findChild<QSpinBox *>("UiScalePercent")->setValue(160);
+      d->findChild<QSlider *>("ViewportSharpenStrength")->setValue(1625);
       auto *roots=d->findChild<QListWidget *>("ProjectContentRoots");roots->clear();roots->addItem(a);
       box->button(QDialogButtonBox::Apply)->click();require(d->isVisible()&&apply_count==2&&save_count==1,"应用没有保持窗口打开或通知主窗口");
+      require(active_preferences.viewport.sharpen==16.25f,"应用没有更新视口锐化");d->findChild<QSlider *>("ViewportSharpenStrength")->setValue(0);
       require(active_preferences.render.texture_limit==512&&active_preferences.ui_percent==160&&active_roots==QStringList{a},"应用未将最新画质、界面和资源路径传给主窗口");
       require(dfv::editor::ApplicationSettings::load(preferences_file)==before&&dfv::editor::ProjectSettings::load(file).content_roots==before_roots,"应用不应写入磁盘配置");
       d->findChild<QComboBox *>("RenderTextureLimit")->setCurrentIndex(1);roots->clear();box->button(QDialogButtonBox::Cancel)->click();
@@ -87,6 +99,8 @@ int main(int argc,char **argv) {
     }),"先应用后保存失败");
     require(apply_count==3&&save_count==2&&dfv::editor::ApplicationSettings::load(preferences_file)==preferences&&dfv::editor::ProjectSettings::load(file).content_roots==QStringList{a},"先应用后保存没有持久化全部参数与资源路径");
     for(int limit:{512,1024,2048,4096,0}){preferences.render.texture_limit=limit;preferences.save(preferences_file);require(dfv::editor::ApplicationSettings::load(preferences_file).render.texture_limit==limit,"纹理精度重新启动后被重置");}
+    for(float value:{0.f,0.35f,20.f}){preferences.viewport.sharpen=value;preferences.save(preferences_file);require(dfv::editor::ApplicationSettings::load(preferences_file).viewport.sharpen==value,"锐化边界值未持久保存");}
+    preferences.viewport.sharpen=20.01f;rejected=false;try{preferences.save(preferences_file);}catch(...){rejected=true;}require(rejected&&dfv::editor::ApplicationSettings::load(preferences_file).viewport.sharpen==20,"非法锐化值覆盖了配置");
     dfv::ir::Material material;material.subsurface=.7f;material.translucency_texture=3;material.bump_texture=4;material.normal_texture=5;material.displacement_texture=6;
     require(dfv::ir::viewport_material(material,{})==material,"默认材质画质发生变化");
     const auto simplified=dfv::ir::viewport_material(material,{0,32,false,false});

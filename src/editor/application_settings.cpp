@@ -2,6 +2,7 @@
 #include <QSettings>
 #include <memory>
 #include <stdexcept>
+#include <cmath>
 
 namespace dfv::editor {
 static std::unique_ptr<QSettings> storage(const QString &file) {
@@ -13,6 +14,8 @@ ApplicationSettings ApplicationSettings::load(const QString &file) {
   value.ui_percent=std::clamp(s->value("ui/scalePercent",100).toInt(),50,200);
   value.viewport.percent=std::clamp(s->value("viewport/renderPercent",100).toInt(),50,100);
   value.viewport.reconstruction=s->value("viewport/reconstruction","bicubic").toString()=="bilinear"?Reconstruction::bilinear:Reconstruction::bicubic;
+  const float sharpen=s->value("viewport/sharpenStrength",s->value("viewport/sharpenPercent",0).toFloat()/100.f).toFloat();
+  value.viewport.sharpen=std::isfinite(sharpen)?std::clamp(sharpen,0.f,max_viewport_sharpen):0.f;
   const int limit=s->value("render/textureLimit",0).toInt();
   for(int supported:{0,512,1024,2048,4096}) if(limit==supported) value.render.texture_limit=limit;
   value.render.transparent_bounces=std::clamp(s->value("render/transparentBounces",32).toInt(),1,32);
@@ -23,12 +26,13 @@ ApplicationSettings ApplicationSettings::load(const QString &file) {
   return value;
 }
 void ApplicationSettings::save(const QString &file) const {
-  if(ui_percent<50||ui_percent>200||viewport.percent<50||viewport.percent>100||
+  if(ui_percent<50||ui_percent>200||viewport.percent<50||viewport.percent>100||!std::isfinite(viewport.sharpen)||viewport.sharpen<0||viewport.sharpen>max_viewport_sharpen||
      (render.texture_limit!=0&&render.texture_limit!=512&&render.texture_limit!=1024&&render.texture_limit!=2048&&render.texture_limit!=4096)||
      render.transparent_bounces<1||render.transparent_bounces>32) throw std::runtime_error("应用设置超出可用范围");
   auto s=storage(file);
   s->setValue("ui/scalePercent",ui_percent);s->setValue("viewport/renderPercent",viewport.percent);
   s->setValue("viewport/reconstruction",viewport.reconstruction==Reconstruction::bilinear?"bilinear":"bicubic");
+  s->setValue("viewport/sharpenStrength",viewport.sharpen);
   s->setValue("render/textureLimit",render.texture_limit);s->setValue("render/transparentBounces",render.transparent_bounces);
   s->setValue("render/subsurface",render.subsurface);s->setValue("render/bumpAndNormal",render.bump_and_normal);
   s->setValue("projectDialog/tab",settings_tab);

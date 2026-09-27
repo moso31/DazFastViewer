@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <cfloat>
+#include <ppl.h>
 
 namespace dfv {
 static ccl::float3 vector(ir::Vec3 v) {return ccl::make_float3(v.x,v.y,v.z);}

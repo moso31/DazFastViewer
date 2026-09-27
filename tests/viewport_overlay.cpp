@@ -45,6 +45,33 @@ int main(){
       check(linear.pixelColor(199,120).red()>20&&linear.pixelColor(199,120).red()<230,"低分辨率仍显示为最近邻方块");
       check(cubic.pixelColor(199,120).red()<linear.pixelColor(199,120).red()&&cubic.pixelColor(200,120).red()>linear.pixelColor(200,120).red(),"双三次未产生较清晰的边缘");
       check(cubic.pixelColor(399,239).red()==255&&cubic.pixelColor(0,0).red()==0,"升采样采到了纹理填充区或亮边振铃");
+      for(auto filter:{Reconstruction::bilinear,Reconstruction::bicubic}) {
+        display.set_reconstruction(filter);display.set_sharpen(0);display.draw(params);const auto normal=picture("sharpen-upscale-off");
+        display.set_sharpen(1);display.draw(params);const auto sharp=picture("sharpen-upscale-on");
+        check(sharp.pixelColor(199,120).red()<normal.pixelColor(199,120).red()&&sharp.pixelColor(200,120).red()>normal.pixelColor(200,120).red(),"升采样锐化未增强边缘对比度");
+        check(sharp.pixelColor(399,239).red()==255&&sharp.pixelColor(0,0).red()==0,"锐化采到了无效边界");
+        display.set_sharpen(0);display.draw(params);check(picture("sharpen-upscale-restored")==normal,"关闭锐化没有精确恢复图像");
+      }
+      window.present_context.deactivate();params.size={400,240};params.full_size=params.size;
+      check(display.update_begin(params,400,240),"无法写入原分辨率检查帧");pixels=display.map_texture_buffer();check(pixels!=nullptr,"无法映射锐化检查缓冲");
+      for(int y=0;y<240;++y)for(int x=0;x<400;++x){const float v=x<198?.125f:x==198?.25f:x==199?.375f:x==200?.625f:x==201?.75f:.875f;pixels[y*400+x]=ccl::float4_to_half4(ccl::make_float4(v,v,v,1));}
+      display.unmap_texture_buffer();display.update_end();window.present_context.activate();glFinish();
+      display.set_sharpen(0);display.draw(params);const auto normal=picture("sharpen-native-off");
+      display.set_sharpen(.5f);display.draw(params);const auto medium=picture("sharpen-native-50");
+      display.set_sharpen(1);display.draw(params);const auto sharp=picture("sharpen-native-100");
+      check(normal.pixelColor(199,120).red()>medium.pixelColor(199,120).red()&&medium.pixelColor(199,120).red()>sharp.pixelColor(199,120).red(),"原分辨率锐化强度没有逐级生效");
+      check(sharp.pixelColor(0,0)==normal.pixelColor(0,0)&&sharp.pixelColor(399,239)==normal.pixelColor(399,239),"锐化改变了平坦区域或图像边界");
+      display.set_sharpen(10);display.draw(params);const auto maximum=picture("sharpen-native-strength-10");
+      check(maximum.pixelColor(199,120).red()<sharp.pixelColor(199,120).red()&&maximum.pixelColor(200,120).red()>sharp.pixelColor(200,120).red(),"扩大强度没有超过原 100% 的锐化效果");
+      check(maximum.pixelColor(0,0)==normal.pixelColor(0,0)&&maximum.pixelColor(399,239)==normal.pixelColor(399,239),"最大强度破坏了平坦区域或边界");
+      display.set_sharpen(0);display.draw(params);check(picture("sharpen-native-restored")==normal,"原分辨率关闭锐化没有精确恢复");
+      window.present_context.deactivate();check(display.update_begin(params,400,240),"无法写入高强度检查帧");pixels=display.map_texture_buffer();check(pixels!=nullptr,"无法映射高强度缓冲");
+      for(int y=0;y<240;++y)for(int x=0;x<400;++x){const float v=x<198?.1f:x==198?.2f:x==199?.4f:x==200?.61f:x==201?.8f:.9f;pixels[y*400+x]=ccl::float4_to_half4(ccl::make_float4(v,v,v,1));}
+      display.unmap_texture_buffer();display.update_end();window.present_context.activate();glFinish();
+      display.set_sharpen(10);display.draw(params);const auto ten=picture("sharpen-range-10");
+      display.set_sharpen(20);display.draw(params);const auto twenty=picture("sharpen-range-20");
+      check(twenty.pixelColor(199,120).red()<ten.pixelColor(199,120).red()&&twenty.pixelColor(200,120).red()>ten.pixelColor(200,120).red(),"GPU 强度仍被截断在 10.00");
+      check(twenty.pixelColor(0,0)==ten.pixelColor(0,0)&&twenty.pixelColor(399,239)==ten.pixelColor(399,239),"20.00 强度破坏了平坦区域或边界");
       check(glGetError()==GL_NO_ERROR&&!display.failed(),"升采样着色器失败");display.release_present_resources();window.present_context.deactivate();
     }
     std::cout<<"副屏 OpenGL：全场景代理、单次黄色合成、选区穿透衣物及部位范围、双线性/双三次升采样 PASS\n";return 0;

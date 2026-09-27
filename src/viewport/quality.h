@@ -4,9 +4,11 @@
 
 namespace dfv {
 enum class Reconstruction {bilinear,bicubic};
+inline constexpr float max_viewport_sharpen=20.f;
 struct ViewportQuality {
   int percent=100;
   Reconstruction reconstruction=Reconstruction::bicubic;
+  float sharpen=0;
   bool operator==(const ViewportQuality &) const=default;
 };
 inline std::pair<int,int> render_size(int width,int height,int percent,bool moving=false) {

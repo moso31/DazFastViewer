@@ -8,17 +8,20 @@
 #include "runtime/picking.h"
 #include <fstream>
 #include <iostream>
+#include <thread>
 
 // 无窗口复现编辑器的 CPU 加载与首次形变；不把结果称为 GPU 首帧耗时。
 int main(int argc,char **argv) {
   using namespace dfv;using Json=nlohmann::json;namespace fs=std::filesystem;
   const bool attachment=argc==6&&std::string(argv[4])=="--attach-to";
-  if(argc<4||(argc>5&&!attachment)) {std::cerr<<"SceneLoadProfile <scene.duf> <project.json> <output-directory> [--eager|--growth-check|--attach-to <host.duf>]\n";return 2;}
-  const bool growth_check=argc==5&&std::string(argv[4])=="--growth-check",lazy=argc==4||growth_check||attachment;
+  if(argc<4||(argc>5&&!attachment)) {std::cerr<<"SceneLoadProfile <scene.duf> <project.json> <output-directory> [--eager|--growth-check|--prepare-payloads|--attach-to <host.duf>]\n";return 2;}
+  const bool prepared=argc==5&&std::string(argv[4])=="--prepare-payloads";
+  const bool growth_check=argc==5&&std::string(argv[4])=="--growth-check",lazy=argc==4||growth_check||attachment||prepared;
+  if(argc==5&&!lazy&&std::string(argv[4])!="--eager") {std::cerr<<"未知诊断选项\n";return 2;}
   SetConsoleOutputCP(CP_UTF8);
   const fs::path output=fs::u8path(argv[3]);fs::create_directories(output);
   diagnostics::LoadProfile profile;diagnostics::active=&profile;
-  Json result={{"input",argv[1]},{"lazy",lazy},{"scope","CPU load and initial deformation; excludes Qt and Cycles/GPU; nested timings exclude background worker threads"},{"stages",Json::array()}};
+  Json result={{"input",argv[1]},{"lazy",lazy},{"prepare_payloads",prepared},{"scope","CPU load and initial deformation; excludes Qt and Cycles/GPU; nested timings exclude background worker threads"},{"stages",Json::array()}};
   const auto start=diagnostics::Clock::now();
   auto elapsed=[&] {return std::chrono::duration<double>(diagnostics::Clock::now()-start).count();};
   auto save=[&] {
@@ -68,6 +71,15 @@ int main(int argc,char **argv) {
     stage("joint_regions",[&] {for(const auto &skin:document.skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene.meshes.at(render_scene.instances.at(skin.instance).mesh),skin);});
     std::unique_ptr<runtime::DeformationRuntime> runtime;
     stage("deformation_construct",[&] {runtime=std::make_unique<runtime::DeformationRuntime>(render_scene,document.catalog.targets,document.skeletons.skins,document.formulas.graphs);});
+    // 对齐编辑器：先批量请求有效差值，再提交首次形变；保留原同步路径供对照。
+    if(prepared) stage("initial_payload_prepare",[&] {
+      for(;;) {
+        const auto progress=runtime->prepare(snapshot.values,snapshot.poses);
+        if(!progress.error.empty()) throw std::runtime_error(progress.error);
+        if(!progress.pending) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    });
     stage("initial_deformation",[&] {runtime->evaluate(snapshot.values,snapshot.poses);});
     if(growth_check)stage("growth_check",[&] {
       const auto found=std::find_if(document.catalog.targets.begin(),document.catalog.targets.end(),[](const auto &t){return t.label=="big_01";});

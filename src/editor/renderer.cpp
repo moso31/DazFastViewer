@@ -523,6 +523,7 @@ void Renderer::run(std::stop_token stop) {
       }
       GLContext::Binding binding(window_->present_context);
       display->set_reconstruction(quality.reconstruction);
+      display->set_sharpen(quality.sharpen);
       const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
       if(geometry_dirty) {instance_groups.emplace(render_scene);auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
       else if(bounds_dirty) {auto begin=now();overlay.apply(render_scene,regions,delta);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
