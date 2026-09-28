@@ -18,6 +18,7 @@
 #include <QVBoxLayout>
 #include <QSplitter>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QTimer>
 #include <QToolButton>
 #include <QSettings>
@@ -56,7 +57,25 @@ ParameterPanel::ParameterPanel(QWidget *parent):QWidget(parent) {
   connect(tree_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{mount();});
   auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this]{mount();});timer->start(150);
 }
+void ParameterPanel::shared_scroll(QScrollArea *scroll) {
+  shared_scroll_=scroll;setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Maximum);
+  for(auto *tree:{groups_,tree_}){tree->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);tree->viewport()->installEventFilter(this);tree->setAutoScroll(false);}
+  connect(scroll->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{mount();});
+  connect(groups_,&QTreeWidget::itemExpanded,this,[this]{shared_height();});connect(groups_,&QTreeWidget::itemCollapsed,this,[this]{shared_height();});shared_height();
+}
+void ParameterPanel::shared_height() {
+  if(!shared_scroll_)return;int rows=0,groups=0;
+  for(auto *item:items_)if(!item->isHidden())++rows;
+  for(QTreeWidgetItemIterator it(groups_);*it;++it){bool shown=true;for(auto *p=(*it)->parent();p;p=p->parent())shown&=p->isExpanded();if(shown)++groups;}
+  const int group_height=groups_->topLevelItemCount()?groups_->sizeHintForIndex(groups_->indexFromItem(groups_->topLevelItem(0))).height():22;
+  tree_->parentWidget()->setFixedHeight(std::max({60,rows*58+4,groups*std::max(20,group_height)+4}));tree_->verticalScrollBar()->setValue(0);groups_->verticalScrollBar()->setValue(0);QTimer::singleShot(0,this,[this]{mount();});
+}
+void ParameterPanel::show_item(QTreeWidgetItem *item) {
+  if(!shared_scroll_){tree_->scrollToItem(item);return;}
+  tree_->doItemsLayout();const auto point=tree_->viewport()->mapTo(shared_scroll_->widget(),tree_->visualItemRect(item).center());shared_scroll_->ensureVisible(point.x(),point.y(),0,50);
+}
 bool ParameterPanel::eventFilter(QObject *object,QEvent *event) {
+  if(shared_scroll_&&event->type()==QEvent::Wheel&&(object==tree_->viewport()||object==groups_->viewport())){forward_wheel(shared_scroll_->viewport(),static_cast<QWheelEvent *>(event));return true;}
   if(event->type()!=QEvent::MouseButtonPress&&event->type()!=QEvent::MouseButtonDblClick&&event->type()!=QEvent::Wheel) return QWidget::eventFilter(object,event);
   const bool viewport=object==tree_->viewport();
   const auto row=object->property("parameterRow");
@@ -184,11 +203,12 @@ void ParameterPanel::filter() {
     const bool shown=category&&(hidden_->isChecked()||c.visible)&&text(c.label+" "+c.id+" "+c.group).contains(q,Qt::CaseInsensitive);items_[i]->setHidden(!shown);if(shown) ++count;
   }
   if(wheel_selected_>=0&&items_[size_t(wheel_selected_)]->isHidden()) wheel_selected_=-1;
-  count_->setText(QStringLiteral("%1 / %2 项").arg(count).arg(controls_.size()));mount();
+  count_->setText(QStringLiteral("%1 / %2 项").arg(count).arg(controls_.size()));shared_height();mount();
 }
 void ParameterPanel::mount() {
-  std::set<int> visible;const auto rect=tree_->viewport()->rect();
-  for(int y=0;y<rect.height()+58;y+=20) if(auto *item=tree_->itemAt(2,std::min(y,std::max(0,rect.height()-1)))) visible.insert(item->data(0,Qt::UserRole).toInt());
+  std::set<int> visible;auto rect=tree_->viewport()->rect();
+  if(shared_scroll_){rect=rect.intersected(QRect(tree_->viewport()->mapFromGlobal(shared_scroll_->viewport()->mapToGlobal(QPoint(0,0))),shared_scroll_->viewport()->size()));if(!isVisible())rect={};}
+  for(int y=rect.top();!rect.isEmpty()&&y<rect.bottom()+58;y+=20) if(auto *item=tree_->itemAt(2,std::min(y,rect.bottom()))) visible.insert(item->data(0,Qt::UserRole).toInt());
   for(auto it=mounted_.begin();it!=mounted_.end();) {if(!visible.contains(it->first)) {tree_->removeItemWidget(items_.at(size_t(it->first)),0);it=mounted_.erase(it);}else ++it;}
   for(int i:visible) if(!mounted_.contains(i)) {
     const auto &c=controls_.at(size_t(i));auto *widget=new QWidget;auto *layout=new QVBoxLayout(widget);layout->setContentsMargins(5,2,5,3);layout->setSpacing(1);
@@ -248,13 +268,13 @@ void ParameterPanel::update_rows() {
 void ParameterPanel::refresh(size_t) {update_rows();}
 bool ParameterPanel::edit_control(const std::string &id,double value) {
   auto found=std::find_if(controls_.begin(),controls_.end(),[&](const auto &c){return c.id==id;});if(found==controls_.end()||!found->enabled) return false;
-  hidden_->setChecked(true);search_->clear();groups_->setCurrentItem(groups_->topLevelItem(0));filter();current_=int(found-controls_.begin());tree_->setCurrentItem(items_[current_]);tree_->scrollToItem(items_[current_]);mount();
+  hidden_->setChecked(true);search_->clear();groups_->setCurrentItem(groups_->topLevelItem(0));filter();current_=int(found-controls_.begin());tree_->setCurrentItem(items_[current_]);show_item(items_[current_]);mount();
   const auto row=mounted_.find(current_);if(row==mounted_.end()) return false;
   if(auto *spin=row->second->findChild<QDoubleSpinBox *>("valueSpin")) {spin->setValue(value);return true;}
   if(auto *combo=row->second->findChild<QComboBox *>("valueChoice")) {combo->setCurrentIndex(int(value));return true;}return false;
 }
 void ParameterPanel::query(const QString &value) {search_->setText(value);}
-void ParameterPanel::select_parameter(size_t index) {if(index<morph_rows_.size()&&morph_rows_[index]>=0) {current_=morph_rows_[index];auto *item=items_[size_t(current_)];tree_->setCurrentItem(item);tree_->scrollToItem(item);mount();}}
+void ParameterPanel::select_parameter(size_t index) {if(index<morph_rows_.size()&&morph_rows_[index]>=0) {current_=morph_rows_[index];auto *item=items_[size_t(current_)];tree_->setCurrentItem(item);show_item(item);mount();}}
 void ParameterPanel::set_slider(int value) {if(current_>=0) {const auto &c=controls_.at(size_t(current_));c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();}}
 void ParameterPanel::evaluated(const std::vector<float> &values) {effective_=values;update_rows();}
 void ParameterPanel::resource_states() {update_rows();}

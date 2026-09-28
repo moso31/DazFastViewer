@@ -2,6 +2,7 @@
 #include "editor/pose_drag.h"
 #include "editor/powerpose_drag.h"
 #include "editor/render_edit_queue.h"
+#include "editor/physics_present.h"
 #include "viewport/display.h"
 #include "viewport/overlay.h"
 #include "runtime/picking.h"
@@ -67,7 +68,25 @@ void Renderer::run(std::stop_token stop) {
   std::ofstream progress_log(output_/"cycles-progress.log");std::string last_progress;
   HoverOverlay overlay;runtime::PickingScene picking;std::vector<runtime::JointRegions> regions;std::vector<uint8_t> pickable;bool geometry_dirty=true;uint64_t clicks=0;
   std::optional<runtime::InstanceGroups> instance_groups;
+  PhysicsService physics_service;
+  std::future<std::shared_ptr<PreparedPhysics>> physics_prepare;
+  std::future<bool> physics_commit;
+  std::vector<std::future<void>> physics_retired;
+  std::shared_ptr<PreparedPhysics> physics_prepared,physics_installing;
+  std::shared_ptr<PhysicsResult> physics_pending;
+  std::atomic<uint64_t> physics_ticket{0};uint64_t physics_prepare_ticket=0,physics_commit_ticket=0;
+  Snapshot physics_input;runtime::PhysicsOptions physics_options;std::shared_ptr<const Document> physics_document;
+  double physics_last_commit=-1e30;uint64_t physics_last_render_frame=0;
+  double physics_due=0;bool physics_requested=false;uint64_t physics_request_serial=0;
+  bool physics_display_wait=false;uint64_t physics_display_camera=0,physics_display_ticket=0;
+  auto retire_physics=[&](std::shared_ptr<PreparedPhysics> value){if(value)physics_retired.push_back(std::async(std::launch::async,[this,value=std::move(value)]()mutable{release_physics_present(std::move(value),*window_);}));};
   auto cleanup=[&] {
+    physics_display_wait=false;
+    ++physics_ticket;physics_service.cancel();physics_service.retire(std::move(physics_pending));
+    if(physics_commit.valid())try{physics_commit.get();}catch(...){}
+    if(physics_prepare.valid())try{retire_physics(physics_prepare.get());}catch(...){}
+    retire_physics(std::move(physics_prepared));retire_physics(std::move(physics_installing));
+    for(auto &f:physics_retired)try{f.get();}catch(...){}physics_retired.clear();physics_document.reset();physics_requested=false;
     if(session) {
       {diagnostics::Scope scope("cancel");session->cancel(true);}
       const auto &integrator=*session->scene->integrator;const auto &background=session->scene->dscene.data.background;
@@ -98,6 +117,8 @@ void Renderer::run(std::stop_token stop) {
   uint64_t graphics_recoveries=0,render_restart=0,failed_generation=0;
   double next_graphics_attempt=0,graphics_stable_since=0;
   auto publish_state=[&] {
+    state.physics_committing=physics_commit.valid();
+    state.physics_prepared=bool(physics_prepared);
     state.graphics_recovering=graphics_recovering;state.graphics_blocked=graphics_blocked;
     state.graphics_attempts=graphics_attempts;state.graphics_recoveries=graphics_recoveries;
     std::lock_guard lock(mutex_);status_=state;
@@ -161,6 +182,19 @@ void Renderer::run(std::stop_token stop) {
       {std::lock_guard lock(mutex_);material_hover_generation=material_hover_generation_;material_hover=material_hover_;}
       {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
       {std::lock_guard lock(mutex_);powerpose=powerpose_input_;gizmo_settings=gizmo_settings_;quality=quality_;}
+      runtime::PhysicsOptions wanted_physics;{std::lock_guard lock(mutex_);wanted_physics=physics_options_;}
+      for(auto it=physics_retired.begin();it!=physics_retired.end();)if(physics_ready(*it)){try{it->get();}catch(...){}it=physics_retired.erase(it);}else ++it;
+      // 场景切换期间提交线程仍拥有旧会话；保持相机反馈，直到可以安全回收。
+      if(physics_commit.valid()&&!physics_ready(physics_commit)&&current!=document){
+        ++physics_ticket;physics_service.cancel();GLContext::Binding b(window_->present_context);auto c=window_->mailbox.latest();overlay.draw_pose(c,window_->width,window_->height,{},{},{},{});window_->swap();state.camera=c;publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
+      }
+      if(current!=document&&physics_document){
+        ++physics_ticket;physics_service.cancel();physics_service.retire(std::move(physics_pending));
+        if(physics_commit.valid())try{physics_commit.get();}catch(...){}
+
+        retire_physics(std::move(physics_prepared));retire_physics(std::move(physics_installing));
+        physics_document.reset();
+      }
       const bool retry_payloads=retry!=retried;
       if(width>0&&height>0&&(width!=window_->width||height!=window_->height)) {
         window_->width=width;window_->height=height;
@@ -262,6 +296,48 @@ void Renderer::run(std::stop_token stop) {
         state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       auto &render_scene=*render_scene_ptr;
+      if(physics_document!=current||!same_physics_input(physics_input,desired)||physics_options!=wanted_physics){
+        ++physics_ticket;physics_service.retire(std::move(physics_pending));physics_input=desired;physics_document=current;physics_options=wanted_physics;physics_due=now();physics_requested=false;state.physics_error.clear();
+        if(physics_prepared)retire_physics(std::move(physics_prepared));
+
+      }
+      if(physics_ready(physics_prepare)){
+        try{auto p=physics_prepare.get();if(physics_prepare_ticket==physics_ticket.load())physics_prepared=std::move(p);else retire_physics(std::move(p));}catch(const std::exception &e){state.physics_error=e.what();}
+      }
+      if(physics_ready(physics_commit)){
+        try{
+          const bool committed=physics_commit.get();
+          if(physics_commit_ticket==physics_ticket.load()&&physics_document==current){
+            auto &p=*physics_installing;auto &r=*p.result;
+            for(const auto &e:r.delta.meshes)render_scene.meshes[e.index].positions.swap(r.scene->meshes[e.index].positions);
+            for(const auto &e:r.delta.instances)render_scene.instances[e.index].transform=e.transform;
+            overlay.swap_delta(p.overlay,render_scene,r.delta);picking.swap_delta(p.picking,render_scene,r.delta);
+            for(size_t k=0;k<p.targets.size();++k){auto i=p.targets[k];state.bounds[i]=p.bounds[k];state.head_bounds[i]=p.head_bounds[k];displacements[i]=p.displacements[k];}
+            if(state.mesh_hashes.size()!=render_scene.meshes.size())state.mesh_hashes.resize(render_scene.meshes.size());for(auto [i,h]:p.hashes)state.mesh_hashes[i]=h;
+            physics_service.acknowledge(p.result);
+            state.physics=r.stats;state.physics_error=r.stats.warning;++state.physics_applied;retire_physics(std::move(physics_installing));gizmo_revision=UINT64_MAX;
+            state.max_displacement=displacements.empty()?0:*std::max_element(displacements.begin(),displacements.end());
+          }else{if(committed&&physics_installing)physics_service.acknowledge(physics_installing->result);retire_physics(std::move(physics_installing));}
+        }catch(const std::exception &e){state.physics_error=e.what();retire_physics(std::move(physics_installing));}
+      }
+      if(!physics_requested&&now()>=physics_due&&!editing){
+        physics_request_serial=physics_service.request(current,desired,physics_options);physics_requested=true;
+      }
+
+      if(physics_requested&&!physics_pending&&!physics_prepared&&!physics_prepare.valid()&&!physics_commit.valid()){
+        physics_service.request_frame();
+        if(auto r=physics_service.take()){
+          if(r->serial!=physics_request_serial){physics_service.retire(std::move(r));}
+          else if(!r->error.empty())state.physics_error=r->error;
+          else {state.physics=r->stats;state.physics_error=r->stats.warning;if(r->scene&&(!r->delta.meshes.empty()||!r->delta.instances.empty()))physics_pending=std::move(r);}
+          physics_service.retire(std::move(r));
+        }
+      }
+      if(physics_pending&&!physics_prepared&&!physics_prepare.valid()&&!physics_commit.valid()){
+        physics_prepare_ticket=physics_ticket;auto r=std::exchange(physics_pending,{});
+        physics_prepare=std::async(std::launch::async,[this,r=std::move(r),current,regions,pickable]{return prepare_physics_present(r,current,*window_,regions,pickable);});
+      }
+      state.physics_busy=physics_service.busy()||physics_prepare.valid()||physics_commit.valid()||bool(physics_prepared);
       auto proxy_excluded=[&](int selected) {
         std::vector<uint32_t> result;if(selected<0||size_t(selected)>=current->catalog.targets.size())return result;
         const auto &targets=current->catalog.targets;auto node=[](const auto &t){return "#"+t.id.substr(0,t.id.rfind('/'));};std::set<std::string> family{node(targets[selected])};
@@ -490,7 +566,7 @@ void Renderer::run(std::stop_token stop) {
         state.applied_revision=applied_revision;
       }
       // 拖动期间只更新白模；松手后尝试提交，锁繁忙时保留最新 Delta，下一轮继续处理输入。
-      if(queued.pending&&!(clay_wait&&editing)) {
+      if(!physics_commit.valid()&&queued.pending&&!(clay_wait&&editing)) {
         thread_scoped_lock lock(session->scene->mutex,std::try_to_lock);
         if(lock.owns_lock()) {
           const auto begin=now();if(queued.synchronize){
@@ -503,7 +579,7 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       RenderProbe probe;{std::lock_guard lock(mutex_);probe=probe_;}
-      if(probe.serial!=state.probe_serial&&session->ready_to_reset()) {
+      if(!physics_commit.valid()&&probe.serial!=state.probe_serial&&session->ready_to_reset()) {
         ir::Delta experiment;
         for(uint32_t i=0;i<render_scene.materials.size();++i) {
           auto material=render_scene.materials[i];
@@ -520,6 +596,23 @@ void Renderer::run(std::stop_token stop) {
           session->scene->integrator->tag_update(session->scene.get(),Integrator::UPDATE_ALL);
           session->dfv_requested_epoch=++epoch;session->reset(params,buffers);}
         state.probe_serial=probe.serial;Frame f;f.id=probe.serial;f.epoch=epoch;telemetry_.event("render_probe",f);
+      }
+      if(!physics_commit.valid()&&physics_prepared&&now()-physics_last_commit>=1.0/physics_options.refresh_hz&&display->drawn_frame().id!=physics_last_render_frame&&!queued.pending&&!editing&&!navigation_preview&&!pose_recovery.active&&!pose_drag.active&&!powerpose_drag.active&&!gizmo_drag.active&&!clay_wait&&desired.revision==applied_revision){
+        physics_last_commit=now();physics_last_render_frame=display->drawn_frame().id;
+        physics_installing=std::move(physics_prepared);physics_commit_ticket=physics_ticket;const auto ticket=physics_commit_ticket;const auto requested=++epoch;
+        auto *engine=session.get();auto *bridge=adapter.get();auto result=physics_installing->result;auto settings=params;auto dimensions=buffers;
+        physics_commit=std::async(std::launch::async,[engine,bridge,result,settings,dimensions,requested,ticket,&physics_ticket]{
+          SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);thread_scoped_lock lock(engine->scene->mutex);
+#ifdef DFV_PHYSICS_TEST
+          // 延长持锁的提交阶段，验收相机及新编辑仍能立即响应。
+          std::this_thread::sleep_for(std::chrono::milliseconds(600));
+#endif
+          const bool committed=ticket==physics_ticket.load();if(committed)bridge->apply(result->delta);
+          // 即使取消也完成已预留的显示代次，避免同几何场景切换永远等待旧帧。
+          engine->dfv_requested_epoch=requested;engine->reset(settings,dimensions);return committed;
+        });
+        physics_display_wait=true;physics_display_camera=camera.epoch;physics_display_ticket=ticket;
+        clay_wait=true;state.physics_busy=true;publish_state();continue;
       }
       GLContext::Binding binding(window_->present_context);
       display->set_reconstruction(quality.reconstruction);
@@ -544,12 +637,15 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       glViewport(0,0,window_->width,window_->height);glClearColor(.035f,.04f,.05f,1);glClear(GL_COLOR_BUFFER_BIT);
-      session->draw();
+      if(!physics_commit.valid())session->draw();
+      else display->draw({}); // 只访问三缓冲显示邮箱，不等待 Cycles 的场景锁。
       const auto beauty=display->drawn_frame();
       if(pose_recovery.active&&desired.revision>pose_recovery.revision&&applied_revision==desired.revision)pose_recovery.active=false;
-      if(clay_wait&&!editing&&!pose_recovery.active&&!queued.pending&&gpu_revision==desired.revision&&beauty.epoch>=epoch){std::lock_guard lock(mutex_);if(snapshot_.revision==desired.revision&&snapshot_.generation==desired.generation&&!edit_active_)clay_wait=false;}
+      if(!physics_commit.valid()&&clay_wait&&!editing&&!pose_recovery.active&&!queued.pending&&gpu_revision==desired.revision&&beauty.epoch>=epoch){std::lock_guard lock(mutex_);if(snapshot_.revision==desired.revision&&snapshot_.generation==desired.generation&&!edit_active_)clay_wait=false;}
       state.pose_restoring=pose_recovery.active||clay_wait;
-      if(clay_wait&&!pose_recovery.active){overlay.draw_pose(camera,window_->width,window_->height,{}, {},{},{});Frame f;f.id=applied_revision;telemetry_.event("edit_clay_present",f);}
+      if(!clay_wait||camera.epoch!=physics_display_camera||physics_ticket.load()!=physics_display_ticket||editing)physics_display_wait=false;
+      // 仅物理更新时保留上一张完整画面，避免持续模拟造成白模闪烁；操作相机立即使用交互预览。
+      if(clay_wait&&!pose_recovery.active&&!(physics_display_wait&&beauty.id)){overlay.draw_pose(camera,window_->width,window_->height,{}, {},{},{});Frame f;f.id=applied_revision;telemetry_.event("edit_clay_present",f);}
       // 松手后的等待使用本次手势的白模和输入版本，不能借用另一种工具的旧状态。
       if(pose_recovery.active) {
         if(pose_recovery.gizmo) {
@@ -655,7 +751,7 @@ void Renderer::run(std::stop_token stop) {
       state.requested_epoch=epoch;state.presented_epoch=telemetry_.displayed_epoch.load();
       state.gpu_device_bytes=gpu_device_bytes;state.gpu_host_bytes=gpu_host_bytes;
       state.sampling=sampling_;
-      state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
+      state.frames=telemetry_.submitted.load();state.samples=telemetry_.displayed_samples.load();if(!physics_commit.valid())state.adapter=adapter->stats();state.evaluation=runtime->morph_stats();
       if(now()>=next_state_report) {
         next_state_report=now()+2;
         const auto &c=state.camera;

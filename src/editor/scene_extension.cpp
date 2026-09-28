@@ -1,5 +1,6 @@
 #include "editor/scene_extension.h"
 #include "render_ir/options_json.h"
+#include "runtime/physics_json.h"
 #include <fstream>
 #include <chrono>
 #include <cmath>
@@ -54,7 +55,7 @@ J snapshot_json(const Document &d,const Snapshot &s){
   J j={{"objects",J::object()},{"poses",J::object()},{"subdivision",s.subdivision_levels},{"options",ir::options_json(s.options)},{"lights",J::array()}};
   for(size_t t=0;t<s.values.size();++t){const auto &v=s.values[t];const auto &target=d.catalog.targets[t];runtime::validate_transform(v.transform);J m=J::object();
     for(size_t i=0;i<target.morphs.size();++i){const auto &p=target.morphs[i];if(p.alias_morph>=0||runtime::legacy_extension_channel(p.label)||(!p.evaluable&&!p.unsupported.empty()))continue;const auto value=v.morphs.at(i);if(!std::isfinite(value))throw std::runtime_error("Morph 值无效");if(value!=p.initial)m[p.id]=value;}
-    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)}};
+    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
   }
   for(size_t i=0;i<s.poses.size();++i){const auto &skin=d.skeletons.skins[i];runtime::validate_pose(skin,s.poses[i]);J poses=J::object();for(size_t b=0;b<skin.joints.size();++b){const auto &p=s.poses[i][b];auto v=transform(p);v["center_offset_cm"]=vec(p.center_offset_cm);v["end_offset_cm"]=vec(p.end_offset_cm);v["orientation_offset_degrees"]=vec(p.orientation_offset_degrees);poses[skin.joints[b].id]=v;}j["poses"][skin.id]=poses;}
   for(const auto &l:s.lights)j["lights"].push_back({{"id",l.id},{"transform",l.transform.value},{"power",vec(l.power)},{"width",l.width},{"height",l.height},{"kind",int(l.kind)},{"angle",l.angle}});
@@ -66,6 +67,7 @@ J snapshot_json(const Document &d,const Snapshot &s){
 void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   auto next=s;
   for(const auto &[id,o]:j.at("objects").items()){const auto t=target_index(d,id);auto &v=next.values.at(t);const auto &target=d.catalog.targets[t];read_transform(v.transform,o.at("transform"));runtime::validate_transform(v.transform);v.visible=o.at("visible");v.extension=read_extension(o.at("extension"));v.ground_alignment_ratio=o.at("ground_ratio");if(!std::isfinite(v.ground_alignment_ratio))throw std::runtime_error("地面对齐比例无效");
+    v.physics=runtime::physics_object_from_json(o.value("physics",J{}));
     v.favorites=read_favorites(o.value("favorites",J{}));v.unlimited_morphs=o.at("unlimited").get<std::set<std::string>>();
     for(const auto &[mid,value]:o.at("morphs").items()){auto m=std::find_if(target.morphs.begin(),target.morphs.end(),[&](const auto &m){return m.id==mid;});if(m==target.morphs.end())throw std::runtime_error("DUFEX 参数不存在："+mid);if(runtime::legacy_extension_channel(m->label))continue;const float x=value.get<float>();if(!std::isfinite(x))throw std::runtime_error("DUFEX Morph 数值无效");v.morphs[size_t(m-target.morphs.begin())]=x;}runtime::sync_aliases(target,v);
   }

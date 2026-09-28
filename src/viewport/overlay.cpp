@@ -80,6 +80,16 @@ void HoverOverlay::apply(const ir::Scene &scene,const std::vector<runtime::Joint
   for(const auto &e:delta.instances) transforms_.at(e.index)=e.transform;
   for(const auto &e:delta.visibility) visible_.at(e.index)=e.visible;
 }
+void HoverOverlay::prepare_delta(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta) {
+  const auto n=scene.instances.size();lists_.resize(n);parts_.resize(n);triangle_counts_.resize(n);transforms_.resize(n);visible_.resize(n);bounds_.resize(n);
+  apply(scene,regions,delta);
+}
+void HoverOverlay::swap_delta(HoverOverlay &p,const ir::Scene &scene,const ir::Delta &delta) {
+  for(const auto &e:delta.meshes)for(size_t i=0;i<scene.instances.size();++i)if(scene.instances[i].mesh==e.index){
+    std::swap(lists_[i],p.lists_[i]);parts_[i].swap(p.parts_[i]);std::swap(triangle_counts_[i],p.triangle_counts_[i]);std::swap(bounds_[i],p.bounds_[i]);
+  }
+  for(const auto &e:delta.instances)transforms_[e.index]=e.transform;
+}
 size_t HoverOverlay::triangle_count(int hovered,int joint) const {
   if(hovered<0||size_t(hovered)>=lists_.size()) return 0;
   if(joint<0) return triangle_counts_[size_t(hovered)];const auto found=parts_[size_t(hovered)].find(joint);return found==parts_[size_t(hovered)].end()?0:found->second.second;

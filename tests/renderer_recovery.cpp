@@ -115,6 +115,8 @@ int main(int argc,char **argv) {
             ++snapshot.revision;renderer.edit(snapshot);pump(.1);
             check(renderer.status().graphics_blocked,"普通编辑绕过了自动恢复次数限制");
             renderer.inject_graphics_failure(false,GLContext::Fault::none);renderer.restart_render();
+            // 重启请求由呈现线程消费；先等它接收请求，避免把上一轮 blocked 状态当作重启失败。
+            const auto restart_begin=now();while(renderer.status().graphics_blocked&&now()-restart_begin<2)pump(.01);
           }
           auto state=ready(1);
           check(state.sessions==2,"恢复未正确销毁并重建 Cycles 会话");

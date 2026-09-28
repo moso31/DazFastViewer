@@ -4,6 +4,7 @@
 #include "runtime/rigid_follow.h"
 #include "runtime/growth.h"
 #include "runtime/favorites.h"
+#include "runtime/physics_settings.h"
 #include <set>
 #include <map>
 
@@ -55,6 +56,7 @@ struct TransformValues {
   bool operator==(const TransformValues &) const = default;
 };
 struct Properties {
+  PhysicsObjectSettings physics;
   std::optional<FavoriteState> favorites;
   ObjectExtension extension;
   std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;

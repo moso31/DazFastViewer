@@ -104,10 +104,11 @@ Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor,HWND
   hwnd=CreateWindowW(cls.lpszClassName,L"DazFastViewer - Cycles",style,parent?0:left,parent?0:top,
                      rect.right-rect.left,rect.bottom-rect.top,parent,nullptr,cls.hInstance,this);
   hidden=CreateWindowW(cls.lpszClassName,L"Cycles render context",WS_POPUP,area.left,area.top,1,1,nullptr,nullptr,cls.hInstance,nullptr);
-  if(!hwnd || !hidden) throw std::runtime_error("创建窗口失败");
+  prepare_hidden=CreateWindowW(cls.lpszClassName,L"Physics prepare context",WS_POPUP,area.left,area.top,1,1,nullptr,nullptr,cls.hInstance,nullptr);
+  if(!hwnd || !hidden || !prepare_hidden) throw std::runtime_error("创建窗口失败");
   if(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONULL)!=selected.handle) throw std::runtime_error("窗口未位于指定显示器，拒绝显示");
-  dc=GetDC(hwnd);render_dc=GetDC(hidden);pixel_format(dc);pixel_format(render_dc);
-  present_context.diagnostics(telemetry_,"present");render_context.diagnostics(telemetry_,"upload");
+  dc=GetDC(hwnd);render_dc=GetDC(hidden);prepare_dc=GetDC(prepare_hidden);pixel_format(dc);pixel_format(render_dc);pixel_format(prepare_dc);
+  present_context.diagnostics(telemetry_,"present");render_context.diagnostics(telemetry_,"upload");prepare_context.diagnostics(telemetry_,"prepare");
   recreate_contexts();
   ShowWindow(hwnd,SW_SHOWNOACTIVATE);
   SetWindowPos(hwnd,HWND_TOP,parent?0:left,parent?0:top,outer_width,outer_height,SWP_NOACTIVATE);
@@ -115,7 +116,8 @@ Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor,HWND
   SetTimer(hwnd,1,16,nullptr);moved_=GetTickCount64();publish();
 }
 Window::~Window() {
-  render_context.destroy();present_context.destroy();
+  prepare_context.destroy();render_context.destroy();present_context.destroy();
+  if(prepare_hidden) {ReleaseDC(prepare_hidden,prepare_dc);DestroyWindow(prepare_hidden);}
   if(hidden) {ReleaseDC(hidden,render_dc);DestroyWindow(hidden);}
   if(hwnd) {ReleaseDC(hwnd,dc);DestroyWindow(hwnd);}
 }
@@ -126,21 +128,24 @@ void Window::publish() {
   mailbox.publish(camera);
 }
 void Window::recreate_contexts() {
-  const bool render_destroyed=render_context.destroy(),present_destroyed=present_context.destroy();
-  if(!render_destroyed||!present_destroyed) throw GraphicsError("旧 OpenGL 上下文未能安全释放；"+render_context.error()+" "+present_context.error());
-  if(!IsWindow(hwnd)||!IsWindow(hidden)||WindowFromDC(dc)!=hwnd||WindowFromDC(render_dc)!=hidden)
+  const bool prepare_destroyed=prepare_context.destroy(),render_destroyed=render_context.destroy(),present_destroyed=present_context.destroy();
+  if(!prepare_destroyed||!render_destroyed||!present_destroyed) throw GraphicsError("旧 OpenGL 上下文未能安全释放；"+render_context.error()+" "+present_context.error()+" "+prepare_context.error());
+  if(!IsWindow(hwnd)||!IsWindow(hidden)||!IsWindow(prepare_hidden)||WindowFromDC(dc)!=hwnd||WindowFromDC(render_dc)!=hidden||WindowFromDC(prepare_dc)!=prepare_hidden)
     throw GraphicsError("OpenGL 视口窗口或设备上下文已失效，需要重新打开窗口");
   try {
-    present_context.initialize(dc);render_context.initialize(render_dc,present_context.handle());
+    // 在任一共享 context 被工作线程使用之前建立共享组，避免 wglShareLists 的忙碌错误。
+    present_context.initialize(dc);render_context.initialize(render_dc,present_context.handle());prepare_context.initialize(prepare_dc,present_context.handle());
     {GLContext::Binding binding(present_context);}
     {GLContext::Binding binding(render_context);}
+    {GLContext::Binding binding(prepare_context);}
     check_graphics();
-  } catch(...) {render_context.destroy();present_context.destroy();throw;}
+  } catch(...) {prepare_context.destroy();render_context.destroy();present_context.destroy();throw;}
   if(telemetry_) telemetry_->graphics("contexts_created","present 与 upload 共享上下文已创建并验证");
 }
 void Window::check_graphics() const {
   if(present_context.failed()) throw GraphicsError(present_context.error());
   if(render_context.failed()) throw GraphicsError(render_context.error());
+  if(prepare_context.failed()) throw GraphicsError(prepare_context.error());
 }
 void Window::swap() {
   if(!SwapBuffers(dc)) {

@@ -3,12 +3,14 @@
 #include <QStringList>
 #include <functional>
 #include "editor/application_settings.h"
+#include "runtime/physics_settings.h"
 class QWidget;
 namespace dfv::editor {
 struct ProjectSettings {
   QString file;
   QStringList content_roots;
   int history_limit=50;
+  runtime::PhysicsOptions physics;
   static ProjectSettings load(const QString &file);
   static QStringList normalize(const QStringList &roots);
   void save() const;

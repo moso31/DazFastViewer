@@ -1,5 +1,6 @@
 #pragma once
 #include "editor/document.h"
+#include "editor/physics_service.h"
 #include "editor/selection.h"
 #include "runtime/powerpose.h"
 #include "editor/gizmo.h"
@@ -30,6 +31,10 @@ struct RenderProbe {
   std::vector<std::string> hidden;
 };
 struct RenderStatus {
+  bool physics_busy=false,physics_committing=false,physics_prepared=false;
+  uint64_t physics_applied=0;
+  runtime::PhysicsStats physics;
+  std::string physics_error;
   bool graphics_recovering=false,graphics_blocked=false;
   unsigned graphics_attempts=0;
   uint64_t graphics_recoveries=0;
@@ -105,6 +110,7 @@ class Renderer {
   std::unique_ptr<Window> window_;
   std::mutex mutex_;
   RenderQuality requested_render_quality_;
+  runtime::PhysicsOptions physics_options_;
   std::shared_ptr<const Document> document_;
   Snapshot snapshot_;
   RenderStatus status_;
@@ -132,6 +138,7 @@ public:
   void resize(int width,int height);
   void quality(ViewportQuality value) {std::lock_guard lock(mutex_);value.percent=std::clamp(value.percent,50,100);value.sharpen=value.sharpen>=0?std::min(value.sharpen,max_viewport_sharpen):0.f;quality_=value;}
   void render_quality(RenderQuality value) {std::lock_guard lock(mutex_);requested_render_quality_=value;}
+  void physics_options(runtime::PhysicsOptions value) {runtime::validate_physics(value);std::lock_guard lock(mutex_);physics_options_=value;}
   void render_probe(RenderProbe value) {std::lock_guard lock(mutex_);probe_=std::move(value);}
   void pointer(int x,int y,bool click=false,bool toggle=false);
   void automated_pointer() {window_->automated_pointer=true;}

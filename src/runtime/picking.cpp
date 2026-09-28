@@ -59,6 +59,22 @@ void PickingScene::apply(const ir::Scene &scene,const ir::Delta &delta) {
   for(const auto &e:delta.visibility) dirty.at(e.index)=1;
   for(uint32_t i=0;i<dirty.size();++i) if(dirty[i]) instance(scene,i);
 }
+void PickingScene::prepare_delta(const ir::Scene &scene,const ir::Delta &delta,const std::vector<uint8_t> &pickable) {
+  meshes_.resize(scene.meshes.size());instances_.resize(scene.instances.size());used_meshes_.assign(scene.meshes.size(),0);std::vector<uint8_t> dirty(instances_.size());
+  for(size_t i=0;i<instances_.size();++i){instances_[i].pickable=pickable.empty()||pickable.at(i);if(instances_[i].pickable)used_meshes_[scene.instances[i].mesh]=1;}
+  for(const auto &e:delta.meshes){if(used_meshes_[e.index])mesh(scene,e.index);for(size_t i=0;i<instances_.size();++i)if(scene.instances[i].mesh==e.index)dirty[i]=1;}
+  for(const auto &e:delta.instances)dirty[e.index]=1;
+  for(uint32_t i=0;i<dirty.size();++i)if(dirty[i]){
+    instance(scene,i);auto &out=instances_[i];if(out.pickable&&out.bounds.empty){ir::Bounds local;for(auto v:scene.meshes[out.mesh].positions)local.add(v);if(!local.empty)for(int c=0;c<8;++c)out.bounds.add(scene.instances[i].transform.point({c&1?local.maximum.x:local.minimum.x,c&2?local.maximum.y:local.minimum.y,c&4?local.maximum.z:local.minimum.z}));}
+  }
+}
+void PickingScene::swap_delta(PickingScene &p,const ir::Scene &scene,const ir::Delta &delta) {
+  std::vector<uint8_t> dirty(instances_.size());
+  for(const auto &e:delta.meshes){std::swap(meshes_[e.index],p.meshes_[e.index]);for(size_t i=0;i<instances_.size();++i)if(scene.instances[i].mesh==e.index)dirty[i]=1;}
+  for(const auto &e:delta.instances)dirty[e.index]=1;
+  for(size_t i=0;i<dirty.size();++i)if(dirty[i])std::swap(instances_[i],p.instances_[i]);
+  stats_.mesh_builds+=p.stats_.mesh_builds;stats_.instance_updates+=p.stats_.instance_updates;
+}
 PickHit PickingScene::ray(ir::Vec3 origin,ir::Vec3 direction) const {
   PickHit result;
   for(size_t instance=0;instance<instances_.size();++instance) {

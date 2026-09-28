@@ -15,7 +15,7 @@
 namespace dfv::editor {
 namespace {QString text(const std::string &s){return QString::fromUtf8(s.data(),qsizetype(s.size()));}}
 ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
-  setObjectName("ObjectExtensionPanel");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);layout->setSpacing(4);
+  setObjectName("ObjectExtensionPanel");setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Maximum);auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);layout->setSpacing(4);
   header_=new QToolButton;header_->setObjectName("ExtensionCollapse");header_->setCheckable(true);header_->setChecked(true);header_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);header_->setArrowType(Qt::DownArrow);layout->addWidget(header_);
   body_=new QWidget;layout->addWidget(body_);auto *body=new QVBoxLayout(body_);body->setContentsMargins(4,0,0,0);body->setSpacing(5);
   connect(header_,&QToolButton::toggled,this,[this](bool on){body_->setVisible(on);header_->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
@@ -39,7 +39,7 @@ ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   status_=new QLabel;status_->setWordWrap(true);status_->setObjectName("WeightStatus");status_->hide();body->addWidget(status_);
   details_=new QToolButton;details_->setObjectName("WeightDetails");details_->setText(QStringLiteral("部位重量详情"));details_->setCheckable(true);details_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);details_->setArrowType(Qt::RightArrow);body->addWidget(details_);
   parts_=new QLabel;parts_->setObjectName("WeightParts");parts_->setTextFormat(Qt::RichText);parts_->setWordWrap(true);parts_->setFont(font);parts_->setAlignment(Qt::AlignTop|Qt::AlignLeft);
-  auto *scroll=new QScrollArea;scroll->setFrameShape(QFrame::NoFrame);scroll->setWidgetResizable(true);scroll->setWidget(parts_);scroll->setMinimumHeight(90);scroll->setMaximumHeight(150);scroll->hide();parts_scroll_=scroll;body->addWidget(scroll);
+  parts_->hide();parts_scroll_=parts_;body->addWidget(parts_);
   connect(details_,&QToolButton::toggled,this,[this](bool on){parts_scroll_->setVisible(on);details_->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});hide();
 }
 void ExtensionPanel::bind(const runtime::ObjectExtension &v,bool selection){

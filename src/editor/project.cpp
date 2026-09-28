@@ -1,4 +1,5 @@
 #include "editor/project.h"
+#include "runtime/physics_json.h"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -18,6 +19,8 @@
 #include <QScrollArea>
 #include <QToolButton>
 #include <QSpinBox>
+#include <QLineEdit>
+#include <QDoubleSpinBox>
 #include <QSlider>
 #include <QHBoxLayout>
 #include <QComboBox>
@@ -43,6 +46,7 @@ ProjectSettings ProjectSettings::load(const QString &path) {
   QJsonParseError error;const auto doc=QJsonDocument::fromJson(file.readAll(),&error);
   if(error.error!=QJsonParseError::NoError || !doc.isObject()) fail(QStringLiteral("项目设置 JSON 无效：")+error.errorString());
   const auto object=doc.object();
+  if(object.contains("physics"))settings.physics=runtime::physics_options_from_json(nlohmann::json::parse(QJsonDocument(object.value("physics").toObject()).toJson().toStdString()));
   settings.history_limit=object.value("history_limit").toInt(50);
   if(settings.history_limit<1||settings.history_limit>500)fail(QStringLiteral("历史记录条数必须在 1 到 500 之间"));
   if(object.value("version").toInt()!=1 || !object.value("content_roots").isArray()) fail(QStringLiteral("不支持的项目设置格式"));
@@ -55,7 +59,8 @@ void ProjectSettings::save() const {
   if(history_limit<1||history_limit>500)fail(QStringLiteral("历史记录条数必须在 1 到 500 之间"));
   QJsonArray paths;for(const auto &root:normalize(content_roots)) paths.append(root);
   QSaveFile output(file);if(!output.open(QIODevice::WriteOnly)) fail(QStringLiteral("无法保存项目设置：")+output.errorString());
-  const auto bytes=QJsonDocument(QJsonObject{{"version",1},{"content_roots",paths},{"history_limit",history_limit}}).toJson(QJsonDocument::Indented);
+  const auto physics=QJsonDocument::fromJson(QByteArray::fromStdString(runtime::physics_json(this->physics).dump())).object();
+  const auto bytes=QJsonDocument(QJsonObject{{"version",1},{"content_roots",paths},{"history_limit",history_limit},{"physics",physics}}).toJson(QJsonDocument::Indented);
   if(output.write(bytes)!=bytes.size() || !output.commit()) fail(QStringLiteral("项目设置保存失败：")+output.errorString());
 }
 bool edit_project_settings(QWidget *parent,ProjectSettings &settings,ApplicationSettings &application,const QString &application_file,bool persistent,const std::function<void(bool)> &applied) {
@@ -120,6 +125,16 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
   note(materials,QStringLiteral("关闭可减少材质计算，但毛孔、织物等表面细节会变平。几何置换保持原设置。"));
   auto *transparent=new QSpinBox;transparent->setObjectName("RenderTransparentBounces");transparent->setRange(1,32);transparent->setValue(application.render.transparent_bounces);materials->addRow(QStringLiteral("透明层数上限"),transparent);
   note(materials,QStringLiteral("默认 32。降低后可能加快重叠透明头发的计算，但较深层的发片、睫毛或透明物体可能变暗或不再透光。"));
+  auto *physics_page=page(QStringLiteral("物理"),"ProjectPhysicsPage");
+  auto *physics_form=new QFormLayout(section(physics_page,"physics",QStringLiteral("快速物理")));
+  auto *paused=new QCheckBox(QStringLiteral("暂停所有已启用的物理"));paused->setObjectName("PhysicsPaused");paused->setChecked(settings.physics.paused);physics_form->addRow(paused);
+  auto *ground=new QCheckBox(QStringLiteral("使用虚拟地面"));ground->setObjectName("PhysicsGround");ground->setChecked(settings.physics.ground);physics_form->addRow(ground);
+  auto number=[&](const char *name,double lo,double hi,double value,const QString &label){auto *spin=new QDoubleSpinBox;spin->setObjectName(name);spin->setRange(lo,hi);spin->setDecimals(3);spin->setValue(value);spin->setKeyboardTracking(false);physics_form->addRow(label,spin);return spin;};
+  auto *refresh=new QLineEdit(QString::number(settings.physics.refresh_hz,'g',17));refresh->setObjectName("PhysicsRefreshHz");refresh->setToolTip(QStringLiteral("默认每秒 4 次，支持任意正数和科学计数法。实际更新频率不会超过渲染帧率，不改变解算时间步长。"));physics_form->addRow(QStringLiteral("物理帧刷新率（次/秒）"),refresh);
+  auto *height=number("PhysicsGroundHeight",-1000000,1000000,settings.physics.ground_height*100,QStringLiteral("地面高度（DAZ Y，cm）"));
+  auto *gravity=number("PhysicsGravity",0,100,settings.physics.gravity,QStringLiteral("重力（m/s²）"));
+  auto *physics_quality=new QComboBox;physics_quality->setObjectName("PhysicsQuality");physics_quality->addItems({QStringLiteral("交互优先"),QStringLiteral("均衡"),QStringLiteral("效果优先")});physics_quality->setCurrentIndex(settings.physics.quality);physics_form->addRow(QStringLiteral("解算质量"),physics_quality);
+  note(physics_form,QStringLiteral("每件物体、服装或发型需在自身根节点启用。点击模拟后按角色独立推进指定轮数；画面可以延迟显示。物理帧没有几何变化时不重置渲染。"));
   tabs->setCurrentIndex(application.settings_tab);
   auto *status=new QLabel;status->setObjectName("ProjectSettingsStatus");status->setWordWrap(true);layout->addWidget(status);
   auto *box=new QDialogButtonBox(QDialogButtonBox::Apply|QDialogButtonBox::Save|QDialogButtonBox::Cancel);box->setObjectName("ProjectSettingsButtons");
@@ -132,11 +147,12 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
       auto updated=settings;updated.content_roots.clear();for(int i=0;i<list->count();++i) updated.content_roots.append(list->item(i)->text());updated.content_roots=ProjectSettings::normalize(updated.content_roots);
       auto preferences=application;preferences.ui_percent=ui_percent->value();preferences.viewport={percent->value(),filter->currentIndex()==0?Reconstruction::bicubic:Reconstruction::bilinear,sharpen->value()/100.f};
       updated.history_limit=history_limit->value();
+      updated.physics={paused->isChecked(),ground->isChecked(),float(gravity->value()),float(height->value()/100),physics_quality->currentIndex()};bool refresh_ok=false;updated.physics.refresh_hz=refresh->text().trimmed().toDouble(&refresh_ok);if(!refresh_ok)throw std::runtime_error("物理帧刷新率必须是正数");runtime::validate_physics(updated.physics);
       preferences.render={limit->currentData().toInt(),transparent->value(),sss->isChecked(),bump->isChecked()};preferences.settings_tab=tabs->currentIndex();
       for(auto i=headers.cbegin();i!=headers.cend();++i) preferences.expanded[i.key()]=i.value()->isChecked();
       // 应用可能已更新内存中的路径，保存时仍需写入磁盘。
       if(save&&persistent) {
-        if(!QFileInfo::exists(updated.file)||ProjectSettings::load(updated.file).content_roots!=updated.content_roots||ProjectSettings::load(updated.file).history_limit!=updated.history_limit) updated.save();
+        updated.save();
         preferences.save(application_file);
       }
       settings=std::move(updated);application=std::move(preferences);if(applied)applied(save);

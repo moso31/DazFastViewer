@@ -9,6 +9,7 @@
 #include "editor/ui_scale.h"
 #include "editor/viewport_settings.h"
 #include "editor/extension_panel.h"
+#include "editor/physics_panel.h"
 #include "editor/object_extension.h"
 #include "editor/scene_extension.h"
 #include "editor/edit_history.h"
@@ -78,6 +79,7 @@ static std::filesystem::path file_path(const QString &s) {return std::filesystem
 static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsizetype(s.size()));}
 class Editor final:public EditorWindow {
   #include "editor/history_ui.inl"
+  #include "editor/physics_ui.inl"
   #include "editor/history_test.inl"
   #include "editor/object_extension_ui.inl"
   #include "editor/object_extension_test.inl"
@@ -92,6 +94,7 @@ class Editor final:public EditorWindow {
   ParameterPanel *parameters_=nullptr;
   ContentBrowser *browser_=nullptr;
   QTreeWidget *hierarchy_=nullptr;
+  QCheckBox *physics_only_=nullptr;
   QLabel *selection_=nullptr;
   QCheckBox *manual_morph_=nullptr;
   QPushButton *refresh_parameters_=nullptr,*apply_parameters_=nullptr,*retry_parameters_=nullptr;
@@ -465,6 +468,12 @@ class Editor final:public EditorWindow {
     std::map<std::string,QTreeWidgetItem *> objects;
     std::set<std::string> containers;
     auto identify=[](QTreeWidgetItem *item,int target,int joint=-1,int light=-1) {item->setData(0,Qt::UserRole,target);item->setData(0,Qt::UserRole+1,joint);item->setData(0,Qt::UserRole+2,light);};
+    if(!document_)return;
+    if(physics_only_&&physics_only_->isChecked()){
+      for(size_t i=0;i<document_->catalog.targets.size();++i)if(snapshot_.values[i].physics.enabled&&physics_eligible(*document_,i)){
+        const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));item->setData(0,Qt::UserRole+3,text(target.id));item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(0,snapshot_.values[i].visible?Qt::Checked:Qt::Unchecked);
+      }return;
+    }
     std::vector<QTreeWidgetItem *> items;
     for(const auto &node:document_->loaded.nodes) if(node.group) {
       auto *item=new QTreeWidgetItem(hierarchy_,{text(node.label.empty()?node.id:node.label)});identify(item,-4);objects[node.id]=item;
@@ -700,6 +709,7 @@ class Editor final:public EditorWindow {
       if(ui_scale_->percent()!=application_settings_.ui_percent) ui_scale_->set_percent(application_settings_.ui_percent);
       viewport_settings_->set(application_settings_.viewport);
       renderer_->render_quality(application_settings_.render);
+      renderer_->physics_options(project_.physics);
       const auto message=saved?QStringLiteral("项目与应用设置已保存。"):QStringLiteral("设置已应用，尚未保存。");
       statusBar()->showMessage(message+(render!=application_settings_.render?QStringLiteral("正在释放旧渲染资源并应用新画质…"):QString{}));
       roots=project_.content_roots;render=application_settings_.render;
@@ -829,7 +839,7 @@ class Editor final:public EditorWindow {
     parameters_->bind_favorites(nullptr);initialize_favorites();
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
     if(materials_)materials_->bind(document_,&snapshot_,index);
-    bind_extension();
+    bind_extension();bind_physics();
     if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1,ground_ratio(target));}
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1);
@@ -890,7 +900,7 @@ class Editor final:public EditorWindow {
     pose_pins_.clear();renderer_->pose_pins({});
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};value.unlimited_morphs.clear();
-    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;
+    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};
     const auto &target=document_->catalog.targets[size_t(selected_)];
     std::erase_if(pending_parameters_,[&](const auto &p){return p.first.first==target.id;});apply_parameters_->setEnabled(!pending_parameters_.empty());
     for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].evaluable||target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
@@ -1459,12 +1469,15 @@ class Editor final:public EditorWindow {
     else if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
     else if(!recovery_error_.isEmpty()) statusBar()->showMessage(QStringLiteral("自动恢复保存失败：")+recovery_error_);
     else if(!state.resource_error.empty()) statusBar()->showMessage(QStringLiteral("Morph 未应用：")+text(state.resource_error)+QStringLiteral("；可重试加载或刷新参数目录"));
+    else if(!state.physics_error.empty()) statusBar()->showMessage(QStringLiteral("快速物理：")+text(state.physics_error));
+    else if(state.physics_busy) statusBar()->showMessage(QStringLiteral("快速物理解算中 · 按指定轮数推进 · 画面异步更新"));
     else if(state.pending_payloads) statusBar()->showMessage(QStringLiteral("正在异步载入 %1 项 Morph 数据，完成后应用最新输入…").arg(state.pending_payloads));
     else if(!pending_parameters_.empty()) statusBar()->showMessage(QStringLiteral("有 %1 项参数更改待应用").arg(pending_parameters_.size()));
     else if(!loading_&&document_&&(state.generation!=document_->generation||state.presented_revision!=snapshot_.revision)) statusBar()->showMessage(QStringLiteral("正在更新场景…"));
     else if(!loading_) statusBar()->showMessage(QStringLiteral("OptiX · %1 samples · 网格 %2 · 顶点更新 %3 · 蒙皮求值 %4 · 发丝 %5").arg(state.samples).arg(state.adapter.meshes).arg(state.adapter.geometry_updates).arg(state.skinning.evaluations).arg(state.adapter.curves));
     if(frame_pending_&&document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&selected_>=0&&size_t(selected_)<state.bounds.size()) {renderer_->frame(state.bounds[size_t(selected_)]);frame_pending_=false;return;}
     if(!self_test_) return;
+    if(physics_ui_test_){physics_ui_tick(state);return;}
     if(empty_test_){empty_tick(state);return;}
     if(extension_test_){extension_tick(state);return;}
     if(!wear_test_file_.empty()) {
@@ -1777,8 +1790,9 @@ public:
     browser_=new ContentBrowser;browser_->open_asset=[this](const QString &file){open_asset(file_path(file));};update_libraries();
     auto *explorer_dock=dock(QStringLiteral("内容浏览器"),browser_,Qt::LeftDockWidgetArea);
     hierarchy_=new QTreeWidget;hierarchy_->setSelectionMode(QAbstractItemView::ExtendedSelection);hierarchy_->setHeaderLabel(QStringLiteral("场景对象"));hierarchy_->setMinimumWidth(240);hierarchy_->setIndentation(12);hierarchy_->header()->setStretchLastSection(false);hierarchy_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
-    auto *hierarchy_dock=dock(QStringLiteral("场景层次"),hierarchy_,Qt::LeftDockWidgetArea);tabifyDockWidget(explorer_dock,hierarchy_dock);hierarchy_dock->raise();
-    auto *panel=new QWidget;auto *properties=new QVBoxLayout(panel);panel->setMinimumWidth(380);
+    auto *hierarchy_panel=new QWidget;auto *hierarchy_layout=new QVBoxLayout(hierarchy_panel);hierarchy_layout->setContentsMargins(0,0,0,0);physics_only_=new QCheckBox(QStringLiteral("仅显示物理模型"));physics_only_->setObjectName("PhysicsOnlyModels");hierarchy_layout->addWidget(physics_only_);hierarchy_layout->addWidget(hierarchy_,1);connect(physics_only_,&QCheckBox::toggled,this,[this]{refresh_physics_filter();});
+    auto *hierarchy_dock=dock(QStringLiteral("场景层次"),hierarchy_panel,Qt::LeftDockWidgetArea);tabifyDockWidget(explorer_dock,hierarchy_dock);hierarchy_dock->raise();
+    auto *property_scroll=new QScrollArea;property_scroll->setObjectName("ObjectPropertiesScroll");property_scroll->setWidgetResizable(true);property_scroll->setFrameShape(QFrame::NoFrame);auto *panel=new QWidget;auto *properties=new QVBoxLayout(panel);properties->setAlignment(Qt::AlignTop);panel->setMinimumWidth(380);property_scroll->setWidget(panel);
     selection_=new QLabel(QStringLiteral("请先加载并选择对象"));selection_->setWordWrap(true);properties->addWidget(selection_);
     auto *form=new QFormLayout;
     const QString names[]={QStringLiteral("位移 X（厘米）"),QStringLiteral("位移 Y（厘米）"),QStringLiteral("位移 Z（厘米）"),QStringLiteral("旋转 X（度）"),QStringLiteral("旋转 Y（度）"),QStringLiteral("旋转 Z（度）"),QStringLiteral("缩放 X（%）"),QStringLiteral("缩放 Y（%）"),QStringLiteral("缩放 Z（%）")};
@@ -1802,24 +1816,27 @@ public:
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column==0&&target>=0&&item->data(0,Qt::UserRole+1).toInt()<0) set_visible(size_t(target),item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     extension_panel_=new ExtensionPanel;properties->addWidget(extension_panel_);extension_panel_->changed=[this](runtime::ObjectExtension v,bool shape,double step){change_extension(v,shape,step);};
+    physics_panel_=new PhysicsPanel;properties->addWidget(physics_panel_);physics_panel_->changed=[this](runtime::PhysicsObjectSettings value){change_physics(std::move(value));};
+    physics_panel_->simulate=[this](bool reset){simulate_physics(reset);};physics_panel_->hovered=[this](int slot){std::vector<MaterialSurface> surfaces;if(document_&&selected_>=0&&slot>=0)surfaces.push_back({document_->catalog.targets[size_t(selected_)].instance,size_t(slot)});if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
     auto *morph_header=new QToolButton;morph_header->setObjectName("MorphCollapse");morph_header->setText(QStringLiteral("对象属性与 Morph"));morph_header->setCheckable(true);morph_header->setChecked(true);morph_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);morph_header->setArrowType(Qt::DownArrow);properties->addWidget(morph_header);
-    parameters_=new ParameterPanel;parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};properties->addWidget(parameters_,1);
+    auto *morph_body=new QWidget;auto *morph_layout=new QVBoxLayout(morph_body);morph_layout->setContentsMargins(0,0,0,0);properties->addWidget(morph_body);
+    parameters_=new ParameterPanel;parameters_->shared_scroll(property_scroll);parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};morph_layout->addWidget(parameters_);
     parameters_->favorite_changed=[this](const std::string &node,const std::string &id,bool enabled){
       if(loading_||!document_)return;
       auto edit=history_edit(QStringLiteral("修改参数收藏"));
       auto &favorites=selected_>=0&&selected_light_<0?snapshot_.values.at(size_t(selected_)).favorites:snapshot_.control_favorites;
       if(favorites)favorites->nodes[node][id]=enabled;
     };
-    connect(morph_header,&QToolButton::toggled,this,[this,morph_header](bool on){parameters_->setVisible(on);morph_header->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
+    connect(morph_header,&QToolButton::toggled,this,[this,morph_header,morph_body](bool on){morph_body->setVisible(on);morph_header->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
     auto *parameter_actions=new QHBoxLayout;
     refresh_parameters_=new QPushButton(QStringLiteral("刷新参数目录"));retry_parameters_=new QPushButton(QStringLiteral("重试加载"));retry_parameters_->setEnabled(false);
-    parameter_actions->addWidget(refresh_parameters_);parameter_actions->addWidget(retry_parameters_);properties->addLayout(parameter_actions);
+    parameter_actions->addWidget(refresh_parameters_);parameter_actions->addWidget(retry_parameters_);morph_layout->addLayout(parameter_actions);
     connect(refresh_parameters_,&QPushButton::clicked,this,[this]{load_error_.clear();refresh_parameter_catalog();});
     connect(retry_parameters_,&QPushButton::clicked,this,[this]{renderer_->retry_resources();send();});
     auto *apply_actions=new QHBoxLayout;manual_morph_=new QCheckBox(QStringLiteral("手动应用参数"));apply_parameters_=new QPushButton(QStringLiteral("应用"));apply_parameters_->setEnabled(false);
-    apply_actions->addWidget(manual_morph_);apply_actions->addWidget(apply_parameters_);properties->addLayout(apply_actions);
+    apply_actions->addWidget(manual_morph_);apply_actions->addWidget(apply_parameters_);morph_layout->addLayout(apply_actions);
     connect(apply_parameters_,&QPushButton::clicked,this,[this]{if(history_)history_->finish_gesture();apply_parameters();});connect(manual_morph_,&QCheckBox::toggled,this,[this](bool manual){if(history_)history_->finish_gesture();if(!manual&&!pending_parameters_.empty()){QSignalBlocker block(manual_morph_);manual_morph_->setChecked(true);auto edit=history_edit(QStringLiteral("关闭手动模式并应用参数"));manual_morph_->setChecked(false);apply_parameters();}checkpoint();});
-    auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),panel,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
+    auto *property_dock=dock(QStringLiteral("对象属性与 Morph"),property_scroll,Qt::RightDockWidgetArea);splitDockWidget(viewport_dock,property_dock,Qt::Horizontal);
     materials_=new MaterialPanel;materials_->changed=[this]{if(!loading_&&renderer_)send();};materials_->interaction_changed=[this](bool active){history_interaction(active,quintptr(materials_));};
     materials_->edit_requested=[this](const QString &name,const std::function<void()> &change){if(loading_)return;auto edit=history_edit(name);change();};
     materials_->preset_requested=[this](const auto &file,const auto &surfaces){apply_surface_material_file(file,surfaces);};
@@ -1899,6 +1916,7 @@ public:
     // 样式首次重建后重新落实默认停靠宽度；已保存的用户布局仍由 restoreState 负责。
     if(self_test_||QSettings().value("window/docks").toByteArray().isEmpty()) resizeDocks({viewport_dock,property_dock},{850,330},Qt::Horizontal);
     renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_,sampling);
+    renderer_->physics_options(project_.physics);
     renderer_->quality(viewport_settings_->value());
     if(!self_test_){try{measurement_scale_=runtime::measurement_scale(QSettings().value("measurement/scale","1").toString().toStdString());}catch(...){measurement_scale_="1";}}
     extension_panel_->measurement_scale(measurement_scale_);
@@ -1921,6 +1939,7 @@ public:
   void extension_test(){extension_test_=true;self_test_=true;}
   void feedback_test(){feedback_test_=true;self_test_=true;}
   void empty_scene(){clear_scene();if(history_){history_->clear();history_->mark_saved();}checkpoint();}
+  void physics_ui_test(){physics_ui_test_=self_test_=true;}
   void empty_test(){empty_test_=self_test_=true;}
   void load(const std::filesystem::path &file,bool preserve=false,bool append=false,std::string attachment_target={},std::filesystem::path entry={}) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
@@ -2082,6 +2101,7 @@ int main(int argc,char **argv) {
   parser.addOption({"powerpose-test",QStringLiteral("副屏验证 PowerPose 三页、灰模、提交、取消和固定约束")});
   parser.addOption({"gizmo-test",QStringLiteral("副屏验证三轴工具、Local / World、提交与取消")});
   parser.addOption({"ground-test",QStringLiteral("副屏验证普通对象与 Instance 的 Ctrl+D 地面对齐")});
+  parser.addOption({"physics-ui-test",QStringLiteral("验证物理属性公共滚动、收起布局和模型筛选")});
   parser.addOption({"empty-test",QStringLiteral("验证默认空场景及移动缩放后的视口刷新")});
   parser.addOption({"extension-test",QStringLiteral("副屏验证生长、重量、密度、折叠与 DUFEX 保存重开")});
   parser.addOption({"pose-test-level",QStringLiteral("FK / IK 验证时使用的宿主细分等级"),"level","-1"});
@@ -2113,7 +2133,7 @@ int main(int argc,char **argv) {
     ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
     auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("history-test"))editor.history_test();
@@ -2123,6 +2143,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("gizmo-test")) editor.gizmo_test();
     if(parser.isSet("extension-test")) editor.extension_test();
     if(parser.isSet("feedback-test")) editor.feedback_test();
+    if(parser.isSet("physics-ui-test"))editor.physics_ui_test();
     if(parser.isSet("empty-test")) editor.empty_test();
     if(parser.isSet("joint-selection-test")) editor.joint_selection_test();
     if(parser.isSet("options-test")) editor.options_test();

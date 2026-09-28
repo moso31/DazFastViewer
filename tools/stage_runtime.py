@@ -70,6 +70,11 @@ license_dir.mkdir(parents=True, exist_ok=True)
 for name in ("LICENSE.MIT", "SOURCE.md"):
     shutil.copy2(root / "third_party/nlohmann" / name, license_dir / name)
 source_files = [root / "CMakeLists.txt"]
+jolt_license = out / "licenses/jolt"
+jolt_license.mkdir(parents=True, exist_ok=True)
+for item in (root / "third_party/jolt").iterdir():
+    if item.is_file():
+        shutil.copy2(item, jolt_license / item.name)
 subdiv_license = out / "licenses/opensubdiv"
 subdiv_license.mkdir(parents=True, exist_ok=True)
 for item in (root / "third_party/opensubdiv").iterdir():

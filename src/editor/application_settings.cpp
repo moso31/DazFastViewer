@@ -21,8 +21,8 @@ ApplicationSettings ApplicationSettings::load(const QString &file) {
   value.render.transparent_bounces=std::clamp(s->value("render/transparentBounces",32).toInt(),1,32);
   value.render.subsurface=s->value("render/subsurface",true).toBool();
   value.render.bump_and_normal=s->value("render/bumpAndNormal",true).toBool();
-  value.settings_tab=std::clamp(s->value("projectDialog/tab",0).toInt(),0,1);
-  for(const auto *key:{"libraries","saveFile","display","textures","materials"}) value.expanded[key]=s->value(QStringLiteral("projectDialog/expanded/")+key,true).toBool();
+  value.settings_tab=std::clamp(s->value("projectDialog/tab",0).toInt(),0,2);
+  for(const auto *key:{"libraries","saveFile","display","textures","materials","physics"}) value.expanded[key]=s->value(QStringLiteral("projectDialog/expanded/")+key,true).toBool();
   return value;
 }
 void ApplicationSettings::save(const QString &file) const {

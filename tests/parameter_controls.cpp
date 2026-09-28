@@ -12,6 +12,8 @@
 #include <QToolButton>
 #include <QTreeWidgetItemIterator>
 #include <QScrollBar>
+#include <QScrollArea>
+#include <QVBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QWheelEvent>
@@ -81,6 +83,15 @@ int main(int argc,char **argv) {
     require(qobject_cast<QStandardItemModel *>(choice->model())->item(2)->isEnabled()&&!choice->itemText(2).contains(QStringLiteral("待支持")),"Sun-Sky Only 仍被禁用");
     require(date->date()==QDate(2024,2,29)&&clock->time()==QTime(13,24,56),"儒略日或当地秒数转换错误");
     date->setDate(QDate(2026,9,23));clock->setTime(QTime(23,59,59));require(options.parameters[1].value[0]==QDate(2026,9,23).toJulianDay()&&options.parameters[2].value[0]==86399,"年月日 / 时分秒没有写回原通道");
+    {
+      QScrollArea outer;outer.resize(520,400);outer.setWidgetResizable(true);auto *body=new QWidget;auto *layout=new QVBoxLayout(body);auto *header=new QLabel("shared scroll");layout->addWidget(header);auto *parameters=new dfv::editor::ParameterPanel;parameters->shared_scroll(&outer);layout->addWidget(parameters);outer.setWidget(body);
+      std::vector<dfv::editor::ParameterControl> many(2000);for(size_t i=0;i<many.size();++i){many[i].id=std::to_string(i);many[i].label="Parameter "+many[i].id;many[i].group="/Group";many[i].read=[]{return 0.;};many[i].write=[](double){};}
+      parameters->bind_controls(many);outer.show();app.processEvents();QTest::qWait(180);
+      auto *rows=parameters->findChild<QTreeWidget *>("parameterRows");require(rows->verticalScrollBarPolicy()==Qt::ScrollBarAlwaysOff&&outer.verticalScrollBar()->maximum()>10000,"属性组没有使用公共滚动条");
+      require(parameters->findChildren<QDoubleSpinBox *>("valueSpin").size()<20,"公共滚动区一次创建了全部 Morph 控件");
+      outer.verticalScrollBar()->setValue(50000);app.processEvents();QTest::qWait(180);auto spins=parameters->findChildren<QDoubleSpinBox *>("valueSpin");require(!spins.empty()&&spins.size()<20&&spins[0]->property("parameterId").toString().toInt()>500,"公共滚动后 Morph 控件未按可见范围挂载");
+      parameters->query("Parameter 1999");app.processEvents();QTest::qWait(180);require(outer.verticalScrollBar()->maximum()<500,"过滤后公共页面保留了空白固定高度");
+    }
     parameter_favorites(app);
     parameter_wheel(app);
     extension_panel(app);

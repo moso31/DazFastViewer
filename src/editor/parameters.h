@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <set>
+class QScrollArea;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QLineEdit;
@@ -31,6 +32,9 @@ class ParameterPanel final:public QWidget {
   const runtime::Target *target_=nullptr;
   const runtime::Properties *values_=nullptr;
   QTreeWidget *groups_,*tree_;
+  QScrollArea *shared_scroll_=nullptr;
+  void shared_height();
+  void show_item(QTreeWidgetItem *item);
   QLineEdit *search_;
   QCheckBox *hidden_;
   QLabel *count_;
@@ -58,6 +62,7 @@ protected:
   bool eventFilter(QObject *object,QEvent *event) override;
 public:
   explicit ParameterPanel(QWidget *parent=nullptr);
+  void shared_scroll(QScrollArea *scroll);
   std::function<void(size_t,double)> changed;
   std::function<void(bool)> interaction_changed;
   std::function<void(const std::string &,const std::string &,bool)> favorite_changed;

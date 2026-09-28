@@ -78,9 +78,9 @@ public:
   void cancel_edit() {cancel_pose();++pose_selection;}
   std::atomic<bool> automated_pointer{false}; // 仅诊断入口：不抢占用户系统光标。
   runtime::PosePointer pose_pointer() {std::lock_guard lock(pose_mutex_);return pose_pointer_;}
-  HWND hwnd{},hidden{};
-  HDC dc{},render_dc{};
-  GLContext present_context,render_context;
+  HWND hwnd{},hidden{},prepare_hidden{};
+  HDC dc{},render_dc{},prepare_dc{};
+  GLContext present_context,render_context,prepare_context;
   std::atomic<bool> close{false},minimized{false},size_changed{false};
   std::atomic<int> pointer_x{-1},pointer_y{-1},click_x{-1},click_y{-1};
   std::atomic<bool> click_toggle{false},pointer_toggle{false};

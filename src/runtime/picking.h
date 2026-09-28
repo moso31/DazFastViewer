@@ -23,6 +23,8 @@ class PickingScene {
 public:
   void update(const ir::Scene &scene,const std::vector<uint8_t> &pickable={});
   void apply(const ir::Scene &scene,const ir::Delta &delta);
+  void prepare_delta(const ir::Scene &scene,const ir::Delta &delta,const std::vector<uint8_t> &pickable);
+  void swap_delta(PickingScene &prepared,const ir::Scene &scene,const ir::Delta &delta);
   const auto &stats() const {return stats_;}
   PickHit ray(ir::Vec3 origin,ir::Vec3 direction) const;
   PickHit screen(const CameraState &camera,int x,int y,int width,int height) const;

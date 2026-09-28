@@ -1,4 +1,5 @@
 #include "editor/project.h"
+#include "editor/physics_panel.h"
 #include "render_ir/material_quality.h"
 #include <QApplication>
 #include <QDialog>
@@ -11,6 +12,8 @@
 #include <QLabel>
 #include <QCheckBox>
 #include <QListWidget>
+#include <QLineEdit>
+#include <QScrollBar>
 #include <QPushButton>
 #include <QTimer>
 #include <QSettings>
@@ -25,6 +28,22 @@ static void require(bool ok,const char *why) {if(!ok) throw std::runtime_error(w
 int main(int argc,char **argv) {
   QApplication app(argc,argv);QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");app.setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
   try {
+    {
+      QScrollArea scroll;auto *content=new QWidget;auto *layout=new QVBoxLayout(content);auto *panel=new dfv::editor::PhysicsPanel;layout->addWidget(panel);layout->addStretch();scroll.setWidget(content);scroll.setWidgetResizable(true);scroll.resize(380,360);
+      dfv::runtime::PhysicsObjectSettings value;int changes=0,runs=0,resets=0,hover=-1;
+      panel->changed=[&](auto next){value=next;++changes;};panel->simulate=[&](bool reset){if(reset)++resets;else ++runs;};panel->hovered=[&](int slot){hover=slot;};panel->bind(value,{"heel","laces","top","sole","long material name"});panel->show();scroll.show();app.processEvents();
+      auto *enabled=panel->findChild<QCheckBox *>("PhysicsEnabled");auto surfaces=panel->findChildren<QCheckBox *>("PhysicsSurface");auto *joined=panel->findChild<QCheckBox *>("PhysicsJoined");auto *rounds=panel->findChild<QSpinBox *>("PhysicsRounds");auto *mass=panel->findChild<QDoubleSpinBox *>("PhysicsMass");
+      require(enabled&&!enabled->isChecked()&&surfaces.size()==5&&joined->isChecked()&&mass->isVisible(),"未启用物理时应展示全部参数");
+      require(surfaces[0]->y()==surfaces[1]->y()&&surfaces[4]->y()>surfaces[0]->y(),"子材质未按可用宽度横向铺开并换行");
+      require(changes==0&&rounds->value()==20,"绑定物理面板产生了编辑，或默认轮数不是 20");enabled->setChecked(true);surfaces[1]->setChecked(false);joined->setChecked(false);rounds->setValue(30);panel->findChild<QPushButton *>("PhysicsRun")->click();panel->findChild<QPushButton *>("PhysicsReset")->click();
+      require(changes==4&&runs==1&&resets==1&&value.enabled&&value.rounds==30&&!value.joined&&value.excluded_surfaces==std::set<std::string>{"laces"},"轮数、重置或子材质编辑失效");
+      QEnterEvent enter(QPointF(2,2),QPointF(2,2),surfaces[0]->mapToGlobal(QPoint(2,2)));QApplication::sendEvent(surfaces[0],&enter);require(hover==0,"悬停未发送材质槽");QEvent leave(QEvent::Leave);QApplication::sendEvent(surfaces[0],&leave);require(hover==-1,"离开未清除高亮");
+      auto wheel=[&](int delta){QWheelEvent e(QPointF(2,2),mass->mapToGlobal(QPoint(2,2)),{},QPoint(0,delta),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(mass,&e);};
+      const double before=mass->value();scroll.verticalScrollBar()->setValue(0);wheel(-120);require(mass->value()==before&&scroll.verticalScrollBar()->value()>0,"未选中物理参数时滚轮没有滚动公共页面");
+      QMouseEvent press(QEvent::MouseButtonPress,QPointF(2,2),mass->mapToGlobal(QPoint(2,2)),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(mass,&press);wheel(120);require(mass->value()!=before,"选中物理参数后滚轮不能调值");
+      panel->bind(value,{"heel","laces"});require(!panel->findChildren<QCheckBox *>("PhysicsSurface")[1]->isChecked(),"重新绑定丢失材质范围");
+
+    }
     QTemporaryDir temp;require(temp.isValid(),"临时目录失败");
     const auto a=temp.path()+QStringLiteral("/中文内容库"),b=temp.path()+"/second",file=temp.path()+QStringLiteral("/项目.json");
     dfv::editor::ProjectSettings settings{file,{a,b,a.toUpper(),QDir::toNativeSeparators(b)}};settings.save();
@@ -52,7 +71,8 @@ int main(int argc,char **argv) {
     };
     auto buttons=[](QDialog *d){return d->findChild<QDialogButtonBox *>("ProjectSettingsButtons");};
     require(dialog_test([&](QDialog *d){
-      auto *tabs=d->findChild<QTabWidget *>("ProjectSettingsTabs");require(tabs&&tabs->count()==2&&tabs->tabText(1)==QStringLiteral("渲染"),"项目设置未按功能拆成选项卡");
+      auto *tabs=d->findChild<QTabWidget *>("ProjectSettingsTabs");require(tabs&&tabs->count()==3&&tabs->tabText(1)==QStringLiteral("渲染")&&tabs->tabText(2)==QStringLiteral("物理"),"项目设置未按功能拆成选项卡");
+      auto *ground=d->findChild<QCheckBox *>("PhysicsGround");require(ground&&ground->isChecked(),"缺少虚拟地面设置");ground->setChecked(false);auto *refresh=d->findChild<QLineEdit *>("PhysicsRefreshHz");require(refresh&&refresh->text()=="4","物理刷新率默认值错误");refresh->setText("7.5e1");
       auto *history=d->findChild<QSpinBox *>("HistoryLimit");require(history&&history->value()==80,"资源与保存缺少历史上限");history->setValue(60);
       auto *libraries=d->findChild<QToolButton *>("librariesCollapse"),*save_file=d->findChild<QToolButton *>("saveFileCollapse");
       require(libraries&&save_file&&libraries->isChecked()&&save_file->isChecked(),"资源页缺少两个折叠模块");
@@ -71,6 +91,7 @@ int main(int argc,char **argv) {
     }),"保存项目选项卡失败");
     require(dfv::editor::ApplicationSettings::load(preferences_file)==preferences,"重开丢失画质、界面、选项卡或折叠状态");
     require(preferences.viewport.sharpen==3.5f,"锐化强度没有保存");
+    require(!loaded.physics.ground&&!dfv::editor::ProjectSettings::load(file).physics.ground&&dfv::editor::ProjectSettings::load(file).physics.refresh_hz==75,"物理项目设置没有保存");
     require(preferences.render.texture_limit==2048&&!preferences.render.subsurface&&!preferences.render.bump_and_normal&&preferences.render.transparent_bounces==8,"渲染参数没有保存");
     const auto before=preferences;const auto before_roots=loaded.content_roots;
     require(!dialog_test([&](QDialog *d){
