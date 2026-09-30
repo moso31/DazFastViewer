@@ -1,3 +1,4 @@
+#include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
@@ -18,7 +19,7 @@ int main(int argc,char **argv) {
   std::filesystem::create_directories(output);
   try {
     auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);
-    ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
+    ccl::path_init(app.applicationDirPath().toStdString(),dfv::cycles_user_directory());
     const auto texture=output/"quality-4096.png";
     std::vector<unsigned char> pixels(4096*4096*4,255);
     for(size_t i=0;i<pixels.size();i+=4){pixels[i]=static_cast<unsigned char>((i/4)%251);pixels[i+1]=112;pixels[i+2]=64;}
@@ -32,8 +33,8 @@ int main(int argc,char **argv) {
     ir::Instance instance;instance.id="quality-plane";instance.mesh=0;instance.materials={0};scene.instances.push_back(instance);
     runtime::Target target;target.id=instance.id;target.label="quality-plane";document->catalog.targets.push_back(target);document->formulas.graphs.resize(1);
     auto snapshot=initial_snapshot(*document);snapshot.revision=2;snapshot.values[0].transform.translation_cm.x=12;
-    QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens())if(screen!=QGuiApplication::primaryScreen()){secondary=screen;break;}
-    check(secondary,"缺少第二屏，跳过 GPU 验证");QWidget host;host.setWindowTitle(QStringLiteral("纹理资源释放验证（自动关闭）"));host.resize(420,300);host.move(secondary->availableGeometry().topLeft()+QPoint(20,20));host.show();app.processEvents();
+    QScreen *secondary=QGuiApplication::primaryScreen();for(auto *screen:QGuiApplication::screens())if(screen!=QGuiApplication::primaryScreen()){secondary=screen;break;}
+    check(secondary,"No available display");QWidget host;host.setWindowTitle(QStringLiteral("纹理资源释放验证（自动关闭）"));host.resize(420,300);host.move(secondary->availableGeometry().topLeft()+QPoint(20,20));host.show();app.processEvents();
     SamplingSettings sampling;sampling.samples=32;
     Renderer renderer(reinterpret_cast<HWND>(host.winId()),qRound(host.width()*host.devicePixelRatioF()),qRound(host.height()*host.devicePixelRatioF()),output,sampling);
     renderer.automated_pointer();renderer.set_document(document,snapshot,false);renderer.camera_view({0,0,0,4,0,0});

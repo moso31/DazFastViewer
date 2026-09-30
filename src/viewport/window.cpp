@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <sstream>
 
+// Prefer NVIDIA graphics on Optimus laptops. Windows per-app preferences take precedence.
+extern "C" { __declspec(dllexport) DWORD NvOptimusEnablement = 1; }
+
 namespace dfv {
 std::string GLContext::failure(const char *operation,DWORD code) {
   std::ostringstream out;
@@ -90,7 +93,13 @@ Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor,HWND
     const bool ap=a.info.dwFlags&MONITORINFOF_PRIMARY,bp=b.info.dwFlags&MONITORINFOF_PRIMARY;
     return ap!=bp?ap>bp:std::wstring(a.info.szDevice)<std::wstring(b.info.szDevice);
   });
-  if(monitor<1 || size_t(monitor)>monitors.size()) throw std::runtime_error("请求的显示器不存在；不会回退到主屏");
+  if(parent || monitor==0) {
+    const auto preferred=MonitorFromWindow(parent,MONITOR_DEFAULTTOPRIMARY);
+    const auto found=std::find_if(monitors.begin(),monitors.end(),[&](const Monitor &row){return row.handle==preferred;});
+    monitor=found==monitors.end()?1:int(found-monitors.begin())+1;
+  }
+  if(monitor<1 || size_t(monitor)>monitors.size()) throw std::runtime_error("请求的显示器不存在，请检查 --monitor 参数");
+  monitor_index=monitor;
   const auto &selected=monitors[monitor-1];const auto area=fullscreen?selected.info.rcMonitor:selected.info.rcWork;
   for(const wchar_t *c=selected.info.szDevice;*c;++c) monitor_device+=char(*c);
   WNDCLASSW cls{};cls.style=CS_OWNDC;cls.lpfnWndProc=procedure;
@@ -99,14 +108,14 @@ Window::Window(int w,int h,bool fullscreen,Telemetry *telemetry,int monitor,HWND
   const DWORD style=parent?(WS_CHILD|WS_CLIPSIBLINGS|WS_CLIPCHILDREN):(fullscreen?WS_POPUP:(WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX));
   RECT rect{0,0,w,h};AdjustWindowRect(&rect,style,FALSE);
   const int outer_width=rect.right-rect.left,outer_height=rect.bottom-rect.top;
-  if(outer_width>area.right-area.left || outer_height>area.bottom-area.top) throw std::runtime_error("窗口尺寸超出目标显示器，请减小 --width/--height");
+  if(!parent && (outer_width>area.right-area.left || outer_height>area.bottom-area.top)) throw std::runtime_error("窗口尺寸超出目标显示器，请减小 --width/--height");
   const int left=area.left+(area.right-area.left-outer_width)/2,top=area.top+(area.bottom-area.top-outer_height)/2;
   hwnd=CreateWindowW(cls.lpszClassName,L"DazFastViewer - Cycles",style,parent?0:left,parent?0:top,
                      rect.right-rect.left,rect.bottom-rect.top,parent,nullptr,cls.hInstance,this);
   hidden=CreateWindowW(cls.lpszClassName,L"Cycles render context",WS_POPUP,area.left,area.top,1,1,nullptr,nullptr,cls.hInstance,nullptr);
   prepare_hidden=CreateWindowW(cls.lpszClassName,L"Physics prepare context",WS_POPUP,area.left,area.top,1,1,nullptr,nullptr,cls.hInstance,nullptr);
   if(!hwnd || !hidden || !prepare_hidden) throw std::runtime_error("创建窗口失败");
-  if(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONULL)!=selected.handle) throw std::runtime_error("窗口未位于指定显示器，拒绝显示");
+  if(!parent && MonitorFromWindow(hwnd,MONITOR_DEFAULTTONULL)!=selected.handle) throw std::runtime_error("窗口未位于指定显示器，拒绝显示");
   dc=GetDC(hwnd);render_dc=GetDC(hidden);prepare_dc=GetDC(prepare_hidden);pixel_format(dc);pixel_format(render_dc);pixel_format(prepare_dc);
   present_context.diagnostics(telemetry_,"present");render_context.diagnostics(telemetry_,"upload");prepare_context.diagnostics(telemetry_,"prepare");
   recreate_contexts();

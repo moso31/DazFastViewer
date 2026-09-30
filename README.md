@@ -1,5 +1,20 @@
 # DazFastViewer — A Faster, More Efficient Viewport Renderer for DAZ 3D
 
+## 从源码构建
+
+详细步骤见 [Windows 构建文档](Docs/build_windows_cn.md)，包含新机器准备、Visual Studio 2022 / 2026、自动依赖下载、手工安装、离线使用及故障排查。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\bootstrap.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -VisualStudio 2022 -Configuration Release
+```
+
+构建脚本会在工程根目录生成 **`DazFastViewer.sln`**；本机直接打开 `D:\DazFastViewer\DazFastViewer.sln`，选择 **Release / x64**，以 `DazFastViewer` 为启动项目按 F5。只生成解决方案可加 `-ConfigureOnly`，首次在 IDE 中构建时会自动整理启动依赖。
+
+当前支持 Windows 10/11 x64、具有 AVX2/FMA/F16C 等指令集的 CPU，以及受 OptiX 9.1 支持的 NVIDIA GPU（建议 RTX 20/30/40/50 系列）；渲染需要 R590+ 驱动。支持单屏和多屏，普通启动使用主屏或已保存的位置。默认构建多架构 Release 运行包，程序位于 `out/vs2022/Release/DazFastViewer.exe`；分发时复制整个 `Release` 文件夹，目标机器无需安装 VS、Python、Qt 或 CUDA Toolkit。
+
+首次准备后只需重复第二条构建命令。仅在本机开发、希望缩短内核编译时间时加 `-CudaArchitectures Auto`；分发前用默认 `Common` 重新构建。具体范围与验证限制见 [Windows 构建文档](Docs/build_windows_cn.md)。
+
 <img width="2560" height="1392" alt="image" src="https://github.com/user-attachments/assets/c498f3c2-db2b-49b7-be4b-1ae59a217cdf" />
 
 ## 我为什么要做这个东西

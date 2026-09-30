@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "tools": {"cmake": "4.2.3", "aqtinstall": "3.3.0"},
+  "git": {
+    "cycles": {"url": "https://projects.blender.org/blender/cycles.git", "revision": "3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba", "path": "sources/cycles"},
+    "blender": {"url": "https://projects.blender.org/blender/blender.git", "revision": "d13f752e3b9c4f8c261cda552b1021f8bcc0382c", "path": "sources/blender", "sparse": ["intern/cycles"]},
+    "windows-libs": {"url": "https://projects.blender.org/blender/lib-windows_x64.git", "revision": "60d6e96b917568278d400a4024c98da0fb777338", "path": "windows-libs", "sparse": ["OpenImageIO", "tbb", "epoxy", "opencolorio", "openexr", "imath", "openjph", "fmt", "zlib", "zstd", "pugixml", "aom", "jpeg", "png", "webp", "openjpeg", "pystring", "opensubdiv"]}
+  },
+  "archives": {
+    "jolt": {"url": "https://codeload.github.com/jrouwe/JoltPhysics/zip/e77f175595e64cb44218cc9d9d56fc365ad0e36a", "sha256": "ff13202d21a7a09efea72534a0a041cd4971cb9ac66b53262275881387cc6871", "path": "sources/jolt", "revision": "e77f175595e64cb44218cc9d9d56fc365ad0e36a", "check": "Build/CMakeLists.txt"},
+    "optix": {"url": "https://codeload.github.com/NVIDIA/optix-dev/zip/f1f6dd803f3159992d248178f6e09421c6eb8b6d", "sha256": "2f9699a7bfa4d100b01113245aabdadbdb0f5157e52ce11f0643a5dccd0211a1", "path": "optix", "revision": "f1f6dd803f3159992d248178f6e09421c6eb8b6d", "check": "include/optix.h"},
+    "cuda_nvcc": {"url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.9.41-archive.zip", "sha256": "b83e3d6e57a078ba064051782d6312fbe4a3c8f73d6fe771b768e924a5d95788", "path": "cuda", "check": "bin/nvcc.exe"},
+    "cuda_cudart": {"url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.9.37-archive.zip", "sha256": "f96afe6df898bc8510c48b44668bd9f825731efbf460f3640a922b2b8ae59ccc", "path": "cuda", "check": "include/cuda_runtime.h"},
+    "cuda_cccl": {"url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.9.27-archive.zip", "sha256": "17aaa7c6b8f94a417d8f3261780b7e34b9cbdfab7513bce86768623b06aa28b5", "path": "cuda", "check": "include/thrust/version.h"}
+  },
+  "qt": {"version": "6.10.3", "arch": "win64_msvc2022_64", "directory": "msvc2022_64", "archives": ["qtbase", "qtsvg", "qttools", "qttranslations"]}
+}

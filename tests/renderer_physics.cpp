@@ -1,3 +1,4 @@
+#include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
@@ -18,7 +19,7 @@ static std::shared_ptr<Document> fixture(uint64_t generation){
 int main(int argc,char **argv){
   QApplication app(argc,argv);auto output=std::filesystem::absolute(std::getenv("DFV_PHYSICS_DENSE")?"artifacts/physics-controls/gpu-dense":"artifacts/physics-controls/gpu");std::filesystem::create_directories(output);
   try{
-    auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
+    auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);ccl::path_init(app.applicationDirPath().toStdString(),dfv::cycles_user_directory());
     QWidget host;host.resize(700,520);for(auto *s:QGuiApplication::screens())if(s!=QGuiApplication::primaryScreen())host.move(s->availableGeometry().topLeft()+QPoint(40,40));host.show();app.processEvents();
     SamplingSettings settings;settings.samples=16;settings.adaptive_threshold=0;settings.interaction_probe=true;Renderer renderer(HWND(host.winId()),host.width(),host.height(),output,settings);renderer.resize(host.width(),host.height());renderer.automated_pointer();
     auto d=fixture(1);auto snapshot=initial_snapshot(*d);renderer.set_document(d,snapshot,false);renderer.camera_view({0,0,1.2f,3,.2f,.5f});

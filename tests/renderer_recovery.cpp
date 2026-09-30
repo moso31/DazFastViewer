@@ -1,3 +1,4 @@
+#include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
 #include "editor/scene_extension.h"
 #include "util/path.h"
@@ -21,10 +22,10 @@ int main(int argc,char **argv) {
   try {
     auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();
     config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);
-    ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
-    QScreen *secondary=nullptr;
+    ccl::path_init(app.applicationDirPath().toStdString(),dfv::cycles_user_directory());
+    QScreen *secondary=QGuiApplication::primaryScreen();
     for(auto *screen:QGuiApplication::screens()) if(screen!=QGuiApplication::primaryScreen()) {secondary=screen;break;}
-    check(secondary,"缺少第二屏，无法验证 GL 自动恢复");
+    check(secondary,"No available display");
     QWidget host;host.setWindowTitle(QStringLiteral("渲染故障恢复验证（自动关闭）"));
     host.setAttribute(Qt::WA_ShowWithoutActivating);host.resize(420,300);
     host.move(secondary->availableGeometry().topLeft()+QPoint(30,30));host.show();app.processEvents();

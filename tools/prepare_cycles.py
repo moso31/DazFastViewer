@@ -8,8 +8,9 @@ import subprocess
 import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
-STANDALONE = "3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba"
-BLENDER = "d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
+LOCK = json.loads((ROOT / "tools/dependencies.lock.json").read_text(encoding="utf-8"))
+STANDALONE = LOCK["git"]["cycles"]["revision"]
+BLENDER = LOCK["git"]["blender"]["revision"]
 
 
 def git(repo, *args):
@@ -26,8 +27,8 @@ def write_changed(path, data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--blender", default="D:/Github/blender-5.2.2")
-    parser.add_argument("--standalone", default=str(ROOT / ".research/cycles-v5.2.0"))
+    parser.add_argument("--blender", default=str(ROOT / ".deps/sources/blender"))
+    parser.add_argument("--standalone", default=str(ROOT / ".deps/sources/cycles"))
     parser.add_argument("--output", default=str(ROOT / ".deps/cycles"))
     args = parser.parse_args()
     destination = Path(args.output).resolve()
@@ -69,7 +70,14 @@ def main():
             'set(_cycles_lib_dir "${DFV_LIB_DIR}")')
     # 项目自有目标定义替代完整 Blender 依赖集合；关闭未使用的功能。
     replace("CMakeLists.txt", "include(dependency_targets)", 'include("${DFV_ROOT}/cmake/dependency_targets.cmake")')
+    # The pinned Cycles still uses FindCUDA; keep its legacy discovery policy
+    # explicitly, while the parent project uses current CMake/VS generators.
+    replace("CMakeLists.txt", "cmake_minimum_required(VERSION 3.10)",
+            "cmake_minimum_required(VERSION 3.10)\nif(POLICY CMP0146)\n  cmake_policy(SET CMP0146 OLD)\nendif()")
     replace("src/app/CMakeLists.txt", "# Application build targets", '# Application build targets\ninclude("${DFV_ROOT}/cmake/bench.cmake")')
+    # CTest must work immediately after building, without a separate upstream install.
+    replace("src/app/CMakeLists.txt", "COMMAND ${app_install_dir}/$<TARGET_FILE_NAME:cycles> --version",
+            "COMMAND $<TARGET_FILE:cycles> --version")
     replace("src/util/CMakeLists.txt", "PRIVATE bf::dependencies::openexr", "PRIVATE bf::dependencies::openexr\n  PRIVATE fmt::fmt")
     # 应用可限制静止视口的更新批次时长；0 保留上游调度，离线渲染不受影响。
     replace("src/device/device.h", "  thread_mutex image_info_mutex;",
@@ -100,6 +108,9 @@ def main():
     # 显式启用与已安装依赖一致的 C++20，避免独立上游残留 C++17 旗标。
     path = "src/cmake/configure_build.cmake"
     files[path] = files[path].replace(b"/std:c++17", b"/std:c++20")
+    # MSBuild already controls project parallelism. /MP without a bound multiplies
+    # the worker count and can exhaust RAM on laptops.
+    files[path] = files[path].replace(b"/MP ", b"/MP1 ")
     # 在持有 Scene 锁时标记实际渲染工作的相机版本，防止旧结果冒充新输入。
     replace("src/session/session.h", "#include <functional>", "#include <functional>\n#include <atomic>")
     replace("src/session/session.h", "  Stats stats;", """  Stats stats;

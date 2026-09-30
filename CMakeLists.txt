@@ -1,25 +1,63 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 4.2)
 project(DazFastViewer LANGUAGES C CXX)
+set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT DazFastViewer)
+option(DFV_STAGE_EDITOR_RUNTIME "Deploy editor dependencies next to the executable for IDE launch" ON)
 
 if(NOT WIN32 OR NOT MSVC)
-  message(FATAL_ERROR "当前 Spec 001 基线要求 Windows x64 / MSVC")
+  message(FATAL_ERROR "DazFastViewer requires Windows x64 / MSVC. See Docs/build_windows_cn.md")
+endif()
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64"
+    OR CMAKE_CXX_COMPILER_ARCHITECTURE_ID MATCHES "ARM")
+  message(FATAL_ERROR "Use an x64 target: cmake -A x64")
 endif()
 set(DFV_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
-set(DFV_BLENDER_SOURCE "D:/Github/blender-5.2.2" CACHE PATH "Blender 参考源码")
-set(DFV_STANDALONE_SOURCE "${DFV_ROOT}/.research/cycles-v5.2.0" CACHE PATH "独立 Cycles 来源")
-set(DFV_LIB_DIR "${DFV_ROOT}/.research/windows-libs-metadata" CACHE PATH "已物化的 Windows 依赖")
-set(OPTIX_ROOT_DIR "D:/Github/optix-dev" CACHE PATH "OptiX 头文件")
+include("${DFV_ROOT}/.deps/local.cmake" OPTIONAL)
+set(DFV_BLENDER_SOURCE "${DFV_ROOT}/.deps/sources/blender" CACHE PATH "Blender 参考源码")
+set(DFV_STANDALONE_SOURCE "${DFV_ROOT}/.deps/sources/cycles" CACHE PATH "独立 Cycles 来源")
+set(DFV_LIB_DIR "${DFV_ROOT}/.deps/windows-libs" CACHE PATH "已物化的 Windows 依赖")
+set(OPTIX_ROOT_DIR "${DFV_ROOT}/.deps/optix" CACHE PATH "OptiX 头文件")
 set(CYCLES_RUNTIME_OPTIX_ROOT_DIR "${OPTIX_ROOT_DIR}" CACHE PATH "OptiX JIT 头文件")
-set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.9" CACHE PATH "CUDA Toolkit")
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${DFV_ROOT}/tools/prepare_cycles.py")
-execute_process(COMMAND "${Python3_EXECUTABLE}" "${DFV_ROOT}/tools/prepare_cycles.py"
+if(NOT CUDA_TOOLKIT_ROOT_DIR)
+  if(DEFINED ENV{CUDA_PATH})
+    set(CUDA_TOOLKIT_ROOT_DIR "$ENV{CUDA_PATH}" CACHE PATH "CUDA Toolkit")
+  else()
+    set(CUDA_TOOLKIT_ROOT_DIR "${DFV_ROOT}/.deps/cuda" CACHE PATH "CUDA Toolkit")
+  endif()
+endif()
+set(DFV_QT_ROOT "${DFV_ROOT}/.deps/qt/6.10.3/msvc2022_64" CACHE PATH "Qt MSVC x64 开发套件")
+if(NOT Python3_EXECUTABLE AND EXISTS "${DFV_ROOT}/.deps/python/Scripts/python.exe")
+  set(Python3_EXECUTABLE "${DFV_ROOT}/.deps/python/Scripts/python.exe" CACHE FILEPATH "Build Python")
+endif()
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+find_program(GIT_EXECUTABLE NAMES git
+  HINTS "${CMAKE_GENERATOR_INSTANCE}/Common7/IDE/CommonExtensions/Microsoft/TeamFoundation/Team Explorer/Git/cmd")
+find_package(Git REQUIRED)
+# prepare_cycles uses Git even when launched from the Visual Studio GUI.
+get_filename_component(_dfv_git_bin "${GIT_EXECUTABLE}" DIRECTORY)
+set(ENV{PATH} "${_dfv_git_bin};$ENV{PATH}")
+foreach(required "${DFV_BLENDER_SOURCE}/.git" "${DFV_STANDALONE_SOURCE}/.git"
+    "${DFV_LIB_DIR}/OpenImageIO/lib/cmake/OpenImageIO/OpenImageIOConfig.cmake"
+    "${OPTIX_ROOT_DIR}/include/optix.h" "${CUDA_TOOLKIT_ROOT_DIR}/bin/nvcc.exe")
+  if(NOT EXISTS "${required}")
+    message(FATAL_ERROR "Missing dependency: ${required}\nRun powershell -ExecutionPolicy Bypass -File tools/bootstrap.ps1 (see Docs/build_windows_cn.md).")
+  endif()
+endforeach()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${DFV_ROOT}/tools/prepare_cycles.py" "${DFV_ROOT}/tools/dependencies.lock.json"
+  "${DFV_ROOT}/specs/001-cycles-static-camera/evidence/source-differences.json")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env PYTHONUTF8=1 "${Python3_EXECUTABLE}" "${DFV_ROOT}/tools/prepare_cycles.py"
   --blender "${DFV_BLENDER_SOURCE}" --standalone "${DFV_STANDALONE_SOURCE}"
   COMMAND_ERROR_IS_FATAL ANY)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_INSTALL_PREFIX "${DFV_ROOT}/out" CACHE PATH "本地安装目录" FORCE)
+# No C++ module units are used. Avoid VS module-scanner basename collisions
+# (for example daz/skeleton.cpp and runtime/skeleton.cpp) with modern CMake.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  set(CMAKE_INSTALL_PREFIX "${DFV_ROOT}/out" CACHE PATH "本地安装目录" FORCE)
+endif()
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release)
 foreach(feature ALEMBIC EMBREE OPENIMAGEDENOISE OPENSUBDIV OPENVDB NANOVDB OSL USD)
   set(WITH_CYCLES_${feature} OFF CACHE BOOL "Spec 001 未启用" FORCE)
@@ -29,10 +67,12 @@ set(WITH_CYCLES_STANDALONE_GUI OFF CACHE BOOL "" FORCE)
 set(WITH_CYCLES_DEVICE_HIP OFF CACHE BOOL "" FORCE)
 set(WITH_CYCLES_DEVICE_ONEAPI OFF CACHE BOOL "" FORCE)
 set(WITH_CYCLES_CUDA_BINARIES ON CACHE BOOL "编译 CUDA/OptiX 内核")
-set(CYCLES_CUDA_BINARIES_ARCH sm_89 CACHE STRING "目标 RTX 4070 Ti SUPER")
+set(CYCLES_CUDA_BINARIES_ARCH "sm_75;sm_80;sm_86;sm_89;sm_90;sm_100;sm_120" CACHE STRING "CUDA architectures; build.ps1 detects local GPU")
 set(WITH_CYCLES_CUDA_BUILD_SERIAL ON CACHE BOOL "控制编译内存")
 set(WITH_STRICT_BUILD_OPTIONS ON CACHE BOOL "缺少能力时明确失败" FORCE)
 enable_testing()
+add_test(NAME build_tools COMMAND "${Python3_EXECUTABLE}" -m unittest discover
+  -s "${DFV_ROOT}/tests" -p test_build_tools.py -v)
 include(cmake/physics.cmake)
 add_library(dfv_scene STATIC src/render_ir/scene.cpp src/daz/loader.cpp src/daz/morphs.cpp src/runtime/morph.cpp
   src/daz/skeleton.cpp src/daz/pose.cpp src/runtime/skeleton.cpp src/daz/formulas.cpp src/runtime/formula.cpp src/runtime/deformation.cpp
@@ -62,6 +102,17 @@ target_include_directories(dfv_scene PUBLIC src third_party)
 target_compile_options(dfv_scene PRIVATE /utf-8)
 target_link_libraries(dfv_scene PRIVATE bf::dependencies::zlib)
 add_subdirectory("${DFV_ROOT}/.deps/cycles" cycles)
+if(CMAKE_GENERATOR MATCHES "^Visual Studio")
+  # CMake keeps vcxproj files in the build tree. Refresh the root entry point
+  # after generation, including regeneration triggered from inside the IDE.
+  add_custom_target(dfv_root_solution ALL
+    COMMAND "${CMAKE_COMMAND}" -E env PYTHONUTF8=1
+      "${Python3_EXECUTABLE}" "${DFV_ROOT}/tools/export_solution.py"
+      --build-dir "${CMAKE_BINARY_DIR}"
+    COMMENT "Updating the root Visual Studio solution"
+    VERBATIM)
+  add_dependencies(DazFastViewer dfv_root_solution)
+endif()
 add_executable(SceneLoadProfile EXCLUDE_FROM_ALL tools/profile_load.cpp)
 target_link_libraries(SceneLoadProfile PRIVATE dfv_scene bf::dependencies::zlib psapi)
 target_compile_options(SceneLoadProfile PRIVATE /utf-8)
@@ -141,3 +192,22 @@ add_executable(GraftSurfaceTest tests/graft_surface.cpp)
 target_link_libraries(GraftSurfaceTest PRIVATE dfv_scene bf::dependencies::zlib)
 target_compile_options(GraftSurfaceTest PRIVATE /utf-8)
 add_test(NAME graft_surface COMMAND GraftSurfaceTest)
+
+# All test DLL paths come from this checkout, never a previous machine's out directory.
+set(_dfv_test_environment "QT_QPA_PLATFORM=offscreen;QT_PLUGIN_PATH=${DFV_QT_ROOT}/plugins")
+set(_dfv_test_paths "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
+file(GLOB _dfv_dependency_bins LIST_DIRECTORIES true "${DFV_LIB_DIR}/*/bin")
+foreach(bin IN LISTS _dfv_dependency_bins)
+  list(APPEND _dfv_test_paths "PATH=path_list_prepend:${bin}")
+endforeach()
+function(dfv_test_environment directory)
+  get_property(tests DIRECTORY "${directory}" PROPERTY TESTS)
+  if(tests)
+    set_tests_properties(${tests} DIRECTORY "${directory}" PROPERTIES ENVIRONMENT "${_dfv_test_environment}" ENVIRONMENT_MODIFICATION "${_dfv_test_paths}")
+  endif()
+  get_property(children DIRECTORY "${directory}" PROPERTY SUBDIRECTORIES)
+  foreach(child IN LISTS children)
+    dfv_test_environment("${child}")
+  endforeach()
+endfunction()
+dfv_test_environment("${CMAKE_CURRENT_SOURCE_DIR}")

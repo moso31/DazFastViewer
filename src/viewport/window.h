@@ -88,10 +88,11 @@ public:
   CameraState camera;
   CameraMailbox mailbox;
   std::atomic<int> width,height;
-  int monitor_index=2;
+  int monitor_index=0;
   std::string monitor_device;
   bool embedded=false;
-  Window(int width,int height,bool fullscreen,Telemetry *telemetry=nullptr,int monitor=2,HWND parent=nullptr);
+  // 0 selects the host's screen for embedded viewports, otherwise the primary screen.
+  Window(int width,int height,bool fullscreen,Telemetry *telemetry=nullptr,int monitor=0,HWND parent=nullptr);
   ~Window();
   // 仅在呈现作用域退出、Cycles 会话及其工作线程全部销毁之后调用。
   void recreate_contexts();

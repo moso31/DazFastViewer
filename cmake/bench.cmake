@@ -13,13 +13,23 @@ target_include_directories(CyclesViewportBench PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(CyclesViewportBench PRIVATE ${LIB} dfv_scene bf::dependencies::epoxy
   opengl32 gdi32 user32 dwmapi psapi winmm)
 target_compile_definitions(CyclesViewportBench PRIVATE
-  NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+  NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(CyclesViewportBench PRIVATE /utf-8)
 install(TARGETS CyclesViewportBench RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}")
 install(FILES "${DFV_LIB_DIR}/epoxy/bin/epoxy-0.dll" DESTINATION "${CMAKE_INSTALL_PREFIX}")
 
-set(DFV_QT_ROOT "C:/Qt/6.10.3/msvc2022_64" CACHE PATH "Qt MSVC x64 开发套件")
-find_package(Qt6 6.10 REQUIRED COMPONENTS Widgets Test PATHS "${DFV_QT_ROOT}/lib/cmake/Qt6" NO_DEFAULT_PATH)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Widgets Test HINTS "${DFV_QT_ROOT}/lib/cmake/Qt6")
+add_executable(WindowPlacementTest "${DFV_ROOT}/tests/window_placement.cpp" "${DFV_ROOT}/src/viewport/window.cpp")
+target_include_directories(WindowPlacementTest PRIVATE "${DFV_ROOT}/src" "${DFV_ROOT}/third_party")
+target_link_libraries(WindowPlacementTest PRIVATE Qt6::Widgets opengl32 gdi32 user32 dwmapi psapi winmm)
+target_compile_definitions(WindowPlacementTest PRIVATE NOMINMAX QT_NO_KEYWORDS)
+target_compile_options(WindowPlacementTest PRIVATE /utf-8)
+add_test(NAME window_placement COMMAND WindowPlacementTest)
+# Derive deployment tools from the Qt actually selected (also supports Qt6_DIR).
+get_target_property(_dfv_qmake Qt6::qmake IMPORTED_LOCATION)
+get_filename_component(_dfv_qt_bin "${_dfv_qmake}" DIRECTORY)
+get_filename_component(DFV_QT_ROOT "${_dfv_qt_bin}" DIRECTORY)
+set(DFV_QT_ROOT "${DFV_QT_ROOT}" CACHE PATH "Selected Qt installation" FORCE)
 add_library(dfv_history STATIC "${DFV_ROOT}/src/editor/edit_history.cpp" "${DFV_ROOT}/src/editor/recovery.cpp")
 target_link_libraries(dfv_history PUBLIC dfv_scene Qt6::Widgets)
 target_compile_options(dfv_history PRIVATE /utf-8)
@@ -48,42 +58,53 @@ qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
 target_include_directories(DazFastViewer PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(DazFastViewer PRIVATE ${LIB} dfv_scene dfv_content Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_link_libraries(DazFastViewer PRIVATE dfv_history)
-target_compile_definitions(DazFastViewer PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_definitions(DazFastViewer PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(DazFastViewer PRIVATE /utf-8)
+set_target_properties(DazFastViewer PROPERTIES
+  VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:DazFastViewer>")
+if(DFV_STAGE_EDITOR_RUNTIME)
+  add_custom_command(TARGET DazFastViewer POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E env PYTHONUTF8=1
+      "${Python3_EXECUTABLE}" "${DFV_ROOT}/tools/stage_runtime.py"
+      --build-dir "${CMAKE_BINARY_DIR}" --configuration "$<CONFIG>"
+      --editor-only --output "$<TARGET_FILE_DIR:DazFastViewer>"
+    COMMENT "Deploying DazFastViewer dependencies for Visual Studio launch"
+    VERBATIM)
+endif()
 add_executable(RendererQualityTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_quality.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(RendererQualityTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererQualityTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
-target_compile_definitions(RendererQualityTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_definitions(RendererQualityTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(RendererQualityTest PRIVATE /utf-8)
 add_executable(RendererMaterialsTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_materials.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(RendererMaterialsTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererMaterialsTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
-target_compile_definitions(RendererMaterialsTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_definitions(RendererMaterialsTest PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(RendererMaterialsTest PRIVATE /utf-8)
 add_executable(RendererRecoveryTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_recovery.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(RendererRecoveryTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererRecoveryTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
-target_compile_definitions(RendererRecoveryTest PRIVATE DFV_GL_RECOVERY_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_definitions(RendererRecoveryTest PRIVATE DFV_GL_RECOVERY_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(RendererRecoveryTest PRIVATE /utf-8)
 add_executable(RendererInteractionTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_interaction.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(RendererInteractionTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererInteractionTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
-target_compile_definitions(RendererInteractionTest PRIVATE DFV_RENDER_INTERACTION_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_definitions(RendererInteractionTest PRIVATE DFV_RENDER_INTERACTION_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(RendererInteractionTest PRIVATE /utf-8)
 add_executable(RendererPhysicsTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_physics.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(RendererPhysicsTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererPhysicsTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
-target_compile_definitions(RendererPhysicsTest PRIVATE DFV_PHYSICS_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN DFV_CYCLES_SOURCE="${DFV_ROOT}/.deps/cycles/src")
+target_compile_definitions(RendererPhysicsTest PRIVATE DFV_PHYSICS_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(RendererPhysicsTest PRIVATE /utf-8)
 add_executable(ProjectSettingsTest "${DFV_ROOT}/tests/project_settings.cpp" "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/application_settings.cpp")
 target_include_directories(ProjectSettingsTest PRIVATE "${DFV_ROOT}/src" "${DFV_ROOT}/third_party")

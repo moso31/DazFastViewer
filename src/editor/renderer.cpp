@@ -15,13 +15,14 @@
 #include "diagnostics/load_profile.h"
 #include "diagnostics/event_profile.h"
 #include <epoxy/wgl.h>
+#include <cuew.h>
 #include <fstream>
 #include <bit>
 
 namespace dfv::editor {
 Renderer::Renderer(HWND host,int width,int height,const std::filesystem::path &output,SamplingSettings sampling):output_(output),sampling_(sampling),telemetry_(output) {
   requested_render_quality_=sampling;
-  window_=std::make_unique<Window>(width,height,false,&telemetry_,2,host);
+  window_=std::make_unique<Window>(width,height,false,&telemetry_,0,host);
   thread_=std::jthread([this](std::stop_token stop) {run(stop);});
 }
 Renderer::~Renderer() {thread_.request_stop();if(thread_.joinable()) thread_.join();}
@@ -133,9 +134,24 @@ void Renderer::run(std::stop_token stop) {
   bool blank_presented=false;
   auto timing=[&](const char *name,double begin,uint64_t revision=0) {Frame f;f.epoch=state.requested_epoch;f.id=revision;telemetry_.event(name,f,(now()-begin)*1000);};
   try {
+    const auto devices=Device::available_devices();
     DeviceInfo device;
-    for(const auto &candidate:Device::available_devices()) if(candidate.type==DEVICE_OPTIX) {device=candidate;break;}
-    if(device.type!=DEVICE_OPTIX) throw std::runtime_error("找不到 OptiX 设备；编辑器不会自动回退 CPU");
+    for(const auto &candidate:devices) if(candidate.type==DEVICE_OPTIX) {device=candidate;break;}
+    if(device.type!=DEVICE_OPTIX) throw std::runtime_error("找不到 OptiX 设备；请使用受支持的 NVIDIA 显卡并更新驱动到 R590 或更高版本（OptiX 9.1 要求）。编辑器不会降低画质或回退 CPU。");
+    {
+      // Match the render GPU to the actual viewport, including systems with multiple NVIDIA GPUs.
+      GLContext::Binding binding(window_->render_context);
+      int count=0;unsigned matched=0;
+      if(!cuDeviceGetCount||!cuGLGetDevices||cuDeviceGetCount(&count)!=CUDA_SUCCESS||count<1)
+        throw std::runtime_error("无法查询 NVIDIA 显示设备，请检查显卡驱动");
+      std::vector<CUdevice> display_devices(size_t(count),0);
+      const auto result=cuGLGetDevices(&matched,display_devices.data(),unsigned(count),CU_GL_DEVICE_LIST_ALL);
+      bool found=false;
+      if(result==CUDA_SUCCESS) for(const auto &candidate:devices) if(candidate.type==DEVICE_OPTIX) {
+        if(std::find(display_devices.begin(),display_devices.begin()+matched,candidate.num)!=display_devices.begin()+matched) {device=candidate;found=true;break;}
+      }
+      if(!found) throw std::runtime_error("视口没有使用可互操作的 NVIDIA 显卡。请在 Windows 设置 → 系统 → 屏幕 → 显示卡中，将 DazFastViewer.exe 设为高性能 NVIDIA GPU，然后重新启动程序。");
+    }
     std::shared_ptr<const Document> current;
     std::unique_ptr<ir::Scene> render_scene_ptr;
     std::shared_ptr<const Document> pending_document;

@@ -1,3 +1,4 @@
+#include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
 #include "editor/project.h"
 #include "editor/parameters.h"
@@ -7,6 +8,7 @@
 #include "editor/powerpose_panel.h"
 #include "editor/chrome.h"
 #include "editor/ui_scale.h"
+#include "editor/window_placement.h"
 #include "editor/viewport_settings.h"
 #include "editor/extension_panel.h"
 #include "editor/physics_panel.h"
@@ -952,6 +954,9 @@ class Editor final:public EditorWindow {
     if(document_) for(const auto &target:document_->catalog.targets) for(const auto &m:target.morphs)
       if(m.label=="Arms Length" || m.label=="Chest Scale" || m.label=="Eyes Closed" || m.label=="HS Sanny Shy")
         report["named_parameters"].push_back({{"label",m.label},{"group",m.group},{"kind",m.kind},{"source",m.source}});
+    const auto work_area=screen()->availableGeometry();
+    report["available_work_area"]={work_area.x(),work_area.y(),work_area.width(),work_area.height()};
+    report["device_pixel_ratio"]=devicePixelRatioF();
     std::ofstream(output_/"editor-check.json")<<report.dump(2);
     if(keep_open_after_test_&&navigation_test_) {
       navigation_test_=self_test_=false;focus_pending_=false;
@@ -1898,21 +1903,41 @@ public:
     connect(hierarchy_,&QTreeWidget::currentItemChanged,this,[this] {sync_selection();});
     chrome->add_layout_actions(view);
     connect(view->addAction(QStringLiteral("恢复默认布局")),&QAction::triggered,this,[this] {restoreState(default_layout_,1);chrome->reset_modules();});
-    QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens()) if(screen!=QGuiApplication::primaryScreen()) {secondary=screen;break;}
-    if(!secondary) throw std::runtime_error("缺少第二屏，编辑器不会在主屏启动");
-    resize(1580,920);const QRect available=secondary->availableGeometry();
-    if(width()>available.width() || height()>available.height()) throw std::runtime_error("第二屏工作区不足以容纳当前编辑器布局");
+    QScreen *initial_screen=QGuiApplication::primaryScreen();
+    if(!initial_screen) throw std::runtime_error("找不到可用显示器");
+    // Prefer the secondary screen only for automated interaction diagnostics.
+    if(self_test_) for(auto *screen:QGuiApplication::screens()) if(screen!=initial_screen) {initial_screen=screen;break;}
+    const QRect available=initial_screen->availableGeometry();
+    resize(QSize(1580,920).boundedTo(available.size()));move(available.center()-QPoint(width()/2,height()/2));
     resizeDocks({viewport_dock,property_dock},{850,330},Qt::Horizontal);default_layout_=saveState(1);
     if(!self_test_) {QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());restoreState(settings.value("window/docks").toByteArray(),1);powerpose_->restore_template(settings.value("powerpose/template","Body").toString());chrome->restore_modules(settings.value("window/topModules").toByteArray());}
-    if(!available.contains(frameGeometry())) {resize(std::min(width(),available.width()),std::min(height(),available.height()));move(available.center()-QPoint(width()/2,height()/2));}
-    for(auto *d:findChildren<QDockWidget *>()) if(d->isFloating()&&!available.intersects(d->frameGeometry())) d->move(available.topLeft()+QPoint(30,30));
+    auto fit_windows=[this] {
+      QList<QRect> areas;for(auto *screen:QGuiApplication::screens()) areas.push_back(screen->availableGeometry());
+      if(areas.isEmpty()) return;
+      const auto preferred=QGuiApplication::primaryScreen()->availableGeometry();
+      auto fit=[&](QWidget *window) {
+        const auto bounds=visible_window_geometry(QRect(window->pos(),window->size()),areas,preferred);
+        window->resize(bounds.size());window->move(bounds.topLeft());
+      };
+      if(!isMaximized()&&!isFullScreen()) fit(this);
+      for(auto *dock:findChildren<QDockWidget *>()) if(dock->isFloating()) fit(dock);
+    };
     if(!self_test_) application_settings_=ApplicationSettings::load();
     if(!self_test_&&!sampling.quality_override) static_cast<RenderQuality &>(sampling)=application_settings_.render;
     else application_settings_.render=sampling;
     ui_scale_=new UiScale(false,{},this);ui_scale_->set_percent(application_settings_.ui_percent);
     viewport_settings_=new ViewportSettings(false,{},this);viewport_settings_->set(application_settings_.viewport);
     viewport_settings_->changed=[this](ViewportQuality value){if(renderer_) renderer_->quality(value);};
+    fit_windows();
+    auto watch_screen=[this,fit_windows](QScreen *screen) {
+      connect(screen,&QScreen::availableGeometryChanged,this,[this,fit_windows]{QTimer::singleShot(0,this,fit_windows);});
+    };
+    for(auto *screen:QGuiApplication::screens()) watch_screen(screen);
+    connect(qApp,&QGuiApplication::screenAdded,this,[watch_screen](QScreen *screen){watch_screen(screen);});
+    connect(qApp,&QGuiApplication::screenRemoved,this,[this,fit_windows]{QTimer::singleShot(0,this,fit_windows);});
     show();
+    // Native frame margins and the first dock layout settle after the initial show.
+    QTimer::singleShot(0,this,fit_windows);
     // 样式首次重建后重新落实默认停靠宽度；已保存的用户布局仍由 restoreState 负责。
     if(self_test_||QSettings().value("window/docks").toByteArray().isEmpty()) resizeDocks({viewport_dock,property_dock},{850,330},Qt::Horizontal);
     renderer_=std::make_unique<Renderer>(reinterpret_cast<HWND>(host_->winId()),qRound(host_->width()*host_->devicePixelRatioF()),qRound(host_->height()*host_->devicePixelRatioF()),output_,sampling);
@@ -2109,7 +2134,7 @@ int main(int argc,char **argv) {
   parser.addOption({"lazy-test",QStringLiteral("验证异步 Morph、手动应用和参数目录刷新后退出")});
   parser.addOption({"test-parameter",QStringLiteral("指定滑块验证参数，可重复，与 --formula-test 配合"),"name"});
   parser.addOption({"reload-test",QStringLiteral("验证后台场景替换后退出"),"file"});parser.process(app);
-  const auto output=parser.isSet("output")?file_path(parser.value("output")):std::filesystem::path("artifacts")/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
+  const auto output=parser.isSet("output")?file_path(parser.value("output")):file_path(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))/"artifacts"/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
   std::filesystem::create_directories(output);
   try {
     SamplingSettings sampling;
@@ -2130,8 +2155,18 @@ int main(int argc,char **argv) {
     bool capture_seconds_valid=false;const double capture_seconds=parser.value("capture-seconds").toDouble(&capture_seconds_valid);
     if(!capture_seconds_valid||!std::isfinite(capture_seconds)||capture_seconds<0||capture_seconds>180) throw std::runtime_error("截图诊断时长无效");
     auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);
-    ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
-    auto project=ProjectSettings::load(parser.isSet("project")?parser.value("project"):QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json"));
+    ccl::path_init(app.applicationDirPath().toStdString(),dfv::cycles_user_directory());
+    QString project_file=parser.value("project");
+    if(!parser.isSet("project")) {
+      const auto legacy=QDir(app.applicationDirPath()).absoluteFilePath("../DazFastViewer.project.json");
+      if(QFileInfo::exists(legacy)) project_file=legacy;
+      else {
+        const auto settings_dir=QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        if(!QDir().mkpath(settings_dir)) throw std::runtime_error("无法创建用户设置目录");
+        project_file=QDir(settings_dir).filePath("DazFastViewer.project.json");
+      }
+    }
+    auto project=ProjectSettings::load(project_file);
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
     Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);

@@ -1,29 +1,60 @@
-"""暂存已编译程序和确实物化的运行时依赖，不复制 LFS 指针。"""
+﻿"""Stage a relocatable runtime from the actual CMake cache, for any configuration."""
 from pathlib import Path
-import shutil
+import argparse
 import hashlib
 import json
+import platform
+import shutil
 import subprocess
 from datetime import datetime, timezone
 
-root = Path(__file__).resolve().parents[1]
-out = root / "out"
-out.mkdir(exist_ok=True)
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read_cache(path):
+    values = {}
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        if line and not line.startswith(('#', '//')) and ':' in line and '=' in line:
+            key, value = line.split('=', 1)
+            values[key.split(':', 1)[0]] = value
+    return values
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+def runtime_kernels(build, cache):
+    folder = Path(build) / 'cycles/src/kernel/device'
+    paths = [folder / 'optix' / f'{name}.ptx.zst' for name in
+             ('kernel_optix', 'kernel_optix_mnee', 'kernel_optix_shader_raytrace')]
+    for arch in cache['CYCLES_CUDA_BINARIES_ARCH'].split(';'):
+        extension = 'ptx' if arch.startswith('compute_') else 'cubin'
+        paths.append(folder / 'cuda' / f'kernel_{arch}.{extension}.zst')
+    for path in paths:
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError(f'Missing GPU kernel: {path}. Build all configured CUDA/OptiX kernels before staging.')
+    return paths
 
 
 def stage_file(source, destination):
-    destination = destination / source.name if destination.is_dir() else destination
-    if destination.is_file() and source.stat().st_size == destination.stat().st_size:
-        if hashlib.sha256(source.read_bytes()).digest() == hashlib.sha256(destination.read_bytes()).digest():
-            return
+    if not source.is_file():
+        raise RuntimeError(f'Missing runtime file: {source}')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_file() and sha256(source) == sha256(destination):
+        return
     try:
         shutil.copy2(source, destination)
     except PermissionError:
-        if destination.suffix.lower() != ".exe":
+        if destination.suffix.lower() != '.exe':
             raise
-        # Windows 允许重命名正在运行的 EXE，旧会话继续使用原映像。
-        # 保留备份，不终止用户进程；替换失败时恢复原路径。
-        backup = destination.with_name(destination.stem + ".previous-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".exe")
+        # Preserve the original developer workflow: running EXEs can be renamed
+        # on Windows. Keep the old image without terminating the user's process.
+        backup = destination.with_name(destination.stem + '.previous-' + datetime.now().strftime('%Y%m%d-%H%M%S-%f') + '.exe')
         destination.rename(backup)
         try:
             shutil.copy2(source, destination)
@@ -34,64 +65,74 @@ def stage_file(source, destination):
             raise
 
 
-stage_file(root / "build/bin/Release/CyclesViewportBench.exe", out)
-editor = root / "build/bin/Release/DazFastViewer.exe"
-qt_root = Path("C:/Qt/6.10.3/msvc2022_64")
-cache = (root / "build/CMakeCache.txt").read_text(encoding="utf-8")
-for line in cache.splitlines():
-    if line.startswith("DFV_QT_ROOT:PATH="):
-        qt_root = Path(line.split("=", 1)[1])
-if editor.exists():
-    stage_file(editor, out)
-    subprocess.run([str(qt_root / "bin/windeployqt.exe"), "--release", "--no-compiler-runtime", "--no-opengl-sw",
-                    "--translations", "zh_CN", "--dir", str(out), str(out / editor.name)], check=True)
-    qt_license = out / "licenses/qt"
-    qt_license.mkdir(parents=True, exist_ok=True)
-    for item in (root / "third_party/qt").glob("*"):
-        if item.is_file():
-            shutil.copy2(item, qt_license / item.name)
-    for module in ("qtbase", "qtsvg", "qttranslations"):
-        for item in (qt_root / "sbom").glob(f"{module}-*.spdx*"):
-            shutil.copy2(item, qt_license / item.name)
-libraries = root / ".research/windows-libs-metadata"
-packages = "OpenImageIO tbb epoxy opencolorio openexr imath openjph fmt zlib zstd pugixml aom jpeg png webp openjpeg pystring yamlcpp".split()
-for package in packages:
-    for file in (libraries / package).rglob("*.dll"):
-        with file.open("rb") as stream:
-            if stream.read(2) != b"MZ":
-                continue
-        stage_file(file, out / file.name)
-(out / "lib").mkdir(exist_ok=True)
-for file in (root / "build/cycles/src/kernel/device").rglob("*.zst"):
-    stage_file(file, out / "lib" / file.name)
-shutil.copy2(root / ".deps/cycles/dfv-source-manifest.json", out)
-license_dir = out / "licenses/nlohmann-json"
-license_dir.mkdir(parents=True, exist_ok=True)
-for name in ("LICENSE.MIT", "SOURCE.md"):
-    shutil.copy2(root / "third_party/nlohmann" / name, license_dir / name)
-source_files = [root / "CMakeLists.txt"]
-jolt_license = out / "licenses/jolt"
-jolt_license.mkdir(parents=True, exist_ok=True)
-for item in (root / "third_party/jolt").iterdir():
-    if item.is_file():
-        shutil.copy2(item, jolt_license / item.name)
-subdiv_license = out / "licenses/opensubdiv"
-subdiv_license.mkdir(parents=True, exist_ok=True)
-for item in (root / "third_party/opensubdiv").iterdir():
-    if item.is_file():
-        shutil.copy2(item, subdiv_license / item.name)
-for base in ("src", "cmake", "tools", "tests", "third_party"):
-    source_files.extend(p for p in (root/base).rglob("*")
-                        if p.is_file() and "__pycache__" not in p.parts)
-manifest = {"staged_at": datetime.now(timezone.utc).isoformat(),
-            "source_hashes": {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
-                              for p in source_files},
-            "exe_sha256": hashlib.sha256((out/"CyclesViewportBench.exe").read_bytes()).hexdigest(),
-            "cycles_assembly": json.loads((out/"dfv-source-manifest.json").read_text()),
-            "environment": json.loads((root/"specs/001-cycles-static-camera/evidence/environment.json").read_text(encoding="utf-8-sig")),
-            "cuda": "12.9.41", "optix": "9.1.0"}
-if editor.exists():
-    manifest["editor_exe_sha256"] = hashlib.sha256((out/editor.name).read_bytes()).hexdigest()
-    manifest["qt_root"] = str(qt_root)
-(out/"build-manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+"\n",encoding="utf-8")
-print(out)
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/vs2022')
+    parser.add_argument('--configuration', choices=['Release', 'Debug', 'RelWithDebInfo', 'MinSizeRel'], default='Release')
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--editor-only', action='store_true', help='Deploy the IDE startup target without requiring the benchmark to be built')
+    args = parser.parse_args()
+    build = args.build_dir.resolve()
+    configuration = args.configuration
+    cache = read_cache(build / 'CMakeCache.txt')
+    kernels = runtime_kernels(build, cache)
+    out = (args.output or ROOT / 'out' / build.name / configuration).resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    marker = out / '.dfv-runtime.json'
+    identity = {'build_dir': str(build), 'configuration': configuration}
+    if marker.is_file() and json.loads(marker.read_text()) != identity:
+        raise RuntimeError(f'{out} belongs to a different build/configuration; choose a separate --output.')
+    qt = Path(cache['DFV_QT_ROOT'])
+    libraries = Path(cache['DFV_LIB_DIR'])
+    executables = ['DazFastViewer.exe'] if args.editor_only else ['CyclesViewportBench.exe', 'DazFastViewer.exe']
+    for name in executables:
+        stage_file(build / 'bin' / configuration / name, out / name)
+    subprocess.run([str(qt / 'bin/windeployqt.exe'), '--debug' if configuration == 'Debug' else '--release',
+                    '--no-compiler-runtime', '--no-opengl-sw', '--translations', 'zh_CN',
+                    '--dir', str(out), str(out / 'DazFastViewer.exe')], check=True)
+    lock = json.loads((ROOT / 'tools/dependencies.lock.json').read_text(encoding='utf-8'))
+    for package in lock['git']['windows-libs']['sparse']:
+        for source in (libraries / package).rglob('*.dll'):
+            with source.open('rb') as stream:
+                if stream.read(2) != b'MZ':
+                    raise RuntimeError(f'Unmaterialized Git LFS DLL: {source}; rerun bootstrap.ps1')
+            stage_file(source, out / source.name)
+    for source in kernels:
+        stage_file(source, out / 'lib' / source.name)
+    # Ship the Release CRT app-locally; debug CRT is development-only and not redistributable.
+    if configuration != 'Debug':
+        vs = Path(cache['CMAKE_GENERATOR_INSTANCE'].split(',')[0])
+        selected_redist = Path(cache.get('MSVC_REDIST_DIR', '')) / 'x64/Microsoft.VC143.CRT'
+        redists = [selected_redist] if selected_redist.is_dir() else sorted((vs / 'VC/Redist/MSVC').glob('*/x64/Microsoft.VC143.CRT'))
+        if not redists:
+            raise RuntimeError('MSVC v143 redistributable files missing; install the VS C++ workload.')
+        for source in redists[-1].glob('*.dll'):
+            stage_file(source, out / source.name)
+    for name in ('qt', 'nlohmann', 'jolt', 'opensubdiv'):
+        shutil.copytree(ROOT / 'third_party' / name, out / 'licenses' / name, dirs_exist_ok=True)
+    if (qt / 'sbom').exists():
+        for source in (qt / 'sbom').glob('*.spdx*'):
+            stage_file(source, out / 'licenses/qt' / source.name)
+    source_manifest = ROOT / '.deps/cycles/dfv-source-manifest.json'
+    stage_file(source_manifest, out / source_manifest.name)
+    source_files = [ROOT / 'CMakeLists.txt', ROOT / 'CMakePresets.json']
+    for folder in ('src', 'cmake', 'tools', 'tests', 'third_party'):
+        source_files.extend(p for p in (ROOT / folder).rglob('*') if p.is_file() and '__pycache__' not in p.parts)
+    manifest = {
+        'staged_at': datetime.now(timezone.utc).isoformat(), **identity,
+        'machine': {'platform': platform.platform(), 'processor': platform.processor()},
+        'cmake': {key: cache.get(key) for key in ('CMAKE_GENERATOR', 'CMAKE_GENERATOR_INSTANCE', 'CMAKE_GENERATOR_TOOLSET',
+                  'CMAKE_CXX_COMPILER', 'CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION', 'DFV_LIB_DIR', 'DFV_QT_ROOT',
+                  'CUDA_TOOLKIT_ROOT_DIR', 'CUDA_VERSION', 'OPTIX_ROOT_DIR', 'CYCLES_CUDA_BINARIES_ARCH')},
+        'dependency_lock': lock,
+        'source_hashes': {p.relative_to(ROOT).as_posix(): sha256(p) for p in source_files},
+        'cycles_assembly': json.loads(source_manifest.read_text(encoding='utf-8')),
+        'files': {p.relative_to(out).as_posix(): sha256(p) for p in out.rglob('*') if p.is_file() and p.name not in ('build-manifest.json', '.dfv-runtime.json')}
+    }
+    (out / 'build-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    marker.write_text(json.dumps(identity), encoding='utf-8')
+    print(f'Runtime staged: {out}')
+
+
+if __name__ == '__main__':
+    main()

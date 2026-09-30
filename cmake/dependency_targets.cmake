@@ -21,6 +21,9 @@ dfv_dependency(bf::dependencies::zlib "${ZLIB_INCLUDE_DIRS}" ${ZLIB_LIBRARIES})
 dfv_dependency(bf::dependencies::zstd "${ZSTD_INCLUDE_DIRS}" ${ZSTD_LIBRARIES})
 dfv_dependency(bf::dependencies::optional::pugixml "${PUGIXML_INCLUDE_DIR}" ${PUGIXML_LIBRARIES})
 # Windows 上 Cycles 使用 std::thread；不链接 pthreads 实现。
+# Upstream also appends this legacy variable directly to executable link lines.
+# Clearing only the dependency target still leaves a nonexistent pthreadVC3.lib.
+unset(PTHREADS_LIBRARIES)
 dfv_dependency(bf::dependencies::pthreads "")
 dfv_dependency(bf::dependencies::epoxy "${DFV_LIB_DIR}/epoxy/include" "${DFV_LIB_DIR}/epoxy/lib/epoxy.lib")
 foreach(dep embree openimagedenoise openpgl opensubdiv openvdb nanovdb osl python sdl usd)

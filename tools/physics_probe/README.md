@@ -4,12 +4,11 @@
 
 本机已验证：Windows x64、VS 2022、MSVC 19.44、CMake 3.31.6、Jolt v5.6.0，提交 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`。
 
-在仓库根目录用 PowerShell 执行（已有源码时跳过 clone）：
+在仓库根目录用 PowerShell 执行（依赖由统一的 [构建流程](../../Docs/build_windows_cn.md) 准备）：
 
 ```powershell
-git clone --depth 1 --branch v5.6.0 https://github.com/jrouwe/JoltPhysics.git .research/JoltPhysics-v5.6.0
-git -C .research/JoltPhysics-v5.6.0 rev-parse HEAD
-$physicsCmake = 'C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
+.\tools\bootstrap.ps1
+$physicsCmake = "$PWD/.deps/python/Scripts/cmake.exe"
 & $physicsCmake -S tools/physics_probe -B .research/build-physics-probe -G 'Visual Studio 17 2022' -A x64
 & $physicsCmake --build .research/build-physics-probe --config Release --target DfvPhysicsProbe --parallel 2
 & .research/build-physics-probe/Release/DfvPhysicsProbe.exe
@@ -23,4 +22,4 @@ $physicsCmake = 'C:/Program Files/Microsoft Visual Studio/2022/Community/Common7
 & .research/build-physics-probe/Release/DfvPhysicsProbe.exe --dihedral
 ```
 
-编译设置仅作用于这个独立 CMake 项目；Jolt 使用静态库和动态 MSVC CRT，不下载额外图形 SDK。Jolt 默认启用的部分 SIMD 选项适合本机 CPU，不能据此承诺所有 x64 机器兼容。正式集成需重新核对目标 CPU、主程序编译选项与 Jolt 许可分发。
+编译设置仅作用于这个独立 CMake 项目；Jolt 使用静态库和动态 MSVC CRT。探针本身不需要图形 SDK，上面的统一 bootstrap 会为主工程同时准备 Qt / CUDA 等依赖；只运行探针时也可手工下载固定版本 Jolt，并通过 `-DDFV_JOLT_SOURCE=<目录>` 指定。Jolt 默认启用的 SIMD 选项要求目标 CPU 支持 AVX2 / FMA 等，不通过关闭优化来默认兼容旧 CPU。

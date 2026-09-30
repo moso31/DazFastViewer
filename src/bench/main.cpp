@@ -1,3 +1,4 @@
+#include "cycles/runtime_paths.h"
 #include "viewport/display.h"
 #include "bench/fixtures.h"
 #include "bench/scene_export.h"
@@ -93,7 +94,8 @@ ccl::DeviceInfo select_device(const std::string &backend) {
   if(backend!="CUDA" && backend!="OPTIX") throw std::runtime_error("仅支持显式 CUDA 或 OPTIX，禁止自动回退 CPU");
   for(const auto &device:ccl::Device::available_devices())
     if(ccl::Device::string_from_type(device.type)==backend) return device;
-  throw std::runtime_error("找不到请求的渲染设备: "+backend);
+  throw std::runtime_error("找不到请求的渲染设备: "+backend+
+    (backend=="OPTIX"?"；OptiX 9.1 需要受支持的 NVIDIA 显卡和 R590 或更高版本驱动":""));
 }
 void screenshot(const std::filesystem::path &path,int width,int height) {
   std::vector<unsigned char> pixels(size_t(width)*height*4),flipped(pixels.size());
@@ -420,7 +422,7 @@ int wmain(int argc,wchar_t **wide_argv) {
     auto color_config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();
     color_config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(color_config);
     const auto options=parse(argc,argv.data());
-    ccl::path_init(ccl::path_dirname(argv[0]),DFV_CYCLES_SOURCE);
+    ccl::path_init(ccl::path_dirname(argv[0]),dfv::cycles_user_directory());
     if(options.help) {
       std::cout<<"DazFastViewer: --file <DUF> [--content-root <directory>] [--inspect] [--strict-dson]\n"
                <<"  --monitor 2 --width 1600 --height 900 --device OPTIX\n"

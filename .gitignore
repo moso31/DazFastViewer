@@ -8,3 +8,6 @@
 __pycache__/
 *.user
 /DazFastViewer.project.json
+/CMakeUserPresets.json
+/aqtinstall.log
+/DazFastViewer.sln

@@ -1,3 +1,4 @@
+#include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
 #include "powerpose_fixture.h"
 #include "util/path.h"
@@ -12,7 +13,7 @@ static void check(bool ok,const char *message){if(!ok)throw std::runtime_error(m
 int main(int argc,char **argv){
   QApplication app(argc,argv);const auto output=std::filesystem::absolute("artifacts/content-interaction/gpu");std::filesystem::create_directories(output);
   try{
-    auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);ccl::path_init(app.applicationDirPath().toStdString(),DFV_CYCLES_SOURCE);
+    auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);ccl::path_init(app.applicationDirPath().toStdString(),dfv::cycles_user_directory());
     auto d=std::make_shared<Document>();d->generation=1;auto &scene=d->loaded.scene;ir::Material material;material.id="surface";scene.materials={material};
     ir::Mesh mesh;mesh.id="mesh";mesh.material_slots={"Surface"};mesh.positions={{.75f,0,-.2f},{1.2f,0,-.2f},{1.2f,0,.2f},{.75f,0,.2f}};mesh.triangles={{{0,1,2}},{{0,2,3}}};scene.meshes={mesh};
     ir::Instance instance;instance.id="figure/mesh";instance.materials={0};scene.instances={instance};runtime::Target target;target.id=instance.id;target.label="figure";d->catalog.targets={target};
@@ -21,7 +22,7 @@ int main(int argc,char **argv){
     skin.joints[fore].parent=shoulder;skin.joints[hand].parent=fore;skin.joints[shoulder].end_cm={40,0,0};skin.joints[fore].center_cm={40,0,0};skin.joints[fore].end_cm={80,0,0};skin.joints[hand].center_cm={80,0,0};skin.joints[hand].end_cm={120,0,0};
     skin.weights.assign(4,{{uint32_t(hand),1}});d->skeletons.skins={skin};d->formulas.graphs.resize(1);d->formulas.graphs[0].skin=0;
     daz::AssetObject object;object.id="figure";object.figure=true;object.content_type="Actor/Character";object.auto_fit_base="/Genesis 8/Female";d->loaded.objects={object};
-    auto snapshot=initial_snapshot(*d);QScreen *secondary=nullptr;for(auto *screen:QGuiApplication::screens())if(screen!=QGuiApplication::primaryScreen())secondary=screen;check(secondary,"缺少副屏");
+    auto snapshot=initial_snapshot(*d);QScreen *secondary=QGuiApplication::primaryScreen();for(auto *screen:QGuiApplication::screens())if(screen!=QGuiApplication::primaryScreen())secondary=screen;check(secondary,"No available display");
     QWidget host;host.resize(700,520);host.move(secondary->availableGeometry().topLeft()+QPoint(30,30));host.show();app.processEvents();
     SamplingSettings settings;settings.samples=16;settings.adaptive_threshold=0;settings.interaction_probe=true;
     Renderer renderer(reinterpret_cast<HWND>(host.winId()),host.width(),host.height(),output,settings);renderer.resize(host.width(),host.height());renderer.automated_pointer();renderer.set_document(d,snapshot,false);renderer.camera_view({.95f,0,0,2.5f,0,0});renderer.select(1,0,-1,{{0,-1}},true);
