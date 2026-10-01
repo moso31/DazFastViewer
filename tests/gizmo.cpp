@@ -1,4 +1,5 @@
 #include "editor/gizmo.h"
+#include "editor/object_hierarchy.h"
 #include "editor/document.h"
 #include "editor/scene_extension.h"
 #include <iostream>
@@ -37,12 +38,12 @@ static void planes_and_ground() {
   auto front=view();front.yaw=front.pitch=0;const auto edge=gizmo_shape(front,1000,800,{},{},{GizmoTool::translate,GizmoSpace::world});check(edge.planes.size()==1,"沿视线的平面没有隐藏");
   const std::vector<ir::Vec3> points={{-.2f,-.1f,-.3f},{.4f,.2f,1.7f},{.1f,-.2f,.8f}};
   auto bounds=[&](const ir::Transform &world){ir::Bounds b;for(auto p:points) b.add(world.point(p));return b;};const auto before=bounds(current);
-  for(double ratio:{0.,.01,-.05,.5}) {
-    const auto result=ground_aligned_transform(target,input,loaded,current,before,ratio);const auto world=parent*runtime::parameter_transform(result,target,loaded)*loaded;const auto after=bounds(world);
-    check(std::abs(after.minimum.z-ratio*(before.maximum.z-before.minimum.z))<2e-6,"地面对齐没有使用当前世界高度比例");
+  for(double ratio:{0.,.01,-.05,.5}) for(double offset:{0.,3.,-7.5}) {
+    const auto result=ground_aligned_transform(target,input,loaded,current,before,ratio,offset);const auto world=parent*runtime::parameter_transform(result,target,loaded)*loaded;const auto after=bounds(world);
+    check(std::abs(after.minimum.z-ratio*(before.maximum.z-before.minimum.z)-offset/100)<2e-6,"地面对齐没有使用当前世界高度比例");
     check(std::abs(after.minimum.x-before.minimum.x)<2e-6&&std::abs(after.minimum.y-before.minimum.y)<2e-6,"地面对齐被父级坐标轴影响");
     check(result.rotation_degrees==input.rotation_degrees&&result.scale==input.scale&&result.general_scale==input.general_scale,"地面对齐改变了旋转或缩放");
-    const auto again=ground_aligned_transform(target,result,loaded,world,after,ratio);check(distance(again.translation_cm,result.translation_cm)<.0001,"重复地面对齐产生累积位移");
+    const auto again=ground_aligned_transform(target,result,loaded,world,after,ratio,offset);check(distance(again.translation_cm,result.translation_cm)<.0001,"重复地面对齐产生累积位移");
   }
   bool rejected=false;try {ground_aligned_transform(target,input,loaded,current,{},0);} catch(const std::exception &) {rejected=true;}check(rejected,"空包围盒没有拒绝");
 }
@@ -60,14 +61,31 @@ static void instance_ground() {
     check(delta.instances.size()==2&&std::abs(after.minimum.x-before.minimum.x)<1e-6&&std::abs(after.minimum.y-before.minimum.y)<1e-6,"Instance 对齐没有发送正确的变换更新");
     check(ground_vertical_shift(after,ratio)==0,"重复 Instance 对齐会积累漂移");ir::Delta repeat;apply_instance_ground(scene,base,snapshot.instance_ground,&repeat);check(repeat.instances.empty(),"相同 Instance 位移重复发出更新");
   }
+  snapshot.instance_ground["copy/a"].offset_cm=2.5;snapshot.instance_ground["copy/a"].body_only=true;
   const auto saved=snapshot_json(d,snapshot);auto restored=initial_snapshot(d);apply_snapshot_json(d,restored,saved);check(restored.instance_ground==snapshot.instance_ground,"Instance 地面对齐的 DUFEX 值未恢复");auto replay=base;apply_instance_ground(replay,base,restored.instance_ground);check(replay.instances[1].transform==scene.instances[1].transform,"Instance 的 DUFEX 位移未实际恢复");
   auto old=saved;old.erase("instance_ground");apply_snapshot_json(d,restored,old);check(restored.instance_ground.empty(),"旧 DUFEX 未正确使用 Instance 默认值");
   auto invalid=snapshot.instance_ground;invalid["missing"]={1,0};bool rejected=false;try{validate_instance_ground(base,invalid);}catch(const std::exception &){rejected=true;}check(rejected,"不存在的 Instance 覆盖未拒绝");prune_instance_ground(base,invalid);check(invalid==snapshot.instance_ground,"删除对象后 Instance 覆盖清理错误");
   ir::Delta reset;apply_instance_ground(scene,base,{},&reset);check(scene.instances[1].transform==base.instances[1].transform&&reset.instances.size()==2,"Instance 清除修改后没有恢复");
 }
+static void clothing_ground() {
+  Document d;d.catalog.targets.resize(5);d.loaded.scene.instances.resize(5);
+  for(size_t i=0;i<5;++i){auto &t=d.catalog.targets[i];t.id=std::to_string(i)+"/shape";t.instance=uint32_t(i);}
+  d.catalog.targets[1].parent="#0";d.catalog.targets[2].conform_target="#0";d.catalog.targets[3].parent="#nested";
+  d.loaded.nodes.push_back({"nested","#0","nested",true});
+  std::vector<ir::Bounds> bounds(5);const double low[]={1,.8,.5,-.5,-20};
+  for(size_t i=0;i<5;++i){bounds[i].add({0,0,float(low[i])});bounds[i].add({1,1,2});}
+  std::vector<bool> visible(5,true);visible[3]=false;
+  check(ground_bounds(d,0,bounds,visible,false).minimum.z==.5f,"默认对齐未包含穿戴物或混入隐藏对象、其他角色");
+  check(ground_bounds(d,0,bounds,visible,true).minimum.z==1,"仅本体选项仍包括服装");
+  visible[3]=true;check(ground_bounds(d,0,bounds,visible,false).minimum.z==-.5f,"嵌套组内的穿戴物未计入");
+  auto snapshot=initial_snapshot(d);snapshot.values[0].ground_alignment_ratio=.02;snapshot.values[0].ground_alignment_offset_cm=-3.5;snapshot.values[0].ground_alignment_body_only=true;
+  auto saved=snapshot_json(d,snapshot),restored=saved;auto next=initial_snapshot(d);apply_snapshot_json(d,next,saved);check(next.values==snapshot.values,"地面对齐三项设置没有保存");
+  for(auto &[id,o]:restored["objects"].items()){o.erase("ground_offset_cm");o.erase("ground_body_only");}apply_snapshot_json(d,next,restored);
+  check(next.values[0].ground_alignment_offset_cm==0&&!next.values[0].ground_alignment_body_only,"旧场景的地面对齐设置默认值错误");
+}
 int main() {
   try {
-    planes_and_ground();instance_ground();
+    planes_and_ground();instance_ground();clothing_ground();
     const auto m=mesh();
     for(const std::string order:{"XYZ","XZY","YXZ","YZX","ZXY","ZYX"}) for(auto space:{GizmoSpace::local,GizmoSpace::world}) for(int axis=0;axis<3;++axis) {
       runtime::Target target;target.rotation_order=order;target.has_edit_frame=true;

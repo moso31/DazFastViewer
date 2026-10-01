@@ -1,5 +1,6 @@
 #include "editor/project.h"
 #include "editor/physics_panel.h"
+#include "editor/ground_panel.h"
 #include "render_ir/material_quality.h"
 #include <QApplication>
 #include <QDialog>
@@ -28,6 +29,19 @@ static void require(bool ok,const char *why) {if(!ok) throw std::runtime_error(w
 int main(int argc,char **argv) {
   QApplication app(argc,argv);QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");app.setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
   try {
+    {
+      QScrollArea scroll;auto *content=new QWidget;auto *layout=new QVBoxLayout(content);auto *panel=new dfv::editor::GroundPanel;layout->addWidget(panel);auto *filler=new QWidget;filler->setMinimumHeight(600);layout->addWidget(filler);scroll.setWidget(content);scroll.setWidgetResizable(true);scroll.resize(420,260);
+      double ratio=0,offset=0;bool body=false;int changes=0,aligns=0;
+      panel->changed=[&](double r,double o,bool b){ratio=r;offset=o;body=b;++changes;};panel->align=[&]{panel->commit();++aligns;};panel->bind(true,.01,2.5,false);scroll.show();app.processEvents();
+      auto *r=panel->findChild<QDoubleSpinBox *>("GroundAlignmentRatio"),*o=panel->findChild<QDoubleSpinBox *>("GroundAlignmentOffset");auto *b=panel->findChild<QCheckBox *>("GroundBodyOnly");
+      require(changes==0&&r->value()==1&&o->value()==2.5&&!b->isChecked(),"地面对齐绑定或百分比单位错误");
+      auto wheel=[&](QDoubleSpinBox *spin,int delta){QWheelEvent e(QPointF(2,2),spin->mapToGlobal(QPoint(2,2)),{},QPoint(0,delta),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(spin,&e);};
+      wheel(o,-120);require(changes==0&&scroll.verticalScrollBar()->value()>0,"未选中地面对齐属性时滚轮修改了数值");scroll.verticalScrollBar()->setValue(0);
+      QMouseEvent press(QEvent::MouseButtonPress,QPointF(2,2),o->mapToGlobal(QPoint(2,2)),Qt::LeftButton,Qt::LeftButton,Qt::NoModifier);QApplication::sendEvent(o,&press);wheel(o,120);require(offset==2.6,"选中固定偏移后滚轮不能调参");wheel(r,120);require(r->value()==1,"滚轮修改了未选中的另一个属性");
+      b->setChecked(true);r->setValue(-2);require(ratio==-.02&&body,"地面对齐选项未通知对象");
+      o->findChild<QLineEdit *>()->setText("-3.75");panel->findChild<QPushButton *>("GroundAlign")->click();require(offset==-3.75&&aligns==1,"对齐按钮未提交尚未回车的固定偏移");
+      auto *header=panel->findChild<QToolButton *>("GroundCollapse");header->setChecked(false);require(!o->isVisible(),"地面对齐不能折叠");header->setChecked(true);panel->bind(true,0,0,false);require(!b->isChecked()&&r->value()==0&&o->value()==0,"切换对象未恢复独立设置");panel->bind(false,0,0,false);require(!o->isEnabled(),"无对象仍可编辑地面对齐");
+    }
     {
       QScrollArea scroll;auto *content=new QWidget;auto *layout=new QVBoxLayout(content);auto *panel=new dfv::editor::PhysicsPanel;layout->addWidget(panel);layout->addStretch();scroll.setWidget(content);scroll.setWidgetResizable(true);scroll.resize(380,360);
       dfv::runtime::PhysicsObjectSettings value;int changes=0,runs=0,resets=0,hover=-1;

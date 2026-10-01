@@ -1,5 +1,43 @@
 # 交接记录
 
+## 最新：Group／多选整体 Ctrl+D 与 Group 移动增量更新
+
+2026-10-02：Group 和多选模型现在合并当前可见模型的世界 AABB，整体沿世界 Y 落地到最低点为 0；忽略各角色的比例、固定偏移和仅本体设置，并保留这些设置。包括后代、穿戴物和 Instance；父子同时选择时只移动最外层选中节点，保持相对位置。整次操作原子提交为一条历史记录，重复 Ctrl+D 不累积位移。单对象保持原有对齐行为；整体模式的参数控件禁用并说明计算规则。
+
+耗时根因是每次 Group 编辑都复制完整 Document，文档指针变化又触发 DeformationRuntime 重建、形变求值、完整 Cycles 同步、白模重建和拾取树重建。现在复用文档与运行时，只传递 Group 参考矩阵和实例 Delta；共同参考框架在相对矩阵计算前消去，保留蒙皮、Morph、服装贴合、GeoGraft 和碰撞缓存。Gizmo、PowerPose、灯光、Instance 与组轴心直接使用轻量参考框架。Fit To 两端参考框架确实分离时才回退重新绑定；启用物理时仍为物理线程生成独立求值文档。
+
+验证：Release 构建及 33 项 CTest 通过（`artifacts/group-ground-incremental-ctest.log`）；新增数学检查覆盖嵌套 Group／Prop／骨骼挂接、旋转缩放下的整体落地、Instance、角色设置保留、服装／碰撞缓存复用，以及 Group 移动后的继续编辑。`--collective-ground-test "Bed (3)"` 在原始 `G:/G1/Scenes/11.duf` 上通过 4 组原生 Ctrl+D：Group、两个模型、Group 加子模型、Group 加外部模型，最低点均为 0；重复执行、撤销重做、最终恢复通过。`--group-motion-test "Bed (3)"` 通过 6 次 Local／World 平移和 3 次取消，世界矩阵最大误差 `2.384185791015625e-7`，所有局部网格不变，移动期间无新增 Morph／蒙皮／几何／全场景更新，全程 1 个 Session。
+
+性能证据：`artifacts/group-ground-performance.json` 对比此前 `artifacts/bed-debug/full-ui-fixed/` 和本次 `artifacts/group-ground-motion-final/` 的同场景诊断日志（16 samples、纹理上限 512，历史运行对比）。松手到新帧提交从 4.39–4.61 秒降为 0.17–0.20 秒；Group 框架更新平均 3.60 ms、增量求值 0.15 ms，白模／拾取增量均小于 0.03 ms。此为程序提交时间，不是系统级可见帧测量。整体对齐报告为 `artifacts/group-ground-collective-final/collective-ground.json`，拖动报告为 `artifacts/group-ground-motion-final/group-check.json`。
+
+新版已部署至 `out/vs2022/Release` 并核对构建与部署 EXE 的 SHA256：`C445A55D2C89E04291B41EF926B9EECDB7E5E30998614EA54F431F47B7923AC6`。保留此前未提交修改，未创建 Git 提交，未改写用户 DUF。
+
+## 最新：修复含角色场景中的根 Group Gizmo 位移跳变
+
+2026-10-02：在原始 `G:/G1/Scenes/11.duf` 的 `Bed (3)`（`Bed-5`，5 个子物体）复现。`node_parent_delta` 把空父 ID 拼成 `#`，误匹配了其他角色中 `scene_id` 为空的骨骼；有效姿势约 1/61 的缩放污染 Group 预览坐标系，约 0.304 米的预览位移提交成了 18.558 米。修复后直接遍历已解析的父 ID，空 ID 立即终止，不参与骨骼匹配。Gizmo 状态栏改为对象变换及渲染更新提示，不再统一宣称恢复角色服装与头发。
+
+新增无关角色空骨骼 ID、缩放姿势与根 Group 共存的回归测试，以及 `--group-motion-test "Bed (3)"`：核对 Local / World 三轴平移、3 次取消、撤销／重做、全部实例矩阵和网格哈希、最终完全恢复。原始完整场景的 9 组窗口验证通过，5 个子物体的预览与提交矩阵最大差异 `2.384185791015625e-7`，其余物体保持不变；33 项 CTest 全部通过。诊断会等待最后一次鼠标输入的预览，避免真实鼠标移动干扰自动测试。
+
+证据：`artifacts/bed-debug/full-ui-trace/` 为修复前复现，`artifacts/bed-debug/full-ui-fixed/group-check.json` 为修复后结果，`artifacts/bed-debug/ctest.log` 为全量测试。`GroupTransformTest <duf> <group-label> <report.json> [content-root ...]` 还可逐顶点核对真实场景的世界坐标。Release 已更新至 `out/vs2022/Release`，EXE SHA256 为 `18F19DBCEF0E5388210C4DB2EA8D9FFEB0E522E1C3AF3CD6C351C3EAB610625D`。未修改用户场景，未创建 Git 提交，保留此前未提交修改。
+
+## 最新：无几何 Group 的 Transform 与视口操作
+
+2026-10-01：Group 保留 DUF 原生平移、旋转、缩放、旋转顺序与轴心；选中母组后，“对象属性与 Morph”提供 XYZ Translate / Rotate / Scale 和整体 Scale。视口沿用现有移动、旋转、缩放工具，支持 Local / World、整组简化网格预览、松手提交、Esc 取消、重置和撤销／重做；历史按 Group 身份恢复选择，不再把母组选择还原为一组子对象。
+
+变换以 `Snapshot::group_transforms` 独立保存，兼容旧 DUFEX，重新加载、追加带前缀的场景和删除父对象时同步保留／清理。`group_transforms.h` 生成缓存的求值文档，组合 Group 参考框架并保留子对象自己的参数和姿势；支持 Group / Prop 交错层级、骨骼父节点、组内灯光和 Instance。实例仍与原型独立；其父级变换先求值，再叠加已有世界地面对齐偏移。变换提交复用 Cycles Session。
+
+验证入口 `--group-transform-test`：母组属性编辑、9 组原生鼠标拖动／取消、撤销重做、DUFEX 文件保存重开与最终矩阵／网格恢复。轻量 `GroupTransformTest` 覆盖嵌套变换顺序、Local / World 预览与提交一致、骨骼挂接、灯光、实例／地面对齐和删除清理；`scene_ir_dson` 验证原生 Group 参数、世界矩阵和轴心。最终 Release 构建及 33 项 CTest 全部通过；带有已编辑父 Prop 与 Instance 副本的窗口验证也通过。验证记录见 `artifacts/group-all-tests.log`、`artifacts/group-ui-final/`、`artifacts/group-ui-instance/` 与 `artifacts/group-freedom-skies/`；真实飞机的 `First Deck-1` 组包含 19 个子对象，9 组鼠标操作、保存重开及撤销全部通过（诊断采样 16，纹理上限 512）。运行时继续部署至 `out/vs2022/Release`；未创建 Git 提交，保留此前全部未提交修改。
+
+## 最新：Prop 母组材质、局部 Pose 与地面对齐面板
+
+2026-10-01：材质面板按真实场景父子关系递归展示 Prop 和无几何组，选中母组编辑其全部后代表面；切换组时默认选择整个组。保留角色与穿戴物的关系。修复混合数值首项为 0 时输入 0 不触发批量写入的问题。真实 `JJVIP2 Freedom Skies Base.duf` 的 BodyPlaneT 已验证覆盖 155 个对象、227 个表面，统一输入自发光亮度 0 后全部归零。
+
+Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+单击应用单选骨骼及其全部后代。使用骨骼 name／id／别名匹配，范围外通道及全身控制器保留；未单选骨骼时局部操作给出提示。普通形态、材质和模型入口保持原有打开方式。局部与全身操作均进入撤销记录。
+
+“对象属性与 Morph”窗口增加与“物理”“对象属性与 Morph”并列的“地面对齐”折叠组：百分比、固定世界偏移（cm）、仅考虑角色本体（默认不勾选）。Ctrl+D 的底部目标高度为当前世界 AABB 高度 × 百分比 + 固定偏移；正值离地，负值下沉。默认纳入可见穿戴物／后代，勾选后只使用本体。参数按对象独立保存，兼容旧 DUFEX，支持撤销与重新加载；滚轮仅调节左键选中的属性。顶部保留对齐动作，移除比例输入框。
+
+完整 Release 构建及 32 项 CTest 通过；最后材质选择调整后重跑 materials 通过。新增检查覆盖后代自发光归零、局部 Pose 分支／控制器隔离、穿戴物和隐藏对象范围、旋转缩放下固定世界偏移、DUFEX 兼容、Ctrl 点击和参数滚轮。真实飞机面板验证不包含 GPU 渲染截图对比。证据：`artifacts/scene-controls-tests.log`、`scene-controls-freedom-skies.json`、`scene-controls-freedom-skies.png`。发布位置沿用 `out/vs2022/Release`。未创建 Git 提交，保留原有资源路径及部署工具等未提交修改。
+
 ## 最新：顶部撤销／重做工具组
 
 2026-09-27：新增独立“撤销／重做模块”，使用与顶部旋转图标一致的黑白左／右回转箭头，默认位于菜单与变换组之间。复用编辑菜单的 QAction，操作名称、快捷键和可用状态同步；支持移动、浮动、隐藏与布局保存。清空历史现在发布状态通知，避免空历史仍显示可撤销。恢复旧布局后按当前图标尺寸重新保留两个按钮的宽度。

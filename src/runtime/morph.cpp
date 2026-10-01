@@ -14,6 +14,7 @@ static bool same(ir::Vec3 a,ir::Vec3 b) {return a.x==b.x && a.y==b.y && a.z==b.z
 MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):scene_(scene),targets_(targets) {
   diagnostics::Scope scope("morph_construct");
   parents_.resize(targets.size(),-1);follow_offsets_.resize(targets.size());attachments_.resize(targets.size());
+  reference_frames_.resize(targets.size());attachment_frames_.resize(targets.size());
   for(size_t i=0;i<targets.size();++i) {
     auto ancestors=targets[i].ancestors;if(ancestors.empty()) ancestors.push_back(targets[i].parent);
     for(const auto &parent:ancestors) {for(size_t j=0;j<targets.size();++j) if(i!=j&&parent=="#"+targets[j].id.substr(0,targets[j].id.rfind('/'))) {parents_[i]=int(j);break;}if(parents_[i]>=0) break;}
@@ -111,16 +112,27 @@ ir::Transform parameter_transform(const TransformValues &v,const Target &t,const
   }
   return result;
 }
-ir::Transform MorphRuntime::local_transform(size_t target) const {
-  return attachments_[target]*parameter_transform(values_[target].transform,targets_[target],transforms_[target]);
+void MorphRuntime::set_reference_frames(const std::vector<ir::Transform> &frames,const std::vector<ir::Transform> &attachment_frames) {
+  if(frames.size()!=targets_.size()||attachment_frames.size()!=targets_.size())throw std::runtime_error("变换参考框架数量不一致");
+  for(size_t t=0;t<frames.size();++t)if(frames[t]!=reference_frames_[t]||attachment_frames[t]!=attachment_frames_[t])dirty_transform(t);
+  reference_frames_=frames;attachment_frames_=attachment_frames;
+}
+ir::Transform MorphRuntime::local_transform(size_t target,const ir::Transform &frame) const {
+  auto relative=[&](const ir::Transform &f){return f==frame?ir::Transform{}:ir::inverse(frame)*f;};
+  const auto f=relative(reference_frames_[target]),a=relative(attachment_frames_[target]);
+  return a*attachments_[target]*ir::inverse(a)*f*parameter_transform(values_[target].transform,targets_[target],transforms_[target])*ir::inverse(f);
 }
 ir::Transform MorphRuntime::relative_transform(uint32_t source,uint32_t follower) const {
   int a=-1,b=-1;for(size_t t=0;t<targets_.size();++t) {if(targets_[t].instance==source) a=int(t);if(targets_[t].instance==follower) b=int(t);}
   if(a<0||b<0) return ir::inverse(scene_.instances.at(source).transform)*scene_.instances.at(follower).transform;
   std::vector<size_t> left,right;for(int t=a;t>=0;t=parents_[t]) left.push_back(size_t(t));for(int t=b;t>=0;t=parents_[t]) right.push_back(size_t(t));
   while(!left.empty()&&!right.empty()&&left.back()==right.back()) {left.pop_back();right.pop_back();}
-  ir::Transform l,r;for(auto i=left.rbegin();i!=left.rend();++i) l=l*local_transform(*i);for(auto i=right.rbegin();i!=right.rend();++i) r=r*local_transform(*i);
-  return ir::inverse(l*transforms_[a])*(r*transforms_[b]);
+  // Cancel a shared Group frame before multiplying, preserving exact relative geometry
+  // for clothing, grafts and collision caches during a rigid move of the whole group.
+  const auto frame=reference_frames_[a];
+  ir::Transform l,r;for(auto i=left.rbegin();i!=left.rend();++i) l=l*local_transform(*i,frame);for(auto i=right.rbegin();i!=right.rend();++i) r=r*local_transform(*i,frame);
+  const auto relative=frame==reference_frames_[b]?ir::Transform{}:ir::inverse(frame)*reference_frames_[b];
+  return ir::inverse(l*transforms_[a])*(r*relative*transforms_[b]);
 }
 ir::Delta MorphRuntime::evaluate() {
   diagnostics::Scope scope("morph_evaluate");
@@ -151,7 +163,7 @@ ir::Delta MorphRuntime::evaluate() {
     return result;
   };
   for(auto target:dirty_transforms_) {
-    const auto transform=edit_transform(target)*transforms_[target];
+    const auto transform=edit_transform(target)*reference_frames_[target]*transforms_[target];
     const auto instance=targets_[target].instance;scene_.instances[instance].transform=transform;
     delta.instances.push_back({instance,transform});++stats_.transform_evaluations;
   }

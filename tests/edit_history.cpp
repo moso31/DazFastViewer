@@ -31,6 +31,7 @@ static void commands(){
   EditState current=state_for(fixture());int changes=0,restores=0;EditHistory history([&]{return current;},[&](const EditState &s){current=s;++restores;});history.changed=[&]{++changes;};
   auto roundtrip=[&](const QString &label,auto change){auto before=current;const auto count=history.stack().count();history.execute(label,change);auto after=current;check(history.stack().count()==count+1,"操作没有产生一条历史");history.undo();check(same_edit(current,before),"撤销没有恢复完整输入");history.redo();check(same_edit(current,after),"重做没有恢复完整输入");};
   roundtrip("transform",[&]{current.snapshot.values[0].transform.translation_cm={1,2,3};current.snapshot.values[0].transform.general_scale=1.123456789;});
+  roundtrip("group transform",[&]{current.snapshot.group_transforms["group"].translation_cm={10,20,30};current.snapshot.group_transforms["nested"].rotation_degrees.y=35;current.context.selection={{"group","","",-4}};current.context.active=current.context.selection.front();});
   roundtrip("visibility",[&]{current.snapshot.values[1].visible=false;});
   roundtrip("morph",[&]{current.snapshot.values[0].morphs[0]=1.7f;current.snapshot.values[0].unlimited_morphs.insert("morph");});
   roundtrip("IK / FK / PowerPose",[&]{for(size_t i=0;i<3;++i)current.snapshot.poses[0][i].rotation_degrees.z=float(i+2);});

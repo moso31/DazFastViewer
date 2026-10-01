@@ -29,7 +29,7 @@
         roundtrip("morph_drag",[&]{history_interaction(true,quintptr(parameters_));for(float v:{.2f,.4f,.6f})set_morph(morph,v);history_interaction(false,quintptr(parameters_));});
         manual_morph_->setChecked(true);roundtrip("draft",[&]{set_morph(morph,.8);});roundtrip("apply_draft",[&]{apply_parameters();});manual_morph_->setChecked(false);
         roundtrip("favorites",[&]{parameters_->favorite_changed("","A",true);});
-        roundtrip("ground_ratio",[&]{chrome->ground_ratio_changed(.3);});
+        roundtrip("ground_ratio",[&]{ground_panel_->changed(.3,2.5,true);});
         roundtrip("extension",[&]{enable_extension();});roundtrip("extension_parameter",[&]{auto next=snapshot_.values[0].extension;next.sensitivity+=1;change_extension(next,false,0);});
         roundtrip("subdivision",[&]{set_subdivision(0,subdivision_level(*document_,snapshot_,0)==0?1:0);});
         materials_->bind(document_,&snapshot_,0);roundtrip("material",[&]{auto *spin=materials_->findChild<QDoubleSpinBox *>("material/roughness");require(spin,"缺少材质参数");spin->setValue(.67);});

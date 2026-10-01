@@ -20,10 +20,10 @@
     }
     pins_document_=document_;pins_generation_=document_->generation;snapshot_.pose_pins=pose_pins_;
   }
-  EditSelection history_selection(int target,int joint,int light) const {
+  EditSelection history_selection(int target,int joint,int light,const std::string &group={}) const {
     EditSelection result;if(!document_)return result;
     if(light>=0&&size_t(light)<snapshot_.lights.size()){result.light=snapshot_.lights[light].id;return result;}
-    result.special=target;
+    result.special=target;if(target==-4){result.object=group;return result;}
     if(target>=0&&size_t(target)<document_->catalog.targets.size()){
       const auto &t=document_->catalog.targets[target];result.object=t.id;result.special=-1;
       if(joint>=0)for(const auto &skin:document_->skeletons.skins)if(skin.instance==t.instance&&size_t(joint)<skin.joints.size())result.joint=skin.joints[joint].id;
@@ -37,13 +37,13 @@
     state.document=document_.get()==history_runtime_document_?history_document_:document_;
     state.snapshot=snapshot_;if(state.document)state.snapshot.generation=state.document->generation;
     state.snapshot.pose_pins=pose_pins_;state.pending=pending_parameters_;state.save_file=extension_file_;state.manual=manual_morph_&&manual_morph_->isChecked();
-    if(hierarchy_)for(auto v:tree_selection(hierarchy_))state.context.selection.push_back(history_selection(v[0],v[1],v[2]));
-    state.context.active=history_selection(selected_,selected_joint_,selected_light_);
+    if(hierarchy_)for(auto *item:hierarchy_->selectedItems())state.context.selection.push_back(history_selection(item->data(0,Qt::UserRole).toInt(),item->data(0,Qt::UserRole+1).toInt(),item->data(0,Qt::UserRole+2).toInt(),item->data(0,Qt::UserRole+3).toString().toStdString()));
+    state.context.active=history_selection(selected_,selected_joint_,selected_light_,selected_group_);
     if(materials_)state.context.surfaces=materials_->selection_ids();return state;
   }
   void restore_context(const EditContext &context) {
     {QSignalBlocker block(hierarchy_);hierarchy_->clearSelection();QTreeWidgetItem *first=nullptr,*active=nullptr;
-      for(QTreeWidgetItemIterator it(hierarchy_);*it;++it){auto *item=*it;const auto key=history_selection(item->data(0,Qt::UserRole).toInt(),item->data(0,Qt::UserRole+1).toInt(),item->data(0,Qt::UserRole+2).toInt());
+      for(QTreeWidgetItemIterator it(hierarchy_);*it;++it){auto *item=*it;const auto key=history_selection(item->data(0,Qt::UserRole).toInt(),item->data(0,Qt::UserRole+1).toInt(),item->data(0,Qt::UserRole+2).toInt(),item->data(0,Qt::UserRole+3).toString().toStdString());
         if(std::find(context.selection.begin(),context.selection.end(),key)!=context.selection.end()){item->setSelected(true);if(!first)first=item;for(auto *p=item->parent();p;p=p->parent())p->setExpanded(true);if(key==context.active)active=item;}}
       hierarchy_->setCurrentItem(active?active:first,0,QItemSelectionModel::NoUpdate);
     }sync_selection();if(materials_)materials_->restore_selection(context.surfaces);
@@ -71,7 +71,8 @@
     if(state.pose_commit==pose_commit_)return false;pose_commit_=state.pose_commit;
     if(!document_||state.pose_generation!=document_->generation||state.pose_revision!=snapshot_.revision||(!state.pose_gizmo&&(state.pose_skin<0||size_t(state.pose_skin)>=snapshot_.poses.size())))return false;
     auto edit=history_edit(state.pose_gizmo?QStringLiteral("Gizmo 变换"):state.pose_powerpose?QStringLiteral("PowerPose 姿势"):QStringLiteral("IK 姿势"));
-    if(state.pose_gizmo&&state.pose_light>=0&&size_t(state.pose_light)<snapshot_.lights.size())snapshot_.lights[state.pose_light].transform=state.gizmo_light_transform;
+    if(state.pose_gizmo&&!state.pose_group.empty()){if(!group_node(*document_,state.pose_group))return false;runtime::validate_transform(state.pose_transform);if(state.pose_transform==runtime::TransformValues{})snapshot_.group_transforms.erase(state.pose_group);else snapshot_.group_transforms[state.pose_group]=state.pose_transform;}
+    else if(state.pose_gizmo&&state.pose_light>=0&&size_t(state.pose_light)<snapshot_.lights.size())snapshot_.lights[state.pose_light].transform=state.gizmo_light_transform;
     else if(state.pose_figure&&(state.pose_powerpose||state.pose_gizmo)&&state.pose_target>=0&&size_t(state.pose_target)<snapshot_.values.size())snapshot_.values[state.pose_target].transform=state.pose_transform;
     else snapshot_.poses.at(size_t(state.pose_skin))=state.pose_input;
     send();select(selected_,selected_joint_,selected_light_);

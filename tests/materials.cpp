@@ -1,4 +1,6 @@
 #include "editor/material_panel.h"
+#include "render_ir/emission.h"
+#include <QFontDatabase>
 #include "editor/ui_scale.h"
 #include "editor/scene_extension.h"
 #include "daz/documents.h"
@@ -40,6 +42,22 @@ static void apply_library_sample(daz::LoadedScene preset){
   check(apply_materials(*d,0,preset,&snapshot)>0,"真实预设未匹配对象表面");scene.validate();auto serialized=snapshot_json(*d,snapshot);auto restored=initial_snapshot(*d);apply_snapshot_json(*d,restored,serialized);check(restored.material_overrides==snapshot.material_overrides,"真实预设替换后的参数不能保存恢复");
   for(size_t i=preset.report.value("hierarchical_material",false)?2:1;i<scene.instances.size();++i)for(auto m:scene.instances[i].materials)check(scene.materials[m].base_color==ir::Material{}.base_color,"真实预设修改泄漏至其他对象");
 }
+static void nested_props(QApplication &app) {
+  auto d=fixture();auto &scene=d->loaded.scene;d->loaded.nodes={{"outer","","Outer",true},{"nested","#figure","Nested",true}};
+  d->loaded.objects[0].figure=false;d->loaded.objects[0].auto_fit_base.clear();d->loaded.objects[0].parent="#outer";
+  d->loaded.objects[1].figure=false;d->loaded.objects[1].parent="#nested";d->loaded.objects[1].conform_target.clear();
+  d->catalog.targets[0].parent="#outer";d->catalog.targets[1].parent="#nested";d->catalog.targets[1].conform_target.clear();d->catalog.targets[1].ancestors={"#nested","#figure","#outer"};
+  auto glow=scene.materials[0];glow.id="glow";glow.emission_luminance=25;scene.materials.push_back(glow);scene.instances[1].materials={1,1};
+  auto snapshot=initial_snapshot(*d);MaterialPanel panel;panel.resize(850,650);panel.bind(d,&snapshot,0);panel.show();app.processEvents();
+  auto *tree=panel.findChild<QTreeWidget *>("materialSurfaces");
+  check(tree->topLevelItemCount()==1&&panel.selected_surfaces().size()==4,"选择 Prop 母组没有递归包含深层子 Prop 材质");
+  auto *strength=panel.findChild<QDoubleSpinBox *>("material/emission_luminance");check(strength&&strength->value()==0,"混合自发光测试首项应为零");
+  auto *input=strength->findChild<QLineEdit *>();input->setFocus();input->selectAll();QTest::keyClicks(input,"0");QTest::keyClick(input,Qt::Key_Return);app.processEvents();
+  auto rendered=scene;apply_material_overrides(rendered,scene,snapshot.material_overrides);check(rendered.materials[rendered.instances[1].materials[0]].emission_luminance==0&&rendered.materials[rendered.instances[1].materials[1]].emission_luminance==0,"混合选择输入零没有关闭后代自发光");
+  check(!snapshot.material_overrides.contains("other"),"批量自发光修改污染其他对象");
+  panel.bind(d,&snapshot,-4,"outer");check(panel.selected_surfaces().size()==4&&tree->topLevelItem(0)->text(0)=="Outer","空组无法递归选择材质");
+  panel.bind(d,&snapshot,-4,"nested");check(panel.selected_surfaces().size()==2,"切换空组后选中范围不正确");
+}
 static void file_roundtrip(const std::filesystem::path &folder){
   auto source=J::parse(R"({"node_library":[{"id":"root","type":"node"}],"geometry_library":[{"id":"mesh","vertices":{"count":3,"values":[[0,0,0],[100,0,0],[0,100,0]]},"polygon_material_groups":{"count":1,"values":["Skin"]},"polylist":{"count":1,"values":[[0,0,0,1,2]]},"default_uv_set":"#uv"}],"uv_set_library":[{"id":"uv","vertex_count":3,"uvs":{"count":3,"values":[[0,0],[1,0],[0,1]]}}],"scene":{"nodes":[{"id":"object","url":"#root","geometries":[{"id":"shape","url":"#mesh"}]}],"materials":[{"id":"mat","geometry":"#shape","groups":["Skin"]}]}})");
   const auto file=folder/"scene.duf",preset_file=folder/"shader.duf";std::ofstream(file)<<source.dump();
@@ -80,8 +98,19 @@ static void file_roundtrip(const std::filesystem::path &folder){
   const auto hierarchy_file=folder/"hierarchy.duf";std::ofstream(hierarchy_file)<<hierarchy.dump();check(!daz::inspect_contents(hierarchy).instantiate,"层级材质被误判为追加模型");auto hierarchy_preset=daz::load(hierarchy_file,{{folder},false});auto family=fixture();auto family_snapshot=initial_snapshot(*family);check(apply_materials(*family,0,hierarchy_preset,&family_snapshot)==2,"层级材质没有同时匹配角色和服装");const auto &family_scene=family->loaded.scene;check(family_scene.materials[family_scene.instances[0].materials[0]].base_color==ir::Vec3{1,0,0}&&family_scene.materials[family_scene.instances[1].materials[0]].base_color==ir::Vec3{0,0,1}&&family_scene.materials[family_scene.instances[2].materials[0]].base_color==ir::Material{}.base_color,"同名表面跨对象串用层级材质");
 }
 int main(int argc,char **argv){
-  QApplication app(argc,argv);app.setFont(QFont(QStringLiteral("Microsoft YaHei UI"),9));
+  QApplication app(argc,argv);QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");app.setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
   try{
+    nested_props(app);
+    if(argc>2&&std::string(argv[1])=="--group-scene"){
+      const std::vector<std::filesystem::path> roots={"G:/G1","G:/G3"};auto d=std::make_shared<Document>();d->loaded=daz::load(std::filesystem::u8path(argv[2]),{roots,false});d->catalog=daz::discover_morphs(d->loaded,roots,{},true);auto snapshot=initial_snapshot(*d);
+      int target=-1;for(size_t i=0;i<d->catalog.targets.size();++i)if(d->catalog.targets[i].label=="BodyPlaneT")target=int(i);check(target>=0,"真实场景缺少 BodyPlaneT");
+      MaterialPanel panel;panel.resize(1050,760);panel.bind(d,&snapshot,target);panel.show();app.processEvents();const auto surfaces=panel.selected_surfaces();std::set<size_t> instances;J emitters=J::array();
+      for(auto s:surfaces){instances.insert(s.instance);const auto &i=d->loaded.scene.instances[s.instance];const auto &m=d->loaded.scene.materials[i.materials[s.slot]];if(ir::emission_strength(m)>0)emitters.push_back({{"object",i.id},{"surface",d->loaded.scene.meshes[i.mesh].material_slots[s.slot]},{"luminance",m.emission_luminance}});}
+      check(instances.size()>20&&surfaces.size()>50&&!emitters.empty(),"真实场景母组遗漏子 Prop 或自发光表面");
+      auto *search=panel.findChild<QLineEdit *>("materialSearch");search->setText(QStringLiteral("自发光"));auto *spin=panel.findChild<QDoubleSpinBox *>("material/emission_luminance");auto *input=spin->findChild<QLineEdit *>();input->setFocus();input->selectAll();QTest::keyClicks(input,"0");QTest::keyClick(input,Qt::Key_Return);app.processEvents();
+      for(auto s:surfaces){auto textures=d->loaded.scene.textures;check(effective_material(d->loaded.scene,snapshot.material_overrides,s.instance,s.slot,textures).emission_luminance==0,"真实场景仍有未关闭的后代自发光");}
+      if(argc>3)panel.grab().save(QString::fromUtf8(argv[3]));std::cout<<J{{"objects",instances.size()},{"surfaces",surfaces.size()},{"emitters_before",emitters},{"all_luminance_zero",true}}.dump(2)<<'\n';return 0;
+    }
     if(argc>1&&std::string(argv[1])=="--library"){
       J report=J::array();for(int i=2;i<argc;++i){auto loaded=daz::load(std::filesystem::u8path(argv[i]),{{"H:/g1","H:/g3","C:/Users/Public/Documents/My DAZ 3D Library","C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"},false});check(!loaded.scene.materials.empty(),"样本未导入材质");apply_library_sample(loaded);size_t channels=0,unmapped=0;for(auto &m:loaded.scene.materials){ir::validate(m,loaded.scene.textures.size());for(auto &c:m.source_channels){++channels;if(!c.mapped)++unmapped;}}report.push_back({{"file",argv[i]},{"materials",loaded.scene.materials.size()},{"channels",channels},{"unmapped",unmapped},{"warnings",loaded.report.value("warnings",J::array())}});}std::cout<<report.dump(2)<<'\n';return 0;
     }

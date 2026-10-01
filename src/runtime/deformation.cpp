@@ -119,6 +119,14 @@ bool DeformationRuntime::same_shape(const std::vector<Properties> &values,const 
   for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs) return false;
   return true;
 }
+bool DeformationRuntime::reframe(const std::vector<ir::Transform> &frames) {
+  if(frames.size()!=targets_.size())throw std::runtime_error("变换参考框架数量不一致");
+  for(const auto &link:conform_.links())if(frames.at(link.source)!=frames.at(link.follower))return false;
+  auto attachment_frames=frames;
+  for(const auto &a:attachments_)for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==skins_[a.skin].instance)attachment_frames[a.target]=frames[t];
+  for(const auto &a:surface_attachments_)attachment_frames[a.target]=frames[a.source];
+  morph_.set_reference_frames(frames,attachment_frames);return true;
+}
 std::vector<std::vector<JointPose>> DeformationRuntime::resolve_poses(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
   std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> result;feed(values,poses,weights,result);return result;
 }

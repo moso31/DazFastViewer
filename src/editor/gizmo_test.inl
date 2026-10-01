@@ -37,10 +37,10 @@
     if(gz_target_<0) return;
     if(gz_case_>=int(std::size(cases))) {
       if(!ready||state.pose_restoring) return;
-      auto *ratio=chrome->findChild<QDoubleSpinBox *>("GroundAlignmentRatio");
+      auto *ratio=ground_panel_->findChild<QDoubleSpinBox *>("GroundAlignmentRatio");
       if(gz_ground_==0) {
         snapshot_.values=gz_initial_.values;snapshot_.poses=gz_initial_.poses;snapshot_.values[gz_target_].transform.rotation_degrees={20,15,10};snapshot_.values[gz_target_].transform.scale={1.2f,1.3f,.9f};snapshot_.values[gz_target_].transform.translation_cm.y=57;
-        send();choose(gz_target_,gz_joint_);ratio->setValue(.01);chrome->ground_action()->trigger();gz_ground_=1;return;
+        send();choose(gz_target_,gz_joint_);ground_panel_->findChild<QCheckBox *>("GroundBodyOnly")->setChecked(true);ratio->setValue(1);chrome->ground_action()->trigger();gz_ground_=1;return;
       }
       if(gz_ground_==1) {
         if(!ground_pending_.empty()) return;
@@ -48,8 +48,8 @@
         if(std::abs(state.bounds.at(gz_target_).minimum.z-.01*gz_height_)>3e-5) {finish_test(false,"地面对齐使用了旋转和缩放更新前的包围盒");return;}
         gz_checks_.push_back({{"ground_queued_after_transform",true},{"world_height",gz_height_}});
         for(size_t t=0;t<document_->catalog.targets.size();++t) if(int(t)!=gz_target_) try {if(attachment_host(*document_,t)==t) {gz_other_target_=int(t);break;}} catch(const std::exception &) {}
-        if(gz_other_target_>=0) {choose(gz_other_target_);if(ratio->value()!=0) {finish_test(false,"另一个角色的默认比例被污染");return;}ratio->setValue(-.03);}
-        choose(-1);choose(gz_target_);if(ratio->value()!=.01) {finish_test(false,"选择切换丢失角色地面对齐比例");return;}
+        if(gz_other_target_>=0) {choose(gz_other_target_);if(ratio->value()!=0) {finish_test(false,"另一个角色的默认比例被污染");return;}ratio->setValue(-3);}
+        choose(-1);choose(gz_target_);if(ratio->value()!=1) {finish_test(false,"选择切换丢失角色地面对齐比例");return;}
         chrome->ground_action()->trigger();gz_ground_=2;return;
       }
       if(gz_ground_==2||gz_ground_==4||gz_ground_==6) {
@@ -64,7 +64,7 @@
           ratio->setValue(0);const auto hwnd=FindWindowExW(HWND(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);
           SendMessageW(hwnd,WM_KEYDOWN,VK_CONTROL,0);SendMessageW(hwnd,WM_KEYDOWN,'D',0);SendMessageW(hwnd,WM_KEYUP,'D',0);SendMessageW(hwnd,WM_KEYUP,VK_CONTROL,0);gz_at_=now();gz_ground_=3;return;
         }
-        if(gz_ground_==4) {ratio->setValue(-.02);chrome->ground_action()->trigger();gz_ground_=6;return;}
+        if(gz_ground_==4) {ratio->setValue(-2);chrome->ground_action()->trigger();gz_ground_=6;return;}
         gz_ground_transform_=snapshot_.values[gz_target_].transform;chrome->ground_action()->trigger();gz_ground_=7;return;
       }
       if(gz_ground_==3) {if(now()-gz_at_<.5||state.ground_requests<=gz_ground_requests_) return;gz_ground_=4;return;}

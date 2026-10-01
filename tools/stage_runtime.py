@@ -65,6 +65,12 @@ def stage_file(source, destination):
             raise
 
 
+def runtime_manifest(out, deployed):
+    # The IDE output directory also contains targets still being linked in parallel.
+    # Hash only files deployed by this invocation, never arbitrary build products.
+    return {p.relative_to(out).as_posix(): sha256(p) for p in sorted(deployed)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/vs2022')
@@ -85,20 +91,33 @@ def main():
     qt = Path(cache['DFV_QT_ROOT'])
     libraries = Path(cache['DFV_LIB_DIR'])
     executables = ['DazFastViewer.exe'] if args.editor_only else ['CyclesViewportBench.exe', 'DazFastViewer.exe']
+    deployed = set()
+
+    def stage(source, destination):
+        stage_file(source, destination)
+        deployed.add(destination)
+
     for name in executables:
-        stage_file(build / 'bin' / configuration / name, out / name)
-    subprocess.run([str(qt / 'bin/windeployqt.exe'), '--debug' if configuration == 'Debug' else '--release',
+        stage(build / 'bin' / configuration / name, out / name)
+    qt_result = subprocess.run([str(qt / 'bin/windeployqt.exe'), '--debug' if configuration == 'Debug' else '--release',
                     '--no-compiler-runtime', '--no-opengl-sw', '--translations', 'zh_CN',
-                    '--dir', str(out), str(out / 'DazFastViewer.exe')], check=True)
+                    '--list', 'target', '--dir', str(out), str(out / 'DazFastViewer.exe')],
+                    check=True, stdout=subprocess.PIPE, text=True, encoding='utf-8')
+    # Qt lists source translation catalogs too; only the merged .qm is created.
+    for name in qt_result.stdout.splitlines():
+        if name.strip():
+            path = Path(name.strip())
+            if path.is_file():
+                deployed.add(path)
     lock = json.loads((ROOT / 'tools/dependencies.lock.json').read_text(encoding='utf-8'))
     for package in lock['git']['windows-libs']['sparse']:
         for source in (libraries / package).rglob('*.dll'):
             with source.open('rb') as stream:
                 if stream.read(2) != b'MZ':
                     raise RuntimeError(f'Unmaterialized Git LFS DLL: {source}; rerun bootstrap.ps1')
-            stage_file(source, out / source.name)
+            stage(source, out / source.name)
     for source in kernels:
-        stage_file(source, out / 'lib' / source.name)
+        stage(source, out / 'lib' / source.name)
     # Ship the Release CRT app-locally; debug CRT is development-only and not redistributable.
     if configuration != 'Debug':
         vs = Path(cache['CMAKE_GENERATOR_INSTANCE'].split(',')[0])
@@ -107,14 +126,15 @@ def main():
         if not redists:
             raise RuntimeError('MSVC v143 redistributable files missing; install the VS C++ workload.')
         for source in redists[-1].glob('*.dll'):
-            stage_file(source, out / source.name)
+            stage(source, out / source.name)
     for name in ('qt', 'nlohmann', 'jolt', 'opensubdiv'):
         shutil.copytree(ROOT / 'third_party' / name, out / 'licenses' / name, dirs_exist_ok=True)
+        deployed.update(p for p in (out / 'licenses' / name).rglob('*') if p.is_file())
     if (qt / 'sbom').exists():
         for source in (qt / 'sbom').glob('*.spdx*'):
-            stage_file(source, out / 'licenses/qt' / source.name)
+            stage(source, out / 'licenses/qt' / source.name)
     source_manifest = ROOT / '.deps/cycles/dfv-source-manifest.json'
-    stage_file(source_manifest, out / source_manifest.name)
+    stage(source_manifest, out / source_manifest.name)
     source_files = [ROOT / 'CMakeLists.txt', ROOT / 'CMakePresets.json']
     for folder in ('src', 'cmake', 'tools', 'tests', 'third_party'):
         source_files.extend(p for p in (ROOT / folder).rglob('*') if p.is_file() and '__pycache__' not in p.parts)
@@ -127,7 +147,7 @@ def main():
         'dependency_lock': lock,
         'source_hashes': {p.relative_to(ROOT).as_posix(): sha256(p) for p in source_files},
         'cycles_assembly': json.loads(source_manifest.read_text(encoding='utf-8')),
-        'files': {p.relative_to(out).as_posix(): sha256(p) for p in out.rglob('*') if p.is_file() and p.name not in ('build-manifest.json', '.dfv-runtime.json')}
+        'files': runtime_manifest(out, deployed)
     }
     (out / 'build-manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     marker.write_text(json.dumps(identity), encoding='utf-8')

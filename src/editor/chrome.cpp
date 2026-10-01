@@ -60,12 +60,8 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
   connect(local_,&QAction::triggered,this,[set_space]{set_space(GizmoSpace::local);});connect(world_,&QAction::triggered,this,[set_space]{set_space(GizmoSpace::world);});
   functions_=new ModuleToolBar(QStringLiteral("角色功能模块"),modules_);functions_->setObjectName("FunctionModule");functions_->setAllowedAreas(Qt::TopToolBarArea|Qt::BottomToolBarArea);functions_->setMinimumHeight(34);functions_->setIconSize({20,20});modules_->addToolBar(functions_);
   ground_=functions_->addAction(tool_icon(5),QStringLiteral("对齐到地面"));ground_->setObjectName("AlignToGround");ground_->setShortcut(QKeySequence(Qt::CTRL|Qt::Key_D));ground_->setAutoRepeat(false);owner->addAction(ground_);
-  ground_->setToolTip(QStringLiteral("对齐到地面（Ctrl+D）：沿世界 Y 移动选中对象，使底部高度等于当前世界包围盒高度 × 地面对齐比例"));
-  ground_ratio_=new QDoubleSpinBox(functions_);ground_ratio_->setObjectName("GroundAlignmentRatio");ground_ratio_->setAccessibleName(QStringLiteral("地面对齐比例"));ground_ratio_->setPrefix(QStringLiteral("比例 "));ground_ratio_->setDecimals(5);ground_ratio_->setRange(-1000,1000);ground_ratio_->setSingleStep(.01);ground_ratio_->setKeyboardTracking(false);ground_ratio_->setMaximumWidth(146);
-  ground_ratio_->setToolTip(QStringLiteral("地面对齐比例（每个对象独立）：0 贴地；0.01 使底部高出地面当前对象高度的 1%；负值下沉。修改后点击对齐到地面生效。"));functions_->addWidget(ground_ratio_);
-  ground_ratio_->setProperty("historyInput",true);
-  connect(ground_ratio_,&QDoubleSpinBox::valueChanged,this,[this](double ratio){if(ground_ratio_changed) ground_ratio_changed(ratio);});bind_ground(false,0);emit_settings();
-  connect(ground_,&QAction::triggered,this,[this]{ground_ratio_->interpretText();});
+  ground_->setToolTip(QStringLiteral("对齐到地面（Ctrl+D）：沿世界 Y 移动选中对象。单个对象使用“地面对齐”设置；组和多选模型按整体包围盒统一落地"));
+  bind_ground(false);emit_settings();
   weight_=functions_->addAction(tool_icon(6),QStringLiteral("添加生长或密度参数"));weight_->setObjectName("ObjectWeight");weight_->setEnabled(false);weight_->setToolTip(QStringLiteral("为选中角色添加生长与体重参数，为普通网格添加密度与重量参数"));
   grip_=new QWidget(this);grip_->setObjectName("WindowDragArea");grip_->setMinimumWidth(36);grip_->setFixedHeight(34);grip_->setToolTip("DazFastViewer");row->addWidget(grip_,0,Qt::AlignTop);
   const QStyle::StandardPixmap icons[]={QStyle::SP_TitleBarMinButton,QStyle::SP_TitleBarMaxButton,QStyle::SP_TitleBarCloseButton};
@@ -78,7 +74,7 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
   QTimer::singleShot(0,this,[this]{fit_height();});
 }
 void EditorChrome::emit_settings() {const bool enabled=settings_.tool==GizmoTool::translate||settings_.tool==GizmoTool::rotate;world_->setEnabled(enabled);local_->setEnabled(enabled);local_->setChecked(settings_.space==GizmoSpace::local);world_->setChecked(settings_.space==GizmoSpace::world);if(changed) changed(settings_);}
-void EditorChrome::bind_ground(bool enabled,double ratio) {ground_->setEnabled(enabled);ground_ratio_->setEnabled(enabled);QSignalBlocker block(ground_ratio_);ground_ratio_->setValue(ratio);}
+void EditorChrome::bind_ground(bool enabled) {ground_->setEnabled(enabled);}
 void EditorChrome::fit_height() {
   // 恢复旧工具栏布局会重置最小宽度；重新按当前缩放保留两个按钮的空间。
   const int history_width=history_->sizeHint().width();

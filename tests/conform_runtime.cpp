@@ -209,6 +209,15 @@ static void unit() {
       require(scene.instances[3].transform.value==initial.instances[3].transform.value,"实例移动污染无关对象");
       for(size_t m=0;m<scene.meshes.size();++m) require(distance(scene.meshes[m].positions,initial.meshes[m].positions)==0,"刚性移动改变局部顶点");
     }
+    const auto skin_evaluations=runtime.skin_stats().evaluations,morph_evaluations=runtime.morph_stats().morph_evaluations;
+    for(int step=0;step<12;++step){
+      TransformValues group;group.translation_cm={step*2.3f,-step*.9f,step*.7f};group.rotation_degrees={step*1.7f,step*2.9f,step*.3f};group.scale={1.3f,.7f,1.1f};
+      const auto frame=make_transform(group);require(runtime.reframe({frame,frame,frame,{}}),"整体 Group 不应重新绑定服装");const auto delta=runtime.evaluate(values,{});
+      require(delta.meshes.empty()&&runtime.collision_stats().evaluations==collisions&&runtime.skin_stats().evaluations==skin_evaluations&&runtime.morph_stats().morph_evaluations==morph_evaluations,"Group 移动重复计算形变或碰撞");
+      for(size_t m=0;m<scene.meshes.size();++m)require(distance(scene.meshes[m].positions,initial.meshes[m].positions)==0,"Group 移动改变局部顶点");
+    }
+    require(!runtime.reframe({ir::Transform::translate({1,0,0}),{},{},{}}),"不同 Fit To 参考框架未要求重新绑定");
+    require(runtime.reframe(std::vector<ir::Transform>(4)),"Group 恢复失败");runtime.evaluate(values,{});
     values[1].transform.translation_cm.z=.002f;runtime.evaluate(values,{});
     require(runtime.collision_stats().evaluations>collisions,"微小的独立服装移动没有重新碰撞");
     const auto local=runtime.collision_stats().evaluations;values[2].transform.translation_cm.z=2;runtime.evaluate(values,{});

@@ -90,7 +90,7 @@ static void navigation_checks(){
 
 static void checks() {
   QTemporaryDir temp;require(temp.isValid(),"临时目录失败");const auto settings=temp.path()+"/history.ini",root=temp.path()+QStringLiteral("/中文库"),pose=root+"/Poses/Standing [01].duf",scene=root+"/Scenes/Test.DUF";
-  write(pose);write(scene);write(root+"/Poses2/Other.duf");write(root+"/ignore.txt");
+  write(pose,R"({"asset_info":{"type":"preset_pose"}})");write(scene);write(root+"/Poses2/Other.duf");write(root+"/ignore.txt");
   {
     ContentHistory history(settings);for(int i=0;i<15;++i) history.searched(QString::number(i));history.searched("10");history.searched("  ");require(history.searches().size()==10&&history.searches().front()=="10","搜索历史上限 / 最近置顶失败");
     history.searched("STAND");history.searched("stand");require(history.searches().front()=="stand"&&history.searches().count("STAND")==0,"搜索历史大小写去重失败");
@@ -128,6 +128,10 @@ static void checks() {
     auto *preview=browser.findChild<QLabel *>("contentPreviewImage");until([&]{return !preview->pixmap().isNull();});const auto preview_image=preview->pixmap().toImage();require(preview_image.pixelColor(preview_image.width()/2,preview_image.height()/2).green()>240,"悬停没有优先使用 tip 大图");QCursor::setPos(cursor_before);
     int opened=0;browser.open_asset=[&](const QString &p){require(p==pose,"激活了错误文件");++opened;};view->setCurrentIndex(view->model()->index(0,0));QTest::keyClick(view,Qt::Key_Return);require(opened==1,"键盘打开丢失或重复");
     require(ContentHistory(ui_settings).recent().empty(),"仅浏览或请求打开就记入近期使用");
+    int full_pose=0,partial_pose=0;browser.apply_pose=[&](const QString &path,bool partial){require(path==pose,"姿势点击路径错误");if(partial)++partial_pose;else ++full_pose;};
+    const auto pose_point=view->visualRect(view->model()->index(0,0)).center();QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,pose_point);QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,pose_point);
+    require(full_pose==1&&partial_pose==1&&opened==1,"普通单击与 Ctrl+单击没有分别应用全身和局部姿势");
+    QTest::mouseDClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,pose_point);require(opened==1,"双击 Pose 又走了普通加载入口");browser.apply_pose={};
     for(int i=0;i<25;++i) browser.record_use(root+"/pose"+QString::number(i)+".duf","pose");browser.record_use(pose,"pose");browser.record_use(root+"/scene.duf","scene");browser.show_recent();
     require(search->currentText()=="standing [01]","切换近期使用清空了搜索文本");
     search->setEditText("not a recent resource");QTest::keyClick(search->lineEdit(),Qt::Key_Return);QTest::qWait(200);

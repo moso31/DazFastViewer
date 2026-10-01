@@ -4,6 +4,12 @@
 
 “资源与保存”页保留资源库路径的添加、删除、排序，以及当前项目保存文件的位置。两组内容使用与 Morph 类似的折叠模块。“渲染”页分为界面与视口、纹理精度、材质质量三组，后续可以继续增加选项卡。
 
+场景的资源搜索路径分为内容库与 DAZ Studio 内置 Iray 资源。`/Runtime/Textures/...` 等引用按项目中配置的内容库顺序解析；`/resources/DTHDR-RuinsB-500.hdr` 则还会查找本机 DAZ Studio 的 `shaders/iray/resources`。程序读取 Windows 注册表中的 DAZ 安装位置，并保留 Program Files 默认安装位置作为回退，支持安装在其他磁盘或自定义目录，不再写死 `C:/Program Files/DAZ 3D`。自动发现的 Iray 路径不会加入内容浏览器的资源库列表，也不会修改项目文件或系统设置。
+
+例如 DAZ 安装在 `C:/Daz 3D/Applications/64-bit/DAZ 3D/DAZStudio4` 时，通常无需额外设置。未注册的便携安装可将环境变量 `DFV_DAZ_STUDIO_PATH` 指向 DAZStudio4 安装目录；也可以在“资源库路径”中手动添加 `C:/Daz 3D/Applications/64-bit/DAZ 3D/DAZStudio4/shaders/iray`，注意添加的是 **iray 目录，而不是 resources 目录**。显式配置的资源库优先于自动发现的位置。诊断文件 `asset-report.json` 的 `iray_resource_roots` 记录本次使用的自动搜索目录，`render_options.environment_file` 记录最终解析的 HDRI 文件。
+
+DUF/DSF 中保存的 Windows 绝对资源路径先检查原文件；若原文件不存在，且只改变了盘符、库内目录结构不变，则按当前配置的库重新定位。例如配置 `G:/G1` 后，`H:/G1/Runtime/Textures/...` 可定位到对应的 `G:/G1/Runtime/Textures/...`。不会按文件名在磁盘中搜索替代贴图；资源库改名或目录层级改变时，应更新源引用。此重定位针对 DAZ 资源引用，不改写源场景。
+
 | 设置 | 默认值 | 调整后的影响 |
 |---|---|---|
 | 界面缩放 | 100%，继承原偏好 | 文字、图标和控件大小，范围 50%～200% |

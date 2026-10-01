@@ -44,12 +44,14 @@ struct RenderStatus {
   bool pose_gizmo=false,gizmo_available=false;
   int pose_light=-1;
   GizmoShape gizmo_shape;
+  runtime::PosePointer gizmo_pointer;
   ir::Transform gizmo_light_transform;
   uint64_t pose_commit=0,pose_revision=0,pose_generation=0,pose_previews=0;
   int pose_skin=-1,pose_joint=-1;
   bool pose_dragging=false,pose_restoring=false;
   bool pose_powerpose=false,pose_figure=false;
   int pose_target=-1;
+  std::string pose_group;
   runtime::TransformValues pose_transform;
   double pose_solve_ms=0,pose_error=0,pose_latency_ms=0,pose_angle_error=0;
   double pose_restore_max_error=0; // 仅 interaction_probe 的逐顶点恢复诊断。
@@ -72,6 +74,8 @@ struct RenderStatus {
   std::vector<std::vector<float>> effective;
   std::vector<runtime::JointPose> effective_roots;
   std::vector<ir::Bounds> bounds;
+  std::vector<ir::Bounds> instance_bounds;
+  std::map<std::string,ir::Transform> group_worlds;
   std::vector<ir::Bounds> head_bounds;
   std::vector<bool> visible;
   uint64_t clicks=0,focus_requests=0,ground_requests=0;
@@ -128,6 +132,7 @@ class Renderer {
   uint64_t interaction_revision_=0;
   double edit_preview_until_=0,resize_preview_until_=0;
   int selected_target_=-1,selected_joint_=-1;
+  std::string selected_group_;
   std::vector<Selection> selections_;
   bool ik_allowed_=false;
   void run(std::stop_token stop);
@@ -142,7 +147,7 @@ public:
   void render_probe(RenderProbe value) {std::lock_guard lock(mutex_);probe_=std::move(value);}
   void pointer(int x,int y,bool click=false,bool toggle=false);
   void automated_pointer() {window_->automated_pointer=true;}
-  void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={},bool ik_allowed=false);
+  void select(uint64_t generation,int target,int joint=-1,std::vector<Selection> selections={},bool ik_allowed=false,const std::string &group={});
   void hover_materials(uint64_t generation,const std::vector<MaterialSurface> &surfaces){std::lock_guard lock(mutex_);material_hover_generation_=generation;material_hover_.clear();for(auto s:surfaces)material_hover_.emplace_back(s.instance,s.slot);}
   void camera_view(const std::array<float,6> &view);
   void edit(const Snapshot &snapshot);

@@ -209,8 +209,10 @@ struct ContentBrowser::Impl {
     QObject::connect(libraries,&QComboBox::currentIndexChanged,o,[this](int row){if(restoring||row<0)return;resume_search();navigate(roots.value(row));});
     QObject::connect(tree->selectionModel(),&QItemSelectionModel::currentChanged,o,[this](const QModelIndex &item){if(restoring)return;const auto path=files->filePath(item);if(files->isDir(item)){resume_search();navigate(path,false);}});
     QObject::connect(files,&QFileSystemModel::directoryLoaded,o,[this](const QString &folder){const auto path=content_path(folder);if(!pending_tree.isEmpty()&&(pending_tree.compare(path,Qt::CaseInsensitive)==0||pending_tree.startsWith(path+"/",Qt::CaseInsensitive)))QTimer::singleShot(0,owner,[this]{reveal_tree();});});
-    QObject::connect(tree,&QTreeView::doubleClicked,o,[this](const QModelIndex &item){if(!files->isDir(item)) activate(files->filePath(item));});
-    QObject::connect(view,&QListView::doubleClicked,o,[this](const QModelIndex &item){activate_item(item);});
+    QObject::connect(tree,&QTreeView::clicked,o,[this](const QModelIndex &item){if(!owner->apply_pose||files->isDir(item))return;const auto path=files->filePath(item);if(pose_file(path)){hide_preview();owner->apply_pose(path,QApplication::keyboardModifiers().testFlag(Qt::ControlModifier));}});
+    QObject::connect(tree,&QTreeView::doubleClicked,o,[this](const QModelIndex &item){if(!files->isDir(item)&&!(owner->apply_pose&&pose_file(files->filePath(item)))) activate(files->filePath(item));});
+    QObject::connect(view,&QListView::clicked,o,[this](const QModelIndex &index){if(!owner->apply_pose||!pose_item(index))return;const auto path=model->items[size_t(index.row())].path;hide_preview();owner->apply_pose(path,QApplication::keyboardModifiers().testFlag(Qt::ControlModifier));});
+    QObject::connect(view,&QListView::doubleClicked,o,[this](const QModelIndex &item){if(owner->apply_pose&&pose_item(item))return;activate_item(item);});
     view->installEventFilter(o);
     QObject::connect(view->verticalScrollBar(),&QScrollBar::valueChanged,o,[this]{hide_preview();});
     QObject::connect(view,&QWidget::customContextMenuRequested,o,[this](const QPoint &point){
@@ -266,6 +268,14 @@ struct ContentBrowser::Impl {
     preview_text->setText(description);preview->adjustSize();auto point=hover_position+QPoint(18,20);const auto area=owner->screen()->availableGeometry();point.setX(std::clamp(point.x(),area.left(),std::max(area.left(),area.right()-preview->width())));point.setY(std::clamp(point.y(),area.top(),std::max(area.top(),area.bottom()-preview->height())));preview->move(point);preview->show();
   }
   void remember_search() {if(recent())return;const auto q=search->currentText();history.searched(q);const QSignalBlocker block(search);search->clear();search->addItems(history.searches());search->setEditText(q);}
+  bool pose_item(const QModelIndex &index) {
+    if(!index.isValid())return false;auto &item=model->items[size_t(index.row())];if(item.directory)return false;
+    if(item.category.isEmpty())return pose_file(item.path);
+    return item.category=="pose";
+  }
+  bool pose_file(const QString &path) const {
+    try{std::vector<std::filesystem::path> libraries;for(const auto &root:roots)libraries.emplace_back(root.toStdWString());const auto file=daz::content_asset(std::filesystem::path(path.toStdWString()),libraries);return content_category(*daz::document_view(file))=="pose";}catch(const std::exception &){return false;}
+  }
   void activate(const QString &path) {hide_preview();if(owner->open_asset) owner->open_asset(path);}
   void activate_item(const QModelIndex &i) {if(!i.isValid()) return;const auto item=model->items[size_t(i.row())];if(item.directory){resume_search();navigate(item.path);}else activate(item.path);}
   void navigate(const QString &path,bool select_tree=true) {

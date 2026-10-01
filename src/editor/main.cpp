@@ -12,6 +12,10 @@
 #include "editor/viewport_settings.h"
 #include "editor/extension_panel.h"
 #include "editor/physics_panel.h"
+#include "editor/ground_panel.h"
+#include "editor/ground_selection.h"
+#include "editor/object_hierarchy.h"
+#include "editor/group_transforms.h"
 #include "editor/object_extension.h"
 #include "editor/scene_extension.h"
 #include "editor/edit_history.h"
@@ -82,6 +86,7 @@ static QString text(const std::string &s) {return QString::fromUtf8(s.data(),qsi
 class Editor final:public EditorWindow {
   #include "editor/history_ui.inl"
   #include "editor/physics_ui.inl"
+  #include "editor/group_ui.inl"
   #include "editor/history_test.inl"
   #include "editor/object_extension_ui.inl"
   #include "editor/object_extension_test.inl"
@@ -89,7 +94,9 @@ class Editor final:public EditorWindow {
   #include "editor/powerpose_test.inl"
   #include "editor/pose_test.inl"
   #include "editor/gizmo_test.inl"
+  #include "editor/group_test.inl"
   #include "editor/ground_test.inl"
+  #include "editor/collective_ground_test.inl"
   #include "editor/feedback_test.inl"
   #include "editor/render_profile.inl"
   QWidget *host_=nullptr;
@@ -145,8 +152,10 @@ class Editor final:public EditorWindow {
     if(result.error>.005||result.angle_error_degrees>.5) pose_status_->setText(QStringLiteral("固定位置／角度受关节限位或可达范围限制，已保留最接近的姿势。"));
   }
   uint64_t focus_requests_=0;
+  GroundPanel *ground_panel_=nullptr;
   uint64_t ground_requests_=0,ground_generation_=0;
   std::string ground_pending_;
+  GroundSelection ground_pending_selection_;
   bool focus_pending_=false;
   bool edit_regression_test_=false;
   uint64_t regression_epoch_=0,regression_clicks_=0,regression_triangles_=0,regression_updates_=0;
@@ -392,37 +401,57 @@ class Editor final:public EditorWindow {
     return submitted;
   }
   void send() {if(powerpose_) powerpose_->cancel();snapshot_.revision=next_revision();renderer_->edit(submitted_snapshot());}
+  GroundSelection ground_objects() const {
+    if(loading_||!document_)return {};
+    const ObjectHierarchy nodes(*document_);std::vector<std::string> ids;
+    for(auto *item:hierarchy_->selectedItems()) {
+      const int key=item->data(0,Qt::UserRole).toInt();if(item->data(0,Qt::UserRole+2).toInt()>=0)continue;
+      if(key==-4){const auto id=item->data(0,Qt::UserRole+3).toString().toStdString();if(group_node(*document_,id))ids.push_back(id);}
+      else if(key>=0&&size_t(key)<nodes.targets.size())ids.push_back(nodes.targets[key]);
+      else if(key<=-5&&size_t(-5-key)<nodes.instances.size())ids.push_back(nodes.instances[-5-key]);
+    }
+    return ground_selection(*document_,std::move(ids));
+  }
   int ground_target() const {
-    if(loading_||!document_||selected_light_>=0||hierarchy_->selectedItems().size()!=1)return -1;
+    if(loading_||!document_||hierarchy_->selectedItems().empty())return -1;
+    if(hierarchy_->selectedItems().size()>1||!selected_group_.empty())return ground_objects().instances.empty()?-1:-4;
+    if(selected_light_>=0)return -1;
     if(selected_>=0&&size_t(selected_)<document_->catalog.targets.size())return selected_;
     if(selected_<=-5){const auto i=size_t(-5-selected_);const auto &scene=document_->loaded.scene;if(i<scene.instances.size()&&scene.instances[i].prototype>=0){const runtime::InstanceGroups groups(scene);return runtime::instance_selection(groups.roots[i]);}}
     return -1;
   }
   std::string ground_id(int target) const {return target>=0?document_->catalog.targets.at(size_t(target)).id:document_->loaded.scene.instances.at(size_t(-5-target)).id;}
   double ground_ratio(int target) const {if(target>=0)return snapshot_.values.at(size_t(target)).ground_alignment_ratio;if(target<=-5){const auto found=snapshot_.instance_ground.find(ground_id(target));if(found!=snapshot_.instance_ground.end())return found->second.ratio;}return 0;}
+  double ground_offset(int target) const {if(target>=0)return snapshot_.values.at(size_t(target)).ground_alignment_offset_cm;if(target<=-5){const auto found=snapshot_.instance_ground.find(ground_id(target));if(found!=snapshot_.instance_ground.end())return found->second.offset_cm;}return 0;}
+  bool ground_body_only(int target) const {if(target>=0)return snapshot_.values.at(size_t(target)).ground_alignment_body_only;if(target<=-5){const auto found=snapshot_.instance_ground.find(ground_id(target));if(found!=snapshot_.instance_ground.end())return found->second.body_only;}return false;}
   void request_ground() {
+    if(ground_panel_)ground_panel_->commit();
     const int target=ground_target();if(target==-1)return;
-    ground_pending_=ground_id(target);ground_generation_=document_->generation;
+    ground_pending_=target==-4?"selection":ground_id(target);ground_pending_selection_=target==-4?ground_objects():GroundSelection{};ground_generation_=document_->generation;
     statusBar()->showMessage(QStringLiteral("正在按对象当前世界包围盒对齐到地面…"));
   }
   void apply_ground(const RenderStatus &state) {
     if(ground_pending_.empty()) return;
     auto edit=history_edit(QStringLiteral("对齐到地面"));
     const int index=ground_target();
-    if(!document_||ground_generation_!=document_->generation||index==-1||ground_id(index)!=ground_pending_) {ground_pending_.clear();return;}
+    if(!document_||ground_generation_!=document_->generation||index==-1||(index==-4?ground_pending_selection_.instances.empty()||ground_objects()!=ground_pending_selection_:!ground_pending_selection_.instances.empty()||ground_id(index)!=ground_pending_)) {ground_pending_.clear();return;}
     if(state.generation!=document_->generation) return;
     if(!state.edit_error.empty()||!state.resource_error.empty()) {ground_pending_.clear();statusBar()->showMessage(QStringLiteral("对象求值失败，未执行地面对齐。"),5000);return;}
     if(state.applied_revision!=snapshot_.revision||state.pose_dragging||state.pose_restoring||state.pending_payloads) return;
+    if(index==-4){
+      if(state.selection_generation!=document_->generation||state.selections!=tree_selection(hierarchy_)||state.instance_bounds.size()!=document_->loaded.scene.instances.size())return;
+      ground_pending_.clear();try{if(align_ground_selection(*document_,snapshot_,ground_pending_selection_,state.instance_bounds,state.target_world,state.group_worlds)){send();select(selected_,selected_joint_,selected_light_);}statusBar()->showMessage(QStringLiteral("已按整体包围盒对齐到地面"),5000);}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}return;
+    }
     if(index<=-5){
       if(state.selection_generation!=document_->generation||state.selected_target!=index||state.selections!=tree_selection(hierarchy_))return;
-      ground_pending_.clear();try{const auto shift=ground_vertical_shift(state.selection_bounds,ground_ratio(index));if(shift!=0){auto values=snapshot_.instance_ground;values[ground_id(index)].offset_m+=shift;validate_instance_ground(document_->loaded.scene,values);snapshot_.instance_ground=std::move(values);send();}statusBar()->showMessage(QStringLiteral("实例已对齐到地面"),5000);}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}return;
+      ground_pending_.clear();try{const auto shift=ground_vertical_shift(state.selection_bounds,ground_ratio(index),ground_offset(index));if(shift!=0){auto values=snapshot_.instance_ground;values[ground_id(index)].offset_m+=shift;validate_instance_ground(document_->loaded.scene,values);snapshot_.instance_ground=std::move(values);send();}statusBar()->showMessage(QStringLiteral("实例已对齐到地面"),5000);}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}return;
     }
     if(size_t(index)>=state.target_world.size()||size_t(index)>=state.bounds.size())return;
     const auto &target=document_->catalog.targets[index];ground_pending_.clear();
     try {
-        auto &value=snapshot_.values[index];const auto next=ground_aligned_transform(target,value.transform,document_->loaded.scene.instances[target.instance].transform,state.target_world[index],state.bounds[index],value.ground_alignment_ratio);
+        auto &value=snapshot_.values[index];const auto next=ground_aligned_transform(target,value.transform,document_->loaded.scene.instances[target.instance].transform,state.target_world[index],ground_bounds(*document_,size_t(index),state.bounds,state.visible,value.ground_alignment_body_only),value.ground_alignment_ratio,value.ground_alignment_offset_cm);
         if(next.translation_cm!=value.transform.translation_cm) {value.transform=next;send();select(selected_,selected_joint_,selected_light_);}
-        statusBar()->showMessage(QStringLiteral("已对齐到地面：%1（比例 %2）").arg(text(target.label)).arg(value.ground_alignment_ratio),5000);
+        statusBar()->showMessage(QStringLiteral("已对齐到地面：%1（%2%，固定偏移 %3 cm）").arg(text(target.label)).arg(value.ground_alignment_ratio*100).arg(value.ground_alignment_offset_cm),5000);
       } catch(const std::exception &e) {statusBar()->showMessage(text(e.what()),5000);}
   }
   void prune_pending_parameters() {
@@ -607,18 +636,20 @@ class Editor final:public EditorWindow {
     for(size_t i=0;i<document_->skeletons.skins.size();++i) if(document_->skeletons.skins[i].instance==instance) return int(i);
     return -1;
   }
-  bool apply_pose_file(const std::filesystem::path &file) {
-    auto edit=history_edit(QStringLiteral("应用姿势与形态预设"));
+  bool apply_pose_file(const std::filesystem::path &file,bool partial=false) {
+    auto edit=history_edit(partial?QStringLiteral("应用局部姿势"):QStringLiteral("应用姿势与形态预设"));
     try {
       if(loading_) throw std::runtime_error("请等待场景加载完成后应用姿势");
       const auto index=selected_skin();if(index<0) throw std::runtime_error("请先选中一个带骨骼蒙皮的角色");
+      if(partial&&(selected_joint_<0||hierarchy_->selectedItems().size()!=1))throw std::runtime_error("局部姿势需要单选一个角色的骨骼部位");
       const auto &skin=document_->skeletons.skins[size_t(index)];
       const auto data=daz::document_view(file);
-      auto applied=daz::apply_pose(daz::parse_pose(*data),skin,snapshot_.poses[size_t(index)],document_->catalog.targets[size_t(selected_)],snapshot_.values[size_t(selected_)]);
+      auto applied=daz::apply_pose(daz::parse_pose(*data),skin,snapshot_.poses[size_t(index)],document_->catalog.targets[size_t(selected_)],snapshot_.values[size_t(selected_)],partial?selected_joint_:-1);
       snapshot_.poses[size_t(index)]=std::move(applied.joints);snapshot_.values[size_t(selected_)]=std::move(applied.properties);pose_report_=applied.report;
       std::ofstream(output_/"pose-report.json")<<pose_report_.dump(2);
       const auto skipped=pose_report_["unapplied"].size();
       pose_status_->setText(QStringLiteral("预设：%1\n已应用 %2 个骨骼通道、%3 个 Morph 通道；%4 项未应用。").arg(QString::fromStdWString(file.stem().wstring())).arg(pose_report_["applied_bone_channels"].get<int>()).arg(pose_report_["applied_morph_channels"].get<int>()).arg(skipped));
+      if(partial)pose_status_->setText(QStringLiteral("局部姿势：%1 及其后代；保留范围外 %2 项通道。\n").arg(text(skin.joints[size_t(selected_joint_)].label)).arg(pose_report_["excluded_channels"].get<int>())+pose_status_->text());
       pose_status_->setToolTip(QString::fromStdWString(file.wstring()));select(selected_,selected_joint_);send();frame_pending_=self_test_;
       if(!self_test_) browser_->record_use(QString::fromStdWString(file.wstring()),content_category(*data));return true;
     } catch(const std::exception &e) {
@@ -632,7 +663,7 @@ class Editor final:public EditorWindow {
     snapshot_.poses[size_t(index)]=document_->skeletons.skins[size_t(index)].initial;send();frame_pending_=true;
     pose_status_->setText(QStringLiteral("已恢复载入时的骨骼姿势；Morph 保持当前值。"));pose_report_=nullptr;
   }
-  void open_asset(const std::filesystem::path &entry) {
+  void open_asset(const std::filesystem::path &entry,bool partial=false) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
     if(entry.extension()==L".dufex"){load(entry);return;}
     try {const auto file=daz::content_asset(entry,roots_);const auto data=daz::read_document_file(file);
@@ -656,8 +687,9 @@ class Editor final:public EditorWindow {
         const bool append=document_&&(!document_->loaded.scene.instances.empty()||!snapshot_.lights.empty()||!document_->source_file.empty()||!document_->operations.empty()||ir::options_json(snapshot_.options)!=ir::options_json(ir::RenderOptions{}));
         load(file,false,append,target,entry);
       }
+      else if(partial&&contents.properties) apply_pose_file(file,true);
       else if(contents.properties&&contents.materials) apply_combined_file(file,data);
-      else if(contents.properties) apply_pose_file(file);
+      else if(contents.properties) apply_pose_file(file,partial);
       else if(contents.materials) apply_material_file(file);
       else throw std::runtime_error("DUF 中没有当前可实例化或应用的内容；资产定义需要 scene 实例引用");
     } catch(const std::exception &e) {if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
@@ -839,12 +871,13 @@ class Editor final:public EditorWindow {
   void select(int index,int joint=-1,int light=-1) {
     if(powerpose_) powerpose_->cancel();
     parameters_->bind_favorites(nullptr);initialize_favorites();
+    selected_group_.clear();if(index==-4&&document_){auto *item=active_selection(hierarchy_);if(item){const auto id=item->data(0,Qt::UserRole+3).toString().toStdString();if(group_node(*document_,id))selected_group_=id;}}
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
-    if(materials_)materials_->bind(document_,&snapshot_,index);
+    if(materials_){auto *item=active_selection(hierarchy_);materials_->bind(document_,&snapshot_,index,index==-4&&item?item->data(0,Qt::UserRole+3).toString().toStdString():std::string{});}
     bind_extension();bind_physics();
-    if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1,ground_ratio(target));}
+    if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1);if(ground_panel_)ground_panel_->bind(target!=-1,ground_ratio(target),ground_offset(target),ground_body_only(target),target==-4);}
     if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
-    if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1);
+    if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1,hierarchy_->selectedItems().size()==1?selected_group_:std::string{});
     if(renderer_) refresh_powerpose(renderer_->status());
     if(light>=0&&document_) {
       const auto &l=snapshot_.lights.at(size_t(light));light_base_=l.transform;light_base_.value[3]=light_base_.value[7]=light_base_.value[11]=0;selection_->setText(text(l.id));parameters_->bind(nullptr,nullptr);
@@ -859,6 +892,7 @@ class Editor final:public EditorWindow {
       parameters_->bind_favorites(&*snapshot_.control_favorites,index==-2?"options/environment":"options/tonemapper");
       parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){auto edit=history_edit(QStringLiteral("修改环境与色调：")+text(node->parameters.at(p).label));try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
     }
+    if(!selected_group_.empty()){bind_group();return;}
     if(index<0 || !document_) {auto *item=active_selection(hierarchy_);selection_->setText(index<=-4&&item?item->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
     const auto &target=document_->catalog.targets[size_t(index)];selection_->setText(text(target.label));
     const auto &values=snapshot_.values[size_t(index)];
@@ -900,6 +934,7 @@ class Editor final:public EditorWindow {
   void reset_selected() {
     auto edit=history_edit(QStringLiteral("重置选中对象"));
     pose_pins_.clear();renderer_->pose_pins({});
+    if(!selected_group_.empty()){set_group_value(selected_group_,{});bind_group();return;}
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};value.unlimited_morphs.clear();
     const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};
@@ -933,6 +968,7 @@ class Editor final:public EditorWindow {
     if(pose_edit_test_) {report["scope"]="native-FK-left-button-IK-selection-proxy-full-quality-cancel";report["checks"]=pose_checks_;}
     if(powerpose_test_) {report["scope"]="powerpose-qt-proxy-commit-cancel-native-limits-pins";report["checks"]=pp_checks_;}
     if(gizmo_test_) {report["scope"]="gizmo-local-world-proxy-commit-cancel-restore";report["checks"]=gz_checks_;}
+    if(group_test_) {report["scope"]="group-transform-properties-gizmo-save-undo";report["checks"]=gt_checks_;}
     if(extension_test_){report["scope"]="native-growth-weight-and-dufex";report["checks"]=extension_checks_;}
     if(empty_test_)report["scope"]="empty-startup-refresh";
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
@@ -1375,7 +1411,9 @@ class Editor final:public EditorWindow {
     if(history_test_){history_test_tick(state);return;}
     if(!render_plan_.empty()) {render_profile_tick(state);return;}
     if(gizmo_test_) {gizmo_tick(state);return;}
+    if(group_test_) {group_test_tick(state);return;}
     if(ground_test_) {ground_test_tick(state);return;}
+    if(!cg_label_.empty()) {collective_ground_tick(state);return;}
     if(feedback_test_) {feedback_tick(state);return;}
     if(powerpose_test_) {powerpose_tick(state);return;}
     if(pose_edit_test_) {pose_edit_tick(state);return;}
@@ -1469,8 +1507,8 @@ class Editor final:public EditorWindow {
     if(!state.error.empty()) {statusBar()->showMessage(QStringLiteral("渲染错误：")+text(state.error));if(self_test_) finish_test(false,state.error);return;}
     if(!state.edit_error.empty()) {statusBar()->showMessage(QStringLiteral("本次编辑未应用：")+text(state.edit_error));if(self_test_) finish_test(false,state.edit_error);return;}
     if(document_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision) {effective_roots_=state.effective_roots;effective_generation_=state.generation;if(selected_>=0&&size_t(selected_)<state.effective.size()) parameters_->evaluated(state.effective[size_t(selected_)]);}
-    if(state.pose_dragging) statusBar()->showMessage(QStringLiteral("%1 拖动 · 基础网格预览 · 松开后更新服装、头发和完整质量 · Esc 取消 · %2 ms").arg(state.pose_gizmo?QStringLiteral("Gizmo"):state.pose_powerpose?QStringLiteral("PowerPose"):QStringLiteral("IK")).arg(state.pose_solve_ms,0,'f',1));
-    else if(state.pose_restoring) statusBar()->showMessage(QStringLiteral("正在恢复姿势的完整形变、服装、头发和渲染质量…"));
+    if(state.pose_dragging) statusBar()->showMessage((state.pose_gizmo?QStringLiteral("Gizmo 拖动 · 对象变换预览 · 松开后更新场景与渲染质量 · Esc 取消 · %1 ms").arg(state.pose_solve_ms,0,'f',1):QStringLiteral("%1 拖动 · 基础网格预览 · 松开后更新服装、头发和完整质量 · Esc 取消 · %2 ms").arg(state.pose_powerpose?QStringLiteral("PowerPose"):QStringLiteral("IK")).arg(state.pose_solve_ms,0,'f',1)));
+    else if(state.pose_restoring) statusBar()->showMessage(state.pose_gizmo?QStringLiteral("正在更新对象变换与渲染质量…"):QStringLiteral("正在恢复姿势的完整形变、服装、头发和渲染质量…"));
     else if(!load_error_.isEmpty()) statusBar()->showMessage(load_error_);
     else if(!recovery_error_.isEmpty()) statusBar()->showMessage(QStringLiteral("自动恢复保存失败：")+recovery_error_);
     else if(!state.resource_error.empty()) statusBar()->showMessage(QStringLiteral("Morph 未应用：")+text(state.resource_error)+QStringLiteral("；可重试加载或刷新参数目录"));
@@ -1771,6 +1809,9 @@ public:
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
   void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
   void gizmo_test() {gizmo_test_=self_test_=true;renderer_->automated_pointer();}
+  void group_transform_test() {group_test_=self_test_=true;renderer_->automated_pointer();}
+  void group_motion_test(const std::string &label) {group_transform_test();gt_motion_label_=label;}
+  void collective_ground_test(const std::string &label) {cg_label_=label;self_test_=true;renderer_->automated_pointer();}
   void ground_test() {ground_test_=self_test_=true;renderer_->automated_pointer();}
   void joint_selection_test() {joint_selection_test_=self_test_=true;GetCursorPos(&workflow_cursor_);}
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
@@ -1792,7 +1833,7 @@ public:
     auto *central=new QWidget;auto *layout=new QVBoxLayout(central);layout->setContentsMargins(4,4,4,4);
     host_=new QWidget;host_->setAttribute(Qt::WA_NativeWindow);host_->setAttribute(Qt::WA_DontCreateNativeAncestors);host_->setMinimumSize(160,120);host_->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Expanding);
     layout->addWidget(host_,1);auto *viewport_dock=dock(QStringLiteral("视口"),central,Qt::RightDockWidgetArea);viewport_dock->setObjectName("Viewport");
-    browser_=new ContentBrowser;browser_->open_asset=[this](const QString &file){open_asset(file_path(file));};update_libraries();
+    browser_=new ContentBrowser;browser_->open_asset=[this](const QString &file){open_asset(file_path(file),QApplication::keyboardModifiers().testFlag(Qt::ControlModifier));};browser_->apply_pose=[this](const QString &file,bool partial){open_asset(file_path(file),partial);};update_libraries();
     auto *explorer_dock=dock(QStringLiteral("内容浏览器"),browser_,Qt::LeftDockWidgetArea);
     hierarchy_=new QTreeWidget;hierarchy_->setSelectionMode(QAbstractItemView::ExtendedSelection);hierarchy_->setHeaderLabel(QStringLiteral("场景对象"));hierarchy_->setMinimumWidth(240);hierarchy_->setIndentation(12);hierarchy_->header()->setStretchLastSection(false);hierarchy_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     auto *hierarchy_panel=new QWidget;auto *hierarchy_layout=new QVBoxLayout(hierarchy_panel);hierarchy_layout->setContentsMargins(0,0,0,0);physics_only_=new QCheckBox(QStringLiteral("仅显示物理模型"));physics_only_->setObjectName("PhysicsOnlyModels");hierarchy_layout->addWidget(physics_only_);hierarchy_layout->addWidget(hierarchy_,1);connect(physics_only_,&QCheckBox::toggled,this,[this]{refresh_physics_filter();});
@@ -1817,12 +1858,14 @@ public:
     light_power_=new QDoubleSpinBox;light_power_->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
     light_power_->setProperty("historyInput",true);
     connect(light_power_,&QDoubleSpinBox::valueChanged,this,[this](double value) {if(selected_light_<0) return;auto edit=history_edit(QStringLiteral("修改灯光功率"));auto &p=snapshot_.lights[size_t(selected_light_)].power;const auto previous=std::max({p.x,p.y,p.z});const float ratio=previous>0?float(value)/previous:0;p=previous>0?ir::Vec3{p.x*ratio,p.y*ratio,p.z*ratio}:ir::Vec3{float(value),float(value),float(value)};send();});
-    pose_status_=new QLabel(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
+    pose_status_=new QLabel(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+单击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column==0&&target>=0&&item->data(0,Qt::UserRole+1).toInt()<0) set_visible(size_t(target),item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     extension_panel_=new ExtensionPanel;properties->addWidget(extension_panel_);extension_panel_->changed=[this](runtime::ObjectExtension v,bool shape,double step){change_extension(v,shape,step);};
     physics_panel_=new PhysicsPanel;properties->addWidget(physics_panel_);physics_panel_->changed=[this](runtime::PhysicsObjectSettings value){change_physics(std::move(value));};
     physics_panel_->simulate=[this](bool reset){simulate_physics(reset);};physics_panel_->hovered=[this](int slot){std::vector<MaterialSurface> surfaces;if(document_&&selected_>=0&&slot>=0)surfaces.push_back({document_->catalog.targets[size_t(selected_)].instance,size_t(slot)});if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
+    ground_panel_=new GroundPanel;properties->addWidget(ground_panel_);ground_panel_->align=[this]{request_ground();};
+    ground_panel_->changed=[this](double ratio,double offset,bool body_only){const int target=ground_target();if(target==-1||target==-4)return;auto edit=history_edit(QStringLiteral("修改地面对齐设置"));if(target>=0){auto &v=snapshot_.values[target];v.ground_alignment_ratio=ratio;v.ground_alignment_offset_cm=offset;v.ground_alignment_body_only=body_only;}else{auto &v=snapshot_.instance_ground[ground_id(target)];v.ratio=ratio;v.offset_cm=offset;v.body_only=body_only;}};
     auto *morph_header=new QToolButton;morph_header->setObjectName("MorphCollapse");morph_header->setText(QStringLiteral("对象属性与 Morph"));morph_header->setCheckable(true);morph_header->setChecked(true);morph_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);morph_header->setArrowType(Qt::DownArrow);properties->addWidget(morph_header);
     auto *morph_body=new QWidget;auto *morph_layout=new QVBoxLayout(morph_body);morph_layout->setContentsMargins(0,0,0,0);properties->addWidget(morph_body);
     parameters_=new ParameterPanel;parameters_->shared_scroll(property_scroll);parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};morph_layout->addWidget(parameters_);
@@ -1854,7 +1897,6 @@ public:
     powerpose_->action=[this](const auto &p,int operation,bool enabled){powerpose_action(p,operation,enabled);};
     install_chrome();
     chrome->changed=[this](GizmoSettings settings){if(renderer_) renderer_->gizmo(settings);};
-    chrome->ground_ratio_changed=[this](double ratio){auto edit=history_edit(QStringLiteral("修改地面对齐比例"));const int target=ground_target();if(target>=0)snapshot_.values[target].ground_alignment_ratio=ratio;else if(target<=-5)snapshot_.instance_ground[ground_id(target)].ratio=ratio;};
     connect(chrome->ground_action(),&QAction::triggered,this,[this]{request_ground();});
     connect(chrome->weight_action(),&QAction::triggered,this,[this]{enable_extension();});
     auto *file_menu=chrome->menus()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
@@ -2014,6 +2056,7 @@ public:
           for(auto pin:loaded_snapshot.pose_pins){pin.skin+=int(first_skin);merged_snapshot.pose_pins.push_back(pin);}
           for(const auto &[id,level]:loaded_snapshot.subdivision_levels)merged_snapshot.subdivision_levels[prefix+id]=level;
           for(const auto &[id,patch]:loaded_snapshot.material_overrides)merged_snapshot.material_overrides[prefix+id]=patch;
+          for(const auto &[id,value]:loaded_snapshot.group_transforms)merged_snapshot.group_transforms[prefix+id]=value;
           for(const auto &[id,value]:loaded_snapshot.instance_ground)merged_snapshot.instance_ground[prefix+id]=value;
           for(size_t l=0;l<loaded_snapshot.lights.size();++l){auto value=loaded_snapshot.lights[l];value.id=prefix+value.id;merged_snapshot.lights.at(first_light+l)=value;}
           if(loaded_snapshot.control_favorites){
@@ -2040,11 +2083,12 @@ public:
           document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_=loaded_snapshot;snapshot_.values.clear();snapshot_.poses.clear();snapshot_.options=(preserve||previous_document)?previous.options:loaded_snapshot.options;if(preserve||previous_document){for(const auto &entry:previous.subdivision_levels){snapshot_.subdivision_levels[entry.first]=entry.second;}}snapshot_.generation=document->generation;snapshot_.revision=1;
           if(!previous_document)extension_file_=sidecar;
           if(preserve||previous_document){for(const auto &[id,patch]:previous.material_overrides)snapshot_.material_overrides[id]=patch;prune_material_overrides(document_->loaded.scene,snapshot_.material_overrides);}
+          if(preserve||previous_document){for(const auto &[id,value]:previous.group_transforms)snapshot_.group_transforms[id]=value;prune_group_transforms(*document_,snapshot_.group_transforms);}
           if(preserve||previous_document){for(const auto &[id,value]:previous.instance_ground)snapshot_.instance_ground[id]=value;prune_instance_ground(document_->loaded.scene,snapshot_.instance_ground);}
           if(preserve||previous_document){auto incoming=std::move(snapshot_.control_favorites);snapshot_.control_favorites=previous.control_favorites;
             if(previous_document&&incoming){if(!snapshot_.control_favorites)snapshot_.control_favorites.emplace();for(auto &[node,values]:incoming->nodes)snapshot_.control_favorites->nodes[node]=std::move(values);}}
           if(previous_document) for(size_t l=0;l<previous.lights.size();++l) snapshot_.lights[l]=previous.lights[l];
-          frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("选中角色后，双击内容库中的姿势或形态 DUF 即可应用。"));
+          frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+单击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));
           for(const auto &skin:document_->skeletons.skins) {
             auto pose=loaded_snapshot.poses.at(snapshot_.poses.size());
             if((preserve||previous_document)&&old) for(size_t s=0;s<old->skeletons.skins.size();++s) if(old->skeletons.skins[s].id==skin.id) {
@@ -2056,7 +2100,7 @@ public:
           for(const auto &target:document_->catalog.targets) {
             auto values=loaded_snapshot.values.at(snapshot_.values.size());
             if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
-              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;std::map<std::string,float> weights;
+              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;values.ground_alignment_offset_cm=previous.values[t].ground_alignment_offset_cm;values.ground_alignment_body_only=previous.values[t].ground_alignment_body_only;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if((target.morphs[m].evaluable||target.morphs[m].unsupported.empty())&&weights.contains(target.morphs[m].id)) values.morphs[m]=weights[target.morphs[m].id];
             }
@@ -2125,6 +2169,9 @@ int main(int argc,char **argv) {
   parser.addOption({"pose-edit-test",QStringLiteral("副屏验证原生 FK 参数、左键 IK、选择门槛、预览和取消")});
   parser.addOption({"powerpose-test",QStringLiteral("副屏验证 PowerPose 三页、灰模、提交、取消和固定约束")});
   parser.addOption({"gizmo-test",QStringLiteral("副屏验证三轴工具、Local / World、提交与取消")});
+  parser.addOption({"group-transform-test",QStringLiteral("副屏验证 Group 参数、鼠标变换、保存与撤销")});
+  parser.addOption({"group-motion-test",QStringLiteral("逐个核对指定 Group 平移预览和提交后的世界矩阵"),"label"});
+  parser.addOption({"collective-ground-test",QStringLiteral("验证指定 Group 和多选模型整体 Ctrl+D 与撤销重做"),"label"});
   parser.addOption({"ground-test",QStringLiteral("副屏验证普通对象与 Instance 的 Ctrl+D 地面对齐")});
   parser.addOption({"physics-ui-test",QStringLiteral("验证物理属性公共滚动、收起布局和模型筛选")});
   parser.addOption({"empty-test",QStringLiteral("验证默认空场景及移动缩放后的视口刷新")});
@@ -2139,7 +2186,7 @@ int main(int argc,char **argv) {
   try {
     SamplingSettings sampling;
     sampling.rebuild_probe=parser.isSet("rebuild-test");
-    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||parser.isSet("powerpose-test")||parser.isSet("gizmo-test")||parser.isSet("ground-test");
+    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||parser.isSet("powerpose-test")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("ground-test");
     if(parser.isSet("sampling-settings")) {sampling.quality_override=true;nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
@@ -2168,7 +2215,7 @@ int main(int argc,char **argv) {
     }
     auto project=ProjectSettings::load(project_file);
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("history-test"))editor.history_test();
@@ -2176,6 +2223,9 @@ int main(int argc,char **argv) {
     if(parser.isSet("pose-edit-test")) editor.pose_edit_test(parser.value("pose-test-level").toInt());
     if(parser.isSet("powerpose-test")) editor.powerpose_test();
     if(parser.isSet("gizmo-test")) editor.gizmo_test();
+    if(parser.isSet("group-transform-test")) editor.group_transform_test();
+    if(parser.isSet("group-motion-test")) editor.group_motion_test(parser.value("group-motion-test").toStdString());
+    if(parser.isSet("collective-ground-test")) editor.collective_ground_test(parser.value("collective-ground-test").toStdString());
     if(parser.isSet("extension-test")) editor.extension_test();
     if(parser.isSet("feedback-test")) editor.feedback_test();
     if(parser.isSet("physics-ui-test"))editor.physics_ui_test();

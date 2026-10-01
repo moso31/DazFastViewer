@@ -7,7 +7,7 @@ bool same_edit(const EditState &a,const EditState &b) {
   const auto &x=a.snapshot,&y=b.snapshot;
   return a.document==b.document&&a.pending==b.pending&&a.manual==b.manual&&
     x.values==y.values&&x.poses==y.poses&&x.lights==y.lights&&x.options==y.options&&
-    x.material_overrides==y.material_overrides&&x.instance_ground==y.instance_ground&&
+    x.material_overrides==y.material_overrides&&x.instance_ground==y.instance_ground&&x.group_transforms==y.group_transforms&&
     x.subdivision_levels==y.subdivision_levels&&x.control_favorites==y.control_favorites&&x.pose_pins==y.pose_pins;
 }
 class EditHistory::Command final:public QUndoCommand {

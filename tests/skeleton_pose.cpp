@@ -21,6 +21,20 @@ static runtime::Skin fixture() {
   skin.joints={root,bone};skin.initial.resize(2);skin.weights={{{1,1}}};return skin;
 }
 static void unit_tests() {
+  {
+    auto s=fixture();auto child=s.joints[1];child.id="chest";child.aliases.clear();child.name="Chest";child.parent=1;s.joints.push_back(child);
+    auto leg=child;leg.id="leg";leg.name="Leg";leg.parent=0;s.joints.push_back(leg);s.initial.resize(4);
+    runtime::Target target;runtime::Morph global,local;global.owner="root";global.channel_id="WholeBody";local.owner="oldId";local.channel_id="LocalControl";target.morphs={global,local};runtime::Properties values;values.morphs={.2f,.3f};
+    auto pose=s.initial;pose[0].translation_cm.y=17;pose[3].rotation_degrees.x=-25;
+    daz::PosePreset preset;preset.channels={{"name","","","translation/y/value",99},{"name","OldName","","rotation/z/value",30},{"id","chest","","rotation/x/value",40},{"name","Leg","","rotation/x/value",50},{"id","","WholeBody","value/value",.8f},{"id","oldId","LocalControl","value/value",.7f}};
+    const auto partial=daz::apply_pose(preset,s,pose,target,values,1);
+    require(partial.joints[0]==pose[0]&&partial.joints[3]==pose[3],"局部姿势改变了根节点或另一分支");
+    require(partial.joints[1].rotation_degrees.z==30&&partial.joints[2].rotation_degrees.x==40,"局部姿势遗漏选中骨骼、别名或后代");
+    require(partial.properties.morphs[0]==.2f&&partial.properties.morphs[1]==.7f&&partial.report["excluded_channels"]==3,"局部控制器范围不正确");
+    const auto full=daz::apply_pose(preset,s,pose,target,values);require(full.joints[0].translation_cm.y==99&&full.joints[3].rotation_degrees.x==50&&full.properties.morphs[0]==.8f,"普通姿势不再作用于全身");
+    require(daz::apply_pose(preset,s,pose,target,values,0).joints==full.joints,"选择根骨骼时未包含全身");
+    rejects([&]{daz::apply_pose(preset,s,pose,target,values,4);},"无效子树未拒绝");
+  }
   auto skin=fixture();auto pose=skin.initial;const std::vector<ir::Vec3> base={{2,0,0}};
   require(near(runtime::deform(skin,pose,base)[0],base[0],0),"零姿势必须逐位恢复原顶点");
   pose[1].rotation_degrees.z=90;require(near(runtime::deform(skin,pose,base)[0],{1,0,1}),"骨骼枢轴或厘米 / Z 向上转换错误");

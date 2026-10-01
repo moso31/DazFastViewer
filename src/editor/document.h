@@ -29,6 +29,7 @@ struct Document {
   std::vector<AttachmentBinding> attachments;
 };
 struct Snapshot {
+  std::map<std::string,runtime::TransformValues> group_transforms;
   InstanceGrounds instance_ground;
   MaterialOverrides material_overrides;
   std::optional<runtime::FavoriteState> control_favorites;

@@ -1,4 +1,5 @@
 #include "editor/material_panel.h"
+#include "editor/object_hierarchy.h"
 #include "editor/folder_icon.h"
 #include "editor/numeric_slider.h"
 #include "editor/numeric_spinbox.h"
@@ -86,9 +87,10 @@ bool MaterialPanel::eventFilter(QObject *object,QEvent *event){
   }
   return QWidget::eventFilter(object,event);
 }
-void MaterialPanel::bind(std::shared_ptr<const Document> document,Snapshot *snapshot,int target){
-  if(document_==document&&snapshot_==snapshot&&target_==target)return;
-  document_=std::move(document);snapshot_=snapshot;target_=target;rebuild_tree();
+void MaterialPanel::bind(std::shared_ptr<const Document> document,Snapshot *snapshot,int target,const std::string &group){
+  if(document_==document&&snapshot_==snapshot&&target_==target&&group_==group)return;
+  if(target_!=target||group_!=group){QSignalBlocker block(tree_);tree_->clearSelection();}
+  document_=std::move(document);snapshot_=snapshot;target_=target;group_=group;rebuild_tree();
 }
 std::vector<MaterialPanel::Surface> MaterialPanel::surfaces() const{
   std::set<std::pair<size_t,size_t>> selected;
@@ -101,19 +103,31 @@ void MaterialPanel::rebuild_tree(){
   std::set<QString> selected,expanded;for(QTreeWidgetItemIterator it(tree_);*it;++it){if((*it)->isSelected())selected.insert((*it)->data(0,Qt::UserRole+2).toString());if((*it)->isExpanded())expanded.insert((*it)->data(0,Qt::UserRole+2).toString());}
   QSignalBlocker blocker(tree_);tree_->clear();
   if(!document_||!snapshot_){rebuild_properties();return;}const auto &d=*document_;const auto &scene=d.loaded.scene;
-  std::vector<int> hosts(d.catalog.targets.size());
-  for(size_t t=0;t<hosts.size();++t){hosts[t]=int(t);try{hosts[t]=int(attachment_host(d,t));}catch(const std::exception &){} }
-  int focus=target_>=0&&size_t(target_)<hosts.size()?hosts[size_t(target_)]:-1;
+  ObjectHierarchy hierarchy(d);
+  std::string focus=group_;
+  if(target_>=0&&size_t(target_)<hierarchy.targets.size()) {
+    size_t host=size_t(target_);try{host=attachment_host(d,host);}catch(const std::exception &){}
+    focus=hierarchy.targets[host];
+  }
   std::map<size_t,size_t> targets;for(size_t t=0;t<d.catalog.targets.size();++t)targets[d.catalog.targets[t].instance]=t;
-  std::map<int,QTreeWidgetItem *> families;
+  std::set<std::string> represented=hierarchy.groups;for(const auto &id:hierarchy.instances)represented.insert(id);
+  std::map<std::string,QTreeWidgetItem *> families;
+  std::set<std::string> building;
+  std::function<QTreeWidgetItem *(const std::string &)> family=[&](const std::string &id)->QTreeWidgetItem * {
+    if(auto f=families.find(id);f!=families.end())return f->second;
+    if(!building.insert(id).second)return nullptr;
+    QTreeWidgetItem *parent=nullptr;auto p=hierarchy.parents[id];std::set<std::string> seen{id};
+    if(scope_->currentIndex()!=0||id!=focus)while(!p.empty()&&seen.insert(p).second){if(represented.contains(p)){parent=family(p);break;}p=hierarchy.parents[p];}
+    auto *item=parent?new QTreeWidgetItem(parent):new QTreeWidgetItem(tree_);item->setText(0,text(hierarchy.labels[id].empty()?id:hierarchy.labels[id]));
+    item->setData(0,Qt::UserRole+2,"family/"+text(id));item->setToolTip(0,text(id));item->setExpanded(true);families[id]=item;building.erase(id);return item;
+  };
   QTreeWidgetItem *first=nullptr;
   for(size_t i=0;i<scene.instances.size();++i){const auto &instance=scene.instances[i];if(instance.materials.empty())continue;
-    auto target=targets.find(i);int host=target==targets.end()?-1:hosts[target->second];
-    if(scope_->currentIndex()==0&&focus>=0&&host!=focus)continue;
-    QTreeWidgetItem *parent=nullptr;
-    if(host>=0){auto &family=families[host];if(!family){family=new QTreeWidgetItem(tree_,{text(d.catalog.targets[size_t(host)].label)});family->setData(0,Qt::UserRole+2,"family/"+text(d.catalog.targets[size_t(host)].id));family->setExpanded(true);}parent=family;}
+    auto target=targets.find(i);const auto &node=hierarchy.instances[i];
+    if(scope_->currentIndex()==0&&!focus.empty()&&!hierarchy.contains(focus,node))continue;
+    auto *parent=family(node);
     auto label=target==targets.end()?text(instance.instance_label.empty()?instance.id:instance.instance_label):text(d.catalog.targets[target->second].label);
-    if(host>=0&&target!=targets.end()&&int(target->second)==host)label=QStringLiteral("自身 · ")+label;
+    label=QStringLiteral("自身 · ")+label;
     if(instance.graft_source>=0)label=QStringLiteral("GeoGraft · ")+label;
     auto *object=parent?new QTreeWidgetItem(parent,{label}):new QTreeWidgetItem(tree_,{label});object->setData(0,Qt::UserRole+2,"object/"+text(instance.id));object->setToolTip(0,text(instance.id));
     const auto &slots=scene.meshes.at(instance.mesh).material_slots;
@@ -123,7 +137,8 @@ void MaterialPanel::rebuild_tree(){
     object->setExpanded(expanded.contains(object->data(0,Qt::UserRole+2).toString())||(target!=targets.end()&&int(target->second)==target_));
   }
   bool restored=false;for(QTreeWidgetItemIterator it(tree_);*it;++it)if(selected.contains((*it)->data(0,Qt::UserRole+2).toString())){(*it)->setSelected(true);restored=true;}
-  if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}rebuild_properties();
+  if(!restored&&scope_->currentIndex()==0&&families.contains(focus))tree_->setCurrentItem(families.at(focus));
+  else if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}rebuild_properties();
 }
 J MaterialPanel::value(Surface s,const P &p)const{auto textures=document_->loaded.scene.textures;auto m=effective_material(document_->loaded.scene,snapshot_->material_overrides,s.instance,s.slot,textures);return material_value(m,textures,p);}
 std::vector<std::pair<std::string,std::string>> MaterialPanel::selection_ids() const {
@@ -174,7 +189,9 @@ void MaterialPanel::rebuild_properties(){
     auto *controls=new QHBoxLayout;controls->setSpacing(3);horizontal->addLayout(controls,1);horizontal->addWidget(reset_button);const auto *parameter=&p;
     if(p.kind==P::number){auto *spin=new NumericSpinBox(true);spin->setButtonSymbols(QAbstractSpinBox::NoButtons);spin->setFixedWidth(74);spin->setObjectName("material/"+text(p.id));spin->setDecimals(6);spin->setRange(std::min(p.minimum,current.get<double>()),std::max(p.maximum,current.get<double>()));spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->sync(current.get<double>());if(mixed)spin->setSuffix(QStringLiteral("（多值）"));auto *slider=new NumericSlider;slider->setMinimumWidth(30);slider->sync(spin->value(),p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),p.step);controls->addWidget(slider,1);controls->addWidget(spin);
       auto sync=[=]{slider->sync(spin->value(),p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),p.step);};
-      connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,spin,sync](double v){spin->setSuffix({});commit(*parameter,v);sync();});slider->edited=[spin](double v){spin->setValue(v);};slider->wheeled=[spin](QWheelEvent *event){QApplication::sendEvent(spin,event);};
+      connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,spin,sync](double v){spin->setSuffix({});commit(*parameter,v);sync();});connect(spin->findChild<QLineEdit *>(),&QLineEdit::textEdited,spin,[spin]{spin->setProperty("materialTyped",true);});
+      connect(spin,&QDoubleSpinBox::editingFinished,this,[this,parameter,spin,sync]{if(!spin->property("materialTyped").toBool())return;spin->setProperty("materialTyped",false);spin->setSuffix({});commit(*parameter,spin->value());sync();});
+      slider->edited=[spin](double v){spin->setValue(v);};slider->wheeled=[spin](QWheelEvent *event){QApplication::sendEvent(spin,event);};
       connect(slider,&QSlider::sliderPressed,this,[this]{if(interaction_changed)interaction_changed(true);});connect(slider,&QSlider::sliderReleased,this,[this]{if(interaction_changed)interaction_changed(false);});
     }else if(p.kind==P::boolean){auto *check=new QCheckBox(mixed?QStringLiteral("多值"):QStringLiteral("启用"));check->setObjectName("material/"+text(p.id));check->setTristate(mixed);check->setCheckState(mixed?Qt::PartiallyChecked:(current.get<bool>()?Qt::Checked:Qt::Unchecked));controls->addWidget(check);connect(check,&QCheckBox::checkStateChanged,this,[this,parameter,check](Qt::CheckState state){if(state==Qt::PartiallyChecked)return;check->setTristate(false);check->setText(QStringLiteral("启用"));commit(*parameter,state==Qt::Checked);});
     }else if(p.kind==P::choice){auto *combo=new QComboBox;combo->setObjectName("material/"+text(p.id));for(const auto &name:p.choices)combo->addItem(text(name));combo->setCurrentIndex(mixed?-1:current.get<int>());combo->setPlaceholderText(QStringLiteral("多值"));controls->addWidget(combo,1);connect(combo,&QComboBox::currentIndexChanged,this,[this,parameter](int index){if(index>=0)commit(*parameter,index);});

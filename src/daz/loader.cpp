@@ -5,6 +5,7 @@
 #include "render_ir/options_json.h"
 #include "render_ir/options.h"
 #include "daz/documents.h"
+#include "daz/resource_paths.h"
 #include "runtime/geometry_shell.h"
 #include "diagnostics/load_profile.h"
 #include <zlib.h>
@@ -19,6 +20,7 @@
 #include <string_view>
 #include <atomic>
 #include <thread>
+#include <optional>
 
 namespace dfv::daz {
 using Json=nlohmann::json;
@@ -54,6 +56,7 @@ const Json &values(const Json &object) {
 }
 struct Repository {
   std::vector<fs::path> roots;
+  std::optional<std::vector<fs::path>> iray_roots;
   std::map<std::string,std::shared_ptr<const Json>> documents;
   std::set<std::string> dependencies;
   std::map<std::pair<fs::path,std::string>,fs::path> resolved_paths;
@@ -68,18 +71,29 @@ struct Repository {
     if(raw.empty()) return owner;
     const auto cache_key=std::make_pair(raw.starts_with('/')?fs::path{}:owner.parent_path(),raw);
     if(auto found=resolved_paths.find(cache_key);found!=resolved_paths.end()) return found->second;
-    if(raw.find('?')!=std::string::npos || raw.find(':')!=std::string::npos) fail("不支持的资产 URI: "+uri);
+    if(raw.find('?')!=std::string::npos) fail("不支持的资产 URI: "+uri);
     raw=decode(raw);
-    const bool absolute=raw.starts_with('/');
-    if(absolute) raw.erase(0,1);
-    const auto relative=fs::u8path(raw).lexically_normal();
-    if(relative.is_absolute() || relative.has_root_name() || (!relative.empty() && *relative.begin()=="..")) fail("资产路径越过内容根目录: "+uri);
+    std::replace(raw.begin(),raw.end(),'\\','/');
+    if(raw.starts_with("file:///"))raw.erase(0,8);
+    if(raw.size()>3&&raw[0]=='/'&&raw[2]==':')raw.erase(0,1);
+    const auto disk_path=fs::u8path(raw).lexically_normal();
     std::vector<fs::path> candidates;
-    if(!absolute) candidates.push_back(owner.parent_path()/relative);
-    for(const auto &root:roots) candidates.push_back(root/relative);
-    if(raw.starts_with("resources/")) for(const auto *installation:{L"DAZStudio4",L"DAZStudio6",L"DAZStudio4 Public Build",L"DAZStudio6 Public Build"})
-      candidates.push_back(fs::path(L"C:/Program Files/DAZ 3D")/installation/L"shaders/iray"/relative);
-    for(const auto &p:candidates) if(fs::is_regular_file(p)) {auto file=fs::weakly_canonical(p);dependencies.insert(utf8(file));resolved_paths.emplace(cache_key,file);return file;}
+    if(disk_path.is_absolute()&&disk_path.has_root_name()) {
+      candidates.push_back(disk_path);
+      const auto relocated=relocated_library_paths(disk_path,roots);candidates.insert(candidates.end(),relocated.begin(),relocated.end());
+    } else {
+      if(raw.find(':')!=std::string::npos)fail("不支持的资产 URI: "+uri);
+      const bool absolute=raw.starts_with('/');if(absolute)raw.erase(0,1);
+      const auto relative=fs::u8path(raw).lexically_normal();
+      if(relative.is_absolute()||relative.has_root_name()||(!relative.empty()&&*relative.begin()==".."))fail("资产路径越过内容根目录: "+uri);
+      if(!absolute)candidates.push_back(owner.parent_path()/relative);
+      for(const auto &root:roots)candidates.push_back(root/relative);
+      if(raw.starts_with("resources/")) {
+        if(!iray_roots)iray_roots=studio_iray_roots();
+        for(const auto &root:*iray_roots)candidates.push_back(root/relative);
+      }
+    }
+    for(const auto &p:candidates) {std::error_code ec;if(fs::is_regular_file(p,ec)) {auto file=fs::weakly_canonical(p);dependencies.insert(utf8(file));resolved_paths.emplace(cache_key,file);return file;}}
     throw MissingAsset("DSON: 依赖缺失: "+uri+"（来源 "+utf8(owner)+"）");
   }
   const Json &document(const fs::path &path) {
@@ -617,14 +631,10 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       if(p.type=="bool") {p.minimum=0;p.maximum=1;}
       if(p.id=="Gamma"||p.id=="Aperture"||p.id=="Shutter Speed"||p.id=="White Point Scale"||p.id=="White Point") p.minimum=.001;
       if(p.id=="Environment Map"&&!p.image_uri.empty()) {
+        scene.options.environment_file.clear();
         try {scene.options.environment_file=repo.path(p.image_uri,file);}
         catch(const std::exception &) {
-          // DAZ 内置 resources URI 从安装目录只读解析。
-          if(p.image_uri.starts_with("/resources/")) for(const auto *installation:{L"DAZStudio4",L"DAZStudio6",L"DAZStudio4 Public Build",L"DAZStudio6 Public Build"}) {
-            const auto candidate=fs::path(L"C:/Program Files/DAZ 3D")/installation/L"shaders/iray"/fs::u8path(decode(p.image_uri.substr(1)));
-            if(fs::is_regular_file(candidate)) {scene.options.environment_file=candidate;repo.dependencies.insert(utf8(candidate));break;}
-          }
-          if(scene.options.environment_file.empty()) warn("environment_map_missing",id,"未找到环境贴图："+p.image_uri);
+          warn("environment_map_missing",id,"未找到环境贴图："+p.image_uri);
         }
       }
       options.parameters.push_back(std::move(p));
@@ -986,6 +996,14 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     if(!mesh.hidden_polygons.empty()) out.report["graft_masks"].push_back({{"object",o.id},{"hidden_polygons",mesh.hidden_polygons},{"hidden_triangles",std::count_if(mesh.triangles.begin(),mesh.triangles.end(),[&](const auto &t){return !mesh.draws(t);})}});
   }
   for(const auto &root:repo.roots) out.report["content_roots"].push_back(utf8(root));
+  out.report["iray_resource_roots"]=Json::array();if(repo.iray_roots)for(const auto &root:*repo.iray_roots)out.report["iray_resource_roots"].push_back(utf8(root));
+  for(auto &node:out.nodes) if(node.group) {
+    const auto &n=nodes.at(node.id);node.translation_cm=axes(n,"translation",{});node.rotation_degrees=axes(n,"rotation",{});node.scale=axes(n,"scale",{1,1,1});node.general_scale=number(n.value("general_scale",Json(1)),1);node.rotation_order=n.value("rotation_order","XYZ");
+    const auto pivot=axes(n,"center_point",{}),t=node.translation_cm;const auto orientation=rotation(axes(n,"orientation",{}),"XYZ");
+    const auto parent=n.value("parent","");const auto parent_world=parent.starts_with('#')?fitted_world(decode(parent.substr(1))):ir::Transform{};
+    node.world=render_transform(fitted_world(node.id));node.translation_frame=render_transform(parent_world);
+    node.edit_frame=render_transform(parent_world*ir::Transform::translate({pivot.x+t.x,pivot.y+t.y,pivot.z+t.z})*orientation);
+  }
   for(auto &object:out.objects) {
     object.source_file=file;object.source_node=object.id;
     const auto presentation=nodes.at(object.id).value("presentation",Json::object());

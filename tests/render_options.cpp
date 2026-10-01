@@ -3,11 +3,71 @@
 #include "render_ir/options_json.h"
 #include "bench/camera.h"
 #include "render_ir/sun_sky.h"
+#include "daz/resource_paths.h"
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 using namespace dfv;
 using J=nlohmann::json;
 static void require(bool b,const char *s) {if(!b) throw std::runtime_error(s);}
+static void environment_paths(const std::filesystem::path &parent) {
+  namespace fs=std::filesystem;
+  const auto folder=parent/("paths-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const auto library=folder/"G1",installation=folder/L"DAZ Studio 测试",iray=installation/"shaders/iray";
+  const auto hdr=library/L"Runtime/Textures/Test/sky #100% 中文.hdr",builtin=iray/"resources/dfv-test-sky.hdr";
+  for(const auto &p:{hdr,builtin}) {fs::create_directories(p.parent_path());std::ofstream(p)<<"fixture";}
+  auto utf8=[](const fs::path &p){const auto s=p.generic_u8string();return std::string(s.begin(),s.end());};
+  auto encode=[](const std::string &s){std::string out;const char *hex="0123456789ABCDEF";for(const unsigned char c:s) {
+    if((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='/'||c==':'||c=='.'||c=='-'||c=='_')out+=char(c);
+    else {out+='%';out+=hex[c>>4];out+=hex[c&15];}
+  }return out;};
+  const auto scene=folder/"environment.duf";
+  auto load=[&](const std::string &uri,const std::vector<fs::path> &roots) {
+    const J node={{"id","environment"},{"extra",J::array({{{"type","studio/node/environment"}},
+      {{"type","studio_node_channels"},{"channels",J::array({{{"channel",{{"id","Environment Map"},{"value",1},{"image_file",uri}}}}})}}})}};
+    std::ofstream(scene)<<J{{"scene",{{"nodes",J::array({node})}}}}.dump();
+    return daz::load(scene,{roots,false});
+  };
+  auto check=[&](const daz::LoadedScene &loaded,const fs::path &expected) {
+    const auto canonical=fs::weakly_canonical(expected);
+    require(loaded.scene.options.environment_file==canonical,"HDRI resolved to the wrong file");
+    require(loaded.report.at("warnings").empty(),"Resolved HDRI still has a missing warning");
+    const auto &deps=loaded.report.at("dependencies");require(std::find(deps.begin(),deps.end(),utf8(canonical))!=deps.end(),"Resolved HDRI missing from dependencies");
+  };
+  check(load(encode(utf8(hdr)),{library}),hdr);
+  check(load("file:///"+encode(utf8(hdr)),{library}),hdr);
+  check(load("/"+encode(utf8(hdr.lexically_relative(library))),{library}),hdr);
+  const auto previous=fs::path(hdr.root_name()==L"Z:"?L"Y:/":L"Z:/")/hdr.relative_path();
+  auto old_uri=encode(utf8(previous));check(load(old_uri,{library}),hdr);
+  old_uri.replace(1,1,"%3A");check(load("/"+old_uri,{library}),hdr);
+  auto windows_uri=encode(utf8(previous));std::replace(windows_uri.begin(),windows_uri.end(),'/','\\');check(load(windows_uri,{library}),hdr);
+  const auto moved=daz::relocated_library_paths("H:/G1/Runtime/Textures/Test/sky.hdr",{"G:/G3","G:/g1/"});
+  require(moved.size()==1&&moved[0]==fs::path("G:/g1/Runtime/Textures/Test/sky.hdr"),"Drive relocation chose the wrong content library");
+  require(daz::relocated_library_paths("H:/G10/sky.hdr",{"G:/G1"}).empty(),"Drive relocation matched a partial directory name");
+  require(daz::relocated_library_paths("H:/G1/../Other/sky.hdr",{"G:/G1"}).empty(),"Drive relocation escaped the library");
+  const auto missing=load("H:/UnknownLibrary/sky.hdr",{library});
+  require(missing.scene.options.environment_file.empty()&&missing.report["warnings"][0]["code"]=="environment_map_missing","Missing HDRI was silently replaced");
+  // A process-local override simulates a nonstandard DAZ installation without editing the registry.
+  struct Override {
+    std::wstring previous;
+    explicit Override(const fs::path &p) {
+      const auto size=GetEnvironmentVariableW(L"DFV_DAZ_STUDIO_PATH",nullptr,0);
+      if(size){previous.resize(size);previous.resize(GetEnvironmentVariableW(L"DFV_DAZ_STUDIO_PATH",previous.data(),size));}
+      require(SetEnvironmentVariableW(L"DFV_DAZ_STUDIO_PATH",p.c_str()),"Cannot set test installation");
+    }
+    ~Override(){SetEnvironmentVariableW(L"DFV_DAZ_STUDIO_PATH",previous.empty()?nullptr:previous.c_str());}
+  } override(installation);
+  const auto automatic=load("/resources/dfv-test-sky.hdr",{library});check(automatic,builtin);
+  require(automatic.report["content_roots"].size()==1&&!automatic.report["iray_resource_roots"].empty(),"Iray roots leaked into the content library list");
+  check(load("/resources/dfv-test-sky.hdr",{iray}),builtin);
+  const auto custom=library/"resources/dfv-test-sky.hdr";fs::create_directories(custom.parent_path());std::ofstream(custom)<<"custom";
+  check(load("/resources/dfv-test-sky.hdr",{library}),custom);
+  const auto absent=load("/resources/dfv-test-missing.hdr",{library});
+  require(absent.scene.options.environment_file.empty()&&absent.report["warnings"][0]["code"]=="environment_map_missing","Missing built-in HDRI was not reported");
+}
 static void local_pivot(const std::filesystem::path &folder) {
   const auto file=folder/"pivot.duf";
   auto axes=[](double x,double y,double z) {return J::array({{{"id","x"},{"value",x}},{{"id","y"},{"value",y}},{{"id","z"},{"value",z}}});};
@@ -27,6 +87,7 @@ int main() {try {
     require(queue.pending&&queue.synchronize&&queue.delta.visibility.size()==2&&queue.delta.visibility[0].visible&&queue.delta.visibility[1].visible&&queue.delta.meshes.size()==1&&queue.delta.meshes[0].positions[0].x==4,"等待期间丢失显隐或最新几何");queue.clear();require(!queue.pending&&!queue.synchronize&&queue.delta.meshes.empty(),"提交后残留过期编辑");}
 
   const auto folder=std::filesystem::temp_directory_path()/"dfv-render-options";std::filesystem::create_directories(folder);
+  environment_paths(folder);
   const auto file=folder/"scene.duf";std::ofstream(folder/"studio.hdr")<<"fixture";
   J tone=J::array(),env=J::array();
   auto channel=[](const char *id,J value,const char *group) {return J{{"group",group},{"channel",{{"id",id},{"type","float"},{"value",value}}}};};

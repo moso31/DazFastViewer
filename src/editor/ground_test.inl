@@ -31,7 +31,7 @@
     if(selected_!=key||state.selected_target!=key){choose(key);return;}
     if(ground_test_phase_==0){
       if(!chrome->ground_action()->isEnabled()){finish_test(false,"普通物体或 Instance 的对齐按钮未启用");return;}
-      ground_test_before_=state;ground_test_bounds_=bounds(key);chrome->findChild<QDoubleSpinBox *>("GroundAlignmentRatio")->setValue(ratio);ground_test_requests_=state.ground_requests;
+      ground_test_before_=state;ground_test_bounds_=bounds(key);ground_panel_->findChild<QDoubleSpinBox *>("GroundAlignmentRatio")->setValue(ratio*100);ground_test_requests_=state.ground_requests;
       const auto hwnd=FindWindowExW(HWND(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);
       SendMessageW(hwnd,WM_KEYDOWN,VK_CONTROL,0);SendMessageW(hwnd,WM_KEYDOWN,'D',0);SendMessageW(hwnd,WM_KEYUP,'D',0);SendMessageW(hwnd,WM_KEYUP,VK_CONTROL,0);ground_test_phase_=1;return;
     }

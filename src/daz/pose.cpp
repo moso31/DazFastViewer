@@ -25,13 +25,27 @@ PosePreset parse_pose(const nlohmann::json &document,const std::string &source) 
   return preset;
 }
 PosePreset read_pose(const std::filesystem::path &file) {const auto u=file.generic_u8string();return parse_pose(read_document_file(file),std::string(u.begin(),u.end()));}
-AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const std::vector<runtime::JointPose> &current,const runtime::Target &target,const runtime::Properties &properties) {
+AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const std::vector<runtime::JointPose> &current,const runtime::Target &target,const runtime::Properties &properties,int subtree_root) {
   runtime::validate_pose(skin,current);AppliedPose result;result.joints=current;result.properties=properties;
   if(properties.morphs.size()!=target.morphs.size()||skin.instance!=target.instance) throw std::runtime_error("姿势目标与角色属性不匹配");
   result.report={{"source",preset.source},{"target",skin.id},{"applied_bone_channels",0},{"applied_morph_channels",0},{"ignored_zero_controls",0},{"unapplied",nlohmann::json::array()}};
   std::set<size_t> bones;
+  if(subtree_root < -1 || subtree_root>=int(skin.joints.size())) throw std::runtime_error("局部姿势的起始骨骼无效");
+  std::vector<bool> included(skin.joints.size(),subtree_root<0);
+  for(size_t i=0;i<skin.joints.size();++i) if(subtree_root>=0)
+    included[i]=int(i)==subtree_root||(skin.joints[i].parent>=0&&included[size_t(skin.joints[i].parent)]);
+  result.report["subtree_root"]=subtree_root;result.report["excluded_channels"]=0;
   auto skip=[&](const PoseChannel &c,const std::string &reason) {result.report["unapplied"].push_back({{"node",c.node},{"modifier",c.modifier},{"property",c.property},{"value",c.value},{"reason",reason}});};
   for(const auto &c:preset.channels) {
+    if(subtree_root>=0) {
+      bool in_scope=false;
+      for(size_t i=0;i<skin.joints.size();++i) {const auto &j=skin.joints[i];
+        const bool match=c.node.empty()?j.parent<0:c.scheme=="id"?j.id==c.node:j.name==c.node||std::find(j.aliases.begin(),j.aliases.end(),c.node)!=j.aliases.end();
+        if(match&&included[i]) in_scope=true;
+      }
+      // Figure-wide controls can drive unrelated limbs; only channels owned by this subtree are applied.
+      if(!in_scope) {result.report["excluded_channels"]=result.report["excluded_channels"].get<int>()+1;continue;}
+    }
     if(!c.modifier.empty()) {
       size_t found=target.morphs.size(),matches=0;
       for(size_t i=0;i<target.morphs.size();++i) {

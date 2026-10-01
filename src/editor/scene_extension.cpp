@@ -1,4 +1,5 @@
 #include "editor/scene_extension.h"
+#include "editor/group_transforms.h"
 #include "render_ir/options_json.h"
 #include "runtime/physics_json.h"
 #include <fstream>
@@ -55,18 +56,21 @@ J snapshot_json(const Document &d,const Snapshot &s){
   J j={{"objects",J::object()},{"poses",J::object()},{"subdivision",s.subdivision_levels},{"options",ir::options_json(s.options)},{"lights",J::array()}};
   for(size_t t=0;t<s.values.size();++t){const auto &v=s.values[t];const auto &target=d.catalog.targets[t];runtime::validate_transform(v.transform);J m=J::object();
     for(size_t i=0;i<target.morphs.size();++i){const auto &p=target.morphs[i];if(p.alias_morph>=0||runtime::legacy_extension_channel(p.label)||(!p.evaluable&&!p.unsupported.empty()))continue;const auto value=v.morphs.at(i);if(!std::isfinite(value))throw std::runtime_error("Morph 值无效");if(value!=p.initial)m[p.id]=value;}
-    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
+    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"ground_offset_cm",v.ground_alignment_offset_cm},{"ground_body_only",v.ground_alignment_body_only},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
   }
   for(size_t i=0;i<s.poses.size();++i){const auto &skin=d.skeletons.skins[i];runtime::validate_pose(skin,s.poses[i]);J poses=J::object();for(size_t b=0;b<skin.joints.size();++b){const auto &p=s.poses[i][b];auto v=transform(p);v["center_offset_cm"]=vec(p.center_offset_cm);v["end_offset_cm"]=vec(p.end_offset_cm);v["orientation_offset_degrees"]=vec(p.orientation_offset_degrees);poses[skin.joints[b].id]=v;}j["poses"][skin.id]=poses;}
   for(const auto &l:s.lights)j["lights"].push_back({{"id",l.id},{"transform",l.transform.value},{"power",vec(l.power)},{"width",l.width},{"height",l.height},{"kind",int(l.kind)},{"angle",l.angle}});
   j["pins"]=J::array();for(const auto &p:s.pose_pins){const auto &skin=d.skeletons.skins.at(size_t(p.skin));j["pins"].push_back({{"skin",skin.id},{"joint",skin.joints.at(size_t(p.joint)).id},{"world",vec(p.world)},{"position",p.position},{"angle",p.angle},{"orientation",p.world_orientation.value}});}
   validate_material_overrides(d.loaded.scene,s.material_overrides);j["materials"]=s.material_overrides;
-  validate_instance_ground(d.loaded.scene,s.instance_ground);j["instance_ground"]=J::object();for(const auto &[id,v]:s.instance_ground)j["instance_ground"][id]={{"offset_m",v.offset_m},{"ratio",v.ratio}};
+  validate_group_transforms(d,s.group_transforms);j["groups"]=J::object();for(const auto &[id,v]:s.group_transforms)j["groups"][id]=transform(v);
+  validate_instance_ground(d.loaded.scene,s.instance_ground);j["instance_ground"]=J::object();for(const auto &[id,v]:s.instance_ground)j["instance_ground"][id]={{"offset_m",v.offset_m},{"ratio",v.ratio},{"offset_cm",v.offset_cm},{"body_only",v.body_only}};
   j["control_favorites"]=favorites(s.control_favorites);return j;
 }
 void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   auto next=s;
+  next.group_transforms.clear();const auto groups=j.value("groups",J::object());for(const auto &[id,value]:groups.items())read_transform(next.group_transforms[id],value);validate_group_transforms(d,next.group_transforms);
   for(const auto &[id,o]:j.at("objects").items()){const auto t=target_index(d,id);auto &v=next.values.at(t);const auto &target=d.catalog.targets[t];read_transform(v.transform,o.at("transform"));runtime::validate_transform(v.transform);v.visible=o.at("visible");v.extension=read_extension(o.at("extension"));v.ground_alignment_ratio=o.at("ground_ratio");if(!std::isfinite(v.ground_alignment_ratio))throw std::runtime_error("地面对齐比例无效");
+    v.ground_alignment_offset_cm=o.value("ground_offset_cm",0.);v.ground_alignment_body_only=o.value("ground_body_only",false);if(!std::isfinite(v.ground_alignment_offset_cm))throw std::runtime_error("地面对齐偏移无效");
     v.physics=runtime::physics_object_from_json(o.value("physics",J{}));
     v.favorites=read_favorites(o.value("favorites",J{}));v.unlimited_morphs=o.at("unlimited").get<std::set<std::string>>();
     for(const auto &[mid,value]:o.at("morphs").items()){auto m=std::find_if(target.morphs.begin(),target.morphs.end(),[&](const auto &m){return m.id==mid;});if(m==target.morphs.end())throw std::runtime_error("DUFEX 参数不存在："+mid);if(runtime::legacy_extension_channel(m->label))continue;const float x=value.get<float>();if(!std::isfinite(x))throw std::runtime_error("DUFEX Morph 数值无效");v.morphs[size_t(m-target.morphs.begin())]=x;}runtime::sync_aliases(target,v);
@@ -78,7 +82,7 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   next.lights.clear();std::set<std::string> ids;for(const auto &l:j.at("lights")){ir::AreaLight v;v.id=l.at("id");if(!ids.insert(v.id).second)throw std::runtime_error("DUFEX 灯光身份重复");v.transform.value=l.at("transform").get<std::array<float,12>>();for(auto x:v.transform.value)if(!std::isfinite(x))throw std::runtime_error("DUFEX 灯光变换无效");v.power=vector(l.at("power"));v.width=l.at("width");v.height=l.at("height");v.angle=l.at("angle");const int kind=l.at("kind");if(kind<0||kind>3||!std::isfinite(v.width)||v.width<=0||!std::isfinite(v.height)||v.height<=0||!std::isfinite(v.angle))throw std::runtime_error("DUFEX 灯光参数无效");v.kind=ir::LightKind(kind);next.lights.push_back(v);}
   next.pose_pins.clear();for(const auto &p:j.value("pins",J::array())){auto skin=std::find_if(d.skeletons.skins.begin(),d.skeletons.skins.end(),[&](const auto &v){return v.id==p.at("skin").get<std::string>();});if(skin==d.skeletons.skins.end())throw std::runtime_error("固定关节的角色不存在");auto joint=std::find_if(skin->joints.begin(),skin->joints.end(),[&](const auto &v){return v.id==p.at("joint").get<std::string>();});if(joint==skin->joints.end())throw std::runtime_error("固定关节不存在");runtime::PosePin pin;pin.skin=int(skin-d.skeletons.skins.begin());pin.joint=int(joint-skin->joints.begin());pin.world=vector(p.at("world"));pin.position=p.at("position");pin.angle=p.at("angle");pin.world_orientation.value=p.at("orientation").get<std::array<float,12>>();for(auto v:pin.world_orientation.value)if(!std::isfinite(v))throw std::runtime_error("固定角度无效");next.pose_pins.push_back(pin);}
   next.material_overrides=j.value("materials",J::object()).get<MaterialOverrides>();validate_material_overrides(d.loaded.scene,next.material_overrides);
-  const auto instance_ground=j.value("instance_ground",J::object());next.instance_ground.clear();for(const auto &[id,v]:instance_ground.items())next.instance_ground[id]={v.at("offset_m").get<double>(),v.at("ratio").get<double>()};validate_instance_ground(d.loaded.scene,next.instance_ground);
+  const auto instance_ground=j.value("instance_ground",J::object());next.instance_ground.clear();for(const auto &[id,v]:instance_ground.items())next.instance_ground[id]={v.at("offset_m").get<double>(),v.at("ratio").get<double>(),v.value("offset_cm",0.),v.value("body_only",false)};validate_instance_ground(d.loaded.scene,next.instance_ground);
   next.control_favorites=read_favorites(j.value("control_favorites",J{}));s=std::move(next);
 }
 J scene_extension_json(const Document &d,const Snapshot &s){

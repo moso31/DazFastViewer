@@ -48,17 +48,17 @@ int main(int argc,char **argv) {
     auto tool=[&](int i){chrome->findChild<QAction *>("GizmoTool"+QString::number(i))->trigger();};auto space=[&](const char *name){for(auto *a:tools->actions()) if(a->text()==name) a->trigger();};
     tool(1);check(last.space==GizmoSpace::local,"T 被 R 的世界模式污染");tool(3);tool(2);check(last.space==GizmoSpace::world,"R 切换回来丢失世界模式");
     space("Local");tool(1);space("World");tool(0);tool(2);check(last.space==GizmoSpace::local,"R 没有独立记住本地模式");tool(1);check(last.space==GizmoSpace::world,"T 没有独立记住世界模式");
-    auto *functions=chrome->findChild<QToolBar *>("FunctionModule");auto *ratio=chrome->findChild<QDoubleSpinBox *>("GroundAlignmentRatio");check(functions&&ratio&&functions->x()>tools->x()&&functions->y()==tools->y(),"角色功能组没有默认位于 Local / World 右侧");
+    auto *functions=chrome->findChild<QToolBar *>("FunctionModule");auto *ratio=chrome->findChild<QDoubleSpinBox *>("GroundAlignmentRatio");check(functions&&!ratio&&functions->x()>tools->x()&&functions->y()==tools->y(),"角色功能组没有默认位于 Local / World 右侧");
     auto caption=[&](QWidget *widget,QPoint p){return chrome->caption_at(widget->mapTo(chrome,p));};
     check(caption(functions,toolbar_blank(functions)),"工具栏尾部空白不能拖动窗口");
     check(!caption(tools,{5,17}),"模块拖动把手被当作窗口标题栏");
     check(!caption(history,{5,17})&&!caption(history,history->actionGeometry(chrome->undo_action()).center()),"撤销重做的把手或按钮被当作窗口标题栏");
-    check(!caption(tools,tools->actionGeometry(tools->actions().front()).center())&&!caption(ratio,ratio->rect().center()),"工具按钮或输入框被当作窗口标题栏");
+    check(!caption(tools,tools->actionGeometry(tools->actions().front()).center()),"工具按钮或输入框被当作窗口标题栏");
     check(!caption(chrome->menus(),chrome->menus()->actionGeometry(chrome->menus()->actions().front()).center()),"菜单按钮被当作窗口标题栏");
     for(const char *name:{"ApplicationIcon","WindowControl0","WindowControl1","WindowControl2"}) {auto *b=chrome->findChild<QToolButton *>(name);check(!caption(b,b->rect().center()),"应用图标或窗口按钮被当作窗口标题栏");}
-    check(!chrome->ground_action()->isEnabled()&&!ratio->isEnabled(),"没有角色时仍可执行对齐");double value=0;int ratio_calls=0;chrome->ground_ratio_changed=[&](double v){value=v;++ratio_calls;};chrome->bind_ground(true,.01);check(ratio->value()==.01&&ratio_calls==0,"绑定角色比例错误地写入参数");ratio->setValue(-.02);check(value==-.02&&ratio_calls==1,"地面对齐比例编辑未接通");chrome->bind_ground(true,0);chrome->bind_ground(true,.01);check(ratio->value()==.01&&ratio_calls==1,"切换角色比例引起额外编辑");
+    check(!chrome->ground_action()->isEnabled(),"没有对象时仍可对齐");chrome->bind_ground(true);check(chrome->ground_action()->isEnabled(),"选中对象后不能对齐");
     check(chrome->ground_action()->shortcut()==QKeySequence(Qt::CTRL|Qt::Key_D)&&!chrome->ground_action()->icon().isNull(),"对齐图标或快捷键缺失");
-    ratio->findChild<QLineEdit *>()->setText(ratio->prefix()+"0.035");chrome->ground_action()->trigger();check(value==.035,"点击对齐没有提交尚未回车的比例输入");
+
     functions->hide();auto function_state=chrome->save_modules();chrome->reset_modules();chrome->restore_modules(function_state);QTest::qWait(50);check(functions->isHidden(),"功能组显隐未保存");chrome->reset_modules();
     history->hide();auto history_state=chrome->save_modules();chrome->reset_modules();check(history->isVisible(),"恢复布局没有显示撤销重做组");chrome->restore_modules(history_state);QTest::qWait(50);check(history->isHidden(),"撤销重做组显隐未保存");chrome->reset_modules();
     auto *host=chrome->findChild<QMainWindow *>("ToolbarModules");host->insertToolBarBreak(tools);QTest::qWait(100);check(tools->y()>menu->y()&&chrome->height()>50,"模块不能分行");auto saved=chrome->save_modules();chrome->reset_modules();QTest::qWait(50);check(tools->y()==menu->y(),"重置未合并行");check(chrome->restore_modules(saved),"模块布局未恢复");QTest::qWait(50);check(tools->y()>menu->y(),"模块顺序／换行未保存");

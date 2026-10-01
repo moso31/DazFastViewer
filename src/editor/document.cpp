@@ -1,4 +1,5 @@
 #include "editor/document.h"
+#include "editor/group_transforms.h"
 #include "daz/documents.h"
 #include "daz/material_uv.h"
 #include "runtime/graft_surface.h"
@@ -128,7 +129,7 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   }
   std::erase_if(document.attachments,[](const auto &b){return b.items.empty();});
   std::erase_if(snapshot.lights,[&](const auto &l) {return removed.contains(l.id);});scene.lights=snapshot.lights;
-  daz::apply_graft_masks(document.loaded);collect_resources(document);prune_material_overrides(scene,snapshot.material_overrides);prune_instance_ground(scene,snapshot.instance_ground);release_load_data(document);++snapshot.revision;
+  daz::apply_graft_masks(document.loaded);collect_resources(document);prune_material_overrides(scene,snapshot.material_overrides);prune_instance_ground(scene,snapshot.instance_ground);prune_group_transforms(document,snapshot.group_transforms);release_load_data(document);++snapshot.revision;
   return std::count(targets.begin(),targets.end(),false);
 }
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target) {

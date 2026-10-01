@@ -61,6 +61,8 @@ struct Properties {
   ObjectExtension extension;
   std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;
   double ground_alignment_ratio=0; // 每个对象独立的操作设置，修改比例本身不触发几何求值。
+  double ground_alignment_offset_cm=0;
+  bool ground_alignment_body_only=false;
   bool operator==(const Properties &) const = default;
 };
 void validate_transform(const TransformValues &value);
@@ -76,11 +78,12 @@ class MorphRuntime {
   std::vector<std::vector<ir::Vec3>> follow_offsets_;
   std::vector<ir::Transform> transforms_;
   std::vector<ir::Transform> attachments_;
+  std::vector<ir::Transform> reference_frames_,attachment_frames_;
   std::vector<int> parents_;
   std::vector<std::set<size_t>> active_;
   std::set<size_t> dirty_meshes_,dirty_transforms_;
   EvaluationStats stats_;
-  ir::Transform local_transform(size_t target) const;
+  ir::Transform local_transform(size_t target,const ir::Transform &frame={}) const;
   void dirty_transform(size_t target);
 public:
   MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets);
@@ -89,6 +92,7 @@ public:
   void set_visible(size_t target,bool visible);
   void bind_parent(size_t target,size_t parent);
   void set_attachment(size_t target,const ir::Transform &delta);
+  void set_reference_frames(const std::vector<ir::Transform> &frames,const std::vector<ir::Transform> &attachment_frames);
   bool set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets);
   ir::Delta evaluate();
   // 先消去共同祖先，再求相对矩阵；共同刚性移动不会制造浮点差异。

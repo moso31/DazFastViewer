@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,26 @@ stage = load('stage_runtime')
 
 
 class BuildToolsTest(unittest.TestCase):
+    def test_manifest_does_not_open_unrelated_linker_outputs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp)
+            owned = {out / 'DazFastViewer.exe', out / 'platforms/qwindows.dll', out / 'lib/kernel_sm_86.cubin.zst'}
+            for path in owned:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'runtime')
+            for name in ('RenderOptionsTest.exe', 'RenderOptionsTest.pdb', 'DazFastViewer.previous.exe'):
+                (out / name).write_bytes(b'unrelated')
+            digest = stage.sha256
+
+            def hash_owned(path):
+                if path not in owned:
+                    raise PermissionError('Unrelated target is still being linked')
+                return digest(path)
+
+            with patch.object(stage, 'sha256', side_effect=hash_owned):
+                manifest = stage.runtime_manifest(out, owned)
+            self.assertEqual(set(manifest), {p.relative_to(out).as_posix() for p in owned})
+
     def test_staging_rejects_partial_multi_gpu_build(self):
         with tempfile.TemporaryDirectory() as temp:
             build = Path(temp)

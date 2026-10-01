@@ -1,4 +1,5 @@
 #include "editor/renderer.h"
+#include "editor/group_transforms.h"
 #include "editor/pose_drag.h"
 #include "editor/powerpose_drag.h"
 #include "editor/render_edit_queue.h"
@@ -54,7 +55,7 @@ void Renderer::focus(const ir::Bounds &bounds) {
 void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) {snapshot_=snapshot;edit_preview_until_=now()+.15;Frame f;f.id=snapshot.revision;telemetry_.event("edit_input",f);}}
 void Renderer::interaction(bool active) {std::lock_guard lock(mutex_);if(active&&!edit_active_) interaction_revision_=snapshot_.revision+1;edit_active_=active;}
 void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources_;}
-void Renderer::select(uint64_t generation,int target,int joint,std::vector<Selection> selections,bool ik_allowed) {std::lock_guard lock(mutex_);selection_generation_=generation;selected_target_=target;selected_joint_=joint;selections_=std::move(selections);ik_allowed_=ik_allowed;++window_->pose_selection;}
+void Renderer::select(uint64_t generation,int target,int joint,std::vector<Selection> selections,bool ik_allowed,const std::string &group) {std::lock_guard lock(mutex_);selected_group_=group;selection_generation_=generation;selected_target_=target;selected_joint_=joint;selections_=std::move(selections);ik_allowed_=ik_allowed;++window_->pose_selection;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
 CameraState Renderer::input_camera() {return window_->mailbox.latest();}
 void Renderer::camera_view(const std::array<float,6> &v) {window_->camera.target={v[0],v[1],v[2]};window_->camera.distance=v[3];window_->camera.yaw=v[4];window_->camera.pitch=v[5];window_->publish();}
@@ -127,7 +128,7 @@ void Renderer::run(std::stop_token stop) {
   double next_state_report=0;
   PoseDrag pose_drag;uint64_t pose_serial=0,pose_commits=0,pose_previews=0;bool pose_paused=false;
   PowerPoseDrag powerpose_drag;uint64_t powerpose_serial=0,powerpose_selection=0;
-  GizmoDrag gizmo_drag;uint64_t gizmo_serial=0,gizmo_consumed=0,gizmo_selection=UINT64_MAX,gizmo_revision=UINT64_MAX;int gizmo_light=-1;bool gizmo_valid=false;
+  GizmoDrag gizmo_drag;uint64_t gizmo_serial=0,gizmo_consumed=0,gizmo_selection=UINT64_MAX,gizmo_revision=UINT64_MAX;int gizmo_light=-1;bool gizmo_valid=false;std::string gizmo_group;std::vector<uint32_t> gizmo_group_members;
   std::vector<std::vector<ir::Vec3>> powerpose_reference;
   struct {bool active=false,powerpose=false;uint64_t generation=0,revision=0;bool gizmo=false;} pose_recovery;
   uint64_t sessions=0;
@@ -152,7 +153,10 @@ void Renderer::run(std::stop_token stop) {
       }
       if(!found) throw std::runtime_error("视口没有使用可互操作的 NVIDIA 显卡。请在 Windows 设置 → 系统 → 屏幕 → 显示卡中，将 DazFastViewer.exe 设为高性能 NVIDIA GPU，然后重新启动程序。");
     }
-    std::shared_ptr<const Document> current;
+    std::shared_ptr<const Document> current,group_source,group_document;GroupTransforms applied_groups;std::optional<GroupFrames> group_frames;std::vector<ir::AreaLight> source_lights;
+    // The runtime holds references into the document it was constructed with.
+    std::shared_ptr<const Document> runtime_document,runtime_source;GroupTransforms document_groups;
+    std::optional<GroupFrames> runtime_frames;
     std::unique_ptr<ir::Scene> render_scene_ptr;
     std::shared_ptr<const Document> pending_document;
     std::unique_ptr<ir::Scene> pending_scene;
@@ -179,6 +183,7 @@ void Renderer::run(std::stop_token stop) {
     std::vector<ir::SubdivisionSettings> queued_subdivision_before;
     auto reset_render_state=[&] {
       runtime.reset();render_scene_ptr.reset();pending_runtime.reset();pending_scene.reset();pending_document.reset();
+      runtime_document.reset();runtime_source.reset();runtime_frames.reset();
       current.reset();picking={};regions.clear();pickable.clear();instance_groups.reset();geometry_dirty=true;
       previous_positions.clear();displacements.clear();powerpose_reference.clear();
       pose_drag.active=powerpose_drag.active=gizmo_drag.active=false;pose_recovery={};pose_paused=false;gizmo_valid=false;
@@ -188,7 +193,7 @@ void Renderer::run(std::stop_token stop) {
       state={};state.clicks=clicks;telemetry_.displayed_epoch=0;telemetry_.displayed_samples=0;
     };
     while(!stop.stop_requested()) {
-      std::shared_ptr<const Document> document;
+      std::shared_ptr<const Document> document;std::string selected_group;
       std::vector<Selection> selections;int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
       bool editing,ik_allowed;double preview_until,resize_until;
       std::vector<runtime::PosePin> pose_pins;
@@ -196,8 +201,19 @@ void Renderer::run(std::stop_token stop) {
       GizmoSettings gizmo_settings;
       uint64_t material_hover_generation;std::vector<std::pair<size_t,size_t>> material_hover;
       {std::lock_guard lock(mutex_);material_hover_generation=material_hover_generation_;material_hover=material_hover_;}
-      {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)) desired=snapshot_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
+      {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)){desired=snapshot_;source_lights=desired.lights;}selected_group=selected_group_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
       {std::lock_guard lock(mutex_);powerpose=powerpose_input_;gizmo_settings=gizmo_settings_;quality=quality_;}
+      try {
+        if(!document){group_source.reset();group_document.reset();group_frames.reset();applied_groups.clear();document_groups.clear();}
+        if(document&&(document!=group_source||desired.group_transforms!=applied_groups)) {
+          const auto begin=now();GroupFrames next(*document,desired.group_transforms);bool reused=false;
+          if(runtime&&session&&runtime_source==document&&runtime_frames){std::vector<ir::Transform> frames;for(const auto &id:next.hierarchy.targets){const auto a=next.delta(id),b=runtime_frames->delta(id);frames.push_back(a==b?ir::Transform{}:a*ir::inverse(b));}reused=runtime->reframe(frames);}
+          if(!reused){group_document=transformed_groups(document,desired.group_transforms);document_groups=desired.group_transforms;}
+          group_frames=std::move(next);group_source=document;applied_groups=desired.group_transforms;
+          if(reused)timing("group_reframe",begin,desired.revision);
+        }
+        document=group_document;desired.lights=source_lights;if(group_frames)for(auto &light:desired.lights)light.transform=group_frames->delta(light.id)*light.transform;
+      }catch(const std::exception &e){state.edit_error=e.what();publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
       runtime::PhysicsOptions wanted_physics;{std::lock_guard lock(mutex_);wanted_physics=physics_options_;}
       for(auto it=physics_retired.begin();it!=physics_retired.end();)if(physics_ready(*it)){try{it->get();}catch(...){}it=physics_retired.erase(it);}else ++it;
       // 场景切换期间提交线程仍拥有旧会话；保持相机反馈，直到可以安全回收。
@@ -249,6 +265,7 @@ void Renderer::run(std::stop_token stop) {
         // 导入等级过高等可恢复错误：允许用户降低等级后重新准备场景。
         state.error.clear();
       }
+      if((!runtime||!session)&&document_groups!=applied_groups){group_document=transformed_groups(group_source,applied_groups);document=group_document;document_groups=applied_groups;}
       if(current!=document||!session) {
         diagnostics::EventProfile profile(sampling_.rebuild_probe,[&](const char *name,double ms){telemetry_.event(name,{},ms);});
         if(pending_document!=document||!pending_runtime) {
@@ -261,9 +278,9 @@ void Renderer::run(std::stop_token stop) {
         state.pending_payloads=resources.pending;state.resource_error=resources.error;
         if(resources.pending||!resources.error.empty()) {publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
         {diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(desired.values,desired.poses);}
-        pending_scene->lights=desired.lights;pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
+        pending_scene->lights=group_lights(*group_source,*pending_scene,group_frames->hierarchy,desired.lights,pending_runtime->effective_poses(),&*group_frames);pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
         apply_material_overrides(*pending_scene,document->loaded.scene,desired.material_overrides);
-        if(!desired.instance_ground.empty())apply_instance_ground(*pending_scene,document->loaded.scene,desired.instance_ground);
+        if(!desired.instance_ground.empty()||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,*pending_scene,group_frames->hierarchy,pending_runtime->effective_poses(),&*group_frames);apply_instance_ground(*pending_scene,document->loaded.scene,desired.instance_ground,nullptr,&bases);}
         applied_instance_ground=desired.instance_ground;
         const auto camera=window_->mailbox.latest();pending_scene->camera=render_camera(camera,window_->width,window_->height);
         camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
@@ -302,6 +319,7 @@ void Renderer::run(std::stop_token stop) {
         }
         // 新场景成功准备后才释放旧运行时及其文档；显示驱动继续保留有效帧。
         runtime.reset();render_scene_ptr=std::move(pending_scene);runtime=std::move(pending_runtime);current=document;pending_document.reset();
+        runtime_document=document;runtime_source=group_source;runtime_frames=group_frames;
         regions.clear();regions.resize(render_scene_ptr->instances.size());pickable=runtime::viewport_pick_mask(*render_scene_ptr,current->catalog.targets);
         for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene_ptr->meshes.at(render_scene_ptr->instances.at(skin.instance).mesh),skin);
         geometry_dirty=true;edit_affects_render=false;previous_positions.clear();
@@ -337,7 +355,8 @@ void Renderer::run(std::stop_token stop) {
         }catch(const std::exception &e){state.physics_error=e.what();retire_physics(std::move(physics_installing));}
       }
       if(!physics_requested&&now()>=physics_due&&!editing){
-        physics_request_serial=physics_service.request(current,desired,physics_options);physics_requested=true;
+        const bool active=std::any_of(desired.values.begin(),desired.values.end(),[](const auto &v){return v.physics.enabled;});
+        physics_request_serial=physics_service.request(active&&document_groups!=applied_groups?transformed_groups(group_source,applied_groups):current,desired,physics_options);physics_requested=true;
       }
 
       if(physics_requested&&!physics_pending&&!physics_prepared&&!physics_prepare.valid()&&!physics_commit.valid()){
@@ -355,7 +374,7 @@ void Renderer::run(std::stop_token stop) {
       }
       state.physics_busy=physics_service.busy()||physics_prepare.valid()||physics_commit.valid()||bool(physics_prepared);
       auto proxy_excluded=[&](int selected) {
-        std::vector<uint32_t> result;if(selected<0||size_t(selected)>=current->catalog.targets.size())return result;
+        std::vector<uint32_t> result;if(selected==-4&&!gizmo_group.empty())return gizmo_group_members;if(selected<0||size_t(selected)>=current->catalog.targets.size())return result;
         const auto &targets=current->catalog.targets;auto node=[](const auto &t){return "#"+t.id.substr(0,t.id.rfind('/'));};std::set<std::string> family{node(targets[selected])};
         bool changed=true;while(changed){const auto before=family.size();for(const auto &t:targets)if(family.contains(t.parent)||family.contains(t.conform_target)||std::any_of(t.ancestors.begin(),t.ancestors.end(),[&](const auto &p){return family.contains(p);}))family.insert(node(t));changed=family.size()!=before;}
         for(const auto &t:targets)if(family.contains(node(t)))result.push_back(t.instance);return result;
@@ -372,17 +391,21 @@ void Renderer::run(std::stop_token stop) {
         gizmo_drag.active=false;gizmo_valid=false;state.pose_dragging=false;gizmo_revision=UINT64_MAX;
       }
       if(!gizmo_drag.active&&!pose_recovery.active&&(gizmo_selection!=window_->pose_selection||gizmo_revision!=applied_revision||gizmo_drag.generation!=current->generation)) {
-        gizmo_selection=window_->pose_selection;gizmo_revision=applied_revision;gizmo_valid=false;gizmo_light=-1;
-        if(gizmo_settings.tool!=GizmoTool::select&&current==document&&desired.revision==applied_revision&&selection_generation==current->generation&&selections.size()==1) {
+        gizmo_selection=window_->pose_selection;gizmo_revision=applied_revision;gizmo_valid=false;gizmo_light=-1;gizmo_group.clear();gizmo_group_members.clear();
+        if(gizmo_settings.tool!=GizmoTool::select&&current==document&&desired.revision==applied_revision&&selection_generation==current->generation&&(selections.size()==1||!selected_group.empty())) {
           if(selected_target>=0&&size_t(selected_target)<current->catalog.targets.size()) {
             const auto &target=current->catalog.targets[selected_target];const auto &instance=render_scene.instances[target.instance];
             if(instance.visible) {
-              gizmo_drag.object(target,desired.values[selected_target].transform,current->loaded.scene.instances[target.instance].transform,instance.transform);gizmo_valid=selected_joint<0;
+              const auto frame=group_target_frame(*group_source,size_t(selected_target),*group_frames);const auto loaded=group_frames->delta(group_frames->hierarchy.targets[selected_target])*group_source->loaded.scene.instances[target.instance].transform;
+              gizmo_drag.object(frame,desired.values[selected_target].transform,loaded,instance.transform);gizmo_valid=selected_joint<0;
               if(selected_joint>=0) for(size_t s=0;s<current->skeletons.skins.size();++s) {const auto &skin=current->skeletons.skins[s];if(skin.instance==target.instance&&size_t(selected_joint)<skin.joints.size()) {gizmo_drag.bone(skin,selected_joint,desired.poses[s],runtime->effective_poses()[s],instance.transform);gizmo_drag.skin=int(s);gizmo_valid=true;break;}}
               gizmo_drag.target=selected_target;
             }
-          } else if(selections.front()[2]>=0&&size_t(selections.front()[2])<desired.lights.size()) {
-            gizmo_light=selections.front()[2];runtime::Target frame;const auto &matrix=desired.lights[gizmo_light].transform;
+          } else if(selected_target==-4&&!selected_group.empty()&&group_node(*group_source,selected_group)) {
+            const auto &node=*group_node(*group_source,selected_group);const auto found=desired.group_transforms.find(selected_group);const auto value=found==desired.group_transforms.end()?runtime::TransformValues{}:found->second;
+            gizmo_drag.object(group_frame(node),value,node.world,group_world(*group_source,render_scene,selected_group,runtime->effective_poses(),&*group_frames));gizmo_drag.target=-4;gizmo_group=selected_group;gizmo_group_members=group_instances(*current,selected_group);gizmo_valid=true;
+          } else if(!selections.empty()&&selections.front()[2]>=0&&size_t(selections.front()[2])<desired.lights.size()) {
+            gizmo_light=selections.front()[2];runtime::Target frame;const auto &matrix=render_scene.lights[gizmo_light].transform;
             frame.has_edit_frame=true;frame.edit_frame=matrix;gizmo_drag.object(frame,{},matrix,matrix);gizmo_drag.target=-1;gizmo_valid=true;
           }
         }
@@ -396,6 +419,7 @@ void Renderer::run(std::stop_token stop) {
           pointer.held&&!pointer.cancelled&&pointer.selection==window_->pose_selection&&current==document&&desired.revision==applied_revision&&!input_camera.navigating) {
           ir::Mesh light_proxy;const ir::Mesh *mesh=&light_proxy;const std::vector<ir::Vec3> *source=nullptr;
           if(gizmo_drag.target>=0) {const auto &instance=render_scene.instances[current->catalog.targets[gizmo_drag.target].instance];mesh=&render_scene.meshes[instance.mesh];if(gizmo_drag.joint>=0) source=&runtime->skin_source(gizmo_drag.skin);}
+          if(!gizmo_group.empty()){light_proxy=group_proxy(render_scene,gizmo_group_members,gizmo_drag.world);mesh=&light_proxy;}
           if(gizmo_drag.begin(pointer,input_camera,window_->width,window_->height,gizmo_settings,gizmo_dpi,*mesh,source)) gizmo_consumed=pointer.serial;
         }
       }
@@ -405,9 +429,10 @@ void Renderer::run(std::stop_token stop) {
         if(!pointer.held) {
           if(gizmo_drag.moved&&gizmo_drag.changed()&&!pointer.cancelled) {
             state.pose_commit=++pose_commits;state.pose_generation=gizmo_drag.generation;state.pose_revision=gizmo_drag.revision;state.pose_skin=gizmo_drag.skin;
-            state.pose_joint=gizmo_drag.joint;state.pose_target=gizmo_drag.target;state.pose_light=gizmo_light;state.pose_figure=gizmo_drag.joint<0;
+            state.pose_joint=gizmo_drag.joint;state.pose_target=gizmo_drag.target;state.pose_light=gizmo_light;state.pose_group=gizmo_group;state.pose_figure=gizmo_drag.joint<0;
             state.pose_transform=gizmo_drag.transform;state.pose_input=gizmo_drag.poses;state.pose_error=state.pose_angle_error=0;
-            if(gizmo_light>=0) state.gizmo_light_transform=gizmo_drag.world;
+            if(gizmo_light>=0){const auto &id=source_lights.at(size_t(gizmo_light)).id;state.gizmo_light_transform=ir::inverse(group_member_parent_delta(*group_source,render_scene,group_frames->hierarchy,id,runtime->effective_poses(),&*group_frames)*group_frames->delta(id))*gizmo_drag.world;}
+            if(sampling_.interaction_probe&&!gizmo_group.empty())std::ofstream(output_/("group-commit-"+std::to_string(pose_commits)+".json"))<<nlohmann::json{{"group",gizmo_group},{"world",gizmo_drag.world.value},{"pivot",{gizmo_drag.pivot().x,gizmo_drag.pivot().y,gizmo_drag.pivot().z}},{"translation_cm",{gizmo_drag.transform.translation_cm.x,gizmo_drag.transform.translation_cm.y,gizmo_drag.transform.translation_cm.z}},{"press",{gizmo_drag.press.start_x,gizmo_drag.press.start_y}},{"release",{pointer.x,pointer.y}}}.dump(2);
             pose_recovery={true,false,gizmo_drag.generation,gizmo_drag.revision,true};clay_wait=true;telemetry_.event("gizmo_commit");
           }
           gizmo_drag.active=false;state.pose_dragging=false;gizmo_revision=UINT64_MAX;
@@ -416,7 +441,7 @@ void Renderer::run(std::stop_token stop) {
           GLContext::Binding binding(window_->present_context);glViewport(0,0,window_->width,window_->height);
           overlay.draw_pose(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.proxy,gizmo_drag.world,{},gizmo_drag.pivot(),proxy_excluded(gizmo_drag.target));
           const auto shape=gizmo_shape(gizmo_drag.camera,window_->width,window_->height,gizmo_drag.pivot(),gizmo_drag.orientation(),gizmo_settings,gizmo_dpi,gizmo_drag.enabled);
-          overlay.draw_gizmo(shape,window_->width,window_->height,gizmo_drag.handle,gizmo_dpi);state.gizmo_shape=shape;
+          overlay.draw_gizmo(shape,window_->width,window_->height,gizmo_drag.handle,gizmo_dpi);state.gizmo_shape=shape;state.gizmo_pointer=pointer;
           window_->swap();binding.release();window_->check_graphics();state.pose_dragging=true;
           if(updated) {state.pose_latency_ms=(now()-pointer.input_seconds)*1000;telemetry_.event("gizmo_proxy_present",{},state.pose_latency_ms);}
           publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(8));continue;
@@ -437,8 +462,9 @@ void Renderer::run(std::stop_token stop) {
           const auto &skin=current->skeletons.skins[powerpose.skin];const auto &target=current->catalog.targets[powerpose.target];
           if(skin.id==powerpose.instance&&skin.instance==target.instance) for(const auto &page:runtime::powerpose_templates()) for(const auto &point:page.points) if(point.id==powerpose.point) {
             const auto &instance=render_scene.instances[skin.instance];const auto &mesh=render_scene.meshes[instance.mesh];
+            const auto frame=group_target_frame(*group_source,size_t(powerpose.target),*group_frames);const auto loaded=group_frames->delta(group_frames->hierarchy.targets[powerpose.target])*group_source->loaded.scene.instances[skin.instance].transform;
             powerpose_drag.begin(skin,mesh,runtime->skin_source(powerpose.skin),desired.poses[powerpose.skin],runtime->effective_poses()[powerpose.skin],instance.transform,
-              desired.values[powerpose.target].transform,runtime::bind_powerpose(skin,point),powerpose,input_camera,window_->width,window_->height,runtime::pin_goals(pose_pins,powerpose.skin,instance.transform),&target,current->loaded.scene.instances[skin.instance].transform);
+              desired.values[powerpose.target].transform,runtime::bind_powerpose(skin,point),powerpose,input_camera,window_->width,window_->height,runtime::pin_goals(pose_pins,powerpose.skin,instance.transform),&frame,loaded);
             powerpose_selection=window_->pose_selection;
             if(sampling_.interaction_probe&&powerpose_drag.active) {powerpose_reference.clear();for(const auto &m:render_scene.meshes) powerpose_reference.push_back(m.positions);state.pose_restore_max_error=0;}
           }
@@ -553,17 +579,18 @@ void Renderer::run(std::stop_token stop) {
             if(!previous_positions.empty()) {
               std::erase_if(delta.meshes,[&](const auto &edit) {const auto &old=previous_positions.at(edit.index);return old.size()==edit.positions.size()&&std::equal(old.begin(),old.end(),edit.positions.begin(),[](auto a,auto b){return a.x==b.x&&a.y==b.y&&a.z==b.z;});});previous_positions.clear();
             }
-            for(size_t l=0;l<desired.lights.size();++l) {
-              const auto &a=desired.lights[l],&b=render_scene.lights[l];
+            auto lights=group_lights(*group_source,render_scene,group_frames->hierarchy,desired.lights,runtime->effective_poses(),&*group_frames);
+            for(size_t l=0;l<lights.size();++l) {
+              const auto &a=lights[l],&b=render_scene.lights[l];
               if(a.transform.value!=b.transform.value||a.power.x!=b.power.x||a.power.y!=b.power.y||a.power.z!=b.power.z||a.width!=b.width||a.height!=b.height) delta.lights.push_back({uint32_t(l),a});
             }
-            render_scene.lights=desired.lights;
+            render_scene.lights=std::move(lights);
             if(render_scene.options!=desired.options) {
               if(render_scene.options.environment!=desired.options.environment||render_scene.options.environment_file!=desired.options.environment_file||render_scene.options.backdrop!=desired.options.backdrop) delta.options=desired.options;
               render_scene.options=desired.options;display->set_options(desired.options);
             }
             material_layout_edit=apply_material_overrides(render_scene,current->loaded.scene,desired.material_overrides,&delta);
-            if(desired.instance_ground!=applied_instance_ground){apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta);applied_instance_ground=desired.instance_ground;}
+            if(desired.instance_ground!=applied_instance_ground||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,render_scene,group_frames->hierarchy,runtime->effective_poses(),&*group_frames);apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta,&bases);applied_instance_ground=desired.instance_ground;}
             new_render_edit=material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
             edit_affects_render=new_render_edit;applied_revision=desired.revision;if(!new_render_edit&&!queued.pending)gpu_revision=applied_revision;state.edit_error.clear();}
           }
@@ -787,6 +814,14 @@ void Renderer::run(std::stop_token stop) {
       state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();state.graft_seams=runtime->graft_seams();
       state.effective_poses=runtime->effective_poses();state.input_poses=runtime->input_poses();state.skin_world.clear();for(const auto &skin:current->skeletons.skins) state.skin_world.push_back(render_scene.instances[skin.instance].transform);
       state.target_world.clear();for(const auto &target:current->catalog.targets)state.target_world.push_back(render_scene.instances[target.instance].transform);
+      if(bounds_dirty||state.instance_bounds.size()!=render_scene.instances.size()) {
+        const bool all=state.instance_bounds.size()!=render_scene.instances.size();state.instance_bounds.resize(render_scene.instances.size());
+        for(uint32_t i=0;i<render_scene.instances.size();++i){const auto &instance=render_scene.instances[i];
+          if(!all&&std::none_of(delta.instances.begin(),delta.instances.end(),[&](const auto &e){return e.index==i;})&&std::none_of(delta.visibility.begin(),delta.visibility.end(),[&](const auto &e){return e.index==i;})&&std::none_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==instance.mesh;}))continue;
+          auto &bounds=state.instance_bounds[i];bounds={};if(instance.visible)for(auto p:render_scene.meshes[instance.mesh].positions)bounds.add(instance.transform.point(p));
+        }
+        state.group_worlds.clear();for(const auto &id:group_frames->hierarchy.groups)state.group_worlds[id]=group_world(*group_source,render_scene,id,runtime->effective_poses(),&*group_frames);
+      }
       if(selected_target>=0&&size_t(selected_target)<desired.values.size()&&selection_generation==current->generation&&desired.values[size_t(selected_target)].extension.kind==runtime::ExtensionKind::density){
         if(state.weight_target!=selected_target||state.weight_generation!=current->generation||bounds_dirty){const auto &instance=render_scene.instances.at(current->catalog.targets.at(size_t(selected_target)).instance);state.weight_positions=std::make_shared<const std::vector<ir::Vec3>>(render_scene.meshes.at(instance.mesh).positions);}
         state.weight_target=selected_target;state.weight_generation=current->generation;
@@ -804,7 +839,7 @@ void Renderer::run(std::stop_token stop) {
         const bool mesh_changed=all||std::any_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==mesh;});
         if(!mesh_changed&&!std::any_of(delta.instances.begin(),delta.instances.end(),[&](const auto &e){return e.index==target.instance;})) continue;
         const auto &base=current->loaded.scene.meshes[mesh].positions;const auto &positions=render_scene.meshes[mesh].positions;
-        ir::Bounds bounds;for(const auto p:positions) bounds.add(render_scene.instances[target.instance].transform.point(p));state.bounds[t]=bounds;
+        auto bounds=state.instance_bounds.at(target.instance);if(!render_scene.instances[target.instance].visible)for(const auto p:positions)bounds.add(render_scene.instances[target.instance].transform.point(p));state.bounds[t]=bounds;
         ir::Bounds head;const auto &region=regions[target.instance];
         if(region.head>=0) for(size_t t=0;t<region.body.size();++t) if(region.body[t]==region.head) for(auto v:render_scene.meshes[mesh].triangles[t].vertices) head.add(render_scene.instances[target.instance].transform.point(positions[v]));
         state.head_bounds[t]=head;

@@ -31,7 +31,7 @@ runtime::PhysicsKind physics_kind(const Document &d,size_t t) {
   return follower?runtime::PhysicsKind::cloth:runtime::PhysicsKind::rigid;
 }
 bool same_physics_geometry(const Snapshot &a,const Snapshot &b) {
-  if(a.generation!=b.generation||a.poses!=b.poses||a.instance_ground!=b.instance_ground||a.values.size()!=b.values.size())return false;
+  if(a.generation!=b.generation||a.poses!=b.poses||a.instance_ground!=b.instance_ground||a.group_transforms!=b.group_transforms||a.values.size()!=b.values.size())return false;
   for(size_t i=0;i<a.values.size();++i){const auto &x=a.values[i],&y=b.values[i];if(x.transform!=y.transform||x.visible!=y.visible||x.morphs!=y.morphs||x.unlimited_morphs!=y.unlimited_morphs||x.extension!=y.extension||x.ground_alignment_ratio!=y.ground_alignment_ratio)return false;}
   return true;
 }

@@ -263,9 +263,18 @@ int main() {
     auto grouped=duf;grouped["node_library"]={{{"id","group-def"},{"label","Classroom"},{"extra",{{{"type","studio/node/group_node"}}}}}};
     grouped["scene"]["nodes"].push_back({{"id","outer"},{"label","School"},{"extra",{{{"type","studio/node/group_node"}}}}});
     grouped["scene"]["nodes"].push_back({{"id","inner"},{"url","#group-def"},{"parent","#outer"}});grouped["scene"]["nodes"][0]["parent"]="#inner";
+    grouped["scene"]["nodes"][2]["translation"]=Json::parse(R"([{"id":"x","current_value":100}])");
+    auto &inner_group=grouped["scene"]["nodes"][3];inner_group["translation"]=Json::parse(R"([{"id":"y","current_value":50}])");inner_group["center_point"]=Json::parse(R"([{"id":"x","value":10},{"id":"y","value":20},{"id":"z","value":30}])");
+    inner_group["rotation"]=Json::parse(R"([{"id":"z","current_value":90}])");inner_group["scale"]=Json::parse(R"([{"id":"x","current_value":2}])");inner_group["general_scale"]={{"current_value",1.2}};inner_group["rotation_order"]="ZYX";
     write(path,grouped);const auto groups=dfv::daz::load(path);size_t group_count=0;
     for(const auto &n:groups.nodes) if(n.group) {++group_count;if(n.id=="inner") require(n.parent=="#outer"&&n.label=="Classroom","Group 丢失继承标签或父节点");}
     require(group_count==2&&groups.objects[0].parent=="#inner","空 Group 或其子对象被平摊");
+    for(const auto &n:groups.nodes)if(n.id=="inner"){
+      const auto pivot=n.edit_frame.point({}),parent=n.translation_frame.point({});
+      require(n.translation_cm.y==50&&n.rotation_degrees.z==90&&n.scale.x==2&&std::abs(n.general_scale-1.2f)<1e-6&&n.rotation_order=="ZYX","Group 原生变换参数丢失");
+      require(std::abs(pivot.x-1.1f)<1e-6&&std::abs(pivot.y+.3f)<1e-6&&std::abs(pivot.z-.7f)<1e-6&&std::abs(parent.x-1)<1e-6,"Group 轴心或父坐标框架错误");
+      const auto origin=n.world.point({});require(std::abs(origin.x-1.34f)<1e-6&&std::abs(origin.y-.06f)<1e-6&&std::abs(origin.z-.46f)<1e-6,"Group 已加载世界矩阵错误");
+    }
     write(path,duf);
     asset["geometry_library"][0]["vertices"]["count"]=5;write(asset_path,asset);
     rejected=false;try {(void)dfv::daz::load(path);} catch(const std::exception &) {rejected=true;}require(rejected,"无效 DSON count 没有拒绝");

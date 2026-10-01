@@ -39,6 +39,9 @@ public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
   PayloadProgress prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry=false);
+  // Reuse shape caches when only Group reference frames changed. False requires a
+  // new bind because a Fit To source and follower no longer share their rest frame.
+  bool reframe(const std::vector<ir::Transform> &frames);
   // 仅求公式与骨架，供 IK 提交校准；不载入差值、不蒙皮、不执行碰撞。
   std::vector<std::vector<JointPose>> resolve_poses(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
   const auto &morph_stats() const {return morph_.stats();}

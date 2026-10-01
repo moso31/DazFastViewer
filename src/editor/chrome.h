@@ -14,7 +14,6 @@ class EditorChrome final:public QWidget {
   QMenuBar *menu_;
   QWidget *grip_;
   QAction *undo_,*redo_,*local_,*world_,*ground_,*weight_;
-  QDoubleSpinBox *ground_ratio_;
   GizmoSettings settings_;
   GizmoSpace translation_space_=GizmoSpace::local,rotation_space_=GizmoSpace::local;
   QByteArray defaults_;
@@ -27,12 +26,11 @@ protected:
 public:
   explicit EditorChrome(QMainWindow *owner);
   std::function<void(GizmoSettings)> changed;
-  std::function<void(double)> ground_ratio_changed;
   QAction *undo_action() const {return undo_;}
   QAction *redo_action() const {return redo_;}
   QAction *ground_action() const {return ground_;}
   QAction *weight_action() const {return weight_;}
-  void bind_ground(bool enabled,double ratio);
+  void bind_ground(bool enabled);
   QMenuBar *menus() const {return menu_;}
   GizmoSettings settings() const {return settings_;}
   bool caption_at(QPoint position) const;

@@ -14,5 +14,5 @@ struct AppliedPose {
   nlohmann::json report;
 };
 AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const std::vector<runtime::JointPose> &current,
-                       const runtime::Target &target,const runtime::Properties &properties);
+                       const runtime::Target &target,const runtime::Properties &properties,int subtree_root=-1);
 }
