@@ -129,9 +129,24 @@ static void checks() {
     int opened=0;browser.open_asset=[&](const QString &p){require(p==pose,"激活了错误文件");++opened;};view->setCurrentIndex(view->model()->index(0,0));QTest::keyClick(view,Qt::Key_Return);require(opened==1,"键盘打开丢失或重复");
     require(ContentHistory(ui_settings).recent().empty(),"仅浏览或请求打开就记入近期使用");
     int full_pose=0,partial_pose=0;browser.apply_pose=[&](const QString &path,bool partial){require(path==pose,"姿势点击路径错误");if(partial)++partial_pose;else ++full_pose;};
-    const auto pose_point=view->visualRect(view->model()->index(0,0)).center();QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,pose_point);QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,pose_point);
-    require(full_pose==1&&partial_pose==1&&opened==1,"普通单击与 Ctrl+单击没有分别应用全身和局部姿势");
-    QTest::mouseDClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,pose_point);require(opened==1,"双击 Pose 又走了普通加载入口");browser.apply_pose={};
+    const auto check_pose_clicks=[&](QAbstractItemView *items,const QModelIndex &index){
+      items->scrollTo(index);until([&]{return items->visualRect(index).intersects(items->viewport()->rect());});
+      const auto point=items->visualRect(index).intersected(items->viewport()->rect()).center();
+      const int full_before=full_pose,partial_before=partial_pose;
+      QTest::mouseClick(items->viewport(),Qt::LeftButton,Qt::NoModifier,point);
+      require(full_pose==full_before+1&&partial_pose==partial_before,"普通单击没有应用全身姿势");
+      QTest::mouseDClick(items->viewport(),Qt::LeftButton,Qt::NoModifier,point);
+      require(full_pose==full_before+1&&partial_pose==partial_before&&opened==1,"普通双击重复应用姿势或走了普通加载入口");
+      QTest::mouseClick(items->viewport(),Qt::LeftButton,Qt::ControlModifier,point);
+      require(full_pose==full_before+1&&partial_pose==partial_before&&opened==1,"Ctrl+单击不应应用姿势");
+      QTest::mouseDClick(items->viewport(),Qt::LeftButton,Qt::ControlModifier,point);
+      QTest::mouseRelease(items->viewport(),Qt::LeftButton,Qt::ControlModifier,point);
+      require(full_pose==full_before+1&&partial_pose==partial_before+1&&opened==1,"Ctrl+左键双击应仅应用一次局部姿势");
+    };
+    check_pose_clicks(view,view->model()->index(0,0));
+    zoom->setValue(0);auto *pose_files=qobject_cast<QFileSystemModel *>(tree->model());
+    until([&]{return pose_files->index(pose).isValid();});tree->expand(pose_files->index(root));tree->expand(pose_files->index(QFileInfo(pose).path()));
+    check_pose_clicks(tree,pose_files->index(pose));zoom->setValue(2);browser.apply_pose={};
     for(int i=0;i<25;++i) browser.record_use(root+"/pose"+QString::number(i)+".duf","pose");browser.record_use(pose,"pose");browser.record_use(root+"/scene.duf","scene");browser.show_recent();
     require(search->currentText()=="standing [01]","切换近期使用清空了搜索文本");
     search->setEditText("not a recent resource");QTest::keyClick(search->lineEdit(),Qt::Key_Return);QTest::qWait(200);

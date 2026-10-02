@@ -1858,7 +1858,7 @@ public:
     light_power_=new QDoubleSpinBox;light_power_->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
     light_power_->setProperty("historyInput",true);
     connect(light_power_,&QDoubleSpinBox::valueChanged,this,[this](double value) {if(selected_light_<0) return;auto edit=history_edit(QStringLiteral("修改灯光功率"));auto &p=snapshot_.lights[size_t(selected_light_)].power;const auto previous=std::max({p.x,p.y,p.z});const float ratio=previous>0?float(value)/previous:0;p=previous>0?ir::Vec3{p.x*ratio,p.y*ratio,p.z*ratio}:ir::Vec3{float(value),float(value),float(value)};send();});
-    pose_status_=new QLabel(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+单击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
+    pose_status_=new QLabel(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+左键双击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column==0&&target>=0&&item->data(0,Qt::UserRole+1).toInt()<0) set_visible(size_t(target),item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     extension_panel_=new ExtensionPanel;properties->addWidget(extension_panel_);extension_panel_->changed=[this](runtime::ObjectExtension v,bool shape,double step){change_extension(v,shape,step);};
@@ -2088,7 +2088,7 @@ public:
           if(preserve||previous_document){auto incoming=std::move(snapshot_.control_favorites);snapshot_.control_favorites=previous.control_favorites;
             if(previous_document&&incoming){if(!snapshot_.control_favorites)snapshot_.control_favorites.emplace();for(auto &[node,values]:incoming->nodes)snapshot_.control_favorites->nodes[node]=std::move(values);}}
           if(previous_document) for(size_t l=0;l<previous.lights.size();++l) snapshot_.lights[l]=previous.lights[l];
-          frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+单击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));
+          frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+左键双击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));
           for(const auto &skin:document_->skeletons.skins) {
             auto pose=loaded_snapshot.poses.at(snapshot_.poses.size());
             if((preserve||previous_document)&&old) for(size_t s=0;s<old->skeletons.skins.size();++s) if(old->skeletons.skins[s].id==skin.id) {
