@@ -37,6 +37,7 @@ if(!shells.empty()) {
         const auto binding=bindings.find({"#"+geometry_id,name});shell.materials.push_back(binding==bindings.end()?original.materials[slot]:binding->second.material);
         material_visible.push_back(visible("material_group_"+name+"_vis"));
         if(binding!=bindings.end()&&!binding->second.uv.empty())uv_slots[binding->second.uv].push_back(slot);
+        else bind_uv_reference(scene,shell.materials,slot,material_uv_set(scene.materials.at(original.materials[slot])));
       }
       // 显式 UV 引用优先；没有覆盖时继承宿主对应表面的 UV。
       for(const auto &[uri,slots]:uv_slots) {
@@ -47,6 +48,7 @@ if(!shells.empty()) {
         auto uv=[&](uint32_t p,uint32_t v){const auto s=seams.find({p,v});return coords.at(s==seams.end()?v:s->second);};
         for(auto &t:mesh.triangles)if(std::find(slots.begin(),slots.end(),t.material_slot)!=slots.end())for(size_t c=0;c<3;++c)t.uv[c]=uv(t.source_polygon,t.vertices[c]);
         for(uint32_t p=0;p<mesh.polygons.size();++p){auto &face=mesh.polygons[p];if(std::find(slots.begin(),slots.end(),face.material_slot)!=slots.end())for(size_t c=0;c<face.vertices.size();++c)face.uv[c]=uv(p,face.vertices[c]);}
+        for(auto slot:slots)bind_uv_reference(scene,shell.materials,slot,uv_reference(uv_file,*u));
       }
       for(auto &name:mesh.polygon_groups)if(part)name="WG_"+std::to_string(part-1)+"_"+name;
       for(const auto &t:mesh.triangles)if(!material_visible.at(t.material_slot)||(t.polygon_group<mesh.polygon_groups.size()&&!visible("facet_group_"+mesh.polygon_groups[t.polygon_group]+"_vis")))mesh.shell_hidden_polygons.push_back(t.source_polygon);

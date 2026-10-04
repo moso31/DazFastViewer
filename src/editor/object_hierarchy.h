@@ -3,6 +3,25 @@
 #include <set>
 
 namespace dfv::editor {
+// A Geometry Shell is one scene node, even when the renderer splits it into
+// meshes for the figure and its grafts. Keep those meshes in one UI selection.
+struct ObjectTargets {
+  std::vector<size_t> primary;
+  std::vector<std::vector<size_t>> members;
+  explicit ObjectTargets(const Document &d){
+    std::map<uint32_t,std::string> ids;for(const auto &o:d.loaded.objects)ids[o.instance]=o.id;
+    std::map<std::string,size_t> shells;primary.resize(d.catalog.targets.size());members.resize(primary.size());
+    for(size_t t=0;t<primary.size();++t){const auto instance=d.catalog.targets[t].instance;size_t root=t;
+      if(d.loaded.scene.instances.at(instance).shell_source>=0&&ids.contains(instance)&&!ids.at(instance).empty())root=shells.try_emplace(ids.at(instance),t).first->second;
+      primary[t]=root;members[root].push_back(t);
+    }
+  }
+};
+inline void sync_object_transform(const Document &d,Snapshot &snapshot,size_t target){
+  if(d.loaded.scene.instances.at(d.catalog.targets.at(target).instance).shell_source<0)return;
+  const ObjectTargets objects(d);const auto transform=snapshot.values.at(target).transform;
+  for(auto part:objects.members.at(objects.primary.at(target)))snapshot.values.at(part).transform=transform;
+}
 // Geometry-free groups and bone parents participate in the same hierarchy as Props.
 struct ObjectHierarchy {
   std::map<std::string,std::string> parents,labels;

@@ -10,6 +10,7 @@
 #include <QComboBox>
 #include <QSplitter>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -53,6 +54,8 @@ void thumbnail(QLabel *label,const QString &file){
   });
 }
 }
+#include "editor/material_selection_sets.inl"
+#include "editor/material_panel_uv.inl"
 MaterialPanel::MaterialPanel(QWidget *parent):QWidget(parent){
   setObjectName("MaterialPanel");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(4,4,4,4);
   auto *toolbar=new QHBoxLayout;scope_=new QComboBox;scope_->setObjectName("materialScope");scope_->addItems({QStringLiteral("当前角色 / 对象"),QStringLiteral("全部场景对象")});toolbar->addWidget(scope_);
@@ -67,6 +70,17 @@ MaterialPanel::MaterialPanel(QWidget *parent):QWidget(parent){
   modified_=new QCheckBox(QStringLiteral("已修改"));modified_->setObjectName("materialModifiedOnly");filter_row->addWidget(modified_);details->addLayout(filter_row);
   properties_=new QScrollArea;properties_->setWidgetResizable(true);properties_->setMinimumWidth(310);details->addWidget(properties_,1);splitter->addWidget(right);splitter->setStretchFactor(1,1);splitter->setSizes({165,380});
   status_=new QLabel;status_->setWordWrap(true);layout->addWidget(status_);
+  connect(properties_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this](int value){if(!restoring_scroll_)scroll_position_=value;});
+  tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(tree_,&QWidget::customContextMenuRequested,this,[this](const QPoint &point){
+    auto *item=tree_->itemAt(point);if(!item||(!item->data(0,Qt::UserRole+1).isValid()&&!item->data(0,Qt::UserRole+3).isValid())||!document_||!snapshot_)return;
+    if(!item->isSelected())tree_->setCurrentItem(item,0,QItemSelectionModel::ClearAndSelect);
+    QMenu menu(this);auto *copy=menu.addAction(QStringLiteral("复制材质"));copy->setObjectName("CopyMaterial");copy->setEnabled(item->data(0,Qt::UserRole+1).isValid());
+    auto *paste=menu.addAction(QStringLiteral("粘贴材质"));paste->setObjectName("PasteMaterial");paste->setEnabled(!clipboard_.is_null()&&bool(paste_requested));
+    auto *action=menu.exec(tree_->viewport()->mapToGlobal(point));
+    if(action==copy){try{clipboard_=copy_material(document_->loaded.scene,snapshot_->material_overrides,{size_t(item->data(0,Qt::UserRole).toULongLong()),size_t(item->data(0,Qt::UserRole+1).toULongLong())});status_->setText(QStringLiteral("已复制材质：")+item->text(0));}catch(const std::exception &e){status_->setText(text(e.what()));}}
+    else if(action==paste)paste_requested(clipboard_,surfaces());
+  });
   connect(tree_,&QTreeWidget::itemSelectionChanged,this,[this]{wheel_selected_.clear();rebuild_properties();});
   connect(scope_,&QComboBox::currentIndexChanged,this,[this]{rebuild_tree();});
   connect(search_,&QLineEdit::textChanged,this,[this]{filter();});connect(modified_,&QCheckBox::toggled,this,[this]{filter();});
@@ -78,9 +92,12 @@ bool MaterialPanel::eventFilter(QObject *object,QEvent *event){
   if(object==tree_->viewport()){
     if(event->type()==QEvent::Leave){clear_hover();hover_suppressed_.clear();}
     if(event->type()==QEvent::MouseMove){auto *item=tree_->itemAt(static_cast<QMouseEvent *>(event)->position().toPoint());const auto key=item?item->data(0,Qt::UserRole+2).toString():QString{};
-      if(key!=hover_suppressed_)hover_suppressed_.clear();if(key!=hovered_){clear_hover();hovered_=key;if(item&&key!=hover_suppressed_){std::vector<Surface> selection;std::function<void(QTreeWidgetItem *)> visit=[&](auto *node){if(node->data(0,Qt::UserRole+1).isValid())selection.push_back({size_t(node->data(0,Qt::UserRole).toULongLong()),size_t(node->data(0,Qt::UserRole+1).toULongLong())});for(int i=0;i<node->childCount();++i)visit(node->child(i));};visit(item);if(hovered)hovered(selection);}}
+      if(key!=hover_suppressed_)hover_suppressed_.clear();if(key!=hovered_){clear_hover();hovered_=key;if(item&&key!=hover_suppressed_){if(hovered)hovered(item_surfaces(item));}}
     }
-    if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick){auto *item=tree_->itemAt(static_cast<QMouseEvent *>(event)->position().toPoint());hover_suppressed_=item?item->data(0,Qt::UserRole+2).toString():QString{};clear_hover();hovered_=hover_suppressed_;}
+    if(event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick){auto *item=tree_->itemAt(static_cast<QMouseEvent *>(event)->position().toPoint());hover_suppressed_=item?item->data(0,Qt::UserRole+2).toString():QString{};clear_hover();hovered_=hover_suppressed_;
+      auto *mouse=static_cast<QMouseEvent *>(event);if(item&&item->data(0,Qt::UserRole+3).isValid()&&mouse->button()==Qt::LeftButton&&mouse->position().x()>=tree_->visualItemRect(item).left()){
+        if(event->type()==QEvent::MouseButtonPress)choose_selection_set(item,mouse->modifiers().testFlag(Qt::ControlModifier));return true;
+      }}
   }else if(const auto id=object->property("materialWheelRow").toString();!id.isEmpty()){
     if((event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick)&&static_cast<QMouseEvent *>(event)->button()==Qt::LeftButton){wheel_selected_=id;filter();}
     if(event->type()==QEvent::Wheel&&wheel_selected_!=id){auto *wheel=static_cast<QWheelEvent *>(event);QWheelEvent forwarded(properties_->viewport()->mapFromGlobal(wheel->globalPosition().toPoint()),wheel->globalPosition(),wheel->pixelDelta(),wheel->angleDelta(),wheel->buttons(),wheel->modifiers(),wheel->phase(),wheel->inverted(),wheel->source());QApplication::sendEvent(properties_->viewport(),&forwarded);return true;}
@@ -94,8 +111,8 @@ void MaterialPanel::bind(std::shared_ptr<const Document> document,Snapshot *snap
 }
 std::vector<MaterialPanel::Surface> MaterialPanel::surfaces() const{
   std::set<std::pair<size_t,size_t>> selected;
-  std::function<void(QTreeWidgetItem *)> visit=[&](auto *item){if(item->data(0,Qt::UserRole+1).isValid())selected.emplace(size_t(item->data(0,Qt::UserRole).toULongLong()),size_t(item->data(0,Qt::UserRole+1).toULongLong()));for(int i=0;i<item->childCount();++i)visit(item->child(i));};
-  for(auto *item:tree_->selectedItems())visit(item);std::vector<Surface> result;for(auto [i,s]:selected)result.push_back({i,s});return result;
+  for(auto *item:tree_->selectedItems())for(auto surface:item_surfaces(item))selected.emplace(surface.instance,surface.slot);
+  std::vector<Surface> result;for(auto [i,s]:selected)result.push_back({i,s});return result;
 }
 void MaterialPanel::rebuild_tree(){
   clear_hover();hover_suppressed_.clear();wheel_selected_.clear();
@@ -131,12 +148,13 @@ void MaterialPanel::rebuild_tree(){
     if(instance.graft_source>=0)label=QStringLiteral("GeoGraft · ")+label;
     auto *object=parent?new QTreeWidgetItem(parent,{label}):new QTreeWidgetItem(tree_,{label});object->setData(0,Qt::UserRole+2,"object/"+text(instance.id));object->setToolTip(0,text(instance.id));
     const auto &slots=scene.meshes.at(instance.mesh).material_slots;
+    add_selection_sets(object,i);
     for(size_t slot=0;slot<instance.materials.size();++slot){auto *surface=new QTreeWidgetItem(object,{text(slots.at(slot))});surface->setData(0,Qt::UserRole,qulonglong(i));surface->setData(0,Qt::UserRole+1,qulonglong(slot));surface->setData(0,Qt::UserRole+2,text(instance.id)+"\n"+text(slots[slot]));surface->setToolTip(0,text(scene.materials.at(instance.materials[slot]).id));
       if(!first||(target!=targets.end()&&int(target->second)==target_&&slot==0))first=surface;
     }
     object->setExpanded(expanded.contains(object->data(0,Qt::UserRole+2).toString())||(target!=targets.end()&&int(target->second)==target_));
   }
-  bool restored=false;for(QTreeWidgetItemIterator it(tree_);*it;++it)if(selected.contains((*it)->data(0,Qt::UserRole+2).toString())){(*it)->setSelected(true);restored=true;}
+  bool restored=false;for(QTreeWidgetItemIterator it(tree_);*it;++it){const auto key=(*it)->data(0,Qt::UserRole+2).toString();if(expanded.contains(key))(*it)->setExpanded(true);if(selected.contains(key)){(*it)->setSelected(true);restored=true;}}
   if(!restored&&scope_->currentIndex()==0&&families.contains(focus))tree_->setCurrentItem(families.at(focus));
   else if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}rebuild_properties();
 }
@@ -167,12 +185,18 @@ void MaterialPanel::commit(const P &p,const J &v,int component){
 }
 void MaterialPanel::reset(const std::string &parameter){
   if(edit_requested){auto callback=std::move(edit_requested);callback(parameter.empty()?QStringLiteral("还原所选表面"):QStringLiteral("还原材质参数"),[&]{reset(parameter);});edit_requested=std::move(callback);return;}
-  if(!document_||!snapshot_)return;auto previous=snapshot_->material_overrides;const auto &scene=document_->loaded.scene;
+  if(!document_||!snapshot_)return;
+  if((parameter.empty()||parameter=="uv_set")&&uv_reset_requested)uv_reset_requested(surfaces());if(parameter=="uv_set")return;
+  auto previous=snapshot_->material_overrides;const auto &scene=document_->loaded.scene;
   for(auto s:surfaces()){const auto &i=scene.instances.at(s.instance);auto object=snapshot_->material_overrides.find(i.id);if(object==snapshot_->material_overrides.end())continue;const auto &slot=scene.meshes.at(i.mesh).material_slots.at(s.slot);if(parameter.empty())object->second.erase(slot);else if(auto patch=object->second.find(slot);patch!=object->second.end())patch->second.erase(parameter);}
   prune_material_overrides(scene,snapshot_->material_overrides);if(previous!=snapshot_->material_overrides&&changed)changed();schedule_properties();
 }
 void MaterialPanel::rebuild_properties(){
   if(interaction_changed)interaction_changed(false);
+  const auto generation=++properties_generation_;restoring_scroll_=true;
+  // setWidget destroys the old controls and temporarily collapses the range.
+  // Restore only after the new layout has settled, including rapid selection changes.
+  QTimer::singleShot(0,this,[this,generation]{if(generation!=properties_generation_)return;auto *body=properties_->widget();if(body&&body->layout()){body->layout()->activate();body->resize(body->width(),std::max(properties_->viewport()->height(),body->sizeHint().height()));}properties_->verticalScrollBar()->setValue(scroll_position_);restoring_scroll_=false;});
   auto *body=new QWidget;auto *layout=new QVBoxLayout(body);layout->setContentsMargins(6,6,6,6);layout->setSpacing(5);properties_->setWidget(body);status_->clear();
   const auto selected=surfaces();if(!document_||!snapshot_||selected.empty()){heading_->setText(QStringLiteral("选择左侧子材质查看参数"));layout->addStretch();return;}
   const auto &scene=document_->loaded.scene;const auto first=selected.front();const auto &instance=scene.instances.at(first.instance);
@@ -210,6 +234,12 @@ void MaterialPanel::rebuild_properties(){
     auto children=row->findChildren<QWidget *>();children.push_back(row);for(auto *child:children){child->setProperty("materialWheelRow",text(p.id));child->installEventFilter(this);}
     rows->addWidget(row);
   }
+  auto *uv_row=new QWidget;uv_row->setObjectName("materialRow/uv_set");uv_row->setProperty("materialParameter","uv_set");uv_row->setProperty("materialSearchText",QStringLiteral("UV Set UV ? ???? ??"));
+  auto *uv_layout=new QHBoxLayout(uv_row);uv_layout->setContentsMargins(3,1,3,1);auto *uv_label=new ParameterLabel(QStringLiteral("UV Set"));uv_label->setFixedWidth(84);uv_layout->addWidget(uv_label);
+  auto *uv_combo=new QComboBox;uv_combo->setObjectName("material/uv_set");uv_combo->setMinimumWidth(40);uv_combo->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);uv_layout->addWidget(uv_combo,1);rows->insertWidget(0,uv_row);populate_uv_combo(uv_combo);
+  auto *uv_revert=new QToolButton;uv_revert->setObjectName("materialRevert/uv_set");uv_revert->setText(QStringLiteral("↺"));uv_revert->setFixedWidth(22);uv_revert->setToolTip(QStringLiteral("还原至加载场景或最近应用的材质 UV Set"));uv_layout->addWidget(uv_revert);connect(uv_revert,&QToolButton::clicked,this,[this]{reset("uv_set");});
+  connect(uv_combo,&QComboBox::activated,this,[this,uv_combo](int index){const auto data=uv_combo->itemData(index).toString();if(data.isEmpty()||!uv_requested)return;const auto j=J::parse(utf8(data));uv_requested({j.at("uri"),j.at("owner"),j.at("label")},surfaces());});
+  for(auto *widget:{uv_row,static_cast<QWidget *>(uv_combo),static_cast<QWidget *>(uv_label)}){widget->setProperty("materialWheelRow","uv_set");widget->installEventFilter(this);}
   auto *source=new QTreeWidget;source->setObjectName("materialSourceChannels");source->setHeaderLabels({QStringLiteral("源材质通道"),QStringLiteral("原值 / 状态")});source->setMinimumHeight(150);source->setMaximumHeight(260);source->setColumnWidth(0,180);
   for(const auto &c:scene.materials.at(instance.materials.at(first.slot)).source_channels){auto *item=new QTreeWidgetItem(source,{text(c.label),text(c.value)+(c.mapped?QStringLiteral(" · 已转换"):QStringLiteral(" · 未映射"))});item->setToolTip(0,text(c.id+"\n"+c.type));item->setToolTip(1,text(c.image));if(!c.mapped)item->setForeground(1,QColor(210,150,70));}
   auto *source_header=new QToolButton;source_header->setText(QStringLiteral("源通道与兼容信息（只读）"));source_header->setCheckable(true);source_header->setArrowType(Qt::RightArrow);source_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);layout->addWidget(source_header);layout->addWidget(source);source->hide();connect(source_header,&QToolButton::toggled,source,[source_header,source](bool on){source->setVisible(on);source_header->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
@@ -218,6 +248,7 @@ void MaterialPanel::rebuild_properties(){
 void MaterialPanel::filter(){
   if(!properties_->widget()||!document_||!snapshot_)return;const auto query=search_->text().trimmed();const auto selected=surfaces();const auto &scene=document_->loaded.scene;
   for(auto *row:properties_->widget()->findChildren<QWidget *>()){auto id=row->property("materialParameter");if(!id.isValid())continue;bool edited=false;
+    if(id.toString()=="uv_set")for(auto s:selected)edited|=daz::material_uv_baseline(scene.materials.at(scene.instances.at(s.instance).materials.at(s.slot))).has_value();
     for(auto s:selected){const auto &i=scene.instances.at(s.instance);auto object=snapshot_->material_overrides.find(i.id);if(object==snapshot_->material_overrides.end())continue;auto slot=object->second.find(scene.meshes.at(i.mesh).material_slots.at(s.slot));edited|=slot!=object->second.end()&&slot->second.contains(utf8(id.toString()));}
     row->setVisible((!modified_->isChecked()||edited)&&(query.isEmpty()||row->property("materialSearchText").toString().contains(query,Qt::CaseInsensitive)));
     if(auto *label=row->findChild<QLabel *>()){auto font=label->font();font.setBold(edited);label->setFont(font);}

@@ -5,6 +5,7 @@
 #include "runtime/pose_edit.h"
 #include "editor/materials.h"
 #include "editor/instance_ground.h"
+#include "daz/material_uv.h"
 #include <map>
 
 namespace dfv::editor {
@@ -54,6 +55,9 @@ void attach_import(Document &document,size_t first_target,size_t host);
 void fit_attachment(Document &document,size_t follower,int host);
 size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset,Snapshot *snapshot=nullptr);
 size_t apply_surface_materials(Document &document,Snapshot &snapshot,const daz::LoadedScene &preset,const std::vector<MaterialSurface> &surfaces);
+std::vector<std::string> paste_material(Document &document,Snapshot &snapshot,const nlohmann::json &copy,const std::vector<MaterialSurface> &surfaces);
+bool change_material_uv(Document &document,const daz::MaterialUVSet &uv,const std::vector<MaterialSurface> &surfaces);
+bool reset_material_uv(Document &document,const std::vector<MaterialSurface> &surfaces);
 void collect_resources(Document &document);
 void release_load_data(Document &document);
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target);

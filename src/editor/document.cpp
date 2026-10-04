@@ -143,6 +143,16 @@ size_t remove_light(Document &document,Snapshot &snapshot,size_t light) {
   document.operations.push_back({{"op","remove_light"},{"id",id}});return count;
 }
 namespace {
+bool material_group_matches(const Document &d,const daz::LoadedScene &preset,size_t instance,const std::string &slot,const std::string &group){
+  if(group==slot||group=="*")return true;
+  if(group!="Torso"||(slot!="Body"&&slot!="Head"))return false;
+  // Genesis 8.1 split the G8 Torso surface into Body and Head. The G8 UV
+  // preset is applied per destination surface below, so both use its torso map.
+  bool genesis81=false;for(const auto &o:d.loaded.objects)if(o.instance==instance){const auto file=o.geometry_file.filename().wstring();genesis81|=file==L"Genesis8_1Female.dsf"||file==L"Genesis8_1Male.dsf";}
+  if(!genesis81)return false;
+  for(const auto &m:preset.report.at("materials"))for(const auto &g:m.at("groups"))if(g==slot)return false;
+  return true;
+}
 bool material_owner_matches(const Document &d,const ir::Material &material,size_t instance){
   if(material.source_definition.empty())return true;const auto definition=nlohmann::json::parse(material.source_definition);const auto node=definition.value("target_node",std::string{});if(node.empty())return true;
   for(const auto &object:d.loaded.objects)if(object.instance==instance){if(object.id==node||object.source_node==node)return true;
@@ -155,6 +165,7 @@ void replace_surface_material(Document &d,Snapshot *snapshot,const daz::LoadedSc
   auto &scene=d.loaded.scene;auto &i=scene.instances.at(instance);const auto &incoming=preset.scene.materials.at(material_index);const auto base=scene.materials.at(i.materials.at(slot));auto material=incoming;auto touched=material_preset_parameters(incoming);
   if(incoming.source_definition.empty()){for(auto *index:ir::texture_indices(material))if(*index>=0)*index+=offset;}
   else {daz::LoadOptions options;for(const auto &root:(d.loaded.report.is_object()?d.loaded.report.value("content_roots",nlohmann::json::array()):nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));for(const auto &root:preset.report.value("content_roots",nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));daz::apply_material_uv(scene,instance,slot,incoming,options);material=daz::merge_material_preset(base,incoming,scene.textures,options);touched=material_preset_parameters(incoming,&material);for(const auto &p:material_parameters())if(!touched.contains(p.id))p.copy(material,base);}
+  const auto actual_uv=daz::material_uv_set(scene.materials.at(i.materials.at(slot)));if(!actual_uv.uri.empty())daz::set_material_uv_set(material,actual_uv);
   ir::validate(material,scene.textures.size());i.materials[slot]=uint32_t(scene.materials.size());scene.materials.push_back(std::move(material));
   if(snapshot)if(auto object=snapshot->material_overrides.find(i.id);object!=snapshot->material_overrides.end())if(auto patch=object->second.find(scene.meshes.at(i.mesh).material_slots.at(slot));patch!=object->second.end())for(const auto &id:touched)patch->second.erase(id);
 }
@@ -172,7 +183,7 @@ size_t apply_surface_materials(Document &d,Snapshot &snapshot,const daz::LoadedS
   if(preset.report.value("preset_type","")=="preset_layered_image")throw std::runtime_error("独立 LIE 预设需要合并原有底图与图层，目前尚未支持直接叠加。请使用普通材质预设，或先在 DAZ 中合成并保存完整材质。");
   auto &scene=d.loaded.scene;std::map<std::pair<size_t,size_t>,std::vector<size_t>> matches;
   for(auto surface:surfaces){const auto &i=scene.instances.at(surface.instance);const auto &slot=scene.meshes.at(i.mesh).material_slots.at(surface.slot);
-    for(size_t m=0;m<preset.scene.materials.size();++m)for(const auto &group:preset.report.at("materials").at(m).at("groups"))if((group==slot||group=="*")&&material_owner_matches(d,preset.scene.materials[m],surface.instance)){auto &list=matches[{surface.instance,surface.slot}];if(std::find(list.begin(),list.end(),m)==list.end())list.push_back(m);break;}
+    for(size_t m=0;m<preset.scene.materials.size();++m)for(const auto &group:preset.report.at("materials").at(m).at("groups"))if(material_group_matches(d,preset,surface.instance,slot,group.get<std::string>())&&material_owner_matches(d,preset.scene.materials[m],surface.instance)){auto &list=matches[{surface.instance,surface.slot}];if(std::find(list.begin(),list.end(),m)==list.end())list.push_back(m);break;}
   }
   if(matches.empty())throw std::runtime_error("材质预设没有匹配选中的表面；通用 Shader 预设可应用于任意表面");
   const auto offset=int(scene.textures.size());scene.textures.insert(scene.textures.end(),preset.scene.textures.begin(),preset.scene.textures.end());nlohmann::json identities=nlohmann::json::array();
@@ -181,6 +192,44 @@ size_t apply_surface_materials(Document &d,Snapshot &snapshot,const daz::LoadedS
   }
   collect_resources(d);prune_material_overrides(scene,snapshot.material_overrides);
   if(preset.report.contains("input"))d.operations.push_back({{"op","surface_materials"},{"surfaces",identities},{"file",preset.report.at("input")}});return matches.size();
+}
+std::vector<std::string> paste_material(Document &d,Snapshot &snapshot,const nlohmann::json &copy,const std::vector<MaterialSurface> &surfaces){
+  std::vector<std::string> warnings;if(surfaces.empty())return warnings;auto &scene=d.loaded.scene;auto textures=scene.textures;
+  const auto copied=read_copied_material(copy,textures);nlohmann::json identities=nlohmann::json::array();
+  for(auto s:surfaces){const auto &i=scene.instances.at(s.instance);identities.push_back({{"instance",i.id},{"slot",scene.meshes.at(i.mesh).material_slots.at(s.slot)}});}
+  daz::LoadOptions options;if(d.loaded.report.is_object())for(const auto &root:d.loaded.report.value("content_roots",nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));
+  scene.textures=std::move(textures);
+  for(auto s:surfaces){auto &i=scene.instances.at(s.instance);const auto slot=scene.meshes.at(i.mesh).material_slots.at(s.slot);auto m=copied;
+    const auto previous_uv=daz::material_uv_set(scene.materials.at(i.materials.at(s.slot)));auto applied_uv=previous_uv;
+    if(!daz::material_uv_set(copied).uri.empty()&&copy.contains("uv_topology")){
+      try{if(copy.at("uv_topology")!=daz::material_uv_topology(scene.meshes.at(i.mesh)))throw std::runtime_error("源与目标的网格拓扑不同");
+        daz::apply_material_uv(scene,s.instance,s.slot,copied,options);applied_uv=daz::material_uv_set(scene.materials.at(i.materials.at(s.slot)));
+      }catch(const std::exception &e){warnings.push_back(slot+"：已保留目标 UV Set（"+e.what()+"）");}
+    }
+    if(applied_uv!=daz::material_uv_set(m))daz::set_material_uv_set(m,applied_uv);
+    m.id="pasted/"+i.id+"/"+slot;i.materials.at(s.slot)=uint32_t(scene.materials.size());scene.materials.push_back(std::move(m));
+    if(auto object=snapshot.material_overrides.find(i.id);object!=snapshot.material_overrides.end())object->second.erase(slot);
+  }
+  collect_resources(d);prune_material_overrides(scene,snapshot.material_overrides);
+  d.operations.push_back({{"op","paste_material"},{"surfaces",identities},{"material",copy}});
+  return warnings;
+}
+bool change_material_uv(Document &d,const daz::MaterialUVSet &uv,const std::vector<MaterialSurface> &surfaces){
+  if(uv.uri.empty()||surfaces.empty())return false;daz::LoadOptions options;
+  if(d.loaded.report.is_object())for(const auto &root:d.loaded.report.value("content_roots",nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));
+  ir::Material request;daz::set_material_uv_set(request,uv);auto identities=nlohmann::json::array();bool changed=false;
+  for(auto s:surfaces){const auto &i=d.loaded.scene.instances.at(s.instance);const auto slot=d.loaded.scene.meshes.at(i.mesh).material_slots.at(s.slot);
+    const auto &before=d.loaded.scene.materials.at(i.materials.at(s.slot));const auto baseline=daz::material_uv_baseline(before).value_or(daz::material_uv_set(before));
+    const bool edited=daz::apply_material_uv(d.loaded.scene,s.instance,s.slot,request,options);changed|=edited;
+    if(edited){auto &material=d.loaded.scene.materials.at(i.materials.at(s.slot));auto definition=nlohmann::json::parse(material.source_definition);
+      if(daz::material_uv_set(material).uri==baseline.uri)definition.erase("uv_baseline");else definition["uv_baseline"]={{"uri",baseline.uri},{"owner",baseline.owner},{"label",baseline.label}};material.source_definition=definition.dump();}
+    identities.push_back({{"instance",i.id},{"slot",slot}});
+  }
+  if(!changed)return false;daz::sync_instance_meshes(d.loaded.scene);collect_resources(d);
+  d.operations.push_back({{"op","material_uv"},{"surfaces",identities},{"uri",uv.uri},{"owner",uv.owner},{"label",uv.label}});return true;
+}
+bool reset_material_uv(Document &d,const std::vector<MaterialSurface> &surfaces){
+  bool changed=false;for(auto s:surfaces){const auto &i=d.loaded.scene.instances.at(s.instance);const auto baseline=daz::material_uv_baseline(d.loaded.scene.materials.at(i.materials.at(s.slot)));if(baseline&&!baseline->uri.empty())changed|=change_material_uv(d,*baseline,{s});}return changed;
 }
 Snapshot initial_snapshot(const Document &document) {
   Snapshot result;result.options=document.loaded.scene.options;result.generation=document.generation;result.revision=1;

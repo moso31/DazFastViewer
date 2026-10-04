@@ -9,6 +9,10 @@ struct LoadOptions {std::vector<std::filesystem::path> content_roots;bool strict
 // 穿戴预设中的选择引用在追加到目标文档后解析，不当作文件内部 ID。
 bool selection_reference(const std::string &uri);
 struct GeometrySource {std::filesystem::path file;std::string id;};
+struct MaterialSelectionSet {
+  std::string name,parent;
+  std::vector<std::string> materials;
+};
 struct AssetObject {
   uint32_t instance=0;
   std::string id,label,parent,geometry_id;
@@ -29,6 +33,7 @@ struct AssetObject {
   std::string content_type,preferred_base,auto_fit_base;
   std::vector<std::string> extended_bases;
   bool attachment_bind_rest=false;
+  std::vector<MaterialSelectionSet> material_selection_sets;
 };
 struct AssetNode {
   std::string id,parent,label;bool group=false;

@@ -3,6 +3,7 @@
   std::optional<EditState> history_before_load_;
   CameraState history_camera_;
   bool history_visibility_=true;
+  daz::MaterialUVSet history_uv_;
   nlohmann::json history_checks_=nlohmann::json::array();
   void history_test_tick(const RenderStatus &state) {
     if(QDateTime::currentMSecsSinceEpoch()-test_started_>240000){finish_test(false,"撤销界面验证超时");return;}
@@ -33,6 +34,12 @@
         roundtrip("extension",[&]{enable_extension();});roundtrip("extension_parameter",[&]{auto next=snapshot_.values[0].extension;next.sensitivity+=1;change_extension(next,false,0);});
         roundtrip("subdivision",[&]{set_subdivision(0,subdivision_level(*document_,snapshot_,0)==0?1:0);});
         materials_->bind(document_,&snapshot_,0);roundtrip("material",[&]{auto *spin=materials_->findChild<QDoubleSpinBox *>("material/roughness");require(spin,"缺少材质参数");spin->setValue(.67);});
+        {auto copied=copy_material(document_->loaded.scene,snapshot_.material_overrides,{document_->catalog.targets[0].instance,0});copied["parameters"]["roughness"]=.31;
+          roundtrip("paste_material",[&]{materials_->paste_requested(copied,{{document_->catalog.targets[0].instance,0}});});}
+        {const auto instance=document_->catalog.targets[0].instance;const auto &mesh=document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(instance).mesh);auto coordinates=nlohmann::json::array();for(size_t v=0;v<mesh.positions.size();++v)coordinates.push_back({.3125,.6875});
+          const auto file=std::filesystem::absolute(output_/"history-uv.dsf");const auto path=file.generic_u8string();const std::string uri(path.begin(),path.end());history_uv_={uri+"#history-uv",uri,"History UV"};
+          std::ofstream(file)<<nlohmann::json{{"uv_set_library",nlohmann::json::array({{{"id","history-uv"},{"label","History UV"},{"vertex_count",mesh.positions.size()},{"uvs",{{"count",coordinates.size()},{"values",coordinates}}}}})}};
+          roundtrip("material_uv",[&]{materials_->uv_requested(history_uv_,{{instance,0}});});roundtrip("material_uv_reset",[&]{materials_->uv_reset_requested({{instance,0}});});}
         roundtrip("reset",[&]{reset_selected();});
         roundtrip("new_light",[&]{add_light();});roundtrip("light_power",[&]{light_power_->setValue(333);});roundtrip("delete_light",[&]{delete_selection();});
         choose(0);roundtrip("delete_model",[&]{delete_selection();});history_->undo();choose(0);
@@ -48,6 +55,12 @@
       if(history_stage_==2){choose(0);history_->clear();history_visibility_=snapshot_.values[0].visible;set_visible(0,!history_visibility_);renderer_->keyboard(VK_CONTROL,true);renderer_->keyboard('Z',true);renderer_->keyboard('Z',false);renderer_->keyboard(VK_CONTROL,false);history_stage_=3;return;}
       if(history_stage_==3){require(snapshot_.values[0].visible==history_visibility_&&history_->stack().index()==0,"原生视口 Ctrl+Z 无效");renderer_->keyboard(VK_CONTROL,true);renderer_->keyboard('Y',true);renderer_->keyboard('Y',false);renderer_->keyboard(VK_CONTROL,false);history_stage_=4;return;}
       if(history_stage_==4){require(snapshot_.values[0].visible!=history_visibility_&&history_->stack().index()==1,"原生视口 Ctrl+Y 无效");history_checks_.push_back("native_viewport_shortcuts");history_->undo();history_stage_=5;return;}
+      if(history_stage_==5){choose(0);const auto skin=selected_skin();if(skin>=0&&document_->skeletons.skins[size_t(skin)].joints.size()>1)choose(0,1);
+        require(delete_->isEnabled(),"选中模型或骨骼后删除不可用");history_before_load_=capture_edit();renderer_->keyboard(VK_DELETE,true);renderer_->keyboard(VK_DELETE,false);history_stage_=6;return;}
+      if(history_stage_==6){require(document_->catalog.targets.size()<history_before_load_->document->catalog.targets.size(),"原生视口 Del 没有删除模型");history_->undo();require(same_edit(capture_edit(),*history_before_load_),"原生删除撤销未恢复模型");history_checks_.push_back("native_viewport_delete");history_stage_=7;return;}
+      if(history_stage_==7){history_before_load_=capture_edit();materials_->uv_requested(history_uv_,{{document_->catalog.targets[0].instance,0}});history_stage_=8;return;}
+      if(history_stage_==8){const auto &i=document_->loaded.scene.instances.at(document_->catalog.targets[0].instance);require(daz::material_uv_set(document_->loaded.scene.materials.at(i.materials.at(0))).label=="History UV","渲染完成后的 UV 状态错误");history_->undo();history_stage_=9;return;}
+      if(history_stage_==9){require(same_edit(capture_edit(),*history_before_load_),"UV 切换渲染后的撤销错误");history_checks_.push_back("rendered_uv_switch_and_undo");}
       const auto camera=renderer_->input_camera();require(camera.target.x==history_camera_.target.x&&camera.target.y==history_camera_.target.y&&camera.target.z==history_camera_.target.z&&camera.distance==history_camera_.distance&&camera.yaw==history_camera_.yaw&&camera.pitch==history_camera_.pitch,"撤销操作改变了相机");
       std::ofstream(output_/"history-checks.json")<<nlohmann::json({{"checks",history_checks_},{"revision",snapshot_.revision},{"sessions",state.sessions},{"history_limit",history_->stack().undoLimit()}}).dump(2);
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"history-editor.png").wstring()));finish_test(true);

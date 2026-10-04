@@ -299,8 +299,11 @@ static void actual_selection(const std::filesystem::path &file,const std::filesy
   require(report["head"].size()==4&&report["garments"].size()==8&&unbound_checked,"test2 头部 / 服装验证数量不足");report["unbound_pickable"]=true;
   std::filesystem::create_directories(output.parent_path());std::ofstream(output)<<report.dump(2);std::cout<<"Real head hierarchy / 8 bound garments / unbound pick: PASS\n";
 }
+#include "editor/object_hierarchy.h"
+#include "content_feedback.inl"
 int wmain(int argc,wchar_t **argv) {
   try {
+    if(argc>1&&std::wstring(argv[1])==L"--content-feedback"){content_feedback(argc,argv);return 0;}
     if(argc==1) {unit();return 0;}
     if(argc==4&&std::wstring(argv[1])==L"--selection") {actual_selection(argv[2],argv[3]);return 0;}
     std::vector<std::filesystem::path> roots={L"H:/G1",L"H:/G3",L"C:/Users/Public/Documents/My DAZ 3D Library",L"C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"};

@@ -14,6 +14,9 @@ inline std::vector<Selection> tree_selection(QTreeWidget *tree) {
     if(key[0]==-4) {for(int i=0;i<item->childCount();++i) self(self,item->child(i));return;}
     if(key[0]<0&&key[0]>-5&&key[2]<0) return;
     if(std::find(result.begin(),result.end(),key)==result.end()) result.push_back(key);
+    if(key[1]<0)for(const auto &member:item->data(0,Qt::UserRole+4).toList()){
+      Selection part{member.toInt(),-1,-1};if(std::find(result.begin(),result.end(),part)==result.end())result.push_back(part);
+    }
   };
   for(auto *item:tree->selectedItems()) append(append,item);
   std::sort(result.begin(),result.end());return result;

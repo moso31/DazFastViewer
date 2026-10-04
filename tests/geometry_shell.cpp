@@ -1,4 +1,5 @@
 #include "editor/document.h"
+#include "editor/object_hierarchy.h"
 #include "runtime/geometry_shell.h"
 #include "daz/documents.h"
 #include <chrono>
@@ -38,6 +39,10 @@ int main(){try{
     require(std::abs(loaded.scene.instances[1].shell_offset-.00015f)<1e-8,"Studio Modifier Channels 中的偏移未导入");}
   d.catalog=daz::discover_morphs(d.loaded,{folder},{},true);d.skeletons=daz::load_skeletons(d.loaded);d.formulas=daz::enable_formulas(d.catalog,d.skeletons);
   require(d.catalog.targets[1].morphs.empty(),"Shell 不应再次独立应用宿主 Morph");
+  {auto parts=d;auto instance=parts.loaded.scene.instances[1];instance.id+="-part-1";parts.loaded.scene.instances.push_back(instance);auto object=parts.loaded.objects[1];object.instance=2;parts.loaded.objects.push_back(object);auto target=parts.catalog.targets[1];target.instance=2;target.id=instance.id;parts.catalog.targets.push_back(target);
+    const editor::ObjectTargets grouped(parts);require(grouped.primary==std::vector<size_t>{0,1,1}&&grouped.members[1]==std::vector<size_t>{1,2},"同一 Shell 的渲染分片未合并");
+    auto snapshot=editor::initial_snapshot(parts);snapshot.values[1].transform.translation_cm.x=12;editor::sync_object_transform(parts,snapshot,1);require(snapshot.values[2].transform==snapshot.values[1].transform&&snapshot.values[0].transform.translation_cm.x==0,"Shell 变换没有覆盖全部分片或影响宿主");
+    parts.loaded.objects.back().id="another-shell";require(editor::ObjectTargets(parts).primary[2]==2,"不同身份但同名 Shell 被错误合并");}
   auto scene=d.loaded.scene;scene.meshes[scene.instances[0].mesh].positions[0].z=1;ir::Delta input;input.meshes.push_back({scene.instances[0].mesh,scene.meshes[scene.instances[0].mesh].positions});
   auto delta=runtime::update_geometry_shells(scene,input);require(delta.meshes.size()==2&&scene.meshes[shell.mesh].positions[0].z>.99,"宿主形变未传给 Shell");
   require(runtime::update_geometry_shells(scene).meshes.empty(),"静止 Shell 重复求值");

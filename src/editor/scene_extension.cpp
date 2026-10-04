@@ -41,9 +41,9 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
     else if(kind=="attach")attach_import(d,target_index(d,op.at("first")),target_index(d,op.at("host")));
     else if(kind=="fit")fit_attachment(d,target_index(d,op.at("target")),op.at("host").get<std::string>().empty()?-1:int(target_index(d,op.at("host"))));
     else if(kind=="materials")apply_materials(d,target_index(d,op.at("target")),daz::load(source_path(op.at("file")),{roots,false}));
-    else if(kind=="surface_materials"){
+    else if(kind=="surface_materials"||kind=="paste_material"||kind=="material_uv"){
       std::vector<MaterialSurface> surfaces;for(const auto &s:op.at("surfaces")){const auto &scene=d.loaded.scene;auto i=std::find_if(scene.instances.begin(),scene.instances.end(),[&](const auto &v){return v.id==s.at("instance").get<std::string>();});if(i==scene.instances.end())throw std::runtime_error("材质预设对象不存在");const auto &slots=scene.meshes.at(i->mesh).material_slots;auto slot=std::find(slots.begin(),slots.end(),s.at("slot").get<std::string>());if(slot==slots.end())throw std::runtime_error("材质预设表面不存在");surfaces.push_back({size_t(i-scene.instances.begin()),size_t(slot-slots.begin())});}
-      auto snapshot=initial_snapshot(d);apply_surface_materials(d,snapshot,daz::load(source_path(op.at("file")),{roots,false}),surfaces);
+      auto snapshot=initial_snapshot(d);if(kind=="paste_material")paste_material(d,snapshot,op.at("material"),surfaces);else if(kind=="material_uv")change_material_uv(d,{op.at("uri"),op.at("owner"),op.at("label")},surfaces);else apply_surface_materials(d,snapshot,daz::load(source_path(op.at("file")),{roots,false}),surfaces);
     }
     else throw std::runtime_error("DUFEX 含未知场景操作："+kind);
   }

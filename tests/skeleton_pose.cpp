@@ -1,6 +1,7 @@
 #include "daz/skeleton.h"
 #include "daz/pose.h"
 #include "runtime/morph.h"
+#include "runtime/deformation.h"
 #include <algorithm>
 #include <cmath>
 #include <chrono>
@@ -21,6 +22,16 @@ static runtime::Skin fixture() {
   skin.joints={root,bone};skin.initial.resize(2);skin.weights={{{1,1}}};return skin;
 }
 static void unit_tests() {
+  {
+    auto skin=fixture();runtime::Target target;runtime::Morph corrective;corrective.id="corrective";corrective.channel_name="pJCMThigh";corrective.owner="root";corrective.minimum=0;corrective.maximum=1;corrective.clamped=true;
+    target.morphs={corrective};runtime::Properties values;values.morphs={0};values.unlimited_morphs.insert(corrective.id);
+    daz::PosePreset preset;preset.channels={{"name","","pJCMThigh","value/value",0},{"name","Bend","","scale/general/value",.8f}};
+    auto applied=daz::apply_pose(preset,skin,skin.initial,target,values);
+    require(applied.properties.unlimited_morphs.empty()&&applied.joints[1].general_scale==.8f,"预设零值解除 JCM 限位或遗漏 general scale");
+    runtime::FormulaGraph graph;runtime::Channel c;c.minimum=0;c.maximum=1;c.clamped=true;graph.channels={c};runtime::Expression expression;expression.output=0;expression.code={{runtime::Op::constant,-.5}};graph.expressions={expression};graph.prepare();runtime::FormulaRuntime formula(graph);
+    formula.set_unlimited(0,applied.properties.unlimited_morphs.contains(corrective.id));formula.evaluate();require(formula.values()[0]==0,"姿势中的零修正通道允许了负 ERC 权重");
+    preset.channels[0].value=2;applied=daz::apply_pose(preset,skin,skin.initial,target,values);require(applied.properties.morphs[0]==2&&applied.properties.unlimited_morphs.contains(corrective.id),"预设显式超限值丢失");
+  }
   {
     auto s=fixture();auto child=s.joints[1];child.id="chest";child.aliases.clear();child.name="Chest";child.parent=1;s.joints.push_back(child);
     auto leg=child;leg.id="leg";leg.name="Leg";leg.parent=0;s.joints.push_back(leg);s.initial.resize(4);

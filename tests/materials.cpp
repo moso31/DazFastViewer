@@ -23,6 +23,10 @@
 #include <QToolButton>
 #include <QLabel>
 #include <QScrollArea>
+#include <QScrollBar>
+#include <QMenu>
+#include <QTimer>
+#include <QThreadPool>
 #include <fstream>
 #include <iostream>
 
@@ -94,12 +98,44 @@ static void file_roundtrip(const std::filesystem::path &folder){
   definition["uv_set"]="default.dsf#default-0x1234";linked.source_definition=definition.dump();auto exact_uv=fixture();check(daz::apply_material_uv(exact_uv->loaded.scene,0,0,linked,{{folder},false}),"准确 UV ID 没有优先匹配");
   uv_data.erase(1);uv_data[0]["id"]="Other-0x1234";write_uv();definition["uv_set"]="default.dsf#default-0x9876";linked.source_definition=definition.dump();rejects_uv("不同名称 UV 被错误兼容");
   auto only=animated;only["scene"].erase("materials");only.erase("material_library");const auto only_file=folder/"only-animation.duf";std::ofstream(only_file)<<only.dump();check(daz::load(only_file,{{folder},false}).scene.materials.size()==1,"只有零帧通道的局部材质预设无法载入");
+  const auto copied=copy_material(rd.loaded.scene,rs.material_overrides,{0,0});paste_material(rd,rs,copied,{{0,0}});save_scene_extension(extension_path(file),rd,rs);
+  auto pasted=load_scene_extension(extension_path(file),{folder},5);check(copy_material(pasted.document->loaded.scene,pasted.snapshot.material_overrides,{0,0})==copied,"完整材质粘贴未随 DUFEX 保存重放");
   auto hierarchy=J::parse(R"({"asset_info":{"type":"preset_hierarchical_material"},"scene":{"nodes":[{"id":"figure","url":"name://@selection/figure:","geometries":[{"id":"figureShape","url":"name://@selection#geometries/figure:"}]},{"id":"dress","url":"name://@selection/dress:","parent":"#figure","geometries":[{"id":"dressShape","url":"name://@selection#geometries/dress:"}]}],"materials":[{"id":"skin","geometry":"#figureShape","groups":["Skin"]},{"id":"fabric","geometry":"#dressShape","groups":["Skin"]}],"animations":[{"url":"figure#materials/Skin:?diffuse/value","keys":[[0,[1,0,0]]]},{"url":"dress#materials/Skin:?diffuse/value","keys":[[0,[0,0,1]]]}]}})");
   const auto hierarchy_file=folder/"hierarchy.duf";std::ofstream(hierarchy_file)<<hierarchy.dump();check(!daz::inspect_contents(hierarchy).instantiate,"层级材质被误判为追加模型");auto hierarchy_preset=daz::load(hierarchy_file,{{folder},false});auto family=fixture();auto family_snapshot=initial_snapshot(*family);check(apply_materials(*family,0,hierarchy_preset,&family_snapshot)==2,"层级材质没有同时匹配角色和服装");const auto &family_scene=family->loaded.scene;check(family_scene.materials[family_scene.instances[0].materials[0]].base_color==ir::Vec3{1,0,0}&&family_scene.materials[family_scene.instances[1].materials[0]].base_color==ir::Vec3{0,0,1}&&family_scene.materials[family_scene.instances[2].materials[0]].base_color==ir::Material{}.base_color,"同名表面跨对象串用层级材质");
 }
+static void clipboard_ui(QApplication &app){
+  auto d=fixture();auto snapshot=initial_snapshot(*d);auto &source=d->loaded.scene.materials[0];source.source_channels.push_back({"test","Source","float","0.4","",true});source.source_definition="{\"channels\":{}}";
+  source.base_color={500,600,700};source.normal_strength=25;source.uv_scale={15000,20000}; // Valid imports may exceed editable ranges.
+  snapshot.material_overrides["figure"]["Skin"]["roughness"]=.42;
+  MaterialPanel panel;panel.resize(650,500);panel.bind(d,&snapshot,0);panel.show();app.processEvents();auto *tree=panel.findChild<QTreeWidget *>("materialSurfaces");
+  auto *skin=tree->topLevelItem(0)->child(0)->child(0);auto *nails=skin->parent()->child(1);tree->setCurrentItem(skin);app.processEvents();
+  auto *scroll=panel.findChild<QScrollArea *>()->verticalScrollBar();scroll->setValue(600);const auto position=scroll->value();check(position>0,"材质属性没有可滚动范围");
+  tree->setCurrentItem(nails);tree->setCurrentItem(skin);tree->setCurrentItem(nails);app.processEvents();check(scroll->value()==position,"快速切换材质重置滚动位置");
+  auto menu_action=[&](QTreeWidgetItem *item,const char *name){tree->setCurrentItem(item);tree->scrollToItem(item);app.processEvents();bool triggered=false;
+    QTimer::singleShot(0,[&]{auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget());if(!menu)return;auto *action=menu->findChild<QAction *>(name);if(action&&action->isEnabled()){triggered=true;menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});
+    QMetaObject::invokeMethod(tree,"customContextMenuRequested",Qt::DirectConnection,Q_ARG(QPoint,tree->visualItemRect(item).center()));check(triggered,"复制粘贴菜单不可用");};
+  menu_action(skin,"CopyMaterial");const auto expected=copy_material(d->loaded.scene,snapshot.material_overrides,{0,0});
+  // Changing the source after copying must not alter the clipboard snapshot.
+  snapshot.material_overrides["figure"]["Skin"]["roughness"]=.8;
+  bool pasted=false;panel.paste_requested=[&](const auto &copy,const auto &surfaces){paste_material(*d,snapshot,copy,surfaces);pasted=true;};menu_action(nails,"PasteMaterial");
+  check(pasted&&copy_material(d->loaded.scene,snapshot.material_overrides,{0,1})==expected,"粘贴未复制完整材质或引用了已改变的源");
+  check(copy_material(d->loaded.scene,snapshot.material_overrides,{0,0})!=expected&&d->loaded.scene.materials[d->loaded.scene.instances[2].materials[1]].roughness==.5f,"粘贴修改了源或其他对象");
+  auto cross=fixture();auto other=initial_snapshot(*cross);paste_material(*cross,other,expected,{{2,0},{2,1}});check(copy_material(cross->loaded.scene,other.material_overrides,{2,0})==expected&&copy_material(cross->loaded.scene,other.material_overrides,{2,1})==expected,"跨场景或多表面粘贴失败");
+  auto compatible=fixture();compatible->loaded.scene.meshes[0].material_slots={"Body","Head"};compatible->loaded.objects[0].geometry_file="Genesis8_1Female.dsf";auto state=initial_snapshot(*compatible);daz::LoadedScene torso;
+  torso.scene.materials.resize(1);torso.scene.materials[0].base_color={1,0,0};torso.report={{"materials",J::array({{{"groups",{"Torso"}}}})}};
+  check(apply_materials(*compatible,0,torso,&state)==2,"G8 Torso 未覆盖 G8.1 Body 和 Head");
+  torso.scene.materials.push_back({});torso.scene.materials[1].base_color={0,0,1};torso.report["materials"].push_back({{"groups",{"Head"}}});
+  apply_materials(*compatible,0,torso,&state);const auto &s=compatible->loaded.scene;check(s.materials[s.instances[0].materials[1]].base_color==ir::Vec3{0,0,1},"Torso 别名覆盖了显式 Head 材质");
+  bool rejected=false;try{apply_materials(*compatible,2,torso,&state);}catch(...){rejected=true;}check(!rejected,"显式 Head 名称未匹配普通物体");
+  torso.scene.materials.resize(1);torso.report["materials"].erase(1);rejected=false;try{apply_materials(*compatible,2,torso,&state);}catch(...){rejected=true;}check(rejected,"G8.1 别名扩散到不相关模型");
+}
+#include "material_uv_selection.inl"
 int main(int argc,char **argv){
   QApplication app(argc,argv);QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");app.setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
   try{
+    if(argc>1&&std::string(argv[1])=="--uv-selection"){real_uv_selection(app,app.arguments());return 0;}
+    {QTemporaryDir uv_temp;check(uv_temp.isValid(),"UV 测试目录创建失败");material_uv_selection(app,std::filesystem::path(uv_temp.path().toStdWString()));}
+    clipboard_ui(app);
     nested_props(app);
     if(argc>2&&std::string(argv[1])=="--group-scene"){
       const std::vector<std::filesystem::path> roots={"G:/G1","G:/G3"};auto d=std::make_shared<Document>();d->loaded=daz::load(std::filesystem::u8path(argv[2]),{roots,false});d->catalog=daz::discover_morphs(d->loaded,roots,{},true);auto snapshot=initial_snapshot(*d);

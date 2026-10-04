@@ -1,4 +1,5 @@
 #include "editor/materials.h"
+#include "daz/material_uv.h"
 #include <cmath>
 #include <stdexcept>
 #include <sstream>
@@ -32,10 +33,11 @@ const std::vector<P> &material_parameters(){
     std::vector<P> out;std::string group;
     auto scalar=[&](const char *id,const char *label,float M::*member,double lo=0,double hi=1,double step=.01,double scale=1){
       P p;p.id=id;p.label=label;p.group=group;p.minimum=lo;p.maximum=hi;p.step=step;
-      p.copy=[=](M &dst,const M &src){dst.*member=src.*member;};p.read=[=](const M &m)->J{return double(m.*member)*scale;};p.write=[=](M &m,const J &v){const double x=v.get<double>();range(x,lo,hi);m.*member=float(x/scale);};out.push_back(std::move(p));};
+      p.copy=[=](M &dst,const M &src){dst.*member=src.*member;};p.read=[=](const M &m)->J{return double(m.*member)*scale;};p.restore=[=](M &m,const J &v){m.*member=float(v.get<double>()/scale);};p.write=[=](M &m,const J &v){const double x=v.get<double>();range(x,lo,hi);m.*member=float(x/scale);};out.push_back(std::move(p));};
     auto color=[&](const char *id,const char *label,ir::Vec3 M::*member,bool radius=false){
       P p;p.id=id;p.label=label;p.group=group;p.kind=radius?P::vector:P::color;p.maximum=radius?1000:10;p.step=.01;
       p.copy=[=](M &dst,const M &src){dst.*member=src.*member;};p.read=[=](const M &m)->J{auto v=m.*member;return radius?J::array({v.x*1000.,v.y*1000.,v.z*1000.}):vec(v);};
+      p.restore=[=](M &m,const J &v){auto a=v.get<std::array<double,3>>();double scale=radius?1000:1;m.*member={float(a[0]/scale),float(a[1]/scale),float(a[2]/scale)};};
       p.write=[=](M &m,const J &v){auto a=v.get<std::array<double,3>>();for(auto x:a)range(x,0,radius?1000:std::pow((10.+.055)/1.055,2.4));double scale=radius?1000:1;m.*member={float(a[0]/scale),float(a[1]/scale),float(a[2]/scale)};};out.push_back(std::move(p));};
     auto flag=[&](const char *id,const char *label,bool M::*member){P p;p.id=id;p.label=label;p.group=group;p.kind=P::boolean;p.copy=[=](M &dst,const M &src){dst.*member=src.*member;};p.read=[=](const M &m)->J{return m.*member;};p.write=[=](M &m,const J &v){m.*member=v.get<bool>();};out.push_back(std::move(p));};
     auto choices=[&](const char *id,const char *label,int M::*member,std::vector<std::string> names){P p;p.id=id;p.label=label;p.group=group;p.kind=P::choice;p.choices=names;p.copy=[=](M &dst,const M &src){dst.*member=src.*member;};p.read=[=](const M &m)->J{return m.*member;};p.write=[=](M &m,const J &v){const double x=v.get<double>();range(x,0,double(names.size()-1));if(x!=std::floor(x))throw std::runtime_error("材质选项不是整数");m.*member=int(x);};out.push_back(std::move(p));};
@@ -90,7 +92,7 @@ const std::vector<P> &material_parameters(){
     texture("hair_tip_texture","发梢颜色贴图",&M::hair_tip_texture,true);
     scalar("hair_root_radius","发根半径（mm）",&M::hair_root_radius,0,10,.001,1000);scalar("hair_tip_radius","发梢半径（mm）",&M::hair_tip_radius,0,10,.001,1000);
     group="贴图坐标 / UV";
-    for(bool offset:{false,true})for(int axis=0;axis<2;++axis){P p;p.id=offset?(axis?"v_offset":"u_offset"):(axis?"v_scale":"u_scale");p.label=offset?(axis?"垂直偏移 · Vertical Offset":"水平偏移 · Horizontal Offset"):(axis?"垂直平铺 · Vertical Tiles":"水平平铺 · Horizontal Tiles");p.group=group;p.minimum=-10000;p.maximum=10000;p.copy=[=](M &dst,const M &src){auto &a=offset?dst.uv_offset:dst.uv_scale;auto b=offset?src.uv_offset:src.uv_scale;(axis?a.y:a.x)=axis?b.y:b.x;};p.read=[=](const M &m)->J{auto v=offset?m.uv_offset:m.uv_scale;return axis?v.y:v.x;};p.write=[=](M &m,const J &j){double x=j.get<double>();range(x,-10000,10000);auto &v=offset?m.uv_offset:m.uv_scale;(axis?v.y:v.x)=float(x);};out.push_back(std::move(p));}
+    for(bool offset:{false,true})for(int axis=0;axis<2;++axis){P p;p.id=offset?(axis?"v_offset":"u_offset"):(axis?"v_scale":"u_scale");p.label=offset?(axis?"垂直偏移 · Vertical Offset":"水平偏移 · Horizontal Offset"):(axis?"垂直平铺 · Vertical Tiles":"水平平铺 · Horizontal Tiles");p.group=group;p.minimum=-10000;p.maximum=10000;p.copy=[=](M &dst,const M &src){auto &a=offset?dst.uv_offset:dst.uv_scale;auto b=offset?src.uv_offset:src.uv_scale;(axis?a.y:a.x)=axis?b.y:b.x;};p.read=[=](const M &m)->J{auto v=offset?m.uv_offset:m.uv_scale;return axis?v.y:v.x;};p.restore=[=](M &m,const J &j){auto &v=offset?m.uv_offset:m.uv_scale;(axis?v.y:v.x)=j.get<float>();};p.write=[=](M &m,const J &j){double x=j.get<double>();range(x,-10000,10000);auto &v=offset?m.uv_offset:m.uv_scale;(axis?v.y:v.x)=float(x);};out.push_back(std::move(p));}
     return out;
   }();return parameters;
 }
@@ -138,6 +140,26 @@ void set_material_value(M &m,std::vector<ir::Texture> &textures,const P &p,const
 M effective_material(const ir::Scene &source,const MaterialOverrides &overrides,size_t instance,size_t slot,std::vector<ir::Texture> &textures){
   const auto &i=source.instances.at(instance);auto m=source.materials.at(i.materials.at(slot));
   if(auto object=overrides.find(i.id);object!=overrides.end())if(auto patch=object->second.find(source.meshes.at(i.mesh).material_slots.at(slot));patch!=object->second.end())for(const auto &[key,value]:patch->second)set_material_value(m,textures,material_parameter(key),value);
+  ir::validate(m,textures.size());return m;
+}
+J copy_material(const ir::Scene &scene,const MaterialOverrides &overrides,MaterialSurface surface){
+  auto textures=scene.textures;const auto m=effective_material(scene,overrides,surface.instance,surface.slot,textures);
+  J copy={{"parameters",J::object()},{"source_definition",m.source_definition},{"source_channels",J::array()}};
+  if(!m.source_definition.empty()){auto definition=J::parse(m.source_definition);if(definition.erase("uv_baseline"))copy["source_definition"]=definition.dump();}
+  for(const auto &p:material_parameters())copy["parameters"][p.id]=material_value(m,textures,p);
+  for(const auto &c:m.source_channels)copy["source_channels"].push_back({{"id",c.id},{"label",c.label},{"type",c.type},{"value",c.value},{"image",c.image},{"mapped",c.mapped}});
+  if(!daz::material_uv_set(m).uri.empty())copy["uv_topology"]=daz::material_uv_topology(scene.meshes.at(scene.instances.at(surface.instance).mesh));
+  return copy;
+}
+M read_copied_material(const J &copy,std::vector<ir::Texture> &textures){
+  M m;for(const auto &p:material_parameters()){
+    const auto &value=copy.at("parameters").at(p.id);
+    if(p.restore)p.restore(m,value);
+    else if(p.kind==P::texture&&!value.is_null()){auto parameter=p;const int space=value.value("colorspace",int(p.colorspace));range(space,0,1);parameter.colorspace=ir::ColorSpace(space);set_material_value(m,textures,parameter,value);}
+    else set_material_value(m,textures,p,value);
+  }
+  m.source_definition=copy.at("source_definition");
+  for(const auto &c:copy.at("source_channels"))m.source_channels.push_back({c.at("id"),c.at("label"),c.at("type"),c.at("value"),c.at("image"),c.at("mapped")});
   ir::validate(m,textures.size());return m;
 }
 bool apply_material_overrides(ir::Scene &scene,const ir::Scene &source,const MaterialOverrides &overrides,ir::Delta *delta){

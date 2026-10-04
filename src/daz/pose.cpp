@@ -56,7 +56,15 @@ AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const 
         if(name==c.modifier&&owner) {found=i;++matches;}
       }
       if(matches>1) {skip(c,"同一节点下有多个同名参数，无法唯一确定目标");continue;}
-      if(c.property=="value/value"&&found<target.morphs.size()&&target.morphs[found].unsupported.empty()) {runtime::set_parameter(target,result.properties,found,c.value);result.report["applied_morph_channels"]=result.report["applied_morph_channels"].get<int>()+1;}
+      if(c.property=="value/value"&&found<target.morphs.size()&&target.morphs[found].unsupported.empty()) {
+        runtime::set_parameter(target,result.properties,found,c.value);
+        const auto &m=target.morphs[found];const auto &canonical=target.morphs[m.alias_morph>=0?size_t(m.alias_morph):found];
+        // Presets often explicitly zero driven JCMs. A normal authored value must
+        // retain ERC limits; the manual editor's unlimited mode would allow
+        // negative corrective weights and leave them active on later poses.
+        if(c.value>=canonical.minimum&&c.value<=canonical.maximum)result.properties.unlimited_morphs.erase(canonical.id);
+        result.report["applied_morph_channels"]=result.report["applied_morph_channels"].get<int>()+1;
+      }
       else if(c.value==0) result.report["ignored_zero_controls"]=result.report["ignored_zero_controls"].get<int>()+1;
       else skip(c,found<target.morphs.size()?target.morphs[found].unsupported:"目标角色未找到该控制器或 Morph");
       continue;
@@ -68,7 +76,7 @@ AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const 
     if(index==skin.joints.size()) {skip(c,"未找到目标骨骼");continue;}
     auto &p=result.joints[index];float *value=nullptr;
     const auto slash=c.property.find('/');const auto property=c.property.substr(0,slash);
-    if(c.property=="general_scale/value") value=&p.general_scale;
+    if(c.property=="general_scale/value"||c.property=="scale/general/value") value=&p.general_scale;
     else if(slash!=std::string::npos&&c.property.size()==slash+8&&c.property.substr(slash+2)=="/value") {
       const char axis=c.property[slash+1];ir::Vec3 *vector=property=="rotation"?&p.rotation_degrees:property=="translation"?&p.translation_cm:property=="scale"?&p.scale:nullptr;
       if(vector) value=axis=='x'?&vector->x:axis=='y'?&vector->y:axis=='z'?&vector->z:nullptr;

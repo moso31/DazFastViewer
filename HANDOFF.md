@@ -1,5 +1,33 @@
 # 交接记录
 
+## 收尾：选择集前置与 Git 提交
+
+2026-10-04：按用户要求，将每个对象的“选择集”移至 Body、Face 等实际材质条目上方。Release 构建、既有材质测试及真实 `test7.duf` UV／选择集验证通过，已目视确认顺序，更新 `out/vs2022/Release`。本次提交包含前两轮的七项反馈修复、UV Set 和原生材质选择集功能。此次收尾证据：`artifacts/selection-order-build.log`、`artifacts/selection-order-test.log`、`artifacts/selection-order/`。
+
+## 最新：UV Set 显示／切换与原生材质选择集
+
+2026-10-04：用户确认按 DAZ 的 UV Set 做“显示＋可切换”，并读取原生 Surface Selection Sets。材质面板“贴图坐标”显示当前实际 UV 名称，后台发现几何对应目录、同路径各内容库及已引用的内嵌 UV；Genesis 8.1 的声明兼容基础几何通过面连接核对后继承 G8 的 UV 选项。多选显示多值、取共同可用选项；切换隔离共享网格，更新三角面／原始多边形／曲线，保留材质参数，支持还原、已修改筛选、历史记录及 DUFEX 重放。DAZ Instance 的切换在原型上进行。
+
+当前 UV 引用在加载时补齐默认 UV 名称，使用规范文件身份，修正了材质预设合并后名称与已应用坐标脱节的问题。复制材质同时保存 UV 引用与源拓扑指纹；兼容目标应用 UV，不兼容或资源缺失则保留目标 UV、粘贴其余参数并提示。源材质的手动还原基线不进入剪贴板。
+
+选择集读取 `geometry.extra/material_selection_sets`，保留名称、层级及成员。单击选择实际材质条目；Ctrl 追加或取消整个成员集合，父组取子组并集，范围限定对象自身。支持悬浮高亮、批量编辑／粘贴及滚动位置恢复，循环／缺失分组成员不会造成递归或跨对象选择。
+
+验证：Release 构建和 33 项 CTest 通过；`MaterialsTest` 增加跨内容库发现、接缝校验、共享网格隔离、复制粘贴、保存恢复、选择集 Ctrl 操作、混合 UV、滚动与循环层级回归。真实 `test7.duf` 中 Lee 8 (2) 的 Nails 精确选中 Fingernails／Toenails，big_01 的 Legacy Torso 选中 Body／Head，并能选择 Base Female；Ruo Xi 的 17 个表面应用后均显示 Base Female。`--history-test` 的 28 项原生窗口检查覆盖 UV 切换／还原的撤销重做和渲染后撤销，全程一个 Session。证据：`artifacts/uv-selection-{build-final.log,ctest.log,real.json,panel.png}`、`artifacts/uv-selection-history-final/`。
+
+已部署至 `out/vs2022/Release`，部署版本再次通过 28 项原生窗口检查（`artifacts/uv-selection-deployed/`）。构建／部署 EXE SHA256 一致：`8863767697B4CABD16562AA91F04FE755380802E1863805FE7D464A7466AEED8`，核对记录为 `artifacts/uv-selection-deployment.json`。保留前轮未提交修改，未创建 Git 提交，未改写用户原始 DUF／DSF。
+
+## 最新：内容浏览器、Pose、材质与场景树的七项反馈
+
+2026-10-04：内容库、搜索结果和近期使用的图标／列表统一双击加载 DUF；单击只选中，Ctrl+双击仍应用骨骼局部姿势。材质表面右键新增复制／粘贴，使用独立快照保存当前全部材质参数、贴图／图层及源通道，支持跨角色、多选、撤销重做及 DUFEX 重放；复制源后续修改或删除不影响副本。目标几何 UV 拓扑不随复制改变。属性控件重建后恢复滚动位置，连续快速切换也保留位置。
+
+`test7.duf` 的 Lee 8 (2) 应用 Twice the pleasure 02／04 后腿部挤压，根因是姿势写入零值 `pJCMFlexQuad` 时复用了手动编辑的“解除限位”路径，使 ERC 输出约 −4 至 −9.4 的修正权重。预设在原生范围内的值现在恢复限位，显式超限值仍保留；同时补齐 `scale/general/value` 通道。真实负向对照分别测得 1.39 cm／3.26 cm 的基础网格最大偏差，修复后相关负权重为 0，连续姿势与恢复的网格结果稳定。此项为原始场景中该角色的独立 CPU 形变验证，未声称与 DAZ 渲染逐像素一致。
+
+Ruo Xi All Maps 的 `Torso` 现在可映射至 Genesis 8.1 的 `Body`／`Head`，并应用预设指定的 Base Female UV；显式同名目标表面优先，普通模型不使用此别名。真实 big_01 的 17 个表面全部匹配。原生视口 Del 接入编辑器删除流程，选中骨骼部位时删除所属模型，可撤销。`11.duf` 的 GoldenPalace_Shell 实际是同一节点的三个渲染分片，场景树按节点身份只保留一行，并关联全部分片的选择、显隐、变换和删除。
+
+验证：Release 构建、33 项 CTest；新增内容库／近期使用单双击、完整材质副本／跨对象粘贴／滚动位置／DUFEX、JCM 限位、G8.1 表面兼容及 Shell 分片回归。编辑器 `--history-test` 的 25 项原生窗口检查包含材质粘贴撤销重做，以及选择骨骼后视口 Del 和撤销；真实 `11.duf` 出图后的场景树仅有一行 GoldenPalace_Shell，父节点为 big_01。证据位于 `artifacts/content-feedback-*`，包括 `content-feedback-real.json`、`content-feedback-history-final/history-checks.json` 和 `content-feedback-shell-ui/editor-check.json`。程序沿用 `out/vs2022/Release`；未修改原始用户 DUF，未创建 Git 提交。
+
+最终构建及 33 项测试日志为 `content-feedback-build-final.log`、`content-feedback-ctest-final.log`；部署后的程序再次通过 25 项原生窗口检查（`content-feedback-deployed/`）。构建／部署 EXE 的 SHA256 一致：`C406827AE5AE68E5EBBFC51446D259C7DA89AB8C4CEB3D35BF1E4729B7A2AADD`。材质副本按 IR 有效性恢复导入值，保留超出编辑框常用范围的 HDR、法线强度及 UV 平铺值。
+
 ## 最新：GeoGraft 大倍率缩放后的置换暗沉与黑边
 
 2026-10-04：在 `G:/G1/Scenes/test7.duf` 的 `big_01 / HD Nipples for G8F - 2.0 / Right Breast 2` 局部机位复现。关闭真实置换后黑边消失，关闭普通 Bump 或 SSS 仍存在。根因是 Cycles 的 `DISPLACE_BOTH` 在对象空间计算凹凸梯度，却将世界空间置换向量投影得到的高度直接用于该梯度，导致对象缩放额外放大法线扰动。

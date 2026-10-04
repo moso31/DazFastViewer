@@ -134,7 +134,7 @@ static void checks() {
       const auto point=items->visualRect(index).intersected(items->viewport()->rect()).center();
       const int full_before=full_pose,partial_before=partial_pose;
       QTest::mouseClick(items->viewport(),Qt::LeftButton,Qt::NoModifier,point);
-      require(full_pose==full_before+1&&partial_pose==partial_before,"普通单击没有应用全身姿势");
+      require(full_pose==full_before&&partial_pose==partial_before,"普通单击不应加载姿势");
       QTest::mouseDClick(items->viewport(),Qt::LeftButton,Qt::NoModifier,point);
       require(full_pose==full_before+1&&partial_pose==partial_before&&opened==1,"普通双击重复应用姿势或走了普通加载入口");
       QTest::mouseClick(items->viewport(),Qt::LeftButton,Qt::ControlModifier,point);
@@ -155,6 +155,8 @@ static void checks() {
     until([&]{return view->model()->rowCount()==1&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose;});
     require(search->currentText()=="standing [01]","切回内容库丢失搜索文本");browser.show_recent();
     require(categories->currentRow()==0&&view->model()->rowCount()==27,"ALL 默认分类或全局记录错误");categories->setCurrentRow(3);require(view->model()->rowCount()==20&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose,"近期分类上限或时间排序错误");
+    browser.apply_pose=[&](const QString &path,bool partial){require(path==pose,"近期姿势路径错误");if(partial)++partial_pose;else ++full_pose;};
+    for(int level:{0,2}){zoom->setValue(level);check_pose_clicks(view,view->model()->index(0,0));}browser.apply_pose={};
     zoom->setValue(21);require(view->iconSize().width()==224,"最大图标尺寸发生变化");browser.save();
     bool removed=false;QTimer::singleShot(0,[&]{if(auto *menu=qobject_cast<QMenu *>(QApplication::activePopupWidget()))if(auto *action=menu->findChild<QAction *>("RemoveRecentContent")){removed=true;menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}});
     view->customContextMenuRequested(view->visualRect(view->model()->index(0,0)).center());

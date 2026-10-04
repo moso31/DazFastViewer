@@ -402,7 +402,7 @@ class Editor final:public EditorWindow {
     }
     return submitted;
   }
-  void send() {if(powerpose_) powerpose_->cancel();snapshot_.revision=next_revision();renderer_->edit(submitted_snapshot());}
+  void send() {if(powerpose_) powerpose_->cancel();if(document_&&selected_>=0)sync_object_transform(*document_,snapshot_,size_t(selected_));snapshot_.revision=next_revision();renderer_->edit(submitted_snapshot());}
   GroundSelection ground_objects() const {
     if(loading_||!document_)return {};
     const ObjectHierarchy nodes(*document_);std::vector<std::string> ids;
@@ -490,6 +490,7 @@ class Editor final:public EditorWindow {
     select(item?item->data(0,Qt::UserRole).toInt():-1,item?item->data(0,Qt::UserRole+1).toInt():-1,item?item->data(0,Qt::UserRole+2).toInt():-1);
   }
   void choose(int target,int joint=-1,bool toggle=false) {
+    if(document_&&target>=0&&joint<0)target=int(ObjectTargets(*document_).primary.at(size_t(target)));
     for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==target&&(*it)->data(0,Qt::UserRole+1).toInt()==joint&&(*it)->data(0,Qt::UserRole+2).toInt()<0) {
       {QSignalBlocker block(hierarchy_);for(auto *p=(*it)->parent();p;p=p->parent()) p->setExpanded(true);choose_item(hierarchy_,*it,toggle);hierarchy_->scrollToItem(*it);}sync_selection();return;
     }
@@ -507,14 +508,16 @@ class Editor final:public EditorWindow {
         const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));item->setData(0,Qt::UserRole+3,text(target.id));item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(0,snapshot_.values[i].visible?Qt::Checked:Qt::Unchecked);
       }return;
     }
-    std::vector<QTreeWidgetItem *> items;
+    std::vector<QTreeWidgetItem *> items;const ObjectTargets object_targets(*document_);
     for(const auto &node:document_->loaded.nodes) if(node.group) {
       auto *item=new QTreeWidgetItem(hierarchy_,{text(node.label.empty()?node.id:node.label)});identify(item,-4);objects[node.id]=item;
       item->setToolTip(0,QStringLiteral("场景组"));
       containers.insert(node.id);
     }
     for(size_t i=0;i<document_->catalog.targets.size();++i) {
+      if(object_targets.primary[i]!=i){items.push_back(items.at(object_targets.primary[i]));continue;}
       const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(0,snapshot_.values[i].visible?Qt::Checked:Qt::Unchecked);items.push_back(item);
+      QVariantList members;for(auto member:object_targets.members[i])members.push_back(int(member));item->setData(0,Qt::UserRole+4,members);
       for(const auto &object:document_->loaded.objects) if(object.instance==target.instance) objects[object.id]=item;
       for(const auto &skin:document_->skeletons.skins) if(skin.instance==target.instance) {
         std::vector<QTreeWidgetItem *> bones;
@@ -544,6 +547,7 @@ class Editor final:public EditorWindow {
       }
     }
     for(size_t i=0;i<items.size();++i) {
+      if(object_targets.primary[i]!=i)continue;
       const auto &target=document_->catalog.targets[i];auto ancestors=target.ancestors;if(ancestors.empty()) ancestors.push_back(target.parent);
       for(const auto &parent:ancestors) if(parent.starts_with('#')&&objects.contains(parent.substr(1))&&objects[parent.substr(1)]!=items[i]) {
         hierarchy_->takeTopLevelItem(hierarchy_->indexOfTopLevelItem(items[i]));objects[parent.substr(1)]->addChild(items[i]);break;
@@ -563,7 +567,7 @@ class Editor final:public EditorWindow {
   void set_visible(size_t target,bool visible) {
     if(loading_||!document_||snapshot_.values.at(target).visible==visible) return;
     auto edit=history_edit(QStringLiteral("切换对象显隐"));
-    snapshot_.values[target].visible=visible;
+    const ObjectTargets objects(*document_);target=objects.primary.at(target);for(auto member:objects.members[target])snapshot_.values[member].visible=visible;
     {QSignalBlocker block(hierarchy_);for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==int(target)&&(*it)->data(0,Qt::UserRole+1).toInt()<0) (*it)->setCheckState(0,visible?Qt::Checked:Qt::Unchecked);}
     send();
   }
@@ -578,7 +582,7 @@ class Editor final:public EditorWindow {
     rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);hierarchy_->setCurrentItem(hierarchy_->topLevelItem(hierarchy_->topLevelItemCount()-1));
   }
   void delete_selection() {
-    if(loading_||!document_||(selected_<0&&selected_light_<0)||selected_joint_>=0) return;
+    if(loading_||!document_||(selected_<0&&selected_light_<0)) return;
     auto edit=history_edit(QStringLiteral("删除对象及子对象"));
     try {
       auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;size_t removed=0;
@@ -878,7 +882,7 @@ class Editor final:public EditorWindow {
     if(materials_){auto *item=active_selection(hierarchy_);materials_->bind(document_,&snapshot_,index,index==-4&&item?item->data(0,Qt::UserRole+3).toString().toStdString():std::string{});}
     bind_extension();bind_physics();
     if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1);if(ground_panel_)ground_panel_->bind(target!=-1,ground_ratio(target),ground_offset(target),ground_body_only(target),target==-4);}
-    if(delete_) delete_->setEnabled(!loading_&&document_&&joint<0&&(index>=0||light>=0));
+    if(delete_) delete_->setEnabled(!loading_&&document_&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1,hierarchy_->selectedItems().size()==1?selected_group_:std::string{});
     if(renderer_) refresh_powerpose(renderer_->status());
     if(light>=0&&document_) {
@@ -1427,7 +1431,7 @@ class Editor final:public EditorWindow {
     if(materials_)materials_->setEnabled(!loading_);
     if(retry_parameters_) retry_parameters_->setEnabled(document_&&!state.resource_error.empty());
     static int resources_tick=0;if(++resources_tick%5==0) parameters_->resource_states();
-    if(delete_) delete_->setEnabled(!loading_&&document_&&selected_joint_<0&&(selected_>=0||selected_light_>=0));
+    if(delete_) delete_->setEnabled(!loading_&&document_&&(selected_>=0||selected_light_>=0));
     if(attachment_test_) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>600000) {finish_test(false,"骨骼附件界面验证超时");return;}
       if(!state.error.empty()||!state.edit_error.empty()) {finish_test(false,state.error+state.edit_error);return;}
@@ -1879,7 +1883,7 @@ public:
     light_power_=new QDoubleSpinBox;light_power_->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
     light_power_->setProperty("historyInput",true);
     connect(light_power_,&QDoubleSpinBox::valueChanged,this,[this](double value) {if(selected_light_<0) return;auto edit=history_edit(QStringLiteral("修改灯光功率"));auto &p=snapshot_.lights[size_t(selected_light_)].power;const auto previous=std::max({p.x,p.y,p.z});const float ratio=previous>0?float(value)/previous:0;p=previous>0?ir::Vec3{p.x*ratio,p.y*ratio,p.z*ratio}:ir::Vec3{float(value),float(value),float(value)};send();});
-    pose_status_=new QLabel(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+左键双击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
+    pose_status_=new QLabel(QStringLiteral("双击加载姿势、形态或材质；单选骨骼后 Ctrl+左键双击姿势，仅应用该部位及其后代。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column==0&&target>=0&&item->data(0,Qt::UserRole+1).toInt()<0) set_visible(size_t(target),item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     extension_panel_=new ExtensionPanel;properties->addWidget(extension_panel_);extension_panel_->changed=[this](runtime::ObjectExtension v,bool shape,double step){change_extension(v,shape,step);};
@@ -1909,6 +1913,25 @@ public:
     materials_=new MaterialPanel;materials_->changed=[this]{if(!loading_&&renderer_)send();};materials_->interaction_changed=[this](bool active){history_interaction(active,quintptr(materials_));};
     materials_->edit_requested=[this](const QString &name,const std::function<void()> &change){if(loading_)return;auto edit=history_edit(name);change();};
     materials_->preset_requested=[this](const auto &file,const auto &surfaces){apply_surface_material_file(file,surfaces);};
+    materials_->paste_requested=[this](const auto &copy,const auto &surfaces){
+      if(loading_||!document_||surfaces.empty())return;auto edit=history_edit(QStringLiteral("粘贴材质"));
+      try{const auto selection=materials_->selection_ids();auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;const auto warnings=paste_material(*next,snapshot,copy,surfaces);
+        next->generation=++generation_;next->loaded.scene.lights=snapshot.lights;document_=std::move(next);snapshot_=std::move(snapshot);snapshot_.generation=document_->generation;++snapshot_.revision;
+        select(selected_,selected_joint_,selected_light_);materials_->restore_selection(selection);renderer_->set_document(document_,submitted_snapshot(),false);
+        if(!warnings.empty()){QStringList messages;for(const auto &warning:warnings)messages.push_back(text(warning));QMessageBox::information(this,QStringLiteral("材质已粘贴"),messages.join("\n"));}
+      }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("材质粘贴失败"),text(e.what()));}
+    };
+    auto change_uv=[this](const daz::MaterialUVSet &uv,const std::vector<MaterialSurface> &surfaces,bool reset){
+      if(loading_||!document_||surfaces.empty())return;auto edit=history_edit(reset?QStringLiteral("还原 UV Set"):QStringLiteral("切换 UV Set"));
+      try{const auto selection=materials_->selection_ids();auto next=std::make_shared<Document>(*document_);
+        if(!(reset?reset_material_uv(*next,surfaces):change_material_uv(*next,uv,surfaces)))return;
+        next->generation=++generation_;next->loaded.scene.lights=snapshot_.lights;document_=std::move(next);snapshot_.generation=document_->generation;++snapshot_.revision;
+        select(selected_,selected_joint_,selected_light_);materials_->restore_selection(selection);renderer_->set_document(document_,submitted_snapshot(),false);
+        statusBar()->showMessage(reset?QStringLiteral("已还原所选表面的 UV Set"):QStringLiteral("已切换 UV Set：")+text(uv.label),5000);
+      }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("UV Set 切换失败"),text(e.what()));}
+    };
+    materials_->uv_requested=[change_uv](const auto &uv,const auto &surfaces){change_uv(uv,surfaces,false);};
+    materials_->uv_reset_requested=[change_uv](const auto &surfaces){change_uv({},surfaces,true);};
     materials_->locate_file=[this](const QString &file){if(browser_->locate(file)){if(auto *dock=qobject_cast<QDockWidget *>(browser_->parentWidget())){dock->show();dock->raise();}}else statusBar()->showMessage(QStringLiteral("文件不存在：%1").arg(file),5000);};
     materials_->hovered=[this](const auto &surfaces){if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
     auto *material_dock=dock(QStringLiteral("材质"),materials_,Qt::RightDockWidgetArea);material_dock->setObjectName("Materials");tabifyDockWidget(property_dock,material_dock);
@@ -1944,7 +1967,7 @@ public:
     auto *fit=attachment_menu->addAction(QStringLiteral("绑定到角色 / 更换目标…"));connect(fit,&QAction::triggered,this,[this]{change_attachment(false);});
     auto *detach=attachment_menu->addAction(QStringLiteral("解除挂接"));detach->setToolTip(QStringLiteral("整套附件恢复独立载入位置，角色被遮盖的表面随绑定关系重新计算"));connect(detach,&QAction::triggered,this,[this]{change_attachment(true);});
     delete_=edit->addAction(QStringLiteral("删除选中对象及其子对象"));delete_->setShortcut(QKeySequence::Delete);delete_->setEnabled(false);
-    delete_->setToolTip(QStringLiteral("删除对象、子对象及绑定的穿戴物；选择骨骼部位时请先选择所属模型"));
+    delete_->setToolTip(QStringLiteral("删除选中模型、子对象及绑定的穿戴物；选择骨骼部位时删除所属模型"));
     connect(delete_,&QAction::triggered,this,[this] {delete_selection();});
     hierarchy_->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach,explorer_dock](const QPoint &point) {
@@ -2009,6 +2032,7 @@ public:
     if(!self_test_){try{measurement_scale_=runtime::measurement_scale(QSettings().value("measurement/scale","1").toString().toStdString());}catch(...){measurement_scale_="1";}}
     extension_panel_->measurement_scale(measurement_scale_);
     renderer_->history_requests([this](bool redo){history_move(redo);});
+    renderer_->delete_requests([this]{QMetaObject::invokeMethod(this,[this]{if(!closing_&&!loading_)delete_->trigger();},Qt::QueuedConnection);});
     parameters_->interaction_changed=[this](bool active){history_interaction(active,quintptr(parameters_));};
     connect(qApp,&QGuiApplication::applicationStateChanged,this,[this](Qt::ApplicationState state){if(state!=Qt::ApplicationActive){if(history_input_)history_input_->finish();if(renderer_)renderer_->interaction(false);}});
     auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this] {tick();});timer->start(50);

@@ -433,21 +433,9 @@ ir::Material merge_material_preset(const ir::Material &base,const ir::Material &
   }
   Repository repo;repo.roots=options.content_roots;ir::Scene scene;scene.textures=textures;Json warnings=Json::array(),reports=Json::array();
   const bool legacy=authored.contains("Base Mixing")?false:original.value("legacy_gloss",false)||patch.value("legacy_gloss",false);
-  auto result=convert_material(Json{{"id",preset.id},{"groups",Json::array()}},std::move(channels),fs::u8path(patch.value("owner",std::string{})),repo,scene,warnings,reports,legacy);textures=std::move(scene.textures);return result;
+  auto result=convert_material(Json{{"id",preset.id},{"groups",Json::array()}},std::move(channels),fs::u8path(patch.value("owner",std::string{})),repo,scene,warnings,reports,legacy);textures=std::move(scene.textures);set_material_uv_set(result,material_uv_set(preset).uri.empty()?material_uv_set(base):material_uv_set(preset));return result;
 }
-bool apply_material_uv(ir::Scene &scene,size_t instance,size_t slot,const ir::Material &preset,const LoadOptions &options){
-  if(preset.source_definition.empty())return false;const auto definition=Json::parse(preset.source_definition);const auto uri=definition.value("uv_set",std::string{});if(uri.empty())return false;
-  Repository repo;repo.roots=options.content_roots;const auto [file,source]=repo.asset(uri,fs::u8path(definition.at("uv_owner").get<std::string>()),"uv_set_library");auto &i=scene.instances.at(instance);auto mesh=scene.meshes.at(i.mesh);
-  if(source->at("vertex_count").get<size_t>()!=mesh.positions.size())fail("材质预设 UV Set 与目标顶点数不匹配："+uri);
-  std::vector<ir::Vec2> coordinates;for(const auto &v:values(source->at("uvs")))coordinates.push_back({v.at(0).get<float>(),v.at(1).get<float>()});std::map<std::pair<uint32_t,uint32_t>,uint32_t> seams;
-  for(const auto &v:source->value("polygon_vertex_indices",Json::array()))seams[{v.at(0).get<uint32_t>(),v.at(1).get<uint32_t>()}]=v.at(2).get<uint32_t>();
-  auto uv=[&](uint32_t polygon,uint32_t vertex){auto seam=seams.find({polygon,vertex});return coordinates.at(seam==seams.end()?vertex:seam->second);};bool changed=false;
-  for(auto &face:mesh.triangles)if(face.material_slot==slot)for(size_t c=0;c<3;++c){const auto value=uv(face.source_polygon,face.vertices[c]);changed|=face.uv[c]!=value;face.uv[c]=value;}
-  for(size_t p=0;p<mesh.polygons.size();++p){auto &face=mesh.polygons[p];if(face.material_slot==slot)for(size_t c=0;c<face.vertices.size();++c){const auto value=uv(uint32_t(p),face.vertices[c]);changed|=face.uv[c]!=value;face.uv[c]=value;}}
-  for(auto &curve:mesh.curves)if(curve.material_slot==slot){const auto value=coordinates.at(curve.vertices.front());changed|=curve.uv!=value;curve.uv=value;}
-  if(!changed)return false;if(i.prototype>=0)fail("DAZ Instance 的 UV 与原型共享，请在原型对象上应用需要不同 UV Set 的材质");
-  if(std::count_if(scene.instances.begin(),scene.instances.end(),[&](const auto &other){return other.mesh==i.mesh;})>1){mesh.id+="/material-uv/"+i.id;i.mesh=uint32_t(scene.meshes.size());scene.meshes.push_back(std::move(mesh));}else scene.meshes[i.mesh]=std::move(mesh);return true;
-}
+#include "daz/material_uv.inl"
 std::string decode_uri(const std::string &uri) {return decode(uri);}
 void sync_instance_meshes(ir::Scene &scene) {
   for(auto &instance:scene.instances) if(instance.prototype>=0) {
@@ -855,6 +843,16 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
         }
         if(!compatible) {warn("derived_geometry_topology",geometry_id,"派生几何拓扑不同，未继承源资产的 Morph / 蒙皮索引");break;}
         out.objects.back().geometry_sources.push_back({source_file,source_id});owner=source_file;derived=base;
+      }
+      out.objects.back().material_selection_sets=read_material_selection_sets(g);
+      if(out.objects.back().material_selection_sets.empty())for(const auto &source:out.objects.back().geometry_sources){
+        const auto [path,base]=repo.asset(encode_uv_uri(utf8(source.file))+"#"+encode_uv_uri(source.id),source.file,"geometry_library");
+        out.objects.back().material_selection_sets=read_material_selection_sets(*base);if(!out.objects.back().material_selection_sets.empty())break;
+      }
+      const auto custom_sets=read_material_selection_sets(geometry_instance);if(!custom_sets.empty())out.objects.back().material_selection_sets=custom_sets;
+      for(size_t slot=0;slot<uv_refs.size();++slot){const auto &ref=uv_refs[slot];const auto [path,asset]=repo.asset(ref,ref.starts_with('#')?geometry_file:file,"uv_set_library");
+        auto &material=scene.materials.at(render_instance.materials[slot]);const auto definition=Json::parse(material.source_definition);
+        if(!definition.contains("uv_label"))set_material_uv_set(material,uv_reference(path,*asset));else bind_uv_reference(scene,render_instance.materials,slot,uv_reference(path,*asset));
       }
       scene.instances.push_back(std::move(render_instance));
       const auto &subdivision=scene.meshes.at(mesh_index).subdivision;
