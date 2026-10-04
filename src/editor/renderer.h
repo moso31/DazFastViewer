@@ -11,8 +11,10 @@
 #include "city/runtime.h"
 #include <memory>
 #include <thread>
+#include <future>
 
 namespace dfv::editor {
+struct ViewportCapture {int size=0;std::vector<unsigned char> rgba;std::array<float,6> view{};};
 // 采样参数和可重建的视口画质；诊断可覆盖，降噪始终关闭。
 struct SamplingSettings : RenderQuality {
   int samples=4096,min_bounces=0,transparent_min_bounces=0;
@@ -115,6 +117,9 @@ class Renderer {
   Telemetry telemetry_;
   std::unique_ptr<Window> window_;
   std::mutex mutex_;
+  struct CaptureRequest {uint64_t generation,revision,camera_epoch;std::promise<ViewportCapture> result;};
+  std::unique_ptr<CaptureRequest> capture_;
+  void capture_frame(uint64_t generation,uint64_t revision,const CameraState &camera);
   RenderQuality requested_render_quality_;
   runtime::PhysicsOptions physics_options_;
   std::shared_ptr<const Document> document_;
@@ -167,6 +172,8 @@ public:
 #endif
   RenderStatus status();
   CameraState input_camera();
+  std::future<ViewportCapture> capture(uint64_t generation,uint64_t revision);
+  void cancel_capture();
   void orbit(float x,float y);
   void keyboard(int key,bool pressed);
   void frame(const ir::Bounds &bounds);

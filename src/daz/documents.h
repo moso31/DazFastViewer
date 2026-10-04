@@ -5,6 +5,7 @@
 #include <span>
 #include <vector>
 #include <nlohmann/json.hpp>
+#include "daz/source_archive.h"
 namespace dfv::daz {
 enum class DocumentView {metadata,skeleton,payload};
 // 返回不可变文档；元数据视图不构造几何、UV 和 Morph 差值的数值 DOM。

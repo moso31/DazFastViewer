@@ -1,4 +1,5 @@
 #include "editor/document.h"
+#include "editor/scene_extension.h"
 #include "daz/content_entry.h"
 #include "daz/pose.h"
 #include <chrono>
@@ -11,7 +12,7 @@ namespace fs=std::filesystem;
 static void require(bool value,const char *message) {if(!value) throw std::runtime_error(message);}
 template<class F> static void rejects(F f,const char *message) {bool rejected=false;try {f();}catch(const std::exception &){rejected=true;}require(rejected,message);}
 static editor::Document load(const fs::path &file,const std::vector<fs::path> &roots,bool deferred=false) {
-  editor::Document d;d.loaded=daz::load(file,{roots,false,deferred});
+  editor::Document d;d.source_file=file;d.loaded=daz::load(file,{roots,false,deferred});
   d.catalog=daz::discover_morphs(d.loaded,roots);d.skeletons=daz::load_skeletons(d.loaded);d.formulas=daz::enable_formulas(d.catalog,d.skeletons);return d;
 }
 static ir::Scene evaluate(const editor::Document &d,const editor::Snapshot &s) {
@@ -120,6 +121,16 @@ static void unit() {
   require(deleting.attachments.size()==1&&deleting.attachments[0].items.size()==1,"删除单件留下失效套装记录");
   editor::fit_attachment(deleting,2,1);
   require(original.catalog.targets.size()==2&&original.loaded.scene.meshes.at(original.loaded.scene.instances[0].mesh).hidden_polygons.empty(),"待提交修改污染了原文档");
+  const auto archive=folder/"attachments.dufex";editor::save_scene_extension(archive,d,snapshot);
+  const auto rigid_archive=folder/"rigid.dufex";const auto rigid_snapshot=editor::initial_snapshot(rigid_document);editor::save_scene_extension(rigid_archive,rigid_document,rigid_snapshot);
+  auto mask=wear;mask["geometry_library"][0]["graft"]["vertex_pairs"]={{"count",0},{"values",J::array()}};mask["scene"]=preset["scene"];auto &mask_nodes=mask["scene"]["nodes"];mask_nodes.erase(mask_nodes.begin()+1,mask_nodes.end());mask_nodes[0]["url"]="#figure";mask_nodes[0]["geometries"][0]["url"]="#mesh";mask["scene"]["materials"].erase(1);mask["scene"]["modifiers"]=J::array();
+  std::ofstream(folder/"mask.duf")<<mask;auto mask_document=original;mask_document.generation=6;editor::append_document(mask_document,load(folder/"mask.duf",{folder},true));editor::attach_import(mask_document,2,0);
+  editor::save_scene_extension(folder/"mask.dufex",mask_document,editor::initial_snapshot(mask_document));
+  for(const auto &name:{"body.duf","wear.duf","rigid.duf","mask.duf"})fs::remove(folder/name);
+  auto restored=editor::load_scene_extension(archive,{folder},11);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,snapshot),"GeoGraft / Fit To 场景保存重开不一致");
+  const auto expected=evaluate(d,snapshot),actual=evaluate(*restored.document,restored.snapshot);for(size_t i=0;i<expected.instances.size();++i)require(distance(point(expected,i),point(actual,i))<1e-6,"重放附件变形结果变化");
+  auto rigid_restored=editor::load_scene_extension(rigid_archive,{folder},12);require(rigid_restored.document->catalog.targets[3].rigid_follow.target=="#body0","DUFEX 丢失表面刚性跟随目标");evaluate(*rigid_restored.document,rigid_restored.snapshot);
+  auto mask_restored=editor::load_scene_extension(folder/"mask.dufex",{folder},13);const auto &mask_scene=mask_restored.document->loaded.scene;require(mask_scene.meshes[mask_scene.instances[2].mesh].graft_vertex_pairs.empty()&&mask_scene.meshes[mask_scene.instances[0].mesh].hidden_polygons==std::vector<uint32_t>{0},"DUFEX 丢失无接缝的服装遮罩");
   std::cout<<"Attachment import / posed host / GeoGraft / rigid hair / rebind / detach / isolation: PASS\n";
   // 测试只删除本次创建的唯一临时目录。
   const auto resolved=fs::weakly_canonical(folder),temporary=fs::weakly_canonical(fs::temp_directory_path());

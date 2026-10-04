@@ -20,6 +20,8 @@ struct AttachmentBinding {
   std::vector<daz::AssetNode> nodes;
 };
 struct Document {
+  std::map<std::string,std::shared_ptr<daz::SourceArchive>> archives;
+  std::map<std::pair<std::string,std::string>,std::shared_ptr<daz::SourceArchive>> material_archives;
   std::filesystem::path source_file;
   nlohmann::json operations=nlohmann::json::array();
   uint64_t generation=0;
@@ -32,6 +34,7 @@ struct Document {
   city::Cities cities;
 };
 struct Snapshot {
+  std::optional<std::array<float,6>> view;
   city::Views city_views;
   std::map<std::string,runtime::TransformValues> group_transforms;
   InstanceGrounds instance_ground;
@@ -47,6 +50,8 @@ struct Snapshot {
   std::vector<runtime::PosePin> pose_pins;
 };
 Snapshot initial_snapshot(const Document &document);
+std::string retain_archive(Document &document,const std::shared_ptr<daz::SourceArchive> &archive);
+std::shared_ptr<daz::SourceArchive> material_archive(const Document &,MaterialSurface,const std::string &owner);
 const ir::Mesh &subdivision_mesh(const Document &document,size_t target);
 int subdivision_level(const Document &document,const Snapshot &snapshot,size_t target);
 bool apply_subdivision_levels(ir::Scene &scene,const std::map<std::string,int> &levels);

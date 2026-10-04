@@ -1,6 +1,7 @@
 std::string MaterialPanel::uv_catalog_key(size_t instance) const {
   const auto &d=*document_;const auto &i=d.loaded.scene.instances.at(instance);const auto &mesh=d.loaded.scene.meshes.at(i.mesh);
   auto path=d.source_file.generic_u8string();std::string key(path.begin(),path.end());key+='\n'+std::to_string(d.asset_revision)+'\n'+i.id+'\n'+mesh.id+'\n'+std::to_string(mesh.positions.size());
+  if(auto a=daz::instance_archive(d.loaded,instance))key+=a->identity();for(const auto &[surface,a]:d.material_archives)if(surface.first==i.id&&a)key+=a->identity();
   if(d.loaded.report.is_object())key+='\n'+d.loaded.report.value("content_roots",J::array()).dump();
   std::set<std::string> refs;for(auto m:i.materials)refs.insert(daz::material_uv_set(d.loaded.scene.materials.at(m)).uri);for(const auto &ref:refs)key+='\n'+ref;return key;
 }
@@ -13,7 +14,7 @@ void MaterialPanel::populate_uv_combo(QComboBox *combo) {
     if(found==uv_catalogs_.end()){
       waiting=true;if(uv_pending_.insert(key).second){QPointer<MaterialPanel> guard(this);auto document=document_;
         QThreadPool::globalInstance()->start([guard,document,key,instance]{daz::MaterialUVCatalog catalog;
-          try{daz::LoadOptions options;if(document->loaded.report.is_object())for(const auto &root:document->loaded.report.value("content_roots",J::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));catalog=daz::discover_material_uv_sets(document->loaded,instance,options);}
+          try{daz::LoadOptions options;if(document->loaded.report.is_object())for(const auto &root:document->loaded.report.value("content_roots",J::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));std::vector<std::shared_ptr<daz::SourceArchive>> sources;const auto &i=document->loaded.scene.instances.at(instance);for(size_t slot=0;slot<i.materials.size();++slot)sources.push_back(material_archive(*document,{instance,slot},daz::material_uv_set(document->loaded.scene.materials.at(i.materials[slot])).owner));catalog=daz::discover_material_uv_sets(document->loaded,instance,options,sources);}
           catch(const std::exception &e){catalog.warnings.push_back(e.what());}
           QMetaObject::invokeMethod(qApp,[guard,key,catalog=std::move(catalog)]()mutable{if(!guard)return;guard->uv_pending_.erase(key);guard->uv_catalogs_[key]=std::move(catalog);if(auto *control=guard->findChild<QComboBox *>("material/uv_set"))guard->populate_uv_combo(control);},Qt::QueuedConnection);
         });

@@ -1,5 +1,19 @@
 # 交接记录
 
+## 最新：DUFEX v2 场景保存、来源冻结和缩略图
+
+2026-10-05：普通场景保存为 gzip JSON 的 DUFEX v2：完整 DUF／预设底稿在导入时冻结，按每次导入的来源域保留，不再只依赖源文件路径。SHA-256 校验底稿；线程内来源域覆盖加载、批量解析、Morph 发现及延迟差值加载，原 DUF 删除或更新后仍可保存重开。同一路径的两个版本、追加对象和表面材质分别记录来源；已加载底稿以压缩字节保存在内存，复用已存在的加载与结构操作流程。DSF／贴图／HDRI 等安装资产仍外部引用。
+
+范围包括场景节点／空组／嵌套、变换、Morph／ERC 作者输入、骨架／姿势／固定约束、Parent／Fit To、骨骼及刚性附件、GeoGraft 接缝和纯遮罩、Shell、实例原型、细分、材质／图层／UV、生长／密度／收藏／地面对齐、灯光／环境／色调和观察角度。原生动画、相机及未知扩展按原文保留，不代表增加对应求值能力。恢复后校验节点、原型及绑定关系，具体口径见 [保存说明](Docs/growth_weight_dufex_cn.md)。按用户要求，v2 暂不保存物理模拟和城市 PCG；已有含城市操作的文档沿用旧版保存并提示，旧明文 v1 仍可读。
+
+Ctrl+S 等待当前编辑对应的渲染帧，读取无 Gizmo／选取轮廓的视口中间正方形，生成 256×256 的 `name.dufex.png`；观察角度随场景恢复。PNG 先暂存、场景原子替换后提交，写入失败有明确提示。内容库／目录树／搜索／近期记录支持大小写 DUFEX 和 DJL 链接，按完整路径区分同名 DUF 与 DUFEX；保存后刷新缩略图及索引。原 DUF 不再自动套用同名扩展文件，必须打开 DUFEX 才恢复修改。
+
+验证：Release 构建及 **35 项 CTest** 通过（`artifacts/dufex-v2-all-tests.log`）。新增测试覆盖原目录删除后的独立恢复、同路径多版本、延迟 Morph、骨架／姿势／实例、未知数据、观察相机、v1、损坏底稿／结构与失败保存保护、同路径多版本材质及 UV 再发现；扩展附件、Shell、材质和内容浏览器测试，包含 GeoGraft、零接缝服装遮罩、Rigid Follow、重绑定及同名双条目。原生 GUI `--self-test --dufex-test` 通过保存／缩略图／相机／重开及 DUF 独立打开四阶段（`artifacts/dufex-v2-gui/editor-check.json`），缩略图已目检。真实 `test7.duf` 13 实例／13 骨架／4 GeoGraft 往返通过，v2 为 373648 字节（`artifacts/dufex-v2-real.log`）。本轮未提交或推送 Git。
+
+另有真实 `10.duf` 的 50 实例／45 骨架／8 GeoGraft／3 Shell 往返通过，v2 为 3219045 字节（`artifacts/dufex-v2-real-shell.log`）。
+
+已部署 `out/vs2022/Release/DazFastViewer.exe`，307 项源码清单一致，EXE 与构建输出 SHA-256 一致：`c56e0dd7ce3a50c7be501a646c7730668615a5790fdfdf4eeb54698cbe0d8699`。部署版本也完成四阶段 GUI 保存验证（`artifacts/dufex-v2-deployed/editor-check.json`）。
+
 ## 最新：独立城市 PCG 与分级代理
 
 2026-10-04：用户授权开工，优先新增专属模块，倒塌／踩踏／陨石坑后置。已实现 `src/city`：模型目录扫描、确定性街区／地块生成、共享原型、LOD/HLOD 调度、共享材质绑定、独立 Qt 面板、后台生成／取消、更新／移除、历史和 DUFEX 配方重放。旧代码只接入文档／快照、渲染调度、菜单与材质列表；IR／Cycles 增加用于平薄代理的竖直真实置换及未置换基础顶点。渲染仍为本工程原有 Cycles/OptiX，沿用 DAZ/Iray 材质转换，未接入另一套渲染器。未修改原建筑 DUF／DSF／贴图，未提交 Git。

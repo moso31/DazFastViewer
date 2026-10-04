@@ -1,4 +1,5 @@
 #include "editor/document.h"
+#include "editor/scene_extension.h"
 #include "editor/object_hierarchy.h"
 #include "runtime/geometry_shell.h"
 #include "daz/documents.h"
@@ -28,7 +29,7 @@ int main(){try{
       "modifiers":[{"id":"saved-offset","url":"#offset","parent":"#overlay","channel":{"current_value":0.2}}]}
   })");
   const auto file=folder/"shell.duf";std::ofstream(file)<<document.dump();
-  editor::Document d;d.loaded=daz::load(file,{{folder}});require(d.loaded.objects.size()==2,"Shell 没有重建为独立物体");
+  editor::Document d;d.source_file=file;d.loaded=daz::load(file,{{folder}});require(d.loaded.objects.size()==2,"Shell 没有重建为独立物体");
   const auto &shell=d.loaded.scene.instances[1];const auto &mesh=d.loaded.scene.meshes[shell.mesh];
   require(shell.shell_source==0&&std::abs(shell.shell_offset-.002f)<1e-7,"Shell 宿主或保存的厘米偏移未应用");
   require(mesh.hidden_polygons==std::vector<uint32_t>{1},"Shell 面组显隐丢失");
@@ -65,5 +66,8 @@ int main(){try{
   auto batch=daz::prefetch_documents(std::vector<fs::path>{file,folder/"missing.dsf",file});require(batch[0].get()->contains("scene")&&batch[2].get()==batch[0].get(),"批量元数据结果或共享句柄错误");
   rejected=false;try{batch[1].get();}catch(...){rejected=true;}require(rejected,"批量解析吞掉了资源错误");
   document["asset_info"]={{"id","updated-source-version"}};std::ofstream(file)<<document.dump();require(daz::document_view(file)->at("asset_info").at("id")=="updated-source-version","共享解析文档没有检查资源版本");
+  const auto saved=folder/"shell.dufex";editor::save_scene_extension(saved,combined,snapshot);fs::remove(file);auto restored=editor::load_scene_extension(saved,{folder},8);
+  require(restored.document->loaded.scene.instances.size()==2&&restored.document->loaded.scene.instances[1].shell_source==0,"DUFEX 丢失 Shell 关系");
+  const auto &restored_shell=restored.document->loaded.scene.instances[1];require(restored.document->loaded.scene.meshes[restored_shell.mesh].hidden_polygons==std::vector<uint32_t>{1}&&std::abs(restored_shell.shell_offset-.002f)<1e-7,"DUFEX 丢失 Shell 偏移或遮罩");
   std::cout<<"Geometry Shell / offset / visibility / UV / deformation / append / removal / batch errors: PASS\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

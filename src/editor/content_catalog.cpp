@@ -24,6 +24,7 @@ QString category_label(const QString &category) {
   return labels.value(category,labels["other"]);
 }
 QString content_category(const nlohmann::json &document) {
+  if(document.value("schema",std::string{})=="daz-fast-viewer-scene-extension")return "scene";
   using J=nlohmann::json;
   const auto info=document.find("asset_info");std::string type;
   if(info!=document.end()&&info->is_object()&&info->contains("type")&&(*info)["type"].is_string()) type=(*info)["type"].get<std::string>();
@@ -53,6 +54,7 @@ QStringList preview_candidates(const QString &asset,bool tooltip) {
   const QFileInfo file(asset);const auto base=file.path()+"/"+file.completeBaseName();
   if(file.isDir())return {asset+".png",asset+"/folder.png",asset+"/Folder.jpg",asset+"/.folder.png",asset+"/"+file.fileName()+".png",asset+".tip.png"};
   QStringList icons={asset+".png",base+".png"},tips={base+".tip.png",asset+".tip.png"};
+  if(file.suffix().compare("dufex",Qt::CaseInsensitive)==0)return tooltip?QStringList{asset+".tip.png",asset+".png",base+".png"}:icons;
   if(file.suffix().compare("djl",Qt::CaseInsensitive)==0){const QFileInfo linked(base);icons.append(linked.path()+"/"+linked.completeBaseName()+".png");tips.prepend(linked.path()+"/"+linked.completeBaseName()+".tip.png");}
   if(QStringList{"png","jpg","jpeg","tif","tiff","bmp","webp","hdr","exr"}.contains(file.suffix().toLower()))icons.prepend(asset);
   return tooltip?tips+icons:icons+tips;

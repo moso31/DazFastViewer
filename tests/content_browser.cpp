@@ -230,8 +230,25 @@ static void locate_real() {
   require(checks.size()==3,"test9 中两个鞋子和头发未全部检查");write(output+"/test9.json",QJsonDocument(QJsonObject{{"result","PASS"},{"checks",checks}}).toJson());
   std::cout<<"test9 LSO Heels / exact DUF / both panes visible / query preserved: PASS\n";
 }
+static void dufex_checks(){
+  QTemporaryDir temp;const auto root=temp.path()+"/library",native=root+"/Together.duf",extended=root+"/Together.DUFEX",settings=temp.path()+"/history.ini";
+  write(native);write(extended,R"({"schema":"daz-fast-viewer-scene-extension","version":2})");
+  QImage icon(256,256,QImage::Format_RGB32);icon.fill(Qt::red);icon.save(native+".png");icon.fill(Qt::blue);icon.save(extended+".png");icon.fill(Qt::green);icon.save(root+"/Together.tip.png");
+  require(content_category(nlohmann::json{{"schema","daz-fast-viewer-scene-extension"},{"version",2}})=="scene","DUFEX 分类错误");
+  require(preview_candidates(extended,true).indexOf(extended+".png")>=0&&!preview_candidates(extended,true).contains(root+"/Together.tip.png"),"DUFEX 预览混用了 DUF 缩略图");
+  {ContentIndex index(temp.path()+"/index");index.refresh({root});until([&]{return !index.scanning();});require(query(index,"Together").paths.size()==2,"同名 DUF 与 DUFEX 未分别索引");}
+  ContentBrowser browser(nullptr,settings,temp.path()+"/browser");browser.resize(800,600);browser.set_roots({root});browser.show();require(browser.locate(native),"无法定位 DUF");
+  auto *view=browser.findChild<QListView *>("contentItems");auto row=[&](const QString &path){for(int i=0;i<view->model()->rowCount();++i){auto index=view->model()->index(i,0);if(index.data(Qt::UserRole).toString()==path)return index;}return QModelIndex{};};
+  until([&]{return row(native).isValid()&&row(extended).isValid();});
+  auto color=[&](const QString &path){const auto image=qvariant_cast<QIcon>(row(path).data(Qt::DecorationRole)).pixmap(32,32).toImage();return image.isNull()?QColor{}:image.pixelColor(16,16);};
+  until([&]{return color(native)==QColor(Qt::red)&&color(extended)==QColor(Qt::blue);});
+  QString opened;browser.open_asset=[&](const QString &path){opened=path;};view->doubleClicked(row(extended));require(opened==extended,"内容库打开了同名错误文件");
+  browser.record_use(native,"scene");browser.saved_scene(extended);browser.show_recent();until([&]{return row(native).isValid()&&row(extended).isValid();});
+  icon.fill(Qt::yellow);icon.save(extended+".png");browser.saved_scene(extended);until([&]{return color(extended)==QColor(Qt::yellow);});
+  ContentHistory history(settings);require(history.recent("scene").size()==2,"同名场景近期记录被合并");
+}
 int main(int argc,char **argv) {
   QApplication app(argc,argv);app.setApplicationName("DazFastViewerContentTest");app.setOrganizationName("DazFastViewerTests");app.setFont(QFont(QStringLiteral("Microsoft YaHei UI"),9));
-  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else {source_checks();checks();navigation_checks();}return 0;}
+  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else {source_checks();checks();navigation_checks();dufex_checks();}return 0;}
   catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}
 }

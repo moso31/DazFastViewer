@@ -1,4 +1,32 @@
   bool extension_test_=false;
+  bool dufex_test_=false;
+  nlohmann::json dufex_expected_;
+  std::filesystem::path dufex_native_;
+  runtime::TransformValues dufex_original_transform_;
+  void dufex_tick(const RenderStatus &state){
+    if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000){finish_test(false,"DUFEX 界面验证超时");return;}
+    if(!state.error.empty()||!state.edit_error.empty()||!state.resource_error.empty()){finish_test(false,state.error+state.edit_error+state.resource_error);return;}
+    if(loading_||!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<4)return;
+    try{
+      if(test_stage_==0){
+        if(document_->source_file.parent_path()!=output_||snapshot_.values.empty())throw std::runtime_error("验证需要输出目录内的测试场景");
+        dufex_native_=document_->source_file;dufex_original_transform_=snapshot_.values[0].transform;snapshot_.values[0].transform.translation_cm.x+=12;
+        send();auto c=renderer_->input_camera();renderer_->camera_view({c.target.x,c.target.y,c.target.z,c.distance*.9f,c.yaw+.2f,c.pitch+.1f});++test_stage_;return;
+      }
+      if(test_stage_==1){
+        extension_file_=extension_path(dufex_native_);save_extension();dufex_expected_=snapshot_json(*document_,snapshot_);
+        const QImage png(QString::fromStdWString(extension_file_.wstring())+".png");if(png.size()!=QSize(256,256))throw std::runtime_error("保存未生成 256 平方缩略图");
+        auto min=255,max=0;for(int y=0;y<png.height();++y)for(int x=0;x<png.width();++x){const auto v=qGray(png.pixel(x,y));min=std::min(min,v);max=std::max(max,v);}if(max-min<10)throw std::runtime_error("缩略图为空白");
+        ++test_stage_;open_asset(extension_file_);return;
+      }
+      if(test_stage_==2){
+        if(snapshot_json(*document_,snapshot_)!=dufex_expected_)throw std::runtime_error("界面保存重开参数不一致");
+        const auto c=renderer_->input_camera();const std::array<float,6> view={c.target.x,c.target.y,c.target.z,c.distance,c.yaw,c.pitch};if(!snapshot_.view||view!=*snapshot_.view)throw std::runtime_error("观察相机未恢复");
+        ++test_stage_;load(dufex_native_);return;
+      }
+      if(snapshot_.values[0].transform!=dufex_original_transform_||snapshot_.view)throw std::runtime_error("打开原 DUF 错误套用了同名 DUFEX");finish_test(true);
+    }catch(const std::exception &e){finish_test(false,e.what());}
+  }
   bool empty_test_=false;
   uint64_t empty_epoch_=0;
   void empty_tick(const RenderStatus &state){

@@ -47,6 +47,7 @@ void joint_channels(runtime::Joint &joint,const Json &node) {
 }
 }
 SkinCatalog load_skeletons(const LoadedScene &loaded) {
+  DocumentScope source_scope(loaded.archive);
   SkinCatalog catalog;catalog.report={{"skins",Json::array()}};
   const auto saved_handle=loaded.report.contains("input")?document_view(std::filesystem::u8path(loaded.report.at("input").get<std::string>())):std::make_shared<const Json>(Json::object());
   const auto &saved=object_member(*saved_handle,"scene");

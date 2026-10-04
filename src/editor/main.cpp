@@ -69,6 +69,9 @@
 #include <QComboBox>
 #include <QDir>
 #include <QMessageBox>
+#include <QProgressDialog>
+#include <QSaveFile>
+#include <QEventLoop>
 #include <QInputDialog>
 #include <QSettings>
 #include <QCloseEvent>
@@ -675,8 +678,7 @@ class Editor final:public EditorWindow {
   }
   void open_asset(const std::filesystem::path &entry,bool partial=false) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
-    if(entry.extension()==L".dufex"){load(entry);return;}
-    try {const auto file=daz::content_asset(entry,roots_);const auto data=daz::read_document_file(file);
+    try {const auto file=daz::content_asset(entry,roots_);if(daz::entry_key(file.extension())==".dufex"){load(file,false,false,{},entry);return;}const auto data=daz::read_document_file(file);
       const auto contents=daz::inspect_contents(data);
       if(contents.instantiate) {
         const bool wear=contents.requires_selection||data.value("asset_info",nlohmann::json::object()).value("type","")=="wearable";
@@ -980,6 +982,7 @@ class Editor final:public EditorWindow {
     if(gizmo_test_) {report["scope"]="gizmo-local-world-proxy-commit-cancel-restore";report["checks"]=gz_checks_;}
     if(group_test_) {report["scope"]="group-transform-properties-gizmo-save-undo";report["checks"]=gt_checks_;}
     if(extension_test_){report["scope"]="native-growth-weight-and-dufex";report["checks"]=extension_checks_;}
+    if(dufex_test_)report["scope"]="dufex-v2-save-thumbnail-camera-reopen-native-independence";
     if(empty_test_)report["scope"]="empty-startup-refresh";
     if(city_test_){report["scope"]="city-generation-lod-materials-history-reopen";report["checks"]=city_checks_;report["city_stage"]=city_test_stage_;}
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
@@ -1406,6 +1409,7 @@ class Editor final:public EditorWindow {
     ++interaction_case_;interaction_begin_=0;interaction_idle_=now();record();
   }
   void tick() {
+    if(saving_extension_)return;
     city_tick();
     update_history_actions();
     if(recovery_)recovery_error_=recovery_->error();
@@ -1535,6 +1539,7 @@ class Editor final:public EditorWindow {
     if(!self_test_) return;
     if(physics_ui_test_){physics_ui_tick(state);return;}
     if(empty_test_){empty_tick(state);return;}
+    if(dufex_test_){dufex_tick(state);return;}
     if(extension_test_){extension_tick(state);return;}
     if(!wear_test_file_.empty()) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>600000) {finish_test(false,"自动穿戴界面验证超时");return;}
@@ -2057,6 +2062,7 @@ public:
   void rebuild_test(const std::filesystem::path &file) {rebuild_test_file_=file;self_test_=true;}
   void subdivision_stress_test() {subdivision_stress_test_=true;self_test_=true;}
   void extension_test(){extension_test_=true;self_test_=true;}
+  void dufex_test(){dufex_test_=true;self_test_=true;}
   void feedback_test(){feedback_test_=true;self_test_=true;}
   void city_test(){city_test_=self_test_=true;}
   void empty_scene(){clear_scene();if(history_){history_->clear();history_->mark_saved();}checkpoint();}
@@ -2075,7 +2081,7 @@ public:
         diagnostics::EventProfile profile(profiling,[this](const char *name,double ms){renderer_->trace(name,ms);});
         diagnostics::Scope loading_scope("asset_load");
         auto document=std::make_shared<Document>();document->generation=generation;document->source_file=std::filesystem::absolute(file);
-        const auto sidecar=file.extension()==L".dufex"?file:extension_path(file);const bool has_sidecar=std::filesystem::is_regular_file(sidecar);
+        const bool has_sidecar=daz::entry_key(file.extension())==".dufex";const auto sidecar=has_sidecar?file:std::filesystem::path{};
         Snapshot loaded_snapshot;
         if(has_sidecar){progress(QStringLiteral("正在加载 DUFEX 场景修改…"));auto restored=load_scene_extension(sidecar,roots,generation,[this,stop](const std::string &message){if(stop.stop_requested())throw std::runtime_error("已取消加载");progress(text(message));});document=std::move(restored.document);loaded_snapshot=std::move(restored.snapshot);}
         else {
@@ -2097,7 +2103,7 @@ public:
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
         std::ofstream(output_/"skeleton-report.json")<<document->skeletons.report.dump(2);
         std::ofstream(output_/"formula-report.json")<<document->formulas.report.dump(2);
-        const auto category=has_sidecar?QStringLiteral("场景"):content_category(*daz::document_view(file));
+        const auto category=has_sidecar?QStringLiteral("scene"):content_category(*daz::document_view(file));
         release_load_data(*document);
         if(previous_document) {
           diagnostics::Scope scope("merge_bind");
@@ -2166,6 +2172,7 @@ public:
           if(preserve||previous_document){auto incoming=snapshot_.pose_pins;snapshot_.pose_pins=pose_pins_;snapshot_.pose_pins.insert(snapshot_.pose_pins.end(),incoming.begin(),incoming.end());}
           pose_pins_=snapshot_.pose_pins;pins_generation_=document_->generation;renderer_->pose_pins(pose_pins_);
           renderer_->set_document(document_,submitted_snapshot(),!previous_document);select(-1);
+          if(!previous_document&&snapshot_.view)renderer_->camera_view(*snapshot_.view);
           if(capture_view_) renderer_->camera_view(*capture_view_);
           const auto first=previous_document?previous_document->catalog.targets.size():0;
           if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
@@ -2233,6 +2240,7 @@ int main(int argc,char **argv) {
   parser.addOption({"physics-ui-test",QStringLiteral("验证物理属性公共滚动、收起布局和模型筛选")});
   parser.addOption({"empty-test",QStringLiteral("验证默认空场景及移动缩放后的视口刷新")});
   parser.addOption({"extension-test",QStringLiteral("副屏验证生长、重量、密度、折叠与 DUFEX 保存重开")});
+  parser.addOption({"dufex-test",QStringLiteral("副屏验证 DUFEX v2、缩略图、观察相机及原 DUF 独立打开")});
   parser.addOption({"pose-test-level",QStringLiteral("FK / IK 验证时使用的宿主细分等级"),"level","-1"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
   parser.addOption({"lazy-test",QStringLiteral("验证异步 Morph、手动应用和参数目录刷新后退出")});
@@ -2285,6 +2293,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("group-motion-test")) editor.group_motion_test(parser.value("group-motion-test").toStdString());
     if(parser.isSet("collective-ground-test")) editor.collective_ground_test(parser.value("collective-ground-test").toStdString());
     if(parser.isSet("extension-test")) editor.extension_test();
+    if(parser.isSet("dufex-test")) editor.dufex_test();
     if(parser.isSet("feedback-test")) editor.feedback_test();
     if(parser.isSet("physics-ui-test"))editor.physics_ui_test();
     if(parser.isSet("empty-test")) editor.empty_test();

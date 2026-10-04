@@ -22,9 +22,11 @@ static std::string utf8(const fs::path &p) {auto s=p.generic_u8string();return {
 const J &array_member(const J &j,const char *key) {static const J empty=J::array();const auto i=j.find(key);return i==j.end()?empty:*i;}
 const J &object_member(const J &j,const char *key) {static const J empty=J::object();const auto i=j.find(key);return i==j.end()?empty:*i;}
 std::string file_version(const fs::path &file) {
+  if(auto d=frozen_document(file,true))return "frozen:"+d->digest;
   return std::to_string(fs::file_size(file))+":"+std::to_string(fs::last_write_time(file).time_since_epoch().count());
 }
 std::string document_bytes(const fs::path &file) {
+  if(auto d=frozen_document(file,true))return d->bytes();
   diagnostics::Scope scope("document_bytes");
   constexpr size_t limit=512*1024*1024;
   std::string bytes;
@@ -150,10 +152,10 @@ std::shared_ptr<const J> document_view(const fs::path &file,DocumentView view) {
 }
 std::vector<DocumentResult> prefetch_documents(std::span<const fs::path> files,DocumentView view) {
   diagnostics::Scope scope("metadata_prefetch");
-  std::vector<DocumentResult> results(files.size());std::atomic<size_t> next=0;
+  std::vector<DocumentResult> results(files.size());std::atomic<size_t> next=0;const auto archive=current_archive();
   const auto count=std::min<size_t>(4,files.size());
   {std::vector<std::jthread> workers;
-    for(size_t worker=0;worker<count;++worker) workers.emplace_back([&] {for(;;) {auto i=next.fetch_add(1);if(i>=files.size()) break;try {results[i].value=document_view(files[i],view);} catch(...) {results[i].error=std::current_exception();}}});
+    for(size_t worker=0;worker<count;++worker) workers.emplace_back([&] {DocumentScope scope(archive);for(;;) {auto i=next.fetch_add(1);if(i>=files.size()) break;try {results[i].value=document_view(files[i],view);} catch(...) {results[i].error=std::current_exception();}}});
   }
   return results;
 }

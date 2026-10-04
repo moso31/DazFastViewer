@@ -44,7 +44,7 @@ Json read_document(const fs::path &path) {
   diagnostics::Scope profile_scope("read_document");
   diagnostics::FileScope file_scope(diagnostics::active?utf8(path):std::string{});
   auto bytes=document_bytes(path);
-  file_scope.bytes=fs::file_size(path);file_scope.unpacked_bytes=bytes.size();
+  file_scope.bytes=bytes.size();file_scope.unpacked_bytes=bytes.size();
   diagnostics::Scope parse_scope("json_parse");
   try {return Json::parse(bytes);} catch(const Json::exception &e) {fail(utf8(path)+": "+e.what());}
 }
@@ -93,7 +93,7 @@ struct Repository {
         for(const auto &root:*iray_roots)candidates.push_back(root/relative);
       }
     }
-    for(const auto &p:candidates) {std::error_code ec;if(fs::is_regular_file(p,ec)) {auto file=fs::weakly_canonical(p);dependencies.insert(utf8(file));resolved_paths.emplace(cache_key,file);return file;}}
+    for(const auto &p:candidates) {if(document_exists(p)) {auto file=fs::weakly_canonical(p);dependencies.insert(utf8(file));resolved_paths.emplace(cache_key,file);return file;}}
     throw MissingAsset("DSON: 依赖缺失: "+uri+"（来源 "+utf8(owner)+"）");
   }
   const Json &document(const fs::path &path) {
@@ -105,8 +105,8 @@ struct Repository {
   }
   void prefetch(const std::vector<fs::path> &files) {
     diagnostics::Scope scope("parallel_documents");
-    std::vector<std::shared_ptr<const Json>> values(files.size());std::vector<std::exception_ptr> errors(files.size());std::atomic<size_t> next=0;
-    {std::vector<std::jthread> workers;for(size_t worker=0;worker<std::min<size_t>(4,files.size());++worker)workers.emplace_back([&]{for(;;){const auto i=next.fetch_add(1);if(i>=files.size())break;try{values[i]=parse(files[i]);}catch(...){errors[i]=std::current_exception();}}});}
+    std::vector<std::shared_ptr<const Json>> values(files.size());std::vector<std::exception_ptr> errors(files.size());std::atomic<size_t> next=0;const auto archive=current_archive();
+    {std::vector<std::jthread> workers;for(size_t worker=0;worker<std::min<size_t>(4,files.size());++worker)workers.emplace_back([&]{DocumentScope scope(archive);for(;;){const auto i=next.fetch_add(1);if(i>=files.size())break;try{values[i]=parse(files[i]);}catch(...){errors[i]=std::current_exception();}}});}
     for(size_t i=0;i<files.size();++i) {if(errors[i])std::rethrow_exception(errors[i]);const auto key=utf8(files[i]);dependencies.insert(key);document_keys[files[i]]=key;documents.emplace(key,std::move(values[i]));}
   }
   std::pair<fs::path,const Json *> asset(const std::string &uri,const fs::path &owner,const char *library) {
@@ -523,15 +523,17 @@ DufContents inspect_contents(const Json &document) {
   return result;
 }
 LoadedScene load(const fs::path &input,const LoadOptions &options) {
+  auto archive=current_archive();if(!archive)archive=std::make_shared<SourceArchive>();DocumentScope source_scope(archive);
   const auto file=fs::weakly_canonical(input);
-  if(!fs::is_regular_file(file)) fail("输入文件不存在: "+utf8(file));
+  if(!document_exists(file)) fail("输入文件不存在: "+utf8(file));
+  archive->capture(file);
   Repository repo;for(const auto &root:options.content_roots) repo.roots.push_back(fs::weakly_canonical(root));
   for(auto p=file.parent_path();!p.empty() && p!=p.parent_path();p=p.parent_path()) {
     if(fs::is_directory(p/"data")) {if(std::find(repo.roots.begin(),repo.roots.end(),p)==repo.roots.end()) repo.roots.push_back(p);break;}
   }
   if(repo.roots.empty()) fail("不能推断内容库；请使用 --content-root");
   const auto &document=repo.document(file);if(!document.contains("scene")) fail("文件中没有 scene");
-  auto source=document.at("scene");LoadedScene out;auto &scene=out.scene;
+  auto source=document.at("scene");LoadedScene out;out.archive=archive;auto &scene=out.scene;
   const bool hierarchical_material=document.value("asset_info",Json::object()).value("type","")=="preset_hierarchical_material";
   const auto asset_type=document.value("asset_info",Json::object()).value("type","");const bool material_only=hierarchical_material||asset_type=="preset_material"||asset_type=="preset_shader"||asset_type=="preset_layered_image";
   std::map<std::string,Json> material_owners;
@@ -1030,6 +1032,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     out.report["geometry_sources"].push_back({{"object",object.id},{"file",utf8(source.file)},{"geometry",source.id},{"topology_verified",true}});
   if(options.strict && !warnings.empty()) fail("严格模式拒绝未支持语义；请先用 --inspect 查看诊断");
   for(auto &[path,document]:repo.documents)out.source_documents.push_back(std::move(document));
+  for(auto &object:out.objects)object.archive=archive;
   return out;
 }
 }

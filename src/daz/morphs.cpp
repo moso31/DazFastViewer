@@ -40,8 +40,8 @@ static fs::path resolve_uncached(const std::string &raw,const fs::path &owner,co
   if(raw.empty()) return owner;
   auto relative=fs::u8path(raw.starts_with('/')?raw.substr(1):raw).lexically_normal();
   if(relative.is_absolute() || relative.has_root_name() || (!relative.empty() && *relative.begin()=="..")) return {};
-  if(!raw.starts_with('/') && fs::is_regular_file(owner.parent_path()/relative)) return canonical_path(owner.parent_path()/relative);
-  for(const auto &root:roots) if(fs::is_regular_file(root/relative)) return canonical_path(root/relative);
+  if(!raw.starts_with('/') && document_exists(owner.parent_path()/relative)) return canonical_path(owner.parent_path()/relative);
+  for(const auto &root:roots) if(document_exists(root/relative)) return canonical_path(root/relative);
   return {};
 }
 static fs::path resolve(const std::string &raw,const fs::path &owner,const std::vector<fs::path> &roots) {
@@ -88,7 +88,8 @@ static std::shared_ptr<runtime::MorphPayload> payload(const fs::path &file,const
   static std::mutex mutex;static std::map<std::string,std::weak_ptr<runtime::MorphPayload>> shared;
   const auto version=file_version(file),identity=key(file)+"#"+id+"|"+version+"|"+std::to_string(vertices);
   std::lock_guard lock(mutex);if(auto p=shared[identity].lock()) return p;
-  auto p=std::make_shared<runtime::MorphPayload>(identity,count,vertices,[file,id,version,vertices] {
+  auto p=std::make_shared<runtime::MorphPayload>(identity,count,vertices,[file,id,version,vertices,archive=current_archive()] {
+    DocumentScope source_scope(archive);
     if(file_version(file)!=version) throw std::runtime_error("资源已变化，请刷新参数目录："+path_string(file));
     const auto handle=document_view(file,DocumentView::payload);const auto &doc=*handle;runtime::OffsetBuffer result;bool found=false;
     for(const auto &m:array_member(doc,"modifier_library")) if(m.value("id","")==id) {if(found) throw std::runtime_error("重复的 Morph ID");result=offsets(m.at("morph"),vertices);found=true;}
@@ -432,6 +433,7 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
   return out;
 }
 MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &roots,const std::function<void(const std::string &)> &progress,bool lazy) {
+  DocumentScope source_scope(loaded.archive);
   struct Paths {Paths(){path_keys.clear();resolved_paths.clear();canonical_parents.clear();}~Paths(){path_keys.clear();resolved_paths.clear();canonical_parents.clear();}} paths;
   // 主线程先固定网格和实例布局；工作线程只读场景，按独立资产族建立参数目录。
   std::set<uint32_t> used;std::vector<std::vector<size_t>> groups;std::map<std::string,size_t> by_asset;
@@ -457,7 +459,7 @@ MorphCatalog discover_morphs(LoadedScene &loaded,const std::vector<fs::path> &ro
   path_keys.clear();resolved_paths.clear();
   std::vector<MorphCatalog> results(groups.size());std::vector<std::exception_ptr> errors(groups.size());std::atomic<size_t> next=0;std::mutex progress_mutex;
   auto update=[&](const std::string &message) {if(progress){std::lock_guard lock(progress_mutex);progress(message);}};
-  auto work=[&] {for(;;){const auto i=next.fetch_add(1);if(i>=groups.size())break;try{results[i]=discover_group(loaded,roots,update,lazy,groups[i],context);}catch(...){errors[i]=std::current_exception();}}};
+  auto work=[&] {DocumentScope source_scope(loaded.archive);for(;;){const auto i=next.fetch_add(1);if(i>=groups.size())break;try{results[i]=discover_group(loaded,roots,update,lazy,groups[i],context);}catch(...){errors[i]=std::current_exception();}}};
   if(!lazy||groups.size()==1)work();
   else {std::vector<std::jthread> workers;for(size_t i=0;i<std::min<size_t>(4,groups.size());++i)workers.emplace_back(work);}
   for(const auto &error:errors)if(error)std::rethrow_exception(error);

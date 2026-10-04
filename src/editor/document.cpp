@@ -8,6 +8,19 @@
 #include <set>
 
 namespace dfv::editor {
+std::string retain_archive(Document &d,const std::shared_ptr<daz::SourceArchive> &archive){
+  if(!archive)return {};for(const auto &[id,p]:d.archives)if(p==archive)return id;
+  const auto id=archive->identity();d.archives.emplace(id,archive);return id;
+}
+std::shared_ptr<daz::SourceArchive> material_archive(const Document &d,MaterialSurface surface,const std::string &owner){
+  auto current=daz::current_archive();const auto file=std::filesystem::u8path(owner);
+  if(current&&current->find(file))return current;
+  const auto &i=d.loaded.scene.instances.at(surface.instance);const auto &slot=d.loaded.scene.meshes.at(i.mesh).material_slots.at(surface.slot);
+  if(const auto found=d.material_archives.find({i.id,slot});found!=d.material_archives.end()&&found->second&&found->second->find(file))return found->second;
+  auto own=daz::instance_archive(d.loaded,surface.instance);if(own&&own->find(file))return own;
+  for(const auto &[id,a]:d.archives)if(a->find(file))return a;
+  return current?current:own?own:std::make_shared<daz::SourceArchive>();
+}
 const ir::Mesh &subdivision_mesh(const Document &document,size_t target) {
   const auto &scene=document.loaded.scene;auto instance=document.catalog.targets.at(target).instance;
   if(scene.instances.at(instance).prototype>=0) instance=uint32_t(scene.instances[instance].prototype);
@@ -43,13 +56,14 @@ std::shared_ptr<Document> refresh_parameters(const Document &document,size_t sel
     if((o.parent.starts_with('#')&&selected_nodes.contains(o.parent.substr(1)))||(o.conform_target.starts_with('#')&&selected_nodes.contains(o.conform_target.substr(1)))) selected_nodes.insert(o.id);changed=selected_nodes.size()!=n;}
   std::erase_if(loaded.objects,[&](const auto &o){return !selected_nodes.contains(o.id);});
   // 追加的对象仍从各自原始 DUF 获取覆盖与节点公式，不使用主文档的来源。
-  std::map<std::filesystem::path,std::vector<daz::AssetObject>> groups;
+  std::map<std::pair<std::filesystem::path,std::shared_ptr<daz::SourceArchive>>,std::vector<daz::AssetObject>> groups;
   for(auto object:loaded.objects) {
+    daz::DocumentScope source_scope(object.archive);
     for(const auto &[file,version]:object.geometry_versions) if(daz::file_version(file)!=version) throw std::runtime_error("基础几何资产已变化，请重新打开场景后再刷新参数");
-    const auto source=object.source_file;if(!object.source_node.empty()) object.id=object.source_node;groups[source].push_back(std::move(object));
+    const auto source=std::make_pair(object.source_file,object.archive);if(!object.source_node.empty()) object.id=object.source_node;groups[source].push_back(std::move(object));
   }
   auto result=std::make_shared<Document>(document);
-  for(const auto &[source,objects]:groups) {
+  for(const auto &[key,objects]:groups) {const auto &[source,archive]=key;loaded.archive=archive;
   loaded.objects=objects;if(!source.empty()) {const auto u8=source.generic_u8string();loaded.report["input"]=std::string(u8.begin(),u8.end());}
   auto catalog=daz::discover_morphs(loaded,roots,progress,true);
   auto source_skins=daz::load_skeletons(loaded);auto skins=document.skeletons;skins.node_formulas.resize(skins.skins.size());
@@ -180,6 +194,7 @@ size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &
   auto scratch=Snapshot{};return apply_surface_materials(document,snapshot?*snapshot:scratch,preset,surfaces);
 }
 size_t apply_surface_materials(Document &d,Snapshot &snapshot,const daz::LoadedScene &preset,const std::vector<MaterialSurface> &surfaces){
+  daz::DocumentScope source_scope(preset.archive);
   if(preset.report.value("preset_type","")=="preset_layered_image")throw std::runtime_error("独立 LIE 预设需要合并原有底图与图层，目前尚未支持直接叠加。请使用普通材质预设，或先在 DAZ 中合成并保存完整材质。");
   auto &scene=d.loaded.scene;std::map<std::pair<size_t,size_t>,std::vector<size_t>> matches;
   for(auto surface:surfaces){const auto &i=scene.instances.at(surface.instance);const auto &slot=scene.meshes.at(i.mesh).material_slots.at(surface.slot);
@@ -189,13 +204,15 @@ size_t apply_surface_materials(Document &d,Snapshot &snapshot,const daz::LoadedS
   const auto offset=int(scene.textures.size());scene.textures.insert(scene.textures.end(),preset.scene.textures.begin(),preset.scene.textures.end());nlohmann::json identities=nlohmann::json::array();
   for(const auto &[surface,m]:matches){auto &i=scene.instances.at(surface.first);const auto slot=scene.meshes.at(i.mesh).material_slots.at(surface.second);
     for(auto index:m)replace_surface_material(d,&snapshot,preset,surface.first,surface.second,index,offset);identities.push_back({{"instance",i.id},{"slot",slot}});
+    d.material_archives[{i.id,slot}]=preset.archive;
   }
   collect_resources(d);prune_material_overrides(scene,snapshot.material_overrides);
-  if(preset.report.contains("input"))d.operations.push_back({{"op","surface_materials"},{"surfaces",identities},{"file",preset.report.at("input")}});return matches.size();
+  if(preset.report.contains("input"))d.operations.push_back({{"op","surface_materials"},{"surfaces",identities},{"file",preset.report.at("input")},{"archive",retain_archive(d,preset.archive)}});return matches.size();
 }
 std::vector<std::string> paste_material(Document &d,Snapshot &snapshot,const nlohmann::json &copy,const std::vector<MaterialSurface> &surfaces){
   std::vector<std::string> warnings;if(surfaces.empty())return warnings;auto &scene=d.loaded.scene;auto textures=scene.textures;
   const auto copied=read_copied_material(copy,textures);nlohmann::json identities=nlohmann::json::array();
+  const auto archive=copy.contains("source_archive")?daz::SourceArchive::read(copy.at("source_archive")):material_archive(d,surfaces.front(),daz::material_uv_set(copied).owner);daz::DocumentScope source_scope(archive);
   for(auto s:surfaces){const auto &i=scene.instances.at(s.instance);identities.push_back({{"instance",i.id},{"slot",scene.meshes.at(i.mesh).material_slots.at(s.slot)}});}
   daz::LoadOptions options;if(d.loaded.report.is_object())for(const auto &root:d.loaded.report.value("content_roots",nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));
   scene.textures=std::move(textures);
@@ -207,26 +224,29 @@ std::vector<std::string> paste_material(Document &d,Snapshot &snapshot,const nlo
       }catch(const std::exception &e){warnings.push_back(slot+"：已保留目标 UV Set（"+e.what()+"）");}
     }
     if(applied_uv!=daz::material_uv_set(m))daz::set_material_uv_set(m,applied_uv);
+    else d.material_archives[{i.id,slot}]=archive;
     m.id="pasted/"+i.id+"/"+slot;i.materials.at(s.slot)=uint32_t(scene.materials.size());scene.materials.push_back(std::move(m));
     if(auto object=snapshot.material_overrides.find(i.id);object!=snapshot.material_overrides.end())object->second.erase(slot);
   }
   collect_resources(d);prune_material_overrides(scene,snapshot.material_overrides);
-  d.operations.push_back({{"op","paste_material"},{"surfaces",identities},{"material",copy}});
+  auto saved_copy=copy;saved_copy.erase("source_archive");d.operations.push_back({{"op","paste_material"},{"surfaces",identities},{"material",saved_copy},{"archive",retain_archive(d,archive)}});
   return warnings;
 }
 bool change_material_uv(Document &d,const daz::MaterialUVSet &uv,const std::vector<MaterialSurface> &surfaces){
   if(uv.uri.empty()||surfaces.empty())return false;daz::LoadOptions options;
+  const auto archive=material_archive(d,surfaces.front(),uv.owner);daz::DocumentScope source_scope(archive);
   if(d.loaded.report.is_object())for(const auto &root:d.loaded.report.value("content_roots",nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));
   ir::Material request;daz::set_material_uv_set(request,uv);auto identities=nlohmann::json::array();bool changed=false;
   for(auto s:surfaces){const auto &i=d.loaded.scene.instances.at(s.instance);const auto slot=d.loaded.scene.meshes.at(i.mesh).material_slots.at(s.slot);
     const auto &before=d.loaded.scene.materials.at(i.materials.at(s.slot));const auto baseline=daz::material_uv_baseline(before).value_or(daz::material_uv_set(before));
     const bool edited=daz::apply_material_uv(d.loaded.scene,s.instance,s.slot,request,options);changed|=edited;
+    if(edited)d.material_archives[{i.id,slot}]=archive;
     if(edited){auto &material=d.loaded.scene.materials.at(i.materials.at(s.slot));auto definition=nlohmann::json::parse(material.source_definition);
       if(daz::material_uv_set(material).uri==baseline.uri)definition.erase("uv_baseline");else definition["uv_baseline"]={{"uri",baseline.uri},{"owner",baseline.owner},{"label",baseline.label}};material.source_definition=definition.dump();}
     identities.push_back({{"instance",i.id},{"slot",slot}});
   }
   if(!changed)return false;daz::sync_instance_meshes(d.loaded.scene);collect_resources(d);
-  d.operations.push_back({{"op","material_uv"},{"surfaces",identities},{"uri",uv.uri},{"owner",uv.owner},{"label",uv.label}});return true;
+  d.operations.push_back({{"op","material_uv"},{"surfaces",identities},{"uri",uv.uri},{"owner",uv.owner},{"label",uv.label},{"archive",retain_archive(d,archive)}});return true;
 }
 bool reset_material_uv(Document &d,const std::vector<MaterialSurface> &surfaces){
   bool changed=false;for(auto s:surfaces){const auto &i=d.loaded.scene.instances.at(s.instance);const auto baseline=daz::material_uv_baseline(d.loaded.scene.materials.at(i.materials.at(s.slot)));if(baseline&&!baseline->uri.empty())changed|=change_material_uv(d,*baseline,{s});}return changed;
@@ -242,6 +262,7 @@ Snapshot initial_snapshot(const Document &document) {
   result.lights=document.loaded.scene.lights;return result;
 }
 void append_document(Document &destination,Document source,const std::string &identity_prefix) {
+  destination.archives.insert(source.archives.begin(),source.archives.end());
   auto &a=destination.loaded.scene;auto &b=source.loaded.scene;
   const int textures=int(a.textures.size());const auto materials=uint32_t(a.materials.size()),meshes=uint32_t(a.meshes.size()),instances=uint32_t(a.instances.size());
   const auto skins=int(destination.skeletons.skins.size());
@@ -250,7 +271,8 @@ void append_document(Document &destination,Document source,const std::string &id
     auto used=[&](const auto &items){return std::any_of(items.begin(),items.end(),[&](const auto &v){return v.id.starts_with(prefix);});};
     auto serial=destination.generation;do {prefix="instance-"+std::to_string(serial++)+"/";} while(used(destination.catalog.targets)||used(a.lights)||used(destination.loaded.nodes)||used(a.meshes));
   }
-  const auto path=source.source_file.generic_u8string();destination.operations.push_back({{"op","append"},{"prefix",prefix},{"file",std::string(path.begin(),path.end())},{"operations",source.operations}});
+  const auto path=source.source_file.generic_u8string();destination.operations.push_back({{"op","append"},{"prefix",prefix},{"file",std::string(path.begin(),path.end())},{"operations",source.operations},{"archive",retain_archive(destination,source.loaded.archive)}});
+  for(const auto &[surface,archive]:source.material_archives)destination.material_archives[{prefix+surface.first,surface.second}]=archive;
   for(const auto &city:source.cities)destination.cities.push_back(city::prefixed(*city,prefix));
   a.textures.insert(a.textures.end(),b.textures.begin(),b.textures.end());
   for(auto m:b.materials) {

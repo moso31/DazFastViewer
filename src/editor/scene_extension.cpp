@@ -3,6 +3,7 @@
 #include "editor/group_transforms.h"
 #include "render_ir/options_json.h"
 #include "runtime/physics_json.h"
+#include "daz/documents.h"
 #include <fstream>
 #include <chrono>
 #include <cmath>
@@ -35,7 +36,8 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
   if(depth>32||!operations.is_array())throw std::runtime_error("DUFEX 场景结构无效");
   auto source_path=[&](const J &j){auto p=fs::u8path(j.get<std::string>());return p.empty()||p.is_absolute()?p:folder/p;};
   for(const auto &op:operations){const auto kind=op.at("op").get<std::string>();
-    if(kind=="append"){auto s=load_source(source_path(op.at("file")),roots,progress,true);replay(*s,op.at("operations"),roots,folder,progress,depth+1);append_document(d,std::move(*s),op.at("prefix"));}
+    auto archive=d.loaded.archive;const auto key=op.value("archive",std::string{});if(!key.empty()){if(!d.archives.contains(key))throw std::runtime_error("场景操作缺少底稿："+key);archive=d.archives.at(key);}daz::DocumentScope source_scope(archive);
+    if(kind=="append"){auto s=load_source(source_path(op.at("file")),roots,progress,true);s->archives=d.archives;replay(*s,op.at("operations"),roots,folder,progress,depth+1);append_document(d,std::move(*s),op.at("prefix"));}
     else if(kind=="city") {auto config=city::config_from_json(op.at("config"));if(config.directory.is_relative())config.directory=folder/config.directory;city::install(d,city::generate(config,op.at("id"),roots,progress),false);}
     else if(kind=="city_remove")city::remove(d,op.at("id"),false);
     else if(kind=="studio")ir::add_studio(d.loaded.scene);
@@ -52,11 +54,21 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
   }
   d.operations=operations;
 }
+J structure(const Document &d){
+  J result={{"nodes",J::object()},{"instances",J::object()},{"bindings",J::object()}};const auto &scene=d.loaded.scene;
+  auto ref=[&](int i){return i<0?std::string{}:scene.instances.at(size_t(i)).id;};
+  for(const auto &n:d.loaded.nodes)result["nodes"][n.id]={{"parent",n.parent},{"group",n.group},{"label",n.label},{"visible",n.visible}};
+  for(const auto &i:scene.instances){const auto &mesh=scene.meshes.at(i.mesh);result["instances"][i.id]={{"prototype",ref(i.prototype)},{"graft",ref(i.graft_source)},{"shell",ref(i.shell_source)},{"shell_root",ref(i.shell_root)},{"shell_offset",i.shell_offset},{"instance_node",i.instance_node},{"instance_group",i.instance_group},{"vertices",mesh.positions.size()},{"polygons",mesh.source_polygon_count},{"curves",mesh.curves.size()},{"graft_pairs",mesh.graft_vertex_pairs},{"graft_masks",mesh.graft_hidden_polygons},{"shell_masks",mesh.shell_hidden_polygons}};}
+  for(const auto &t:d.catalog.targets)result["bindings"][t.id]={{"parent",t.parent},{"fit",t.conform_target},{"collision",t.smoothing.collision_target},{"rigid",t.rigid_follow.target}};
+  return result;
+}
+bool city_operations(const J &ops){for(const auto &op:ops){const auto kind=op.value("op",std::string{});if(kind=="city"||kind=="city_remove"||(kind=="append"&&city_operations(op.at("operations"))))return true;}return false;}
 }
 std::filesystem::path extension_path(std::filesystem::path p){p.replace_extension(".dufex");return p;}
 J snapshot_json(const Document &d,const Snapshot &s){
   if(s.generation!=d.generation||s.values.size()!=d.catalog.targets.size()||s.poses.size()!=d.skeletons.skins.size())throw std::runtime_error("保存快照与场景不匹配");
   J j={{"objects",J::object()},{"poses",J::object()},{"subdivision",s.subdivision_levels},{"options",ir::options_json(s.options)},{"lights",J::array()}};
+  if(s.view){for(float v:*s.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*s.view)[3]<=0)throw std::runtime_error("观察相机距离无效");j["view"]=*s.view;}
   for(size_t t=0;t<s.values.size();++t){const auto &v=s.values[t];const auto &target=d.catalog.targets[t];runtime::validate_transform(v.transform);J m=J::object();
     for(size_t i=0;i<target.morphs.size();++i){const auto &p=target.morphs[i];if(p.alias_morph>=0||runtime::legacy_extension_channel(p.label)||(!p.evaluable&&!p.unsupported.empty()))continue;const auto value=v.morphs.at(i);if(!std::isfinite(value))throw std::runtime_error("Morph 值无效");if(value!=p.initial)m[p.id]=value;}
     j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"ground_offset_cm",v.ground_alignment_offset_cm},{"ground_body_only",v.ground_alignment_body_only},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
@@ -71,6 +83,7 @@ J snapshot_json(const Document &d,const Snapshot &s){
 }
 void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   auto next=s;next.city_views=city::views_from_json(j.value("cities",J::object()));for(const auto &[id,v]:next.city_views)if(std::none_of(d.cities.begin(),d.cities.end(),[&](const auto &c){return c->id==id;}))throw std::runtime_error("城市视图引用无效");
+  next.view.reset();if(j.contains("view")){next.view=j.at("view").get<std::array<float,6>>();for(float v:*next.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*next.view)[3]<=0)throw std::runtime_error("观察相机距离无效");}
   next.group_transforms.clear();const auto groups=j.value("groups",J::object());for(const auto &[id,value]:groups.items())read_transform(next.group_transforms[id],value);validate_group_transforms(d,next.group_transforms);
   for(const auto &[id,o]:j.at("objects").items()){const auto t=target_index(d,id);auto &v=next.values.at(t);const auto &target=d.catalog.targets[t];read_transform(v.transform,o.at("transform"));runtime::validate_transform(v.transform);v.visible=o.at("visible");v.extension=read_extension(o.at("extension"));v.ground_alignment_ratio=o.at("ground_ratio");if(!std::isfinite(v.ground_alignment_ratio))throw std::runtime_error("地面对齐比例无效");
     v.ground_alignment_offset_cm=o.value("ground_offset_cm",0.);v.ground_alignment_body_only=o.value("ground_body_only",false);if(!std::isfinite(v.ground_alignment_offset_cm))throw std::runtime_error("地面对齐偏移无效");
@@ -89,14 +102,18 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   next.control_favorites=read_favorites(j.value("control_favorites",J{}));s=std::move(next);
 }
 J scene_extension_json(const Document &d,const Snapshot &s){
-  return {{"schema","daz-fast-viewer-scene-extension"},{"version",1},{"source",path_string(d.source_file)},{"operations",d.operations},{"state",snapshot_json(d,s)}};
+  J j={{"schema","daz-fast-viewer-scene-extension"},{"version",1},{"source",path_string(d.source_file)},{"operations",d.operations},{"state",snapshot_json(d,s)},{"archives",J::object()}};
+  for(const auto &[id,a]:d.archives)j["archives"][id]=a->json();
+  if(d.loaded.archive){const auto id=d.loaded.archive->identity();j["archives"][id]=d.loaded.archive->json();j["source_archive"]=id;}
+  if(d.loaded.report.is_object())j["content_roots"]=d.loaded.report.value("content_roots",J::array());return j;
 }
+bool legacy_scene_extension(const Document &d){return !d.cities.empty()||city_operations(d.operations);}
 void save_scene_extension(const fs::path &file,const Document &d,const Snapshot &s){
-  const auto destination=fs::absolute(file).lexically_normal();if(destination.extension()!=L".dufex")throw std::runtime_error("扩展文件必须使用 .dufex 后缀");
-  if(!d.source_file.empty()&&fs::equivalent(destination.parent_path(),d.source_file.parent_path())&&destination.filename()==d.source_file.filename())throw std::runtime_error("不能覆盖源场景");
-  auto source=d.source_file;if(!source.empty()){std::error_code ec;auto relative=fs::relative(source,destination.parent_path(),ec);if(!ec&&!relative.empty())source=relative;}
-  J j={{"schema","daz-fast-viewer-scene-extension"},{"version",1},{"source",path_string(source)},{"operations",d.operations},{"state",snapshot_json(d,s)}};
-  const auto body=j.dump(2);auto temporary=destination;temporary+=L".tmp-"+std::to_wstring(std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto destination=fs::absolute(file).lexically_normal();auto ext=destination.extension().wstring();std::transform(ext.begin(),ext.end(),ext.begin(),::towlower);if(ext!=L".dufex")throw std::runtime_error("扩展文件必须使用 .dufex 后缀");
+  if(!d.source_file.empty()&&daz::source_key(destination)==daz::source_key(d.source_file))throw std::runtime_error("不能覆盖源场景");
+  J j=scene_extension_json(d,s);const bool legacy=legacy_scene_extension(d);
+  if(!legacy){if(!d.source_file.empty()&&!d.loaded.archive)throw std::runtime_error("缺少已加载场景的完整底稿，请重新打开后保存");j["version"]=2;j["structure"]=structure(d);j["state"].erase("cities");for(auto &o:j["state"]["objects"])o.erase("physics");}
+  const auto body=daz::gzip_document(j.dump());auto temporary=destination;temporary+=L".tmp-"+std::to_wstring(std::chrono::steady_clock::now().time_since_epoch().count());
   try{std::ofstream stream(temporary,std::ios::binary|std::ios::trunc);stream.write(body.data(),std::streamsize(body.size()));stream.flush();if(!stream)throw std::runtime_error("扩展文件写入失败");stream.close();if(!stream)throw std::runtime_error("扩展文件关闭失败");
 #ifdef _WIN32
     if(!MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH))throw std::runtime_error("扩展文件原子替换失败");
@@ -106,13 +123,20 @@ void save_scene_extension(const fs::path &file,const Document &d,const Snapshot 
   }catch(...){std::error_code ec;fs::remove(temporary,ec);throw;}
 }
 RestoredScene load_scene_extension(const fs::path &file,const std::vector<fs::path> &roots,uint64_t generation,const std::function<void(const std::string &)> &progress){
-  J j;std::ifstream stream(file,std::ios::binary);if(!stream)throw std::runtime_error("无法读取 DUFEX");stream>>j;
+  const auto j=J::parse(daz::document_bytes(file));
   return restore_scene_extension(j,fs::absolute(file).parent_path(),roots,generation,progress);
 }
 RestoredScene restore_scene_extension(const J &j,const fs::path &folder,const std::vector<fs::path> &roots,uint64_t generation,const std::function<void(const std::string &)> &progress){
-  if(j.at("schema")!="daz-fast-viewer-scene-extension"||j.at("version")!=1)throw std::runtime_error("不支持的 DUFEX 格式或版本");
+  const auto version=j.at("version").get<int>();if(j.at("schema")!="daz-fast-viewer-scene-extension"||(version!=1&&version!=2))throw std::runtime_error("不支持的 DUFEX 格式或版本");
+  if(version==2&&city_operations(j.at("operations")))throw std::runtime_error("DUFEX v2 尚未包含城市 PCG 序列化");
+  std::map<std::string,std::shared_ptr<daz::SourceArchive>> archives;const auto archive_data=j.value("archives",J::object());for(const auto &[id,value]:archive_data.items())archives[id]=daz::SourceArchive::read(value);
+  const auto key=j.value("source_archive",std::string{});if(!key.empty()&&!archives.contains(key))throw std::runtime_error("场景根底稿不存在");
+  daz::DocumentScope source_scope(key.empty()?nullptr:archives.at(key));
   auto source=fs::u8path(j.at("source").get<std::string>());if(!source.empty()&&source.is_relative())source=folder/source;
-  auto d=load_source(source,roots,progress);d->generation=generation;replay(*d,j.at("operations"),roots,folder,progress);
+  if(version==2&&!source.empty()&&(key.empty()||!archives.at(key)->find(source)))throw std::runtime_error("DUFEX v2 缺少完整场景底稿");
+  auto resolved=roots;for(const auto &r:j.value("content_roots",J::array())){auto p=fs::u8path(r.get<std::string>());if(fs::is_directory(p)&&std::find(resolved.begin(),resolved.end(),p)==resolved.end())resolved.push_back(p);}
+  auto d=load_source(source,resolved,progress);d->archives=std::move(archives);d->generation=generation;replay(*d,j.at("operations"),resolved,folder,progress);
+  if(version==2&&structure(*d)!=j.at("structure"))throw std::runtime_error("场景结构或依赖资产已变化，无法完整恢复保存的关系");
   auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
 }
 }

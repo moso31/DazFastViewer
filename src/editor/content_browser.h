@@ -16,6 +16,7 @@ public:
   std::function<void(const QString &,bool)> apply_pose;
   void set_roots(const QStringList &roots);
   void record_use(const QString &path,const QString &category);
+  void saved_scene(const QString &path);
   void show_recent();
   bool locate(const QString &path);
   void locate_asset(const ContentOrigin &origin);

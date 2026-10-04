@@ -78,7 +78,7 @@ MaterialPanel::MaterialPanel(QWidget *parent):QWidget(parent){
     QMenu menu(this);auto *copy=menu.addAction(QStringLiteral("复制材质"));copy->setObjectName("CopyMaterial");copy->setEnabled(item->data(0,Qt::UserRole+1).isValid());
     auto *paste=menu.addAction(QStringLiteral("粘贴材质"));paste->setObjectName("PasteMaterial");paste->setEnabled(!clipboard_.is_null()&&bool(paste_requested));
     auto *action=menu.exec(tree_->viewport()->mapToGlobal(point));
-    if(action==copy){try{clipboard_=copy_material(document_->loaded.scene,snapshot_->material_overrides,{size_t(item->data(0,Qt::UserRole).toULongLong()),size_t(item->data(0,Qt::UserRole+1).toULongLong())});status_->setText(QStringLiteral("已复制材质：")+item->text(0));}catch(const std::exception &e){status_->setText(text(e.what()));}}
+    if(action==copy){try{const auto instance=size_t(item->data(0,Qt::UserRole).toULongLong());clipboard_=copy_material(document_->loaded.scene,snapshot_->material_overrides,{instance,size_t(item->data(0,Qt::UserRole+1).toULongLong())});auto textures=document_->loaded.scene.textures;const auto uv=daz::material_uv_set(read_copied_material(clipboard_,textures));if(!uv.uri.empty())if(auto archive=material_archive(*document_,{instance,size_t(item->data(0,Qt::UserRole+1).toULongLong())},uv.owner))clipboard_["source_archive"]=archive->json();status_->setText(QStringLiteral("已复制材质：")+item->text(0));}catch(const std::exception &e){status_->setText(text(e.what()));}}
     else if(action==paste)paste_requested(clipboard_,surfaces());
   });
   connect(tree_,&QTreeWidget::itemSelectionChanged,this,[this]{wheel_selected_.clear();rebuild_properties();});

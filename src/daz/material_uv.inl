@@ -74,14 +74,15 @@ std::string material_uv_topology(const ir::Mesh &mesh) {
   for(const auto &c:mesh.curves){add(c.vertices.size());for(auto v:c.vertices)add(v);}
   return std::to_string(hash);
 }
-MaterialUVCatalog discover_material_uv_sets(const LoadedScene &loaded,size_t instance,const LoadOptions &options) {
+MaterialUVCatalog discover_material_uv_sets(const LoadedScene &loaded,size_t instance,const LoadOptions &options,const std::vector<std::shared_ptr<SourceArchive>> &surface_archives) {
+  DocumentScope source_scope(instance_archive(loaded,instance));
   MaterialUVCatalog result;Repository repo;repo.roots=options.content_roots;
   const auto &i=loaded.scene.instances.at(instance);const auto &mesh=loaded.scene.meshes.at(i.mesh);
   std::set<fs::path> files,directories;std::set<std::string> ids;
   auto add=[&](const fs::path &file,const Json &asset){read_uv_coordinates(asset,mesh);auto ref=uv_reference(file,asset);if(ids.insert(ref.uri).second)result.sets.push_back(std::move(ref));};
   // Saved per-surface references may live outside the model's UV Sets directory.
-  for(auto m:i.materials){const auto ref=material_uv_set(loaded.scene.materials.at(m));if(ref.uri.empty())continue;
-    try{const auto [file,asset]=repo.asset(ref.uri,fs::u8path(ref.owner),"uv_set_library");add(file,*asset);}
+  for(size_t slot=0;slot<i.materials.size();++slot){const auto ref=material_uv_set(loaded.scene.materials.at(i.materials[slot]));if(ref.uri.empty())continue;
+    try{DocumentScope surface_scope(slot<surface_archives.size()&&surface_archives[slot]?surface_archives[slot]:current_archive());Repository material_repo;material_repo.roots=repo.roots;const auto [file,asset]=material_repo.asset(ref.uri,fs::u8path(ref.owner),"uv_set_library");add(file,*asset);}
     catch(const std::exception &e){result.warnings.push_back(e.what());}
   }
   auto geometry=[&](const fs::path &file,const std::string &id){

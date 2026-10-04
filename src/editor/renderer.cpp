@@ -59,6 +59,21 @@ void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources
 void Renderer::select(uint64_t generation,int target,int joint,std::vector<Selection> selections,bool ik_allowed,const std::string &group) {std::lock_guard lock(mutex_);selected_group_=group;selection_generation_=generation;selected_target_=target;selected_joint_=joint;selections_=std::move(selections);ik_allowed_=ik_allowed;++window_->pose_selection;}
 RenderStatus Renderer::status() {std::lock_guard lock(mutex_);return status_;}
 CameraState Renderer::input_camera() {return window_->mailbox.latest();}
+std::future<ViewportCapture> Renderer::capture(uint64_t generation,uint64_t revision){
+  std::lock_guard lock(mutex_);capture_=std::make_unique<CaptureRequest>();capture_->generation=generation;capture_->revision=revision;capture_->camera_epoch=window_->mailbox.latest().epoch;return capture_->result.get_future();
+}
+void Renderer::cancel_capture(){std::lock_guard lock(mutex_);capture_.reset();}
+void Renderer::capture_frame(uint64_t generation,uint64_t revision,const CameraState &camera){
+  std::unique_ptr<CaptureRequest> request;{std::lock_guard lock(mutex_);if(!capture_||capture_->generation!=generation||capture_->revision!=revision)return;request=std::move(capture_);}
+  try{
+    if(camera.epoch!=request->camera_epoch)throw std::runtime_error("保存期间视口发生变化，请重新保存");
+    const int w=window_->width,h=window_->height,n=std::min(w,h);if(n<=0)throw std::runtime_error("视口尺寸无效");
+    ViewportCapture result;result.size=n;result.rgba.resize(size_t(n)*n*4);result.view={camera.target.x,camera.target.y,camera.target.z,camera.distance,camera.yaw,camera.pitch};
+    GLint alignment=4,buffer=GL_BACK;glGetIntegerv(GL_PACK_ALIGNMENT,&alignment);glGetIntegerv(GL_READ_BUFFER,&buffer);glPixelStorei(GL_PACK_ALIGNMENT,1);glReadBuffer(GL_BACK);
+    glReadPixels((w-n)/2,(h-n)/2,n,n,GL_RGBA,GL_UNSIGNED_BYTE,result.rgba.data());glPixelStorei(GL_PACK_ALIGNMENT,alignment);glReadBuffer(buffer);
+    if(glGetError()!=GL_NO_ERROR)throw std::runtime_error("视口缩略图读取失败");request->result.set_value(std::move(result));
+  }catch(...){request->result.set_exception(std::current_exception());}
+}
 void Renderer::camera_view(const std::array<float,6> &v) {window_->camera.target={v[0],v[1],v[2]};window_->camera.distance=v[3];window_->camera.yaw=v[4];window_->camera.pitch=v[5];window_->publish();}
 void Renderer::keyboard(int key,bool pressed) {SetFocus(window_->hwnd);PostMessageW(window_->hwnd,pressed?WM_KEYDOWN:WM_KEYUP,WPARAM(key),0);}
 void Renderer::orbit(float x,float y) {window_->camera.orbit(x,y);window_->publish();}
@@ -688,6 +703,8 @@ void Renderer::run(std::stop_token stop) {
       if(!physics_commit.valid())session->draw();
       else display->draw({}); // 只访问三缓冲显示邮箱，不等待 Cycles 的场景锁。
       const auto beauty=display->drawn_frame();
+      if(beauty.id&&beauty.epoch>=epoch&&camera.epoch==camera_epoch&&!queued.pending&&!editing&&!preview&&!pose_recovery.active&&!clay_wait&&applied_revision==desired.revision)
+        capture_frame(current->generation,applied_revision,camera);
       if(pose_recovery.active&&desired.revision>pose_recovery.revision&&applied_revision==desired.revision)pose_recovery.active=false;
       if(!physics_commit.valid()&&clay_wait&&!editing&&!pose_recovery.active&&!queued.pending&&gpu_revision==desired.revision&&beauty.epoch>=epoch){std::lock_guard lock(mutex_);if(snapshot_.revision==desired.revision&&snapshot_.generation==desired.generation&&!edit_active_)clay_wait=false;}
       state.pose_restoring=pose_recovery.active||clay_wait;
