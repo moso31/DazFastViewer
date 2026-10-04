@@ -118,7 +118,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     if(inserted) {
       const auto old=old_geometry.find(key);if(old!=old_geometry.end()) geometry=old->second;
       const bool shader_changed=std::any_of(key.second.begin(),key.second.end(),[&](auto *s){return modified_shaders.contains(s);});
-      const bool positions_changed=previous_mesh[index]<0||data.positions!=source_.meshes[size_t(previous_mesh[index])].positions;
+      const bool positions_changed=previous_mesh[index]<0||data.positions!=source_.meshes[size_t(previous_mesh[index])].positions||data.displacement_rest!=source_.meshes[size_t(previous_mesh[index])].displacement_rest;
       array<Node *> used(key.second.size());for(size_t m=0;m<used.size();++m) used[m]=key.second[m];
       if(!data.triangles.empty()&&graft_bindings[size_t(&instance-source.instances.data())].group<0) {
         const bool rebuild=topology_changed[index]||!geometry.mesh;
@@ -126,7 +126,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
         if(rebuild||positions_changed||shader_changed) {
           const auto &triangles=subdivision.active()?subdivision.triangles():data.triangles;
           if(subdivision.active()&&refined[index].empty()) refined[index]=subdivision.evaluate(data.positions);
-          const auto &points=subdivision.active()?refined[index]:data.positions;
+          const auto &points=subdivision.active()?refined[index]:data.displacement_rest.empty()?data.positions:data.displacement_rest;
           if(rebuild) {
             mesh->clear(true);const auto visible=std::count_if(triangles.begin(),triangles.end(),[&](const auto &t){return data.draws(t);});mesh->resize_mesh(int(points.size()),int(visible));
             auto *uv=mesh->attributes.add(ATTR_STD_UV,ustring("UVMap"))->data_for_write<float2>();size_t face=0;

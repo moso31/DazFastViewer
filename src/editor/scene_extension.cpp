@@ -1,4 +1,5 @@
 #include "editor/scene_extension.h"
+#include "city/document.h"
 #include "editor/group_transforms.h"
 #include "render_ir/options_json.h"
 #include "runtime/physics_json.h"
@@ -35,6 +36,8 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
   auto source_path=[&](const J &j){auto p=fs::u8path(j.get<std::string>());return p.empty()||p.is_absolute()?p:folder/p;};
   for(const auto &op:operations){const auto kind=op.at("op").get<std::string>();
     if(kind=="append"){auto s=load_source(source_path(op.at("file")),roots,progress,true);replay(*s,op.at("operations"),roots,folder,progress,depth+1);append_document(d,std::move(*s),op.at("prefix"));}
+    else if(kind=="city") {auto config=city::config_from_json(op.at("config"));if(config.directory.is_relative())config.directory=folder/config.directory;city::install(d,city::generate(config,op.at("id"),roots,progress),false);}
+    else if(kind=="city_remove")city::remove(d,op.at("id"),false);
     else if(kind=="studio")ir::add_studio(d.loaded.scene);
     else if(kind=="remove"){auto v=initial_snapshot(d);remove_target(d,v,target_index(d,op.at("target")));}
     else if(kind=="remove_light"){auto v=initial_snapshot(d);const auto id=op.at("id").get<std::string>();const auto found=std::find_if(v.lights.begin(),v.lights.end(),[&](const auto &l){return l.id==id;});if(found!=v.lights.end())remove_light(d,v,size_t(found-v.lights.begin()));}
@@ -64,10 +67,10 @@ J snapshot_json(const Document &d,const Snapshot &s){
   validate_material_overrides(d.loaded.scene,s.material_overrides);j["materials"]=s.material_overrides;
   validate_group_transforms(d,s.group_transforms);j["groups"]=J::object();for(const auto &[id,v]:s.group_transforms)j["groups"][id]=transform(v);
   validate_instance_ground(d.loaded.scene,s.instance_ground);j["instance_ground"]=J::object();for(const auto &[id,v]:s.instance_ground)j["instance_ground"][id]={{"offset_m",v.offset_m},{"ratio",v.ratio},{"offset_cm",v.offset_cm},{"body_only",v.body_only}};
-  j["control_favorites"]=favorites(s.control_favorites);return j;
+  j["cities"]=city::json(s.city_views);j["control_favorites"]=favorites(s.control_favorites);return j;
 }
 void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
-  auto next=s;
+  auto next=s;next.city_views=city::views_from_json(j.value("cities",J::object()));for(const auto &[id,v]:next.city_views)if(std::none_of(d.cities.begin(),d.cities.end(),[&](const auto &c){return c->id==id;}))throw std::runtime_error("城市视图引用无效");
   next.group_transforms.clear();const auto groups=j.value("groups",J::object());for(const auto &[id,value]:groups.items())read_transform(next.group_transforms[id],value);validate_group_transforms(d,next.group_transforms);
   for(const auto &[id,o]:j.at("objects").items()){const auto t=target_index(d,id);auto &v=next.values.at(t);const auto &target=d.catalog.targets[t];read_transform(v.transform,o.at("transform"));runtime::validate_transform(v.transform);v.visible=o.at("visible");v.extension=read_extension(o.at("extension"));v.ground_alignment_ratio=o.at("ground_ratio");if(!std::isfinite(v.ground_alignment_ratio))throw std::runtime_error("地面对齐比例无效");
     v.ground_alignment_offset_cm=o.value("ground_offset_cm",0.);v.ground_alignment_body_only=o.value("ground_body_only",false);if(!std::isfinite(v.ground_alignment_offset_cm))throw std::runtime_error("地面对齐偏移无效");

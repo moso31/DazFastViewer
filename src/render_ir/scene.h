@@ -71,6 +71,8 @@ struct Material {
   int bump_texture=-1;
   int displacement_texture=-1;
   float displacement_strength=0,displacement_min=-.001f,displacement_max=.001f;
+  // Procedural height-field proxies can displace vertically without changing wall footprints.
+  bool displacement_vertical=false,displacement_bump=true;
   bool thin_walled=false,hair=false,roughness_from_glossiness=false,weighted_glossy=false;
   float specular=.5f,anisotropy=0,anisotropy_rotation=0,translucency=0;
   float subsurface=0,subsurface_anisotropy=0;
@@ -145,6 +147,8 @@ struct Mesh {
   std::vector<uint32_t> shell_hidden_polygons;
   std::string id;
   std::vector<Vec3> positions;
+  // Optional undisplaced cage; positions remain the evaluated picking/preview geometry.
+  std::vector<Vec3> displacement_rest;
   std::vector<Triangle> triangles;
   // 细分必须使用原始四边面，不能对绘制用的三角化结果做 Catmark。
   std::vector<Polygon> polygons;

@@ -8,6 +8,7 @@
 #include "viewport/window.h"
 #include "viewport/quality.h"
 #include "bench/telemetry.h"
+#include "city/runtime.h"
 #include <memory>
 #include <thread>
 
@@ -31,6 +32,7 @@ struct RenderProbe {
   std::vector<std::string> hidden;
 };
 struct RenderStatus {
+  city::Stats city;
   bool physics_busy=false,physics_committing=false,physics_prepared=false;
   uint64_t physics_applied=0;
   runtime::PhysicsStats physics;

@@ -139,7 +139,7 @@ void MaterialPanel::rebuild_tree(){
     item->setData(0,Qt::UserRole+2,"family/"+text(id));item->setToolTip(0,text(id));item->setExpanded(true);families[id]=item;building.erase(id);return item;
   };
   QTreeWidgetItem *first=nullptr;
-  for(size_t i=0;i<scene.instances.size();++i){const auto &instance=scene.instances[i];if(instance.materials.empty())continue;
+  for(size_t i=0;i<scene.instances.size();++i){const auto &instance=scene.instances[i];if(instance.materials.empty()||!city::material_entry(document_->cities,instance.id))continue;
     auto target=targets.find(i);const auto &node=hierarchy.instances[i];
     if(scope_->currentIndex()==0&&!focus.empty()&&!hierarchy.contains(focus,node))continue;
     auto *parent=family(node);

@@ -6,6 +6,7 @@
 #include "editor/materials.h"
 #include "editor/instance_ground.h"
 #include "daz/material_uv.h"
+#include "city/model.h"
 #include <map>
 
 namespace dfv::editor {
@@ -28,8 +29,10 @@ struct Document {
   daz::SkinCatalog skeletons;
   daz::FormulaCatalog formulas;
   std::vector<AttachmentBinding> attachments;
+  city::Cities cities;
 };
 struct Snapshot {
+  city::Views city_views;
   std::map<std::string,runtime::TransformValues> group_transforms;
   InstanceGrounds instance_ground;
   MaterialOverrides material_overrides;

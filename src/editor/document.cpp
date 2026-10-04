@@ -251,6 +251,7 @@ void append_document(Document &destination,Document source,const std::string &id
     auto serial=destination.generation;do {prefix="instance-"+std::to_string(serial++)+"/";} while(used(destination.catalog.targets)||used(a.lights)||used(destination.loaded.nodes)||used(a.meshes));
   }
   const auto path=source.source_file.generic_u8string();destination.operations.push_back({{"op","append"},{"prefix",prefix},{"file",std::string(path.begin(),path.end())},{"operations",source.operations}});
+  for(const auto &city:source.cities)destination.cities.push_back(city::prefixed(*city,prefix));
   a.textures.insert(a.textures.end(),b.textures.begin(),b.textures.end());
   for(auto m:b.materials) {
     m.id=prefix+m.id;

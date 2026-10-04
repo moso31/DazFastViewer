@@ -73,6 +73,9 @@ void Scene::validate() const {
   for(const auto &mesh:meshes) {
     if(mesh.positions.empty()||(mesh.material_slots.empty()&&(!mesh.triangles.empty()||!mesh.curves.empty())))throw std::runtime_error("IR: 网格为空或可绘制表面没有材质槽："+mesh.id);
     for(auto p:mesh.positions) require(finite(p),"IR: 顶点包含非有限值");
+    require(mesh.displacement_rest.empty()||mesh.displacement_rest.size()==mesh.positions.size(),"IR: 置换基础顶点数量错误");
+    require(mesh.displacement_rest.empty()||!mesh.subdivision.enabled,"IR: 预计算置换代理不能重复细分");
+    for(auto p:mesh.displacement_rest)require(finite(p),"IR: 置换基础顶点包含非有限值");
     for(const auto &curve:mesh.curves) {
       require(curve.vertices.size()>=2&&curve.material_slot<mesh.material_slots.size(),"IR: 发丝长度或材质槽无效");
       for(auto v:curve.vertices) require(v<mesh.positions.size(),"IR: 发丝顶点索引越界");

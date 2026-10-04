@@ -101,12 +101,18 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
   };
   ShaderOutput *surface_normal=nullptr;
   const bool displace=m.displacement_texture>=0&&m.displacement_strength!=0&&(m.displacement_min!=0||m.displacement_max!=0);
-  shader.set_displacement_method(displace?DISPLACE_BOTH:DISPLACE_BUMP);
+  shader.set_displacement_method(displace?(m.displacement_bump?DISPLACE_BOTH:DISPLACE_TRUE):DISPLACE_BUMP);
   if(displace) {
     auto *range=graph->create_node<MathNode>();range->set_math_type(NODE_MATH_MULTIPLY);range->set_value2(m.displacement_max-m.displacement_min);graph->connect(texture(m.displacement_texture),range->input("Value1"));
     auto *height=graph->create_node<MathNode>();height->set_math_type(NODE_MATH_ADD);height->set_value2(m.displacement_min);graph->connect(range->output("Value"),height->input("Value1"));
-    auto *node=graph->create_node<DisplacementNode>();node->set_space(NODE_NORMAL_MAP_OBJECT);node->set_midlevel(0);node->set_scale(m.displacement_strength);
-    graph->connect(height->output("Value"),node->input("Height"));graph->connect(node->output("Displacement"),graph->output()->input("Displacement"));
+    if(m.displacement_vertical){
+      auto *xyz=graph->create_node<CombineXYZNode>();graph->connect(height->output("Value"),xyz->input("Z"));
+      auto *node=graph->create_node<VectorDisplacementNode>();node->set_space(NODE_NORMAL_MAP_OBJECT);node->set_midlevel(0);node->set_scale(m.displacement_strength);
+      graph->connect(xyz->output("Vector"),node->input("Vector"));graph->connect(node->output("Displacement"),graph->output()->input("Displacement"));
+    }else{
+      auto *node=graph->create_node<DisplacementNode>();node->set_space(NODE_NORMAL_MAP_OBJECT);node->set_midlevel(0);node->set_scale(m.displacement_strength);
+      graph->connect(height->output("Value"),node->input("Height"));graph->connect(node->output("Displacement"),graph->output()->input("Displacement"));
+    }
   }
   if(m.normal_texture>=0) {
     auto *normal=graph->create_node<NormalMapNode>();normal->set_strength(m.normal_strength);normal->set_attribute(ustring("UVMap"));
@@ -286,6 +292,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
   }
   for(const auto &edit:delta.meshes) {
     if(edit.index>=meshes_.size() || edit.positions.size()!=vertex_counts_[edit.index]) throw std::runtime_error("顶点 Delta 不能改变拓扑或越界");
+    if(!source_.meshes.at(edit.index).displacement_rest.empty())throw std::runtime_error("置换城市代理需整体重生成，不能单独修改求值顶点");
     for(const auto &p:edit.positions) if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)) throw std::runtime_error("顶点 Delta 含非有限值");
     for(const auto *mesh:meshes_[edit.index]) if(mesh->transform_applied) throw std::runtime_error("动态编辑要求未烘焙对象变换的动态 BVH 场景");
   }

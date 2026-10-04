@@ -21,6 +21,8 @@
 #include "editor/edit_history.h"
 #include "editor/history_input.h"
 #include "editor/recovery.h"
+#include "city/panel.h"
+#include "city/document.h"
 #include <QStandardPaths>
 #include <QCryptographicHash>
 #include "runtime/measurement_units.h"
@@ -100,6 +102,8 @@ class Editor final:public EditorWindow {
   #include "editor/collective_ground_test.inl"
   #include "editor/feedback_test.inl"
   #include "editor/render_profile.inl"
+  #include "city/editor_ui.inl"
+  #include "city/editor_test.inl"
   QWidget *host_=nullptr;
   ParameterPanel *parameters_=nullptr;
   ContentBrowser *browser_=nullptr;
@@ -977,6 +981,7 @@ class Editor final:public EditorWindow {
     if(group_test_) {report["scope"]="group-transform-properties-gizmo-save-undo";report["checks"]=gt_checks_;}
     if(extension_test_){report["scope"]="native-growth-weight-and-dufex";report["checks"]=extension_checks_;}
     if(empty_test_)report["scope"]="empty-startup-refresh";
+    if(city_test_){report["scope"]="city-generation-lod-materials-history-reopen";report["checks"]=city_checks_;report["city_stage"]=city_test_stage_;}
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
     if(edit_regression_test_) {report["scope"]="multi-selection-focus-subdivision-ERC-scale";report["checks"]=regression_checks_;}
@@ -1401,6 +1406,7 @@ class Editor final:public EditorWindow {
     ++interaction_case_;interaction_begin_=0;interaction_idle_=now();record();
   }
   void tick() {
+    city_tick();
     update_history_actions();
     if(recovery_)recovery_error_=recovery_->error();
     update_measurement();
@@ -1415,6 +1421,7 @@ class Editor final:public EditorWindow {
     apply_ground(state);
     refresh_powerpose(state);
     if(history_test_){history_test_tick(state);return;}
+    if(city_test_){city_test_tick(state);return;}
     if(!render_plan_.empty()) {render_profile_tick(state);return;}
     if(gizmo_test_) {gizmo_tick(state);return;}
     if(group_test_) {group_test_tick(state);return;}
@@ -1981,6 +1988,7 @@ public:
     connect(file_menu->addAction(QStringLiteral("新建空场景")),&QAction::triggered,this,[this] {clear_scene();});
     connect(file_menu->addAction(QStringLiteral("打开场景（替换）…")),&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("打开场景"),{},QStringLiteral("DAZ 场景 (*.duf *.dufex)"));if(!file.isEmpty()) load(file_path(file));});
     auto *create=chrome->menus()->addMenu(QStringLiteral("创建"));
+    install_city_ui(create);
     connect(create->addAction(QStringLiteral("面光源")),&QAction::triggered,this,[this] {add_light();});
     auto *view=chrome->menus()->addMenu(QStringLiteral("视图"));for(auto *d:findChildren<QDockWidget *>()) view->addAction(d->toggleViewAction());
     connect(view->addAction(QStringLiteral("重启渲染")),&QAction::triggered,this,[this] {if(renderer_)renderer_->restart_render();});
@@ -2050,6 +2058,7 @@ public:
   void subdivision_stress_test() {subdivision_stress_test_=true;self_test_=true;}
   void extension_test(){extension_test_=true;self_test_=true;}
   void feedback_test(){feedback_test_=true;self_test_=true;}
+  void city_test(){city_test_=self_test_=true;}
   void empty_scene(){clear_scene();if(history_){history_->clear();history_->mark_saved();}checkpoint();}
   void physics_ui_test(){physics_ui_test_=self_test_=true;}
   void empty_test(){empty_test_=self_test_=true;}
@@ -2103,6 +2112,7 @@ public:
           for(const auto &[id,patch]:loaded_snapshot.material_overrides)merged_snapshot.material_overrides[prefix+id]=patch;
           for(const auto &[id,value]:loaded_snapshot.group_transforms)merged_snapshot.group_transforms[prefix+id]=value;
           for(const auto &[id,value]:loaded_snapshot.instance_ground)merged_snapshot.instance_ground[prefix+id]=value;
+          for(const auto &[id,value]:loaded_snapshot.city_views)merged_snapshot.city_views[prefix+id]=value;
           for(size_t l=0;l<loaded_snapshot.lights.size();++l){auto value=loaded_snapshot.lights[l];value.id=prefix+value.id;merged_snapshot.lights.at(first_light+l)=value;}
           if(loaded_snapshot.control_favorites){
             merged_snapshot.control_favorites.emplace();const auto &favorites=*loaded_snapshot.control_favorites;
@@ -2127,6 +2137,7 @@ public:
           if(!preserve&&!previous_document) {pending_parameters_.clear();apply_parameters_->setEnabled(false);}
           document_=document;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);snapshot_=loaded_snapshot;snapshot_.values.clear();snapshot_.poses.clear();snapshot_.options=(preserve||previous_document)?previous.options:loaded_snapshot.options;if(preserve||previous_document){for(const auto &entry:previous.subdivision_levels){snapshot_.subdivision_levels[entry.first]=entry.second;}}snapshot_.generation=document->generation;snapshot_.revision=1;
           if(!previous_document)extension_file_=sidecar;
+          if(preserve||previous_document){for(const auto &entry:previous.city_views)snapshot_.city_views[entry.first]=entry.second;}
           if(preserve||previous_document){for(const auto &[id,patch]:previous.material_overrides)snapshot_.material_overrides[id]=patch;prune_material_overrides(document_->loaded.scene,snapshot_.material_overrides);}
           if(preserve||previous_document){for(const auto &[id,value]:previous.group_transforms)snapshot_.group_transforms[id]=value;prune_group_transforms(*document_,snapshot_.group_transforms);}
           if(preserve||previous_document){for(const auto &[id,value]:previous.instance_ground)snapshot_.instance_ground[id]=value;prune_instance_ground(document_->loaded.scene,snapshot_.instance_ground);}
@@ -2179,6 +2190,7 @@ int main(int argc,char **argv) {
   parser.addOption({"project",QStringLiteral("项目设置文件"),"file"});
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
   parser.addOption({"history-test",QStringLiteral("副屏验证撤销、重做、场景替换和原生快捷键")});
+  parser.addOption({"city-test",QStringLiteral("验证城市生成、LOD、共享材质、撤销和保存重开")});
   parser.addOption({"feedback-test",QStringLiteral("副屏验证分辨率切换、升采样和 UI 快捷键")});
   parser.addOption({"edit-regression-test",QStringLiteral("副屏验证多选聚焦、细分及 ERC 缩放")});
   parser.addOption({"joint-selection-test",QStringLiteral("副屏验证同角色左右指尖 Ctrl 多选及聚焦")});
@@ -2260,10 +2272,11 @@ int main(int argc,char **argv) {
     }
     auto project=ProjectSettings::load(project_file);
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("city-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("history-test"))editor.history_test();
+    if(parser.isSet("city-test"))editor.city_test();
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
     if(parser.isSet("pose-edit-test")) editor.pose_edit_test(parser.value("pose-test-level").toInt());
     if(parser.isSet("powerpose-test")) editor.powerpose_test();

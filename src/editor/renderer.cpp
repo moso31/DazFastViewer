@@ -28,7 +28,8 @@ Renderer::Renderer(HWND host,int width,int height,const std::filesystem::path &o
 }
 Renderer::~Renderer() {thread_.request_stop();if(thread_.joinable()) thread_.join();}
 void Renderer::set_document(std::shared_ptr<const Document> document,const Snapshot &snapshot,bool frame_scene) {
-  if(frame_scene) {ir::Bounds bounds;for(const auto &target:document->catalog.targets) {const auto &i=document->loaded.scene.instances[target.instance];if(i.visible) for(auto p:document->loaded.scene.meshes[i.mesh].positions) bounds.add(i.transform.point(p));}frame(bounds);}
+  if(frame_scene) {ir::Bounds bounds;for(const auto &target:document->catalog.targets) {const auto &i=document->loaded.scene.instances[target.instance];if(i.visible) for(auto p:document->loaded.scene.meshes[i.mesh].positions) bounds.add(i.transform.point(p));}
+    if(!document->cities.empty()){const GroupFrames frames(*document,snapshot.group_transforms);for(const auto &c:document->cities){const auto transform=frames.delta(c->id)*ir::Transform::translate({float(c->config.origin_x),float(c->config.origin_y),float(c->config.origin_z)});for(const auto &cell:c->cells)for(int k=0;k<8;++k)bounds.add(transform.point({k&1?cell.bounds.maximum.x:cell.bounds.minimum.x,k&2?cell.bounds.maximum.y:cell.bounds.minimum.y,k&4?cell.bounds.maximum.z:cell.bounds.minimum.z}));}}frame(bounds);}
   std::lock_guard lock(mutex_);document_=std::move(document);snapshot_=snapshot;
   if(sampling_.rebuild_probe) telemetry_.event("document_submitted");
 }
@@ -160,6 +161,7 @@ void Renderer::run(std::stop_token stop) {
     std::unique_ptr<ir::Scene> render_scene_ptr;
     std::shared_ptr<const Document> pending_document;
     std::unique_ptr<ir::Scene> pending_scene;
+    city::Runtime city_runtime;uint64_t city_camera_epoch=0;
     std::unique_ptr<runtime::DeformationRuntime> pending_runtime;
     std::unique_ptr<runtime::DeformationRuntime> runtime;
     uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
@@ -283,6 +285,7 @@ void Renderer::run(std::stop_token stop) {
         if(!desired.instance_ground.empty()||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,*pending_scene,group_frames->hierarchy,pending_runtime->effective_poses(),&*group_frames);apply_instance_ground(*pending_scene,document->loaded.scene,desired.instance_ground,nullptr,&bases);}
         applied_instance_ground=desired.instance_ground;
         const auto camera=window_->mailbox.latest();pending_scene->camera=render_camera(camera,window_->width,window_->height);
+        city_runtime.bind(document->cities,*pending_scene);city_runtime.apply(*pending_scene,desired.city_views);state.city=city_runtime.stats;city_camera_epoch=camera.epoch;
         camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
         set_quality(camera.navigating||now()<camera.preview_until);
         if(!session) {
@@ -327,7 +330,7 @@ void Renderer::run(std::stop_token stop) {
         gpu_revision=applied_revision;queued.clear();clay_wait=false;pose_recovery={};
         queued_subdivision_before.clear();
         {Frame f;f.epoch=epoch;f.id=applied_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);}
-        state={};state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
+        state={};state.city=city_runtime.stats;state.clicks=clicks;state.generation=current->generation;state.applied_revision=applied_revision;measured_evaluation=measured_skinning=measured_transform=UINT64_MAX;
       }
       auto &render_scene=*render_scene_ptr;
       if(physics_document!=current||!same_physics_input(physics_input,desired)||physics_options!=wanted_physics){
@@ -556,9 +559,10 @@ void Renderer::run(std::stop_token stop) {
       const bool resolution_changed=quality.percent!=applied_percent;
       const bool quality_changed=wanted_preview!=preview||resolution_changed;
       ir::Delta delta;bool new_render_edit=false,subdivision_edit=false,material_layout_edit=false;
+      const bool city_pending=!current->cities.empty()&&!navigation_preview&&city_camera_epoch!=camera.epoch;
       std::vector<ir::SubdivisionSettings> previous_subdivision;
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
-      if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending) &&
+      if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending || city_pending) &&
          (edit_pending||clay_wait||resolution_changed||(wanted_preview&&!preview)||((telemetry_.displayed_epoch.load()>=epoch||
            (pose_recovery.active&&display->drawn_frame().epoch>=epoch))&&session->ready_to_reset()))) {
         if(desired.generation==current->generation && desired.revision!=attempted_revision) {
@@ -600,6 +604,7 @@ void Renderer::run(std::stop_token stop) {
           }
         }
         if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);render_scene.camera=*delta.camera;camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
+        if(!current->cities.empty()&&(edit_pending||(!navigation_preview&&(city_pending||size_changed)))){const auto count=delta.visibility.size();material_layout_edit=city_runtime.apply(render_scene,desired.city_views,&delta)||material_layout_edit;state.city=city_runtime.stats;city_camera_epoch=camera.epoch;new_render_edit=new_render_edit||material_layout_edit||count!=delta.visibility.size();}
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
         wanted_preview=navigation_preview||(!clay_wait&&!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
         if(!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty())clay_wait=true;

@@ -1,4 +1,9 @@
 # 在 Cycles app 目录作用域定义，继承该版本所需的编译选项和 ABI。
+add_executable(CityRenderProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/city_render.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp")
+target_include_directories(CityRenderProbe PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(CityRenderProbe PRIVATE ${LIB} dfv_scene)
+target_compile_definitions(CityRenderProbe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(CityRenderProbe PRIVATE /utf-8)
 add_executable(RenderSchedulerTest "${DFV_ROOT}/tests/render_scheduler.cpp")
 target_link_libraries(RenderSchedulerTest PRIVATE ${LIB})
 target_compile_options(RenderSchedulerTest PRIVATE /utf-8)
@@ -56,6 +61,7 @@ qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
   "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/viewport/window.cpp"
   "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(DazFastViewer PRIVATE "${DFV_ROOT}/src")
+target_sources(DazFastViewer PRIVATE "${DFV_ROOT}/src/city/panel.cpp")
 target_link_libraries(DazFastViewer PRIVATE ${LIB} dfv_scene dfv_content Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_link_libraries(DazFastViewer PRIVATE dfv_history)
 target_compile_definitions(DazFastViewer PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
