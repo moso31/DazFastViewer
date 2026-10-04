@@ -3,6 +3,7 @@
 #include "daz/loader.h"
 #include "bench/output.h"
 #include "bench/fixtures.h"
+#include "bench/displacement_scale_check.h"
 #include "scene/scene.h"
 #include "scene/object.h"
 #include "scene/mesh.h"
@@ -101,7 +102,8 @@ inline int displacement_check(const ccl::DeviceInfo &device,const std::filesyste
     sync(source);require(adapter.stats().curves==0,"同步没有移除曲线");run(("curve-remove-"+std::to_string(round)).c_str(),enabled);
     require(scene.shaders.size()==shader_count+1,"反复增删导致 Shader 节点无限增长");
   }
-  std::ofstream(output/"displacement-check.json")<<J({{"status","PASS"},{"checks",checks},{"shared_geometry",true},{"device",device.id}}).dump(2);
+  const auto scale_checks=displacement_scale_check(device,output/"scale");
+  std::ofstream(output/"displacement-check.json")<<J({{"status","PASS"},{"checks",checks},{"scale_checks",scale_checks},{"shared_geometry",true},{"device",device.id}}).dump(2);
   std::cout<<"Displacement and scene synchronization GPU checks: PASS ("<<checks.size()<<" stages)\n";return 0;
 }
 }

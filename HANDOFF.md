@@ -1,5 +1,17 @@
 # 交接记录
 
+## 最新：GeoGraft 大倍率缩放后的置换暗沉与黑边
+
+2026-10-04：在 `G:/G1/Scenes/test7.duf` 的 `big_01 / HD Nipples for G8F - 2.0 / Right Breast 2` 局部机位复现。关闭真实置换后黑边消失，关闭普通 Bump 或 SSS 仍存在。根因是 Cycles 的 `DISPLACE_BOTH` 在对象空间计算凹凸梯度，却将世界空间置换向量投影得到的高度直接用于该梯度，导致对象缩放额外放大法线扰动。
+
+修复通过 `tools/prepare_cycles.py` 固化到生成的 `shader_graph.cpp`：计算高度前，将三次置换采样向量及投影法线统一转换到对象空间；Bump 节点的法线输入仍保留其约定的世界空间。保留真实置换、细节凹凸与 GeoGraft 共同曲面，不修改材质强度、曝光或用户资产。重新生成依赖树也会保留此修复。
+
+新增 `--displacement-check` 的 GPU 图像倍率回归：带非均匀基础变换的 GeoGraft 与普通网格，在固定远光源下同步缩放相机和对象，覆盖 1、100、0.01、10000、恢复 1 倍，交替执行 Delta 与完整同步。旧代码负向对照在 100 倍时相对 RGB L1 误差为 51.45%，测试失败；修复后最大为 0.000306%。这项合成场景测试关闭了 SSS，不能把该误差数字当作完整皮肤材质的缩放误差。
+
+新增 `--graft-scale-check --file test7.duf --content-root ...`，使用真实形变、骨骼选区与完整材质，验证 UI 缩放值 80% → 8000% → 80%，并重复验证完整同步路径。OptiX、384×384、64 samples、无降噪的离线图像已目视复核，放大后的密集黑边消失；平均线性亮度比为 1.01538，恢复后的相对 RGB L1 误差小于 7e-8。这是生产形变与 Cycles 适配器的离线验证，未模拟原生窗口点击。
+
+完整 Release 构建及 33 项 CTest 通过；部署后的 23 阶段置换、5 阶段倍率和 17 阶段 GeoGraft GPU 回归通过。证据：`artifacts/graft-scale-release-build.log`、`artifacts/graft-scale/{negative,test7-final,deployed-displacement,deployed-graft}/`；初次隔离诊断位于 `before`、`after`，其中关闭材质效果的阶段仅用于定位。程序已部署至 `out/vs2022/Release`，构建／部署 EXE SHA256 一致：`1E42E2BAF62E024E67812AB5D6481FD572DD276854564A28C301138D8B6712A6`。保留原有未提交修改，未创建 Git 提交，未改写用户 DUF。
+
 ## 最新：Group／多选整体 Ctrl+D 与 Group 移动增量更新
 
 2026-10-02：Group 和多选模型现在合并当前可见模型的世界 AABB，整体沿世界 Y 落地到最低点为 0；忽略各角色的比例、固定偏移和仅本体设置，并保留这些设置。包括后代、穿戴物和 Instance；父子同时选择时只移动最外层选中节点，保持相对位置。整次操作原子提交为一条历史记录，重复 Ctrl+D 不累积位移。单对象保持原有对齐行为；整体模式的参数控件禁用并说明计算规则。

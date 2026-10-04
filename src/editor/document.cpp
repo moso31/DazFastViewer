@@ -58,6 +58,7 @@ std::shared_ptr<Document> refresh_parameters(const Document &document,size_t sel
   for(size_t t=0;t<catalog.targets.size();++t) {
     const auto found=std::find_if(result->catalog.targets.begin(),result->catalog.targets.end(),[&](const auto &old){return old.id==catalog.targets[t].id;});
     if(found==result->catalog.targets.end()) throw std::runtime_error("刷新时对象身份已变化");
+    catalog.targets[t].initial_visible=found->initial_visible;catalog.targets[t].ancestors_visible=found->ancestors_visible;
     const size_t index=size_t(found-result->catalog.targets.begin());*found=std::move(catalog.targets[t]);result->formulas.graphs[index]=std::move(formulas.graphs[t]);
   }
   }
@@ -186,7 +187,7 @@ Snapshot initial_snapshot(const Document &document) {
   for(const auto &skin:document.skeletons.skins) result.poses.push_back(skin.initial);
   for(const auto &target:document.catalog.targets) {
     runtime::Properties p;p.extension=target.native_extension;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
-    p.visible=document.loaded.scene.instances.at(target.instance).visible;
+    p.visible=target.initial_visible.value_or(document.loaded.scene.instances.at(target.instance).visible);
     runtime::sync_aliases(target,p);result.values.push_back(std::move(p));
   }
   result.lights=document.loaded.scene.lights;return result;

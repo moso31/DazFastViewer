@@ -79,6 +79,30 @@ def main():
     replace("src/app/CMakeLists.txt", "COMMAND ${app_install_dir}/$<TARGET_FILE_NAME:cycles> --version",
             "COMMAND $<TARGET_FILE:cycles> --version")
     replace("src/util/CMakeLists.txt", "PRIVATE bf::dependencies::openexr", "PRIVATE bf::dependencies::openexr\n  PRIVATE fmt::fmt")
+    # DISPLACE_BOTH evaluates surface gradients in object space. Displacement
+    # outputs are world-space vectors, so projecting them onto a world normal
+    # would apply the object scale twice. Convert both sides of the dot product;
+    # keep the Bump node's normal input in world space as its kernel expects.
+    replace("src/scene/shader_graph.cpp", '''  connect(geom->output("Normal"), dot_center->input("Vector2"));
+  connect(geom->output("Normal"), dot_dx->input("Vector2"));
+  connect(geom->output("Normal"), dot_dy->input("Vector2"));''', '''  ShaderOutput *height_normal = geom->output("Normal");
+  if (use_object_space) {
+    auto to_object = [&](ShaderOutput *value, NodeVectorTransformType type) {
+      VectorTransformNode *convert = create_node<VectorTransformNode>();
+      convert->set_transform_type(type);
+      convert->set_convert_from(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_WORLD);
+      convert->set_convert_to(NODE_VECTOR_TRANSFORM_CONVERT_SPACE_OBJECT);
+      connect(value, convert->input("Vector"));
+      return convert->output("Vector");
+    };
+    height_normal = to_object(height_normal, NODE_VECTOR_TRANSFORM_TYPE_NORMAL);
+    out_center = to_object(out_center, NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+    out_dx = to_object(out_dx, NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+    out_dy = to_object(out_dy, NODE_VECTOR_TRANSFORM_TYPE_VECTOR);
+  }
+  connect(height_normal, dot_center->input("Vector2"));
+  connect(height_normal, dot_dx->input("Vector2"));
+  connect(height_normal, dot_dy->input("Vector2"));''')
     # 应用可限制静止视口的更新批次时长；0 保留上游调度，离线渲染不受影响。
     replace("src/device/device.h", "  thread_mutex image_info_mutex;",
             "  thread_mutex image_info_mutex;\n  size_t dfv_host_bytes() const { return map_host_used; }\n  size_t dfv_device_bytes() const { return device_mem_in_use; }")
@@ -152,7 +176,7 @@ def main():
     for name, data in files.items():
         write_changed(destination / name, data)
     manifest = {"standalone_commit": STANDALONE, "blender_commit": BLENDER, "adopted_files": adopted,
-                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry"]}
+                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry", "object-space displacement bump projection"]}
     write_changed(destination / "dfv-source-manifest.json", json.dumps(manifest, indent=2) + "\n")
     print(f"Cycles 构建树已生成：{destination}；接入 {len(adopted)} 个 Blender 5.2.2 文件")
 

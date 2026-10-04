@@ -36,6 +36,7 @@ struct AssetNode {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
   float general_scale=1;
   std::string rotation_order="XYZ";
+  bool visible=true;
 };
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;std::vector<std::shared_ptr<const nlohmann::json>> source_documents;};
 struct DufContents {bool instantiate=false,materials=false,properties=false,requires_selection=false;};

@@ -25,6 +25,7 @@
 #include <QCryptographicHash>
 #include "runtime/measurement_units.h"
 #include "runtime/decimal_float.h"
+#include "runtime/visibility.h"
 #include "daz/documents.h"
 #include "daz/content_entry.h"
 #include "render_ir/options_json.h"
@@ -333,7 +334,8 @@ class Editor final:public EditorWindow {
   bool visibility_initial_=true;
   size_t visibility_geometry_updates_=0;
   size_t visibility_geometry_budget_=0;
-  std::vector<bool> visibility_previous_;
+  // Diagnostic baselines only; normal edits never save or restore child flags.
+  std::vector<bool> visibility_previous_,visibility_original_,visibility_initial_values_;
   size_t visibility_sessions_=0,visibility_morph_evaluations_=0;
   bool visibility_local_graft_=false;
   QStringList capture_targets_;
@@ -1594,6 +1596,7 @@ class Editor final:public EditorWindow {
         if(visibility_target_<0) {finish_test(false,"可见性测试对象缺失");return;}
         choose(visibility_target_);visibility_initial_=snapshot_.values[size_t(visibility_target_)].visible;visibility_geometry_updates_=state.adapter.geometry_updates;
         visibility_previous_=state.visible;visibility_geometry_budget_=0;
+        visibility_original_=state.visible;visibility_initial_values_.clear();for(const auto &v:snapshot_.values)visibility_initial_values_.push_back(v.visible);
         findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"))->raise();
         visibility_sessions_=state.sessions;visibility_morph_evaluations_=state.evaluation.morph_evaluations;
         const auto &scene=document_->loaded.scene;auto index=document_->catalog.targets[size_t(visibility_target_)].instance;
@@ -1604,11 +1607,28 @@ class Editor final:public EditorWindow {
       }
       const auto instance=document_->catalog.targets[size_t(visibility_target_)].instance;
       const bool expected=test_stage_==1?!visibility_initial_:visibility_initial_;
-      if(state.visible.at(instance)!=expected||snapshot_.values[size_t(visibility_target_)].visible!=expected||hierarchy_->currentItem()->checkState(0)!=(expected?Qt::Checked:Qt::Unchecked)) {
+      const auto &targets=document_->catalog.targets;
+      const auto effective=runtime::effective_visibility(targets,runtime::visibility_children(document_->loaded.scene,targets),snapshot_.values);
+      auto expected_visibility=visibility_original_;
+      for(size_t t=0;t<targets.size();++t) {
+        const bool local=int(t)==visibility_target_?expected:visibility_initial_values_[t];
+        if(snapshot_.values[t].visible!=local){finish_test(false,"切换父级改写了子对象自身的显隐状态");return;}
+        expected_visibility.at(targets[t].instance)=effective[t];
+      }
+      if(state.visible!=expected_visibility) {
+        finish_test(false,"角色关联对象未同步显隐，或影响了无关对象");return;
+      }
+      bool tree_matches=true;
+      for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) {
+        const int t=(*it)->data(0,Qt::UserRole).toInt();if(t<0||(*it)->data(0,Qt::UserRole+1).toInt()>=0)continue;
+        const bool local=snapshot_.values[size_t(t)].visible;
+        tree_matches&=(*it)->checkState(0)==(local?Qt::Checked:Qt::Unchecked);
+      }
+      if(!tree_matches) {
         finish_test(false,"场景树、对象状态和渲染可见性不同步");return;
       }
       // 重新显示会按需恢复 GPU 几何；仍限制在本次实际改变显隐的对象范围。
-      for(size_t i=0;i<state.visible.size();++i) if(state.visible[i]!=visibility_previous_[i]) ++visibility_geometry_budget_;
+      size_t affected=0;for(size_t i=0;i<state.visible.size();++i) if(state.visible[i]!=visibility_previous_[i]) {++visibility_geometry_budget_;++affected;}
       visibility_previous_=state.visible;
       const auto budget=visibility_geometry_budget_;
       if(state.adapter.geometry_updates-visibility_geometry_updates_>budget||state.sessions!=visibility_sessions_||state.evaluation.morph_evaluations!=visibility_morph_evaluations_) {
@@ -1616,7 +1636,8 @@ class Editor final:public EditorWindow {
       }
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/(prefix+(test_stage_==1?"-toggled.png":"-restored.png"))).wstring()));
       if(test_stage_==1) {hierarchy_->currentItem()->setCheckState(0,visibility_initial_?Qt::Checked:Qt::Unchecked);test_stage_=2;return;}
-      visibility_checks_.push_back({{"label",visibility_label_.toStdString()},{"instance",instance},{"toggle_restore",true},{"local_graft",visibility_local_graft_},{"geometry_updates",state.adapter.geometry_updates-visibility_geometry_updates_},{"sessions",state.sessions}});
+      if(state.visible!=visibility_original_){finish_test(false,"父级恢复后未保留原先混合的子对象显隐");return;}
+      visibility_checks_.push_back({{"label",visibility_label_.toStdString()},{"instance",instance},{"affected_targets",affected},{"local_visibility_preserved",true},{"toggle_restore",true},{"local_graft",visibility_local_graft_},{"geometry_updates",state.adapter.geometry_updates-visibility_geometry_updates_},{"sessions",state.sessions}});
       if(++visibility_case_<visibility_labels_.size()) {visibility_label_=visibility_labels_[visibility_case_];visibility_target_=-1;test_stage_=0;return;}
       finish_test(true);return;
     }

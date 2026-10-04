@@ -4,6 +4,7 @@
 #include "bench/scene_export.h"
 #include "bench/displacement_check.h"
 #include "bench/graft_check.h"
+#include "bench/graft_scale_check.h"
 #include "cycles/adapter.h"
 #include "daz/loader.h"
 #include "device/device.h"
@@ -30,7 +31,7 @@
 namespace {
 struct Options {
   bool prune_hidden=false;
-  bool displacement_check=false,graft_check=false,render_subdivision=false,emission_check=false;
+  bool displacement_check=false,graft_check=false,graft_scale_check=false,render_subdivision=false,emission_check=false;
   bool raw_sampling=false,devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
   double seconds=60,warmup=10,refine=10,preview_seconds=0;
@@ -57,6 +58,7 @@ Options parse(int argc,char **argv) {
     else if(arg=="--emission-check") {o.emission_check=true;o.material_delta_check=true;}
     else if(arg=="--displacement-check") o.displacement_check=true;
     else if(arg=="--graft-check") o.graft_check=true;
+    else if(arg=="--graft-scale-check") o.graft_scale_check=true;
     else if(arg=="--dump-shaders") o.dump_shaders=true;
     else if(arg=="--strict-dson") o.strict=true;
     else if(arg=="--monitor") o.monitor=std::stoi(value());
@@ -82,6 +84,7 @@ Options parse(int argc,char **argv) {
      !std::isfinite(o.refine) || o.refine<0 || o.render_delay_ms<0 || o.render_delay_ms>1000 || o.monitor<1 ||
      !std::isfinite(o.preview_seconds) || o.preview_seconds<0) throw std::runtime_error("无效尺寸、样本数或时长");
   if((o.inspect || o.export_scene) && o.file.empty()) throw std::runtime_error("--inspect / --export-scene 需要 --file");
+  if(o.graft_scale_check&&o.file.empty()) throw std::runtime_error("--graft-scale-check 需要 --file test7.duf");
   if(o.material_delta_check && (!o.smoke || o.file.empty() || o.inspect || o.export_scene || o.dump_shaders))
     throw std::runtime_error("--material-delta-check 需要 --smoke 和 --file，不能与只导出选项组合");
   return o;
@@ -430,6 +433,8 @@ int wmain(int argc,wchar_t **wide_argv) {
                <<"  --smoke  离线 PNG/EXR；--samples <count>；--output <directory>\n"
                <<"  --raw-sampling  关闭自适应采样，用于等样本对照；所有模式均禁用降噪\n"
                <<"  --prune-hidden  仅上传可见对象及其使用的材质资源\n"
+               <<"  --displacement-check  GPU 置换、同步与缩放回归\n"
+               <<"  --graft-scale-check --file test7.duf  big_01 / Right Breast 2 的 80% 到 8000% 回归\n"
                <<"  --dump-shaders  导出材质图和绑定诊断，不创建窗口或执行渲染\n"
                <<"  --export-scene  无需 GPU 导出参考场景、相机、灯光及材质参数\n"
                <<"  --material-delta-check  与 --smoke --file 合用，检查同一 Session 的材质增量\n"
@@ -453,6 +458,7 @@ int wmain(int argc,wchar_t **wide_argv) {
     }
     if(options.displacement_check) return dfv::displacement_check(select_device(options.backend),std::filesystem::absolute(options.output));
     if(options.graft_check) return dfv::graft_check(select_device(options.backend),std::filesystem::absolute(options.output),options.prune_hidden);
+    if(options.graft_scale_check) return dfv::graft_scale_check(select_device(options.backend),options.file,options.content_roots,std::filesystem::absolute(options.output));
     return run(options,select_device(options.backend));
   } catch(const std::exception &error) {std::cerr<<"ERROR: "<<error.what()<<std::endl;return 1;}
 }

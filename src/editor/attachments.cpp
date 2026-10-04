@@ -23,11 +23,14 @@ const daz::AssetObject &object(const Document &d,size_t target) {
 bool refers(const std::string &uri,const std::set<std::string> &nodes) {return uri.starts_with('#')&&nodes.contains(uri.substr(1));}
 void rebuild_ancestors(Document &d) {
   std::map<std::string,std::string> parents;
+  std::set<std::string> hidden;
   for(const auto &n:d.loaded.nodes) parents["#"+n.id]=n.parent;
+  for(const auto &n:d.loaded.nodes)if(!n.visible&&std::none_of(d.loaded.objects.begin(),d.loaded.objects.end(),[&](const auto &o){return o.id==n.id;}))hidden.insert("#"+n.id);
   for(auto &t:d.catalog.targets) {
-    t.ancestors.clear();std::set<std::string> seen;
+    t.ancestors.clear();t.ancestors_visible=true;std::set<std::string> seen;
     for(auto p=t.parent;!p.empty();) {
       if(!seen.insert(p).second) throw std::runtime_error("附件父子关系存在循环");
+      t.ancestors_visible&=!hidden.contains(p);
       t.ancestors.push_back(p);auto found=parents.find(p);p=found==parents.end()?std::string{}:found->second;
     }
   }

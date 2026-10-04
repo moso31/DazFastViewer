@@ -646,6 +646,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       const auto type=extra.value("type","");group|=type=="studio/node/group_node"||type=="studio/node/group_instance";
     }
     out.nodes.push_back({id,decode(node.value("parent","")),node.value("label",node.value("name",id)),group});
+    out.nodes.back().visible=node_visible(node);
   }
   std::map<std::string,runtime::RigidFollow> rigid_groups;
   for(const auto &[id,node]:nodes) for(const auto &e:array_member(node,"extra")) if(e.value("type","")=="studio/node/rigid_follow"&&e.contains("rigidity_group")) {

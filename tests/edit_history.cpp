@@ -1,5 +1,6 @@
 #include "editor/edit_history.h"
 #include "editor/history_input.h"
+#include "runtime/picking.h"
 #include "editor/recovery.h"
 #include "editor/scene_extension.h"
 #include "editor/material_panel.h"
@@ -27,6 +28,82 @@ static std::shared_ptr<Document> fixture(){
   auto skin=powerpose_fixture();skin.instance=0;d->skeletons.skins={skin};d->formulas.graphs.resize(3);d->formulas.graphs[0].skin=0;return d;
 }
 static EditState state_for(std::shared_ptr<const Document> document){EditState s;s.document=std::move(document);s.snapshot=initial_snapshot(*s.document);s.save_file="first.dufex";s.context.selection={{"figure/geometry"}};s.context.active=s.context.selection.front();return s;}
+static void subtree_visibility(){
+  auto d=fixture();d->catalog.targets[0].character=true;
+  d->catalog.targets[1].parent="#bone";d->catalog.targets[1].ancestors={"#bone","#group","#figure"};
+  d->catalog.targets[2].parent="#figure";
+  auto nested=d->catalog.targets[1];nested.id="nested/geometry";nested.instance=3;nested.parent="#dress";nested.ancestors={"#dress","#bone","#group","#figure"};d->catalog.targets.push_back(nested);
+  auto instance=d->loaded.scene.instances[1];instance.id="nested";d->loaded.scene.instances.push_back(instance);
+  const auto mesh=d->loaded.scene.meshes[0];d->loaded.scene.meshes.resize(4,mesh);
+  for(size_t i=0;i<4;++i)d->loaded.scene.instances[i].mesh=uint32_t(i);
+  auto current=state_for(d);auto scene=d->loaded.scene;runtime::MorphRuntime runtime(scene,d->catalog.targets);
+  auto render=[&]{for(size_t i=0;i<4;++i)runtime.set_visible(i,current.snapshot.values[i].visible);const auto delta=runtime.evaluate();check(delta.meshes.empty()&&delta.instances.empty(),"Visibility edit recomputed geometry or transforms");return delta;};
+  // All combinations include A=true with every child false, and mixed deep descendants.
+  for(unsigned mask=0;mask<8;++mask){
+    current.snapshot.values[0].visible=true;for(size_t i=1;i<4;++i)current.snapshot.values[i].visible=(mask&(1u<<(i-1)))!=0;
+    render();const auto before=current;const auto rendered=scene.instances;
+    EditHistory history([&]{return current;},[&](const EditState &s){current=s;});
+    history.execute("hide parent",[&]{current.snapshot.values[0].visible=false;});render();
+    check(history.stack().count()==1,"Parent visibility must be one history entry");
+    for(size_t i=0;i<4;++i)check(!scene.instances[i].visible,"Hidden parent left a descendant rendered");
+    for(size_t i=1;i<4;++i)check(current.snapshot.values[i]==before.snapshot.values[i],"Parent edit changed descendant properties");
+    check(render().visibility.empty(),"Idle hidden state emitted another visibility delta");
+    runtime::PickingScene picking;picking.update(scene);check(picking.ray({.25f,1,.25f},{0,-1,0}).instance<0,"Hidden descendants remained pickable");
+    const auto hidden=current;history.undo();render();check(same_edit(current,before),"Undo changed authored child inputs");
+    for(size_t i=0;i<4;++i)check(scene.instances[i].visible==rendered[i].visible,"Undo failed to restore effective visibility");
+    history.redo();render();check(same_edit(current,hidden),"Redo changed authored child inputs");
+    history.execute("show parent",[&]{current.snapshot.values[0].visible=true;});render();
+    check(current.snapshot.values==before.snapshot.values,"Showing parent changed child visible flags");
+    check(scene.instances[3].visible==(current.snapshot.values[1].visible&&current.snapshot.values[3].visible),"Deep descendant ignored its intermediate parent");
+    auto restored=initial_snapshot(*d);apply_snapshot_json(*d,restored,snapshot_json(*d,hidden.snapshot));
+    check(restored.values==hidden.snapshot.values,"Saved effective visibility instead of authored values");
+  }
+  current.snapshot.values[0].visible=false;current.snapshot.values[1].visible=false;current.snapshot.values[3].visible=true;render();
+  current.snapshot.values[1].visible=true;render();check(!scene.instances[1].visible&&!scene.instances[3].visible,"Child bypassed a hidden ancestor");
+  current.snapshot.values[0].visible=true;render();check(scene.instances[1].visible&&scene.instances[3].visible,"Lost child edits made while parent was hidden");
+}
+static void attached_visibility(){
+  auto d=fixture();d->catalog.targets[0].character=d->catalog.targets[2].character=true;
+  const auto mesh=d->loaded.scene.meshes[0];d->loaded.scene.meshes.resize(3,mesh);
+  for(size_t i=0;i<3;++i)d->loaded.scene.instances[i].mesh=uint32_t(i);
+  auto add=[&](const std::string &id,const std::string &parent={},const std::string &fit={}) {
+    const auto index=d->catalog.targets.size();runtime::Target t;t.id=id+"/geometry";t.instance=uint32_t(index);t.parent=parent;t.conform_target=fit;d->catalog.targets.push_back(t);
+    daz::AssetObject o;o.id=id;o.instance=t.instance;o.parent=parent;o.conform_target=fit;d->loaded.objects.push_back(o);
+    auto instance=d->loaded.scene.instances[0];instance.id=t.id;instance.mesh=uint32_t(d->loaded.scene.meshes.size());d->loaded.scene.meshes.push_back(mesh);d->loaded.scene.instances.push_back(instance);return index;
+  };
+  const auto fitted=add("fitted","#wardrobe","#figure"),button=add("button","#fitted");
+  const auto rigid=add("rigid","#wardrobe");d->catalog.targets[rigid].rigid_follow.target="#fitted";
+  const auto graft=add("graft","#wardrobe");d->loaded.scene.instances[graft].graft_source=0;
+  const auto shell=add("shell","#wardrobe");d->loaded.scene.instances[shell].shell_source=int(graft);
+  const auto shell_child=add("shell-child","#shell");
+  const auto hair=add("hair","#wardrobe","#scalp"),scalp=add("scalp","#hair","#figure"),hair_tip=add("hair-tip","#hair");
+  const auto glasses=add("glasses","#head");d->catalog.targets[glasses].ancestors={"#head","#figure"};
+  const auto other_fit=add("other-fit",{},"#other");
+  const auto collision=add("collision-only","#wardrobe");d->catalog.targets[collision].smoothing.collision_target="#figure";
+  const auto detached=add("detached","#wardrobe");
+  const auto shell_part=add("shell");d->catalog.targets[shell_part].id="shell/extra-part";
+  auto copy=d->loaded.scene.instances[0];copy.id="independent-copy";copy.prototype=0;copy.instance_node="independent-copy";d->loaded.scene.instances.push_back(copy);
+  const std::set<size_t> related{0,1,fitted,button,rigid,graft,shell,shell_child,hair,scalp,hair_tip,glasses,shell_part};
+  auto current=state_for(d);current.snapshot.values[1].visible=false;current.snapshot.values[scalp].visible=false;
+  const auto original=current.snapshot.values;auto scene=d->loaded.scene;runtime::MorphRuntime runtime(scene,d->catalog.targets);
+  auto render=[&]{for(size_t i=0;i<original.size();++i)runtime.set_visible(i,current.snapshot.values[i].visible);return runtime.evaluate();};
+  render();check(scene.instances[hair].visible&&scene.instances[hair_tip].visible&&!scene.instances[scalp].visible,"Hidden scalp hid fitted hair");
+  const auto initial=scene.instances;current.snapshot.values[0].visible=false;const auto delta=render();
+  for(size_t i=0;i<original.size();++i){check(scene.instances[i].visible==!related.contains(i),"Character hide missed attachments or affected unrelated objects");if(i)check(current.snapshot.values[i]==original[i],"Character hide changed attachment properties");}
+  check(delta.visibility.size()==related.size()-2&&delta.meshes.empty()&&delta.instances.empty(),"Inherited visibility emitted wrong deltas or geometry edits");
+  check(scene.instances.back().visible,"Character visibility affected an independent Instance");
+  current.snapshot.values[0].visible=true;render();
+  for(size_t i=0;i<scene.instances.size();++i)check(scene.instances[i].visible==initial[i].visible,"Restoring character lost mixed visibility");
+  current.snapshot.values[fitted].visible=false;render();
+  check(!scene.instances[fitted].visible&&!scene.instances[button].visible&&scene.instances[0].visible&&scene.instances[rigid].visible,"Scene inheritance was confused with deformation dependencies");
+  current.snapshot.values[fitted].visible=true;current.snapshot.values[hair].visible=false;render();
+  check(!scene.instances[hair_tip].visible&&!scene.instances[scalp].visible&&scene.instances[0].visible,"Hair descendants failed to hide or hid the character");
+  current.snapshot.values[hair].visible=true;current.snapshot.values[0].visible=false;
+  d->catalog.targets[fitted].conform_target.clear();d->loaded.objects[fitted].conform_target.clear();
+  runtime::MorphRuntime rebound(scene,d->catalog.targets);for(size_t i=0;i<original.size();++i)rebound.set_visible(i,current.snapshot.values[i].visible);rebound.evaluate();
+  check(scene.instances[fitted].visible&&scene.instances[button].visible&&scene.instances[rigid].visible,"Detached accessory still inherited former character visibility");
+  check(scene.instances[2].visible&&scene.instances[other_fit].visible&&scene.instances[collision].visible&&scene.instances[detached].visible,"Visibility affected unrelated objects");
+}
 static void commands(){
   EditState current=state_for(fixture());int changes=0,restores=0;EditHistory history([&]{return current;},[&](const EditState &s){current=s;++restores;});history.changed=[&]{++changes;};
   auto roundtrip=[&](const QString &label,auto change){auto before=current;const auto count=history.stack().count();history.execute(label,change);auto after=current;check(history.stack().count()==count+1,"操作没有产生一条历史");history.undo();check(same_edit(current,before),"撤销没有恢复完整输入");history.redo();check(same_edit(current,after),"重做没有恢复完整输入");};
@@ -93,6 +170,34 @@ static EditState disk_fixture(const std::filesystem::path &folder){
   std::filesystem::create_directories(folder/"Morphs");std::ofstream(folder/"Morphs/shape.dsf")<<R"({"modifier_library":[{"id":"draft","parent":"/scene.duf#mesh","channel":{"type":"float","label":"Draft","value":0,"min":0,"max":1},"morph":{"vertex_count":3,"deltas":{"count":1,"values":[[0,1,0,0]]}}}]})";
   const auto file=folder/"scene.duf";std::ofstream(file)<<data.dump();auto d=std::make_shared<Document>();d->source_file=file;d->generation=3;d->loaded=daz::load(file,{{folder},false});d->catalog=daz::discover_morphs(d->loaded,{folder});d->skeletons=daz::load_skeletons(d->loaded);d->formulas=daz::enable_formulas(d->catalog,d->skeletons);auto state=state_for(d);state.snapshot.values[0].transform.translation_cm.x=12;state.snapshot.values[0].extension.kind=runtime::ExtensionKind::density;state.snapshot.values[0].extension.density=320;state.snapshot.material_overrides[d->loaded.scene.instances[0].id]["Skin"]["roughness"]=.78;state.manual=true;return state;
 }
+static void imported_visibility(){
+  QTemporaryDir temp;check(temp.isValid(),"Cannot create visibility fixture");const std::filesystem::path folder(temp.path().toStdWString());
+  const auto seed=disk_fixture(folder);const auto file=seed.document->source_file;auto data=daz::read_document_file(file);
+  const auto hidden=J::parse(R"([{"channels":[{"channel":{"id":"Visible","current_value":false}}]}])");
+  const auto original=data["scene"]["nodes"][0];data["scene"]["nodes"][0]["extra"]=hidden;
+  auto add=[&](const char *id,const char *parent,bool visible){auto node=original;node["id"]=id;node["parent"]=parent;const auto shape=std::string(id)+"-shape";node["geometries"][0]["id"]=shape;if(!visible)node["extra"]=hidden;data["scene"]["nodes"].push_back(node);auto material=data["scene"]["materials"][0];material["id"]=std::string(id)+"-mat";material["geometry"]="#"+shape;data["scene"]["materials"].push_back(material);};
+  add("child-on","#object",true);add("child-off","#object",false);add("grandchild","#child-off",true);
+  data["scene"]["nodes"].push_back({{"id","hidden-group"},{"extra",hidden}});add("group-child","#hidden-group",true);
+  std::ofstream(file)<<data.dump();Document d;d.source_file=file;d.generation=4;d.loaded=daz::load(file,{{folder},false});d.catalog=daz::discover_morphs(d.loaded,{folder});d.skeletons=daz::load_skeletons(d.loaded);d.formulas=daz::enable_formulas(d.catalog,d.skeletons);
+  auto index=[](const Document &doc,const std::string &node){for(size_t i=0;i<doc.catalog.targets.size();++i)if(doc.catalog.targets[i].id.starts_with(node+"/"))return i;throw std::runtime_error("Missing visibility fixture node");};
+  const auto root=index(d,"object"),on=index(d,"child-on"),off=index(d,"child-off"),deep=index(d,"grandchild"),group=index(d,"group-child");
+  auto s=initial_snapshot(d);check(!s.values[root].visible&&s.values[on].visible&&!s.values[off].visible&&s.values[deep].visible&&s.values[group].visible,"Import flattened local visibility into inherited state");
+  auto verify=[&](const Document &doc,Snapshot input,size_t r,size_t c,size_t h,size_t g,size_t fixed){
+    auto scene=doc.loaded.scene;runtime::DeformationRuntime runtime(scene,doc.catalog.targets,doc.skeletons.skins,doc.formulas.graphs);
+    auto shown=[&](size_t t){return scene.instances[doc.catalog.targets[t].instance].visible;};
+    runtime.evaluate(input.values,input.poses);check(!shown(r)&&!shown(c)&&!shown(h)&&!shown(g)&&!shown(fixed),"Loaded hidden ancestors were ignored");
+    input.values[r].visible=true;runtime.evaluate(input.values,input.poses);check(shown(r)&&shown(c)&&!shown(h)&&!shown(g)&&!shown(fixed),"Showing imported parent lost child or group visibility");
+    input.values[h].visible=true;runtime.evaluate(input.values,input.poses);check(shown(g),"Showing intermediate parent did not reveal its enabled descendant");
+  };
+  verify(d,s,root,on,off,deep,group);
+  const auto saved=folder/"visibility.dufex";save_scene_extension(saved,d,s);auto reopened=load_scene_extension(saved,{folder},5);
+  check(snapshot_json(d,s)==snapshot_json(*reopened.document,reopened.snapshot),"DUFEX failed to retain authored visibility");verify(*reopened.document,reopened.snapshot,root,on,off,deep,group);
+  Document combined;append_document(combined,d,"a/");append_document(combined,d,"b/");auto merged=initial_snapshot(combined);merged.values[index(combined,"b/object")].visible=true;
+  auto rendered=combined.loaded.scene;runtime::DeformationRuntime runtime(rendered,combined.catalog.targets,combined.skeletons.skins,combined.formulas.graphs);runtime.evaluate(merged.values,merged.poses);
+  check(!rendered.instances[combined.catalog.targets[index(combined,"a/child-on")].instance].visible&&rendered.instances[combined.catalog.targets[index(combined,"b/child-on")].instance].visible,"Appended scenes shared visibility inheritance");
+  const auto refreshed=refresh_parameters(combined,index(combined,"b/object"),{folder});
+  check(initial_snapshot(*refreshed).values[index(*refreshed,"b/child-on")].visible,"Parameter refresh lost authored child visibility");
+}
 static void recovery(){
   QTemporaryDir temp;check(temp.isValid(),"无法创建恢复测试目录");const std::filesystem::path folder(temp.path().toStdWString());auto state=disk_fixture(folder);const auto directory=temp.filePath("recovery");QString abnormal;
   {RecoverySession session(directory);abnormal=session.file();session.checkpoint(state,{folder});check(session.flush(),"恢复点写入失败");check(RecoverySession::candidates(directory).empty(),"运行中的恢复点被误认为崩溃");}
@@ -108,4 +213,4 @@ static void recovery(){
   const auto crash_directory=temp.filePath("crash");QProcess child;child.start(QCoreApplication::applicationFilePath(),{"--crash-writer",crash_directory,temp.path()});check(child.waitForFinished(30000)&&child.exitCode()==23,"崩溃恢复子进程失败");const auto crashed=RecoverySession::candidates(crash_directory);check(crashed.size()==1,"异常进程遗留锁未识别");check(restore_recovery(RecoverySession::read(crashed.front()),55).snapshot.values[0].transform.translation_cm.x==12,"真实异常退出后丢失场景");
   auto original=RecoverySession::read(abnormal);{RecoverySession session(directory);session.checkpoint(state,{folder});check(session.flush(),"有效恢复点失败");auto invalid=state;invalid.snapshot.values[0].transform.general_scale=std::numeric_limits<double>::quiet_NaN();session.checkpoint(invalid,{folder});check(!session.flush(),"无效恢复点没有报错");check(RecoverySession::read(session.file())["scene"]["state"]["objects"].begin().value()["transform"]["general_scale"]==1,"失败写入破坏上一个恢复点");}
 }
-int main(int argc,char **argv){QApplication app(argc,argv);try{if(argc==4&&std::string(argv[1])=="--crash-writer"){auto state=disk_fixture(std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString()));RecoverySession session(QString::fromLocal8Bit(argv[2]));session.checkpoint(state,{std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString())});check(session.flush(),"崩溃前恢复点写入失败");std::_Exit(23);}commands();gestures_and_limits();structure();controls();recovery();std::cout<<"PASS edit history, controls, limits, structure, recovery\n";return 0;}catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(int argc,char **argv){QApplication app(argc,argv);try{if(argc==4&&std::string(argv[1])=="--crash-writer"){auto state=disk_fixture(std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString()));RecoverySession session(QString::fromLocal8Bit(argv[2]));session.checkpoint(state,{std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString())});check(session.flush(),"崩溃前恢复点写入失败");std::_Exit(23);}subtree_visibility();attached_visibility();imported_visibility();commands();gestures_and_limits();structure();controls();recovery();std::cout<<"PASS edit history, controls, limits, structure, recovery\n";return 0;}catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

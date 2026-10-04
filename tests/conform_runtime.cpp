@@ -156,15 +156,15 @@ static void bone_attachment() {
 static void root_follower_and_visibility() {
   ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};
   scene.meshes={mesh,mesh,mesh};scene.instances.resize(3);for(int i=0;i<3;++i) scene.instances[i].mesh=i;
-  Target body;body.id="body/mesh";Target shoe;shoe.id="shoe/mesh";shoe.instance=1;shoe.conform_target="#body";
+  Target body;body.id="body/mesh";body.character=true;Target shoe;shoe.id="shoe/mesh";shoe.instance=1;shoe.conform_target="#body";
   Target child;child.id="child/mesh";child.instance=2;child.parent="#body";
   std::vector<Target> targets={body,shoe,child};std::vector<FormulaGraph> graphs={graph(body,-1),graph(shoe,-1),graph(child,-1)};std::vector<Skin> skins;
   DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(3);runtime.evaluate(values,{});
   values[0].transform.translation_cm={10,20,30};runtime.evaluate(values,{});
   require(distance({scene.instances[0].transform.point({})},{scene.instances[1].transform.point({})})<1e-7,"根层级 Fit To 没有跟随目标交互变换");
   values[0].visible=false;auto delta=runtime.evaluate(values,{});
-  require(!scene.instances[0].visible&&scene.instances[2].visible&&scene.instances[1].visible,"普通节点可见性错误地沿 parent 或 Fit To 传播");
-  require(delta.visibility.size()==1&&delta.meshes.empty()&&delta.instances.empty(),"切换可见性不应重算顶点或实例变换");
+  require(!scene.instances[0].visible&&!scene.instances[2].visible&&!scene.instances[1].visible&&values[1].visible&&values[2].visible,"角色隐藏没有作用于附件，或改写了子对象属性");
+  require(delta.visibility.size()==3&&delta.meshes.empty()&&delta.instances.empty(),"切换可见性不应重算顶点或实例变换");
   values[2].visible=false;values[0].visible=true;runtime.evaluate(values,{});
   require(scene.instances[0].visible&&!scene.instances[2].visible,"显示父对象覆盖了子对象自己的隐藏状态");
   values[0].transform={};runtime.evaluate(values,{});require(distance({scene.instances[1].transform.point({})},{{}})==0,"根层级 Fit To 重置产生漂移");

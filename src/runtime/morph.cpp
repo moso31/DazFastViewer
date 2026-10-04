@@ -1,4 +1,5 @@
 #include "runtime/morph.h"
+#include "runtime/visibility.h"
 #include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@ static void finite(ir::Vec3 p) {
 static bool same(ir::Vec3 a,ir::Vec3 b) {return a.x==b.x && a.y==b.y && a.z==b.z;}
 MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):scene_(scene),targets_(targets) {
   diagnostics::Scope scope("morph_construct");
+  visibility_children_=visibility_children(scene,targets);
   parents_.resize(targets.size(),-1);follow_offsets_.resize(targets.size());attachments_.resize(targets.size());
   reference_frames_.resize(targets.size());attachment_frames_.resize(targets.size());
   for(size_t i=0;i<targets.size();++i) {
@@ -26,7 +28,7 @@ MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):
     if(!used_meshes.insert(instance.mesh).second) throw std::runtime_error("可编辑对象必须拥有独立网格实例");
     bases_.push_back(mesh.positions);transforms_.push_back(instance.transform);active_.emplace_back();
     Properties property;
-    property.visible=instance.visible;
+    property.visible=target.initial_visible.value_or(instance.visible);
     for(const auto &m:target.morphs) {
       if(!std::isfinite(m.minimum)||!std::isfinite(m.maximum)||!std::isfinite(m.initial)||m.minimum>m.maximum)
         throw std::runtime_error("Morph 范围无效");
@@ -137,9 +139,9 @@ ir::Transform MorphRuntime::relative_transform(uint32_t source,uint32_t follower
 ir::Delta MorphRuntime::evaluate() {
   diagnostics::Scope scope("morph_evaluate");
   ir::Delta delta;
+  const auto visibility=effective_visibility(targets_,visibility_children_,values_);
   for(size_t t=0;t<targets_.size();++t) {
-    // DAZ 普通节点的 Visible 独立于 parent / Fit To；递归隐藏属于显式 UI 操作。
-    const bool visible=values_[t].visible;
+    const bool visible=visibility[t];
     auto &instance=scene_.instances.at(targets_[t].instance);
     if(instance.visible!=visible) {instance.visible=visible;delta.visibility.push_back({targets_[t].instance,visible});}
   }

@@ -33,6 +33,10 @@ struct Morph {
 };
 struct Target {
   std::string id,label,parent;
+  // Keep the authored node switch separate from inherited render visibility.
+  std::optional<bool> initial_visible;
+  bool ancestors_visible=true; // Fixed visibility of non-editable bone/group ancestors.
+  bool character=false;
   // DUF 节点收藏：空键为对象本身，其他键为骨骼资产 ID；空集合也代表已保存的列表。
   std::string favorite_scope;
   std::map<std::string,std::set<std::string>> favorites;
@@ -80,6 +84,7 @@ class MorphRuntime {
   std::vector<ir::Transform> attachments_;
   std::vector<ir::Transform> reference_frames_,attachment_frames_;
   std::vector<int> parents_;
+  std::vector<std::vector<size_t>> visibility_children_;
   std::vector<std::set<size_t>> active_;
   std::set<size_t> dirty_meshes_,dirty_transforms_;
   EvaluationStats stats_;
