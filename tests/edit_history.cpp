@@ -5,6 +5,7 @@
 #include "editor/scene_extension.h"
 #include "editor/material_panel.h"
 #include "editor/numeric_spinbox.h"
+#include "editor/hdr_color_dialog.h"
 #include "powerpose_fixture.h"
 #include <QApplication>
 #include <QTemporaryDir>
@@ -163,6 +164,10 @@ static void controls(){
   history.undo();slider->sync(0,-10,10,1);const auto drag_before=current;QTest::mousePress(slider,Qt::LeftButton,{},QPoint(10,8));QTest::mouseMove(slider,QPoint(55,8));QTest::keyPress(slider,Qt::Key_Shift);QTest::keyRelease(slider,Qt::Key_Shift);check(history.gesturing(),"Shift 精细调整中断了拖动历史");QTest::keyClick(slider,Qt::Key_Escape);check(same_edit(current,drag_before)&&history.stack().canRedo()&&!slider->isSliderDown(),"Esc 取消拖动未恢复原值与 redo");QTest::mouseRelease(slider,Qt::LeftButton);QApplication::processEvents();
   MaterialPanel panel;layout.addWidget(&panel);panel.bind(current.document,&current.snapshot,0);panel.edit_requested=[&](const QString &name,const std::function<void()> &change){history.execute(name,change);};
   panel.findChild<QComboBox *>()->setCurrentIndex(1);panel.restore_selection({{"figure","Skin"},{"dress","Nails"}});check(panel.selected_surfaces().size()==2,"多选测试未选择两个表面");auto *roughness=panel.findChild<QDoubleSpinBox *>("material/roughness");check(roughness,"材质参数控件缺失");const auto before=current;roughness->setValue(.63);auto after=current;history.undo();check(same_edit(current,before),"实际材质面板多选撤销错误");history.redo();check(same_edit(current,after)&&current.snapshot.material_overrides.size()==2,"实际材质面板多选重做错误");
+  const auto before_color=current;const int color_count=history.stack().count();bool opened=false;
+  QTimer::singleShot(0,[&]{auto *dialog=dynamic_cast<HdrColorDialog *>(QApplication::activeModalWidget());if(!dialog){if(auto *modal=qobject_cast<QDialog *>(QApplication::activeModalWidget()))modal->reject();return;}opened=true;dialog->findChild<QPushButton *>("hdrDouble")->click();dialog->findChild<QPushButton *>("hdrDouble")->click();dialog->accept();});
+  panel.findChild<QPushButton *>("material/base_color")->click();QApplication::processEvents();check(opened&&history.stack().count()==color_count+1,"HDR 弹窗多次调色未合并为一条历史");
+  const auto after_color=current;check(!same_edit(before_color,after_color),"HDR 弹窗没有写入修改");history.undo();check(same_edit(current,before_color),"HDR 多选颜色撤销错误");history.redo();check(same_edit(current,after_color),"HDR 多选颜色重做错误");
 }
 static EditState disk_fixture(const std::filesystem::path &folder){
   auto data=J::parse(R"({"node_library":[{"id":"root","type":"node"}],"geometry_library":[{"id":"mesh","vertices":{"count":3,"values":[[0,0,0],[100,0,0],[0,100,0]]},"polygon_material_groups":{"count":1,"values":["Skin"]},"polylist":{"count":1,"values":[[0,0,0,1,2]]}}],"scene":{"nodes":[{"id":"object","url":"#root","geometries":[{"id":"shape","url":"#mesh"}]}],"materials":[{"id":"mat","geometry":"#shape","groups":["Skin"]}]}})");

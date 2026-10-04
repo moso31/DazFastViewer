@@ -1,4 +1,5 @@
 #include "editor/material_panel.h"
+#include "editor/hdr_color_dialog.h"
 #include "render_ir/emission.h"
 #include <QFontDatabase>
 #include "editor/ui_scale.h"
@@ -27,6 +28,7 @@
 #include <QMenu>
 #include <QTimer>
 #include <QThreadPool>
+#include <QStyleOptionSlider>
 #include <fstream>
 #include <iostream>
 
@@ -132,9 +134,12 @@ static void clipboard_ui(QApplication &app){
   torso.scene.materials.resize(1);torso.report["materials"].erase(1);rejected=false;try{apply_materials(*compatible,2,torso,&state);}catch(...){rejected=true;}check(rejected,"G8.1 别名扩散到不相关模型");
 }
 #include "material_uv_selection.inl"
+#include "material_hdr_color.inl"
 int main(int argc,char **argv){
   QApplication app(argc,argv);QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");app.setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
   try{
+    material_hdr_color(app,argc>2&&std::string(argv[1])=="--hdr-color"?QString::fromLocal8Bit(argv[2]):QString{});
+    if(argc>1&&std::string(argv[1])=="--hdr-color"){std::cout<<"HDR color dialog and material integration: PASS\n";return 0;}
     if(argc>1&&std::string(argv[1])=="--uv-selection"){real_uv_selection(app,app.arguments());return 0;}
     {QTemporaryDir uv_temp;check(uv_temp.isValid(),"UV 测试目录创建失败");material_uv_selection(app,std::filesystem::path(uv_temp.path().toStdWString()));}
     clipboard_ui(app);

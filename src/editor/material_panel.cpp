@@ -3,6 +3,7 @@
 #include "editor/folder_icon.h"
 #include "editor/numeric_slider.h"
 #include "editor/numeric_spinbox.h"
+#include "editor/hdr_color_dialog.h"
 #include <QTreeWidget>
 #include <QHeaderView>
 #include <QLineEdit>
@@ -15,7 +16,6 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QToolButton>
-#include <QColorDialog>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMenu>
@@ -40,8 +40,16 @@ public:using QLabel::QLabel;
 protected:void paintEvent(QPaintEvent *)override{QPainter painter(this);painter.setPen(palette().color(isEnabled()?QPalette::Active:QPalette::Disabled,QPalette::WindowText));painter.drawText(rect(),Qt::AlignVCenter,fontMetrics().elidedText(text(),Qt::ElideRight,width()));}
 };
 QString text(const std::string &s){return QString::fromUtf8(s.data(),qsizetype(s.size()));}
-double linear(double v){return v<=.04045?v/12.92:std::pow((v+.055)/1.055,2.4);}
-double srgb(double v){return v<=.0031308?v*12.92:1.055*std::pow(v,1/2.4)-.055;}
+using hdr_color::linear;
+using hdr_color::srgb;
+void color_swatch(QPushButton *button,const J &value,bool mixed=false){
+  const auto c=value.get<hdr_color::Color>();const auto color=hdr_color::preview(c);const double strength=std::max(1.,hdr_color::peak(c));
+  button->setFixedWidth(strength>1?52:24);
+  button->setText(mixed?QStringLiteral("*"):strength>=1000?QStringLiteral("HDR"):strength>1?QStringLiteral("×%1").arg(strength,0,'g',3):QString{});
+  button->setStyleSheet("background-color: "+color.name()+"; color: "+(color.lightnessF()>.5?"#111":"#fff")+"; border: 1px solid #888;");
+  button->setToolTip(QStringLiteral("选择颜色与 HDR 强度\n%1线性 RGB：%2, %3, %4\n色块强度：×%5（HDR 色块按强度归一化显示）")
+    .arg(mixed?QStringLiteral("多值；预览为第一个表面的颜色\n"):QString{}).arg(c[0],0,'g',7).arg(c[1],0,'g',7).arg(c[2],0,'g',7).arg(strength,0,'g',6));
+}
 std::string utf8(const QString &s){return s.toUtf8().toStdString();}
 void thumbnail(QLabel *label,const QString &file){
   label->setFixedSize(30,30);label->setAlignment(Qt::AlignCenter);label->setObjectName("materialThumbnail");
@@ -221,15 +229,18 @@ void MaterialPanel::rebuild_properties(){
     }else if(p.kind==P::choice){auto *combo=new QComboBox;combo->setObjectName("material/"+text(p.id));for(const auto &name:p.choices)combo->addItem(text(name));combo->setCurrentIndex(mixed?-1:current.get<int>());combo->setPlaceholderText(QStringLiteral("多值"));controls->addWidget(combo,1);connect(combo,&QComboBox::currentIndexChanged,this,[this,parameter](int index){if(index>=0)commit(*parameter,index);});
     }else if(p.kind==P::color||p.kind==P::vector){
       QPushButton *swatch=nullptr;
-      if(p.kind==P::color){swatch=new QPushButton(mixed?QStringLiteral("多值"):QStringLiteral("颜色"));swatch->setFixedWidth(24);swatch->setObjectName("material/"+text(p.id));controls->addWidget(swatch);auto color=QColor::fromRgbF(std::clamp(srgb(current[0]),0.,1.),std::clamp(srgb(current[1]),0.,1.),std::clamp(srgb(current[2]),0.,1.));swatch->setStyleSheet("background-color: "+color.name()+"; border: 1px solid #888;");connect(swatch,&QPushButton::clicked,this,[this,parameter]{const auto selected=surfaces();if(selected.empty())return;const auto c=value(selected.front(),*parameter);const auto latest=QColor::fromRgbF(std::clamp(srgb(c[0]),0.,1.),std::clamp(srgb(c[1]),0.,1.),std::clamp(srgb(c[2]),0.,1.));const auto chosen=QColorDialog::getColor(latest,this,QStringLiteral("选择颜色（sRGB）"));if(chosen.isValid()){commit(*parameter,J::array({linear(chosen.redF()),linear(chosen.greenF()),linear(chosen.blueF())}));schedule_properties();}});}
-      for(int component=0;component<3;++component){auto *spin=new NumericSpinBox(true);spin->setButtonSymbols(QAbstractSpinBox::NoButtons);spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setObjectName("material/"+text(p.id)+"/"+QString::number(component));spin->setDecimals(6);const double shown=p.kind==P::color?srgb(current[size_t(component)]):current[size_t(component)].get<double>();spin->setRange(0,std::max(p.maximum,shown));spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->setPrefix(QString("%1 ").arg("RGB"[component]));spin->sync(shown);if(mixed)spin->setSuffix(QStringLiteral(" *"));controls->addWidget(spin,1);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,component,spin,swatch](double v){spin->setSuffix({});commit(*parameter,parameter->kind==P::color?linear(v):v,component);if(swatch){const auto selected=surfaces();if(!selected.empty()){auto c=value(selected.front(),*parameter);auto color=QColor::fromRgbF(std::clamp(srgb(c[0]),0.,1.),std::clamp(srgb(c[1]),0.,1.),std::clamp(srgb(c[2]),0.,1.));swatch->setStyleSheet("background-color: "+color.name()+"; border: 1px solid #888;");swatch->setText({});}}});}
+      if(p.kind==P::color){swatch=new QPushButton;swatch->setObjectName("material/"+text(p.id));controls->addWidget(swatch);color_swatch(swatch,current,mixed);
+        connect(swatch,&QPushButton::clicked,this,[this,parameter]{const auto selected=surfaces();if(selected.empty())return;const auto initial=value(selected.front(),*parameter).get<hdr_color::Color>();
+          HdrColorDialog dialog(initial,linear(parameter->maximum),this);
+          if(dialog.exec()==QDialog::Accepted&&dialog.color()!=initial){commit(*parameter,J(dialog.color()));schedule_properties();}
+        });}
+      for(int component=0;component<3;++component){auto *spin=new NumericSpinBox(true);spin->setButtonSymbols(QAbstractSpinBox::NoButtons);spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setObjectName("material/"+text(p.id)+"/"+QString::number(component));spin->setDecimals(6);const double shown=p.kind==P::color?srgb(current[size_t(component)]):current[size_t(component)].get<double>();spin->setRange(0,std::max(p.maximum,shown));spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->setPrefix(QString("%1 ").arg("RGB"[component]));spin->sync(shown);if(mixed)spin->setSuffix(QStringLiteral(" *"));controls->addWidget(spin,1);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,component,spin,swatch](double v){spin->setSuffix({});commit(*parameter,parameter->kind==P::color?linear(v):v,component);if(swatch){const auto selected=surfaces();if(!selected.empty()){const auto c=value(selected.front(),*parameter);bool mixed=false;for(auto s:selected)mixed|=value(s,*parameter)!=c;color_swatch(swatch,c,mixed);}}});}
     }else if(p.kind==P::texture){auto *button=new QPushButton;button->setObjectName("material/"+text(p.id));button->setText(mixed?QStringLiteral("多张贴图"):current.is_null()?QStringLiteral("无贴图 · 点击选择"):QFileInfo(text(current.at("file").get<std::string>())).fileName());button->setToolTip(current.is_null()?QStringLiteral("选择场景贴图或图像文件"):text(current.dump(2)));controls->addWidget(button,1);
       connect(button,&QPushButton::clicked,this,[this,parameter,button]{QMenu menu;auto *browse=menu.addAction(QStringLiteral("浏览图像文件…"));auto *clear=menu.addAction(QStringLiteral("移除贴图"));menu.addSeparator();std::map<QAction *,J> available;const auto &scene=document_->loaded.scene;for(size_t i=0;i<scene.textures.size();++i){ir::Material m;m.*parameter->texture_member=int(i);auto v=material_value(m,scene.textures,*parameter);auto *action=menu.addAction(QFileInfo(text(v["file"].get<std::string>())).fileName());action->setToolTip(text(v["file"].get<std::string>()));available.emplace(action,std::move(v));}auto *action=menu.exec(button->mapToGlobal(QPoint(0,button->height())));if(!action)return;
         if(action==clear)commit(*parameter,J{});else if(action==browse){auto file=QFileDialog::getOpenFileName(this,QStringLiteral("选择材质贴图"),{},QStringLiteral("图像 (*.png *.jpg *.jpeg *.tif *.tiff *.exr *.hdr *.bmp *.tga *.webp);;所有文件 (*)"));if(file.isEmpty())return;commit(*parameter,J{{"file",utf8(QFileInfo(file).absoluteFilePath())}});}else commit(*parameter,available.at(action));schedule_properties();});
     }
     if(p.kind==P::texture){auto *preview=new QLabel;thumbnail(preview,!mixed&&!current.is_null()?text(current.at("file").get<std::string>()):QString{});controls->addWidget(preview);if(auto *button=row->findChild<QPushButton *>()){button->setMinimumWidth(45);button->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}}
     if(p.kind==P::texture){auto *locate=new QToolButton;locate->setObjectName("materialLocate/"+text(p.id));locate->setIcon(folder_icon());locate->setToolTip(QStringLiteral("在内容库中定位"));locate->setFixedWidth(22);locate->setEnabled(!mixed&&!current.is_null());horizontal->insertWidget(horizontal->count()-1,locate);connect(locate,&QToolButton::clicked,this,[this,parameter]{const auto selected=surfaces();if(selected.empty()||!locate_file)return;const auto v=value(selected.front(),*parameter);if(!v.is_null())locate_file(text(v.at("file").get<std::string>()));});}
-    if(p.kind==P::color)if(auto *button=row->findChild<QPushButton *>()){button->setFixedWidth(24);button->setText(mixed?QStringLiteral("*"):QString{});button->setToolTip(QStringLiteral("选择颜色；HDR 分量可在右侧直接输入"));}
     if(p.kind==P::choice)if(auto *combo=row->findChild<QComboBox *>()){combo->setMinimumWidth(40);combo->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}
     auto children=row->findChildren<QWidget *>();children.push_back(row);for(auto *child:children){child->setProperty("materialWheelRow",text(p.id));child->installEventFilter(this);}
     rows->addWidget(row);
