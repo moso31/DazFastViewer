@@ -216,7 +216,8 @@ void PhysicsSimulation::Impl::build(const std::function<bool()> &cancel){
   }
   stats.objects=soft.size()+rigids.size();stats.prepare_ms=elapsed(begin);
 }
-PhysicsSimulation::PhysicsSimulation(){static std::once_flag once;std::call_once(once,[]{RegisterDefaultAllocator();Factory::sInstance=new Factory;RegisterTypes();});}
+void initialize_physics(){static std::once_flag once;std::call_once(once,[]{RegisterDefaultAllocator();Factory::sInstance=new Factory;RegisterTypes();});}
+PhysicsSimulation::PhysicsSimulation(){initialize_physics();}
 PhysicsSimulation::~PhysicsSimulation()=default;
 void PhysicsSimulation::update(std::shared_ptr<const ir::Scene> scene,const std::vector<PhysicsTarget> &targets,const PhysicsOptions &options,const std::vector<uint32_t> &colliders,const std::function<bool()> &cancel){
   validate_physics(options);

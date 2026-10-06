@@ -18,7 +18,7 @@
   }
   int extension_target() const {
     if(loading_||!document_||selected_<0||selected_light_>=0||hierarchy_->selectedItems().size()!=1)return -1;
-    if(selected_water())return -1;
+    if(selected_water()||selected_cloud())return -1;
     const auto &t=document_->catalog.targets.at(size_t(selected_));const auto &mesh=document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(t.instance).mesh);
     return mesh.triangles.empty()&&mesh.polygons.empty()?-1:selected_;
   }

@@ -47,6 +47,15 @@ void validate(const Camera &camera) {
   for(float f:camera.transform.value) if(!std::isfinite(f)) throw std::runtime_error("IR: 相机矩阵包含非有限值");
 }
 void validate(const Material &m,size_t texture_count) {
+  if(m.cloud){const auto &c=*m.cloud;
+    auto finite=[](Vec3 p){return std::isfinite(p.x)&&std::isfinite(p.y)&&std::isfinite(p.z);};
+    auto positive=[&](Vec3 p){return finite(p)&&p.x>0&&p.y>0&&p.z>0;};
+    if(m.water||!positive(c.half_extent)||!finite(c.offset)||!std::isfinite(c.density)||c.density<0||c.density>10||!std::isfinite(c.coverage)||c.coverage<0||c.coverage>1||!std::isfinite(c.scale)||c.scale<1||!std::isfinite(c.detail)||c.detail<0||c.detail>4||c.steps<16||c.steps>192||c.colliders.size()>16)throw std::runtime_error("IR: 体积云参数无效");
+    for(const auto &o:c.colliders){
+      if(!finite(o.center)||!finite(o.tail)||!std::isfinite(o.padding)||o.padding<0||!std::isfinite(o.softness)||o.softness<0||!std::isfinite(o.decay)||o.decay<0||!std::isfinite(o.tail_length)||o.tail_length<0||o.planes.size()<4||o.planes.size()>max_cloud_planes)throw std::runtime_error("IR: 体积云碰撞体无效");
+      for(const auto &p:o.planes)if(!finite(p.normal)||std::hypot(p.normal.x,p.normal.y,p.normal.z)==0||!std::isfinite(p.distance))throw std::runtime_error("IR: 体积云凸包平面无效");
+    }
+  }
   if(m.water){const auto &w=*m.water;for(float v:{w.depth,w.clarity,w.ripples,w.foam,w.time,w.foam_uv_scale})if(!std::isfinite(v))throw std::runtime_error("IR: 水体参数无效");if(w.depth<=0||w.clarity<=0||w.foam<0||w.foam>1||w.ripples<0||w.foam_uv_scale<.01f||w.foam_uv_scale>100)throw std::runtime_error("IR: 水体参数范围无效");}
   for(float f:{m.overlay_weight,m.overlay_roughness,m.overlay_color.x,m.overlay_color.y,m.overlay_color.z,m.coat_normal,m.coat_grazing,m.coat_exponent})if(!std::isfinite(f)||f<0)throw std::runtime_error("IR: 覆盖层或清漆参数无效");
   for(float f:{m.emission_color.x,m.emission_color.y,m.emission_color.z,m.emission_luminance,m.emission_temperature,m.emission_efficacy})

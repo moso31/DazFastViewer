@@ -37,6 +37,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   using namespace ccl;
   diagnostics::Scope scope("adapter_sync");
   source.validate();
+  cloud_quality(source);
   std::set<std::string> identities;
   for(const auto &mesh:source.meshes) if(!identities.insert(mesh.id).second) throw std::runtime_error("网格身份重复，无法安全增量同步："+mesh.id);
   // 所有模板及快照先准备完毕。非法等级、拓扑和主要 CPU 分配失败不会破坏现有节点。

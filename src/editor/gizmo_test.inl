@@ -1,4 +1,5 @@
-  bool gizmo_test_=false;
+  bool gizmo_test_=false,gizmo_scale_test_=false,gz_scale_pending_=false;
+  runtime::TransformValues gz_scaled_;
   int gz_case_=0,gz_phase_=0,gz_steps_=0,gz_target_=-1,gz_skin_=-1,gz_joint_=-1,gz_index_=0;
   int gz_ground_=0,gz_other_target_=-1;
   uint64_t gz_ground_requests_=0;
@@ -18,25 +19,40 @@
     if(!state.error.empty()||!state.edit_error.empty()||!state.resource_error.empty()) {finish_test(false,state.error+state.edit_error+state.resource_error);return;}
     if(loading_||!document_||state.generation!=document_->generation) return;
     const bool ready=state.applied_revision==snapshot_.revision&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&!state.preview&&state.samples>=4&&state.selections==tree_selection(hierarchy_);
-    struct Case {GizmoTool tool;GizmoSpace space;bool bone=false;int cancel=0;bool light=false;bool plane=false;};
-    static const Case cases[]={{GizmoTool::translate,GizmoSpace::world},{GizmoTool::translate,GizmoSpace::local},
+    struct Case {GizmoTool tool;GizmoSpace space;bool bone=false;int cancel=0;bool light=false;bool plane=false;int axis=0;};
+    std::vector<Case> cases={{GizmoTool::translate,GizmoSpace::world},{GizmoTool::translate,GizmoSpace::local},
       {GizmoTool::rotate,GizmoSpace::local},{GizmoTool::rotate,GizmoSpace::world},{GizmoTool::scale,GizmoSpace::local},
       {GizmoTool::rotate,GizmoSpace::world,true},{GizmoTool::rotate,GizmoSpace::local,true},
       {GizmoTool::translate,GizmoSpace::world,false,1},{GizmoTool::rotate,GizmoSpace::world,false,2},{GizmoTool::scale,GizmoSpace::local,false,3},
       {GizmoTool::translate,GizmoSpace::world,false,0,true},{GizmoTool::rotate,GizmoSpace::local,false,0,true},{GizmoTool::scale,GizmoSpace::local,false,0,true},
       {GizmoTool::translate,GizmoSpace::local,false,0,false,true},{GizmoTool::translate,GizmoSpace::world,false,0,false,true}};
+    if(gizmo_scale_test_)cases={{GizmoTool::translate,GizmoSpace::world,false,0,false,false,0},{GizmoTool::translate,GizmoSpace::world,false,0,false,false,1},{GizmoTool::translate,GizmoSpace::world,false,0,false,false,2},{GizmoTool::translate,GizmoSpace::local,false,0,false,false,0},{GizmoTool::translate,GizmoSpace::local,false,0,false,false,1},{GizmoTool::translate,GizmoSpace::local,false,0,false,false,2}};
     std::ofstream(output_/"gizmo-progress.json")<<nlohmann::json({{"case",gz_case_},{"phase",gz_phase_},{"ground",gz_ground_},{"ready",ready},{"dragging",state.pose_dragging},{"restoring",state.pose_restoring},{"available",state.gizmo_available},{"lines",state.gizmo_shape.lines.size()},{"revision",snapshot_.revision},{"applied",state.applied_revision},{"selection",state.selections}}).dump();
     if(gz_target_<0&&ready) {
       for(size_t s=0;s<document_->skeletons.skins.size()&&gz_target_<0;++s) for(size_t t=0;t<document_->catalog.targets.size();++t) if(document_->catalog.targets[t].instance==document_->skeletons.skins[s].instance&&document_->catalog.targets[t].conform_target.empty()) {
+        if(gizmo_scale_test_&&!text(document_->catalog.targets[t].label).contains(QStringLiteral("Seo Hyun"),Qt::CaseInsensitive))continue;
         const auto &skin=document_->skeletons.skins[s];for(size_t j=0;j<skin.joints.size();++j) if(skin.joints[j].name=="lHand") {gz_target_=int(t);gz_skin_=int(s);gz_joint_=int(j);break;}
       }
       if(gz_target_<0) {finish_test(false,"Gizmo 验证需要带左手骨骼的角色");return;}gz_initial_=snapshot_;gz_before_=state;
       // 非零初始旋转可区分 Local 和 World，结束时逐项恢复到原始场景。
-      snapshot_.values[gz_target_].transform.rotation_degrees={15,25,35};send();return;
+      snapshot_.values[gz_target_].transform.rotation_degrees={15,25,35};
+      if(gizmo_scale_test_){choose(gz_target_);if(auto *dock=findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"))){dock->show();dock->raise();}auto *groups=parameters_->findChild<QTreeWidget *>("parameterGroups");groups->setCurrentItem(groups->topLevelItem(0));parameters_->query(QStringLiteral("transform/general_scale"));gz_scale_pending_=true;gz_at_=now();}
+      else send();return;
     }
     if(gz_target_<0) return;
+    if(gz_scale_pending_){
+      auto *rows=parameters_->findChild<QTreeWidget *>("parameterRows");for(auto *p=parameters_->parentWidget();p;p=p->parentWidget())if(auto *scroll=qobject_cast<QScrollArea *>(p))scroll->ensureWidgetVisible(rows);
+      QDoubleSpinBox *scale=nullptr;for(auto *spin:parameters_->findChildren<QDoubleSpinBox *>())if(spin->property("parameterId").toString()=="transform/general_scale")scale=spin;
+      if(!scale){if(now()-gz_at_>10)finish_test(false,"缺少角色 Scale 控件");return;}
+      scale->setValue(100000);gz_scaled_=snapshot_.values[gz_target_].transform;gz_checks_.push_back({{"scale_percent",scale->value()},{"general_scale",gz_scaled_.general_scale},{"target",document_->catalog.targets[gz_target_].label}});gz_scale_pending_=false;return;
+    }
     if(gz_case_>=int(std::size(cases))) {
       if(!ready||state.pose_restoring) return;
+      if(gizmo_scale_test_){
+        if(gz_phase_!=9){snapshot_.values=gz_initial_.values;snapshot_.poses=gz_initial_.poses;send();gz_phase_=9;return;}
+        if(state.mesh_hashes!=gz_before_.mesh_hashes||state.instance_transforms!=gz_before_.instance_transforms){finish_test(false,"极端缩放拖动测试未恢复初始场景");return;}
+        std::ofstream(output_/"gizmo-check.json")<<nlohmann::json({{"pass",true},{"cases",gz_checks_},{"restored",true}}).dump(2);finish_test(true);return;
+      }
       auto *ratio=ground_panel_->findChild<QDoubleSpinBox *>("GroundAlignmentRatio");
       if(gz_ground_==0) {
         snapshot_.values=gz_initial_.values;snapshot_.poses=gz_initial_.poses;snapshot_.values[gz_target_].transform.rotation_degrees={20,15,10};snapshot_.values[gz_target_].transform.scale={1.2f,1.3f,.9f};snapshot_.values[gz_target_].transform.translation_cm.y=57;
@@ -92,7 +108,7 @@
       gz_at_=now();gz_phase_=2;return;
     }
     if(gz_phase_==2&&ready&&now()-gz_at_>.2) {
-      gz_lines_.clear();const int handle=c.plane?(state.gizmo_shape.planes.empty()?-1:state.gizmo_shape.planes.front().handle):c.tool==GizmoTool::scale?3:0;for(const auto &line:state.gizmo_shape.lines) if(line.handle==handle) gz_lines_.push_back(line);
+      gz_lines_.clear();const int handle=c.plane?(state.gizmo_shape.planes.empty()?-1:state.gizmo_shape.planes.front().handle):c.tool==GizmoTool::scale?3:c.axis;for(const auto &line:state.gizmo_shape.lines) if(line.handle==handle) gz_lines_.push_back(line);
       gz_index_=-1;for(size_t k=0;k<gz_lines_.size();++k) {const auto &l=gz_lines_[k];QPoint p(qRound((l.a.x+l.b.x)*.5),qRound((l.a.y+l.b.y)*.5));if(state.gizmo_shape.hit(float(p.x()),float(p.y()))==handle&&p.x()>15&&p.y()>15&&p.x()<state.width-15&&p.y()<state.height-15) {gz_index_=int(k);gz_point_=p;break;}}
       if(c.plane&&!state.gizmo_shape.planes.empty()) {ir::Vec2 center{};for(auto p:state.gizmo_shape.planes.front().corners) {center.x+=p.x/4;center.y+=p.y/4;}gz_point_={qRound(center.x),qRound(center.y)};gz_index_=state.gizmo_shape.hit(float(gz_point_.x()),float(gz_point_.y()))==handle?0:-1;}
       if(gz_index_<0) {finish_test(false,"没有可见手柄供实际命中");return;}
@@ -111,12 +127,18 @@
       mouse(WM_LBUTTONUP,p);gz_phase_=4;return;
     }
     if(gz_phase_==4&&ready&&!state.pose_restoring&&now()-gz_at_>.3) {
-      const auto base=gz_initial_.values[gz_target_].transform;auto expected=base;expected.rotation_degrees={15,25,35};
+      const auto base=gz_initial_.values[gz_target_].transform;auto expected=base;expected.rotation_degrees={15,25,35};if(gizmo_scale_test_)expected=gz_scaled_;
       const bool changed=c.light?snapshot_.lights!=gz_initial_.lights:c.bone?snapshot_.poses!=gz_initial_.poses:runtime::make_transform(snapshot_.values[gz_target_].transform)!=runtime::make_transform(expected);
       if(changed==bool(c.cancel)) {finish_test(false,c.cancel?"取消 Gizmo 后仍改写参数":"松手未提交 Gizmo 变换");return;}
+      if(gizmo_scale_test_){
+        const auto &shape=gz_drag_before_.gizmo_shape;ir::Vec2 end;for(const auto &line:shape.lines)if(line.handle==c.axis){end=line.b;break;}const float x=end.x-shape.center.x,y=end.y-shape.center.y,amount=shape.radius*(36*x-12*y)/(x*x+y*y);const auto a=shape.axes[c.axis],p=shape.pivot,q=state.gizmo_shape.pivot;
+        const double error=std::hypot(double(q.x-p.x-a.x*amount),double(q.y-p.y-a.y*amount),double(q.z-p.z-a.z*amount));
+        if(error>std::max(.01,std::abs(double(amount))*.002)){finish_test(false,"极端缩放下平移轴未跟随鼠标距离");return;}
+        gz_checks_.push_back({{"axis",c.axis},{"space",int(c.space)},{"world_distance_m",amount},{"error_m",error}});
+      }
       if(history_->stack().index()!=gz_history_index_+(c.cancel?0:1)){finish_test(false,"Gizmo 拖动未对应一条历史或取消仍入栈");return;}
       if(!c.cancel){const auto after=capture_edit();const auto camera=renderer_->input_camera();history_move(false);if(!same_edit(capture_edit(),*gz_history_before_)){finish_test(false,"真实 Gizmo 拖动无法撤销");return;}history_move(true);if(!same_edit(capture_edit(),after)||renderer_->input_camera().epoch!=camera.epoch){finish_test(false,"真实 Gizmo 拖动重做错误或改变相机");return;}}
       gz_checks_.push_back({{"tool",int(c.tool)},{"space",int(c.space)},{"bone",c.bone},{"light",c.light},{"plane",c.plane},{"cancel",c.cancel},{"solve_ms",state.pose_solve_ms},{"input_to_present_ms",state.pose_latency_ms}});
-      snapshot_.values=gz_initial_.values;snapshot_.values[gz_target_].transform.rotation_degrees={15,25,35};snapshot_.poses=gz_initial_.poses;snapshot_.lights=gz_initial_.lights;send();++gz_case_;gz_phase_=0;return;
+      snapshot_.values=gz_initial_.values;snapshot_.values[gz_target_].transform.rotation_degrees={15,25,35};if(gizmo_scale_test_)snapshot_.values[gz_target_].transform=gz_scaled_;snapshot_.poses=gz_initial_.poses;snapshot_.lights=gz_initial_.lights;send();++gz_case_;gz_phase_=0;return;
     }
   }

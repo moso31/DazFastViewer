@@ -8,6 +8,7 @@
 #include "daz/material_uv.h"
 #include "city/model.h"
 #include "water/model.h"
+#include "cloud/model.h"
 #include <map>
 
 namespace dfv::editor {
@@ -34,12 +35,14 @@ struct Document {
   std::vector<AttachmentBinding> attachments;
   city::Cities cities;
   water::Waters waters;
+  cloud::Clouds clouds;
 };
 struct Snapshot {
   std::optional<std::array<float,6>> view;
   city::Views city_views;
   // Parameter edits share the immutable scene and only retain changed water recipes.
   water::Waters water_overrides;
+  cloud::Clouds cloud_overrides;
   std::map<std::string,runtime::TransformValues> group_transforms;
   InstanceGrounds instance_ground;
   MaterialOverrides material_overrides;

@@ -25,6 +25,8 @@
 #include "city/document.h"
 #include "water/document.h"
 #include "water/panel.h"
+#include "cloud/document.h"
+#include "cloud/panel.h"
 #include "render_ir/default_options.h"
 #include <QStandardPaths>
 #include <QCryptographicHash>
@@ -111,6 +113,8 @@ class Editor final:public EditorWindow {
   #include "editor/render_profile.inl"
   #include "city/editor_ui.inl"
   #include "water/editor_ui.inl"
+  #include "cloud/editor_ui.inl"
+  #include "cloud/editor_test.inl"
   #include "water/editor_test.inl"
   #include "city/editor_test.inl"
   QWidget *host_=nullptr;
@@ -892,12 +896,12 @@ class Editor final:public EditorWindow {
     selected_group_.clear();if(index==-4&&document_){auto *item=active_selection(hierarchy_);if(item){const auto id=item->data(0,Qt::UserRole+3).toString().toStdString();if(group_node(*document_,id))selected_group_=id;}}
     selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
     if(environment_tools_)environment_tools_->setVisible(index==-2);
-    bind_water();
-    parameters_->setVisible(!selected_water());
-    for(auto *control:std::initializer_list<QWidget *>{refresh_parameters_,retry_parameters_,manual_morph_,apply_parameters_})if(control)control->setVisible(!selected_water());
+    bind_water();bind_cloud();
+    parameters_->setVisible(!selected_water()&&!selected_cloud());
+    for(auto *control:std::initializer_list<QWidget *>{refresh_parameters_,retry_parameters_,manual_morph_,apply_parameters_})if(control)control->setVisible(!selected_water()&&!selected_cloud());
     if(materials_){auto *item=active_selection(hierarchy_);materials_->bind(document_,&snapshot_,index,index==-4&&item?item->data(0,Qt::UserRole+3).toString().toStdString():std::string{});}
     bind_extension();bind_physics();
-    pose_status_->setVisible(!selected_water());
+    pose_status_->setVisible(!selected_water()&&!selected_cloud());
     if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1);if(ground_panel_)ground_panel_->bind(target!=-1,ground_ratio(target),ground_offset(target),ground_body_only(target),target==-4,selected_water()&&target>=0);}
     if(delete_) delete_->setEnabled(!loading_&&document_&&(index>=0||light>=0));
     if(renderer_) renderer_->select(document_?document_->generation:0,light<0?index:-1,joint,tree_selection(hierarchy_),index>=0&&light<0&&hierarchy_->selectedItems().size()==1,hierarchy_->selectedItems().size()==1?selected_group_:std::string{});
@@ -918,7 +922,7 @@ class Editor final:public EditorWindow {
     if(!selected_group_.empty()){bind_group();return;}
     if(index<0 || !document_) {auto *item=active_selection(hierarchy_);selection_->setText(index<=-4&&item?item->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
     const auto &target=document_->catalog.targets[size_t(index)];selection_->setText(text(target.label));
-    if(selected_water()){parameters_->bind(nullptr,nullptr);return;}
+    if(selected_water()||selected_cloud()){parameters_->bind(nullptr,nullptr);return;}
     const auto &values=snapshot_.values[size_t(index)];
     const auto &t=values.transform;
     const float data[]={t.translation_cm.x,t.translation_cm.y,t.translation_cm.z,t.rotation_degrees.x,t.rotation_degrees.y,t.rotation_degrees.z,t.scale.x*100,t.scale.y*100,t.scale.z*100};
@@ -999,6 +1003,7 @@ class Editor final:public EditorWindow {
     if(empty_test_)report["scope"]="empty-startup-refresh";
     if(city_test_){report["scope"]="city-generation-lod-materials-history-reopen";report["checks"]=city_checks_;report["city_stage"]=city_test_stage_;}
     if(water_test_){report["scope"]=water_scene_test_?"water-full-scene-create-lod-time-undo":"water-menu-coast-time-history-save";report["checks"]=water_checks_;report["water_stage"]=water_test_stage_;}
+    if(cloud_test_){report["scope"]="cloud-menu-static-time-history-save";report["checks"]=cloud_checks_;report["cloud_stage"]=cloud_test_stage_;}
     if(capture_test_&&document_) {report["scope"]="scene-render";report["instances"]=document_->catalog.targets.size();report["skins"]=document_->skeletons.skins.size();}
     if(!selection_test_labels_.empty()) {report["scope"]=focus_only_test_?"large-scene-key-and-side-button-focus":"instance-and-graft-ray-tree-selection";report["checks"]=selection_checks_;}
     if(edit_regression_test_) {report["scope"]="multi-selection-focus-subdivision-ERC-scale";report["checks"]=regression_checks_;}
@@ -1426,6 +1431,7 @@ class Editor final:public EditorWindow {
     if(saving_extension_)return;
     city_tick();
     water_tick();
+    cloud_tick();
     update_history_actions();
     if(recovery_)recovery_error_=recovery_->error();
     update_measurement();
@@ -1442,6 +1448,7 @@ class Editor final:public EditorWindow {
     if(history_test_){history_test_tick(state);return;}
     if(city_test_){city_test_tick(state);return;}
     if(water_test_){water_test_tick(state);return;}
+    if(cloud_test_){cloud_test_tick(state);return;}
     if(!render_plan_.empty()) {render_profile_tick(state);return;}
     if(gizmo_test_) {gizmo_tick(state);return;}
     if(group_test_) {group_test_tick(state);return;}
@@ -1455,7 +1462,7 @@ class Editor final:public EditorWindow {
     if(subdivision_stress_test_) {subdivision_stress_tick(state);return;}
     if(interaction_test_) {interaction_tick(state);return;}
     if(navigation_test_) {navigation_tick(state);return;}
-    if(refresh_parameters_) refresh_parameters_->setEnabled(!loading_&&document_&&selected_>=0&&!selected_water());
+    if(refresh_parameters_) refresh_parameters_->setEnabled(!loading_&&document_&&selected_>=0&&!selected_water()&&!selected_cloud());
     if(materials_)materials_->setEnabled(!loading_);
     if(retry_parameters_) retry_parameters_->setEnabled(document_&&!state.resource_error.empty());
     static int resources_tick=0;if(++resources_tick%5==0) parameters_->resource_states();
@@ -1863,7 +1870,7 @@ public:
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
   void edit_resume_test() {powerpose_test();edit_resume_test_=true;}
   void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
-  void gizmo_test() {gizmo_test_=self_test_=true;renderer_->automated_pointer();}
+  void gizmo_test(bool extreme=false) {gizmo_scale_test_=extreme;gizmo_test_=self_test_=true;renderer_->automated_pointer();}
   void group_transform_test() {group_test_=self_test_=true;renderer_->automated_pointer();}
   void group_motion_test(const std::string &label) {group_transform_test();gt_motion_label_=label;}
   void collective_ground_test(const std::string &label) {cg_label_=label;self_test_=true;renderer_->automated_pointer();}
@@ -1925,6 +1932,7 @@ public:
     auto *morph_body=new QWidget;auto *morph_layout=new QVBoxLayout(morph_body);morph_layout->setContentsMargins(0,0,0,0);properties->addWidget(morph_body);
     parameters_=new ParameterPanel;parameters_->shared_scroll(property_scroll);parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};morph_layout->addWidget(parameters_);
     water_panel_=new water::Panel;morph_layout->addWidget(water_panel_);
+    cloud_panel_=new cloud::Panel;morph_layout->addWidget(cloud_panel_);cloud_panel_->refresh_candidates=[this]{bind_cloud();};cloud_panel_->changed=[this](cloud::Config config){if(const auto *v=selected_cloud())generate_cloud(std::move(config),v->id);};
     water_panel_->refresh_candidates=[this]{bind_water();};
     water_panel_->changed=[this](water::Config config,bool recalculate){if(const auto *w=selected_water())generate_water(std::move(config),w->id,recalculate);};water_panel_->cancel=[this]{loader_.request_stop();};
     environment_tools_=new QWidget;auto *environment_actions=new QHBoxLayout(environment_tools_);environment_actions->setContentsMargins(0,0,0,0);auto *environment_image=new QPushButton(QStringLiteral("选择环境贴图…"));environment_image->setObjectName("EnvironmentImage");auto *clear_environment_image=new QPushButton(QStringLiteral("清除贴图"));environment_actions->addWidget(environment_image);environment_actions->addWidget(clear_environment_image);morph_layout->addWidget(environment_tools_);environment_tools_->hide();
@@ -2012,6 +2020,7 @@ public:
     auto *create_environment=create->addAction(QStringLiteral("环境设置"));create_environment->setObjectName("CreateEnvironment");connect(create_environment,&QAction::triggered,this,[this]{create_options(true);});
     auto *create_tone=create->addAction(QStringLiteral("色调设置"));create_tone->setObjectName("CreateTonemapper");connect(create_tone,&QAction::triggered,this,[this]{create_options(false);});
     auto *create_water=create->addAction(QStringLiteral("水体"));create_water->setObjectName("CreateWater");connect(create_water,&QAction::triggered,this,[this]{generate_water({}, {},false);});
+    auto *create_cloud=create->addAction(QStringLiteral("体积云"));create_cloud->setObjectName("CreateCloud");connect(create_cloud,&QAction::triggered,this,[this]{generate_cloud({});});
     install_city_ui(create);
     connect(create->addAction(QStringLiteral("面光源")),&QAction::triggered,this,[this] {add_light();});
     auto *view=chrome->menus()->addMenu(QStringLiteral("视图"));for(auto *d:findChildren<QDockWidget *>()) view->addAction(d->toggleViewAction());
@@ -2085,6 +2094,7 @@ public:
   void feedback_test(){feedback_test_=true;self_test_=true;}
   void city_test(){city_test_=self_test_=true;}
   void water_test(){water_test_=self_test_=true;}
+  void cloud_test(){cloud_test_=self_test_=true;}
   void water_scene_test(){water_scene_test_=water_test_=self_test_=true;}
   void empty_scene(){clear_scene();if(history_){history_->clear();history_->mark_saved();}checkpoint();}
   void physics_ui_test(){physics_ui_test_=self_test_=true;}
@@ -2166,6 +2176,7 @@ public:
           if(!previous_document)extension_file_=sidecar;
           if(preserve||previous_document){for(const auto &entry:previous.city_views)snapshot_.city_views[entry.first]=entry.second;}
           if(preserve||previous_document)for(const auto &w:previous.water_overrides)if(water::find(document_->waters,w->id))snapshot_.water_overrides.push_back(w);
+          if(preserve||previous_document)for(const auto &v:previous.cloud_overrides)if(cloud::find(document_->clouds,v->id))snapshot_.cloud_overrides.push_back(v);
           if(preserve||previous_document){for(const auto &[id,patch]:previous.material_overrides)snapshot_.material_overrides[id]=patch;prune_material_overrides(document_->loaded.scene,snapshot_.material_overrides);}
           if(preserve||previous_document){for(const auto &[id,value]:previous.group_transforms)snapshot_.group_transforms[id]=value;prune_group_transforms(*document_,snapshot_.group_transforms);}
           if(preserve||previous_document){for(const auto &[id,value]:previous.instance_ground)snapshot_.instance_ground[id]=value;prune_instance_ground(document_->loaded.scene,snapshot_.instance_ground);}
@@ -2221,6 +2232,7 @@ int main(int argc,char **argv) {
   parser.addOption({"history-test",QStringLiteral("副屏验证撤销、重做、场景替换和原生快捷键")});
   parser.addOption({"city-test",QStringLiteral("验证城市生成、LOD、共享材质、撤销和保存重开")});
   parser.addOption({"water-test",QStringLiteral("验证水体菜单、交界、静态时间、撤销和保存重开")});
+  parser.addOption({"cloud-test",QStringLiteral("验证体积云菜单、静态时间、撤销和保存重开")});
   parser.addOption({"water-scene-test",QStringLiteral("在完整场景验证创建水体、近远切换、时间修改和撤销")});
   parser.addOption({"feedback-test",QStringLiteral("副屏验证分辨率切换、升采样和 UI 快捷键")});
   parser.addOption({"edit-regression-test",QStringLiteral("副屏验证多选聚焦、细分及 ERC 缩放")});
@@ -2257,6 +2269,7 @@ int main(int argc,char **argv) {
   parser.addOption({"pose-edit-test",QStringLiteral("副屏验证原生 FK 参数、左键 IK、选择门槛、预览和取消")});
   parser.addOption({"edit-resume-test",QStringLiteral("Verify consecutive PowerPose and Morph edits before beauty")});
   parser.addOption({"powerpose-test",QStringLiteral("副屏验证 PowerPose 三页、灰模、提交、取消和固定约束")});
+  parser.addOption({"gizmo-scale-test",QStringLiteral("验证 Seo Hyun 角色 Scale=100000 后的 XYZ 平移和撤销重做")});
   parser.addOption({"gizmo-test",QStringLiteral("副屏验证三轴工具、Local / World、提交与取消")});
   parser.addOption({"group-transform-test",QStringLiteral("副屏验证 Group 参数、鼠标变换、保存与撤销")});
   parser.addOption({"group-motion-test",QStringLiteral("逐个核对指定 Group 平移预览和提交后的世界矩阵"),"label"});
@@ -2276,7 +2289,7 @@ int main(int argc,char **argv) {
   try {
     SamplingSettings sampling;
     sampling.rebuild_probe=parser.isSet("rebuild-test");
-    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("ground-test");
+    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||(parser.isSet("gizmo-test")||parser.isSet("gizmo-scale-test"))||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("ground-test");
     if(parser.isSet("sampling-settings")) {sampling.quality_override=true;nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
@@ -2305,18 +2318,19 @@ int main(int argc,char **argv) {
     }
     auto project=ProjectSettings::load(project_file);
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("water-test")||parser.isSet("water-scene-test")||parser.isSet("city-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("cloud-test")||parser.isSet("water-test")||parser.isSet("water-scene-test")||parser.isSet("city-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||(parser.isSet("gizmo-test")||parser.isSet("gizmo-scale-test"))||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("history-test"))editor.history_test();
     if(parser.isSet("city-test"))editor.city_test();
     if(parser.isSet("water-test"))editor.water_test();
+    if(parser.isSet("cloud-test"))editor.cloud_test();
     if(parser.isSet("water-scene-test"))editor.water_scene_test();
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
     if(parser.isSet("pose-edit-test")) editor.pose_edit_test(parser.value("pose-test-level").toInt());
     if((parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))) editor.powerpose_test();
     if(parser.isSet("edit-resume-test")) editor.edit_resume_test();
-    if(parser.isSet("gizmo-test")) editor.gizmo_test();
+    if((parser.isSet("gizmo-test")||parser.isSet("gizmo-scale-test"))) editor.gizmo_test(parser.isSet("gizmo-scale-test"));
     if(parser.isSet("group-transform-test")) editor.group_transform_test();
     if(parser.isSet("group-motion-test")) editor.group_motion_test(parser.value("group-motion-test").toStdString());
     if(parser.isSet("collective-ground-test")) editor.collective_ground_test(parser.value("collective-ground-test").toStdString());

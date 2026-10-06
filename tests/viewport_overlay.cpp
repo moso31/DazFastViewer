@@ -10,13 +10,15 @@ static void check(bool ok,const char *why){if(!ok)throw std::runtime_error(why);
 static ir::Mesh plane(float left,float right){ir::Mesh m;m.positions={{left,0,-.5f},{right,0,-.5f},{right,0,.5f},{left,0,.5f}};m.triangles={{{0,1,2},0},{{0,2,3},0}};return m;}
 int main(){
   try{
-    std::filesystem::create_directories("artifacts/experience-feedback/overlay");Window window(400,240,false,nullptr,2);window.automated_pointer=true;window.present_context.activate();
+    std::filesystem::create_directories("artifacts/experience-feedback/overlay");Window window(400,240,false,nullptr,GetSystemMetrics(SM_CMONITORS)>1?2:0);window.automated_pointer=true;window.present_context.activate();
     glViewport(0,0,400,240);glDrawBuffer(GL_BACK);GLint bits=0;glGetIntegerv(GL_STENCIL_BITS,&bits);check(bits>=8,"选择遮罩缺少 stencil 缓冲");
     auto picture=[&](const char *name){QImage image(400,240,QImage::Format_RGBA8888);glReadPixels(0,0,400,240,GL_RGBA,GL_UNSIGNED_BYTE,image.bits());image=image.flipped(Qt::Vertical);image.save(QString("artifacts/experience-feedback/overlay/")+name+".png");return image;};
     CameraState camera;camera.target={0,0,0};camera.yaw=camera.pitch=0;camera.distance=3;
     ir::Scene scene;scene.meshes={plane(-1,-.1f),plane(.1f,1)};scene.instances.resize(2);scene.instances[1].mesh=1;
     HoverOverlay overlay;overlay.update(scene,{});overlay.draw_pose(camera,400,240,scene.meshes[0],{}, {},{100,100,100},{0});
     auto white=picture("all-proxies");check(white.pixelColor(150,120).red()>40&&white.pixelColor(250,120).red()>40,"拖动代理没有同时显示活动模型及另一模型");
+    scene.materials.resize(1);scene.materials[0].cloud.emplace();scene.instances[1].materials={0};overlay.update(scene,{});overlay.draw_pose(camera,400,240,{},{},{},{100,100,100},{});
+    auto volume=picture("cloud-no-solid-proxy");check(volume.pixelColor(150,120).red()>40&&volume.pixelColor(250,120).red()<40,"云层边界盒作为实心白模遮挡了视口");scene.instances[1].materials.clear();scene.materials.clear();
     scene.meshes={plane(-1,1)};scene.instances[1].mesh=0;overlay.update(scene,{});glClearColor(.2f,.2f,.2f,1);glClear(GL_COLOR_BUFFER_BIT);
     const std::vector<uint32_t> members{0,1};overlay.draw(camera,400,240,0,-1,&members);auto highlighted=picture("single-highlight");const auto yellow=highlighted.pixelColor(200,120);
     check(std::abs(yellow.red()-96)<=2&&std::abs(yellow.green()-89)<=2&&std::abs(yellow.blue()-58)<=2,"重叠表面重复叠加黄色标记");

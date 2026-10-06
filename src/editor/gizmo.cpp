@@ -9,7 +9,11 @@ ir::Vec3 mul(ir::Vec3 a,float f) {return {a.x*f,a.y*f,a.z*f};}
 float dot(ir::Vec3 a,ir::Vec3 b) {return a.x*b.x+a.y*b.y+a.z*b.z;}
 ir::Vec3 cross(ir::Vec3 a,ir::Vec3 b) {return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};}
 ir::Vec3 unit(ir::Vec3 a) {return mul(a,1/std::max(1e-12f,std::sqrt(dot(a,a))));}
-ir::Vec3 direction(const ir::Transform &m,ir::Vec3 a) {return sub(m.point(a),m.point({}));}
+ir::Vec3 direction(const ir::Transform &m,ir::Vec3 a) {
+  // A direction has no translation. Subtracting two far-away points loses
+  // small vectors when an object or its parent is extremely large/distant.
+  const auto &v=m.value;return {float(double(v[0])*a.x+double(v[1])*a.y+double(v[2])*a.z),float(double(v[4])*a.x+double(v[5])*a.y+double(v[6])*a.z),float(double(v[8])*a.x+double(v[9])*a.y+double(v[10])*a.z)};
+}
 float &component(ir::Vec3 &v,int a) {return a==0?v.x:a==1?v.y:v.z;}
 bool project(const CameraState &camera,int w,int h,ir::Vec3 p,ir::Vec2 &out) {
   const auto m=camera.matrix();const auto d=sub(p,{m[3],m[7],m[11]});const float z=d.x*m[2]+d.y*m[6]+d.z*m[10];
@@ -166,6 +170,15 @@ bool GizmoDrag::begin(runtime::PosePointer pointer,CameraState view,int w,int h,
 // 三个通道的小型最小二乘求解；直接使用现有变换求值，支持六种欧拉顺序、父节点和自身轴心。
 void GizmoDrag::solve(const ir::Vec3 &position,const ir::Transform &orientation) {
   const bool rotate=settings.tool==GizmoTool::rotate;const int offset=rotate?3:0;
+  if(!rotate&&joint<0){
+    // Object translation is affine in its three authored channels, independent
+    // of its own rotation/scale. Invert the parent/translation basis directly:
+    // finite 0.1 cm probes disappear at large scales, and an iterative 100 cm
+    // step cap cannot follow a single pointer event spanning hundreds of metres.
+    const auto delta=direction(ir::inverse(prefix_*frame_.translation_frame),sub(position,initial_pivot_));
+    transform=initial_;transform.translation_cm={float(double(initial_.translation_cm.x)+double(delta.x)*100),float(double(initial_.translation_cm.y)+double(delta.z)*100),float(double(initial_.translation_cm.z)-double(delta.y)*100)};
+    world=prefix_*runtime::parameter_transform(transform,frame_,loaded_)*loaded_;return;
+  }
   auto value=[&](int c){return joint>=0?runtime::joint_value(poses[joint],offset+c):component(rotate?transform.rotation_degrees:transform.translation_cm,c);};
   auto set=[&](int c,float v){if(joint>=0) {
     if(runtime::editable_channel(skin_,joint,offset+c)) {

@@ -1,5 +1,6 @@
 #include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
+#include "cloud/document.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
 #include <QApplication>
@@ -14,7 +15,10 @@ static std::shared_ptr<Document> fixture(uint64_t generation){
   auto d=std::make_shared<Document>();d->generation=generation;auto &s=d->loaded.scene;ir::Material material;material.id="surface";material.base_color={.2f,.5f,.8f};s.materials={material};
   ir::Mesh m;m.id="cloth";m.material_slots={"surface"};const uint32_t n=std::getenv("DFV_PHYSICS_DENSE")?1025:129;for(uint32_t y=0;y<n;++y)for(uint32_t x=0;x<n;++x)m.positions.push_back({float(x)/(n-1)-.5f,float(y)/(n-1)-.5f,1+float(y)/(2*(n-1))});
   for(uint32_t y=0;y+1<n;++y)for(uint32_t x=0;x+1<n;++x){const auto a=y*n+x;m.triangles.push_back({{a,a+1,a+n}});m.triangles.push_back({{a+1,a+n+1,a+n}});}s.meshes={m};
-  ir::Instance i;i.id="cloth/mesh";i.materials={0};s.instances={i};runtime::Target t;t.id=i.id;t.label="Cloth";d->catalog.targets={t};d->formulas.graphs.resize(1);return d;
+  ir::Instance i;i.id="cloth/mesh";i.materials={0};s.instances={i};runtime::Target t;t.id=i.id;t.label="Cloth";d->catalog.targets={t};d->formulas.graphs.resize(1);
+  // Include a native volume and a live collision source in every physics phase.
+  // Zero density preserves the existing blue-pixel presentation assertions.
+  auto volume=std::make_shared<cloud::Cloud>();volume->id="cloud";volume->config.height=.5;volume->config.width=volume->config.length=3;volume->config.thickness=1;volume->config.density=0;volume->config.sources={"cloth"};cloud::install(*d,volume,false);return d;
 }
 int main(int argc,char **argv){
   QApplication app(argc,argv);auto output=std::filesystem::absolute(std::getenv("DFV_PHYSICS_DENSE")?"artifacts/physics-controls/gpu-dense":"artifacts/physics-controls/gpu");std::filesystem::create_directories(output);

@@ -164,6 +164,10 @@ M read_copied_material(const J &copy,std::vector<ir::Texture> &textures){
 }
 bool apply_material_overrides(ir::Scene &scene,const ir::Scene &source,const MaterialOverrides &overrides,ir::Delta *delta){
   auto textures=source.textures;auto materials=source.materials;std::vector<std::vector<uint32_t>> bindings;
+  // Cloud density/collision payloads are owned by cloud::Runtime. Preserve the
+  // current payload until that runtime compares the new recipe and geometry;
+  // restoring the load-time payload here would reset sampling on no-op edits.
+  for(size_t i=0;i<materials.size()&&i<scene.materials.size();++i)if(materials[i].cloud&&scene.materials[i].cloud&&materials[i].id==scene.materials[i].id)materials[i].cloud=scene.materials[i].cloud;
   for(size_t index=0;index<source.instances.size();++index){const auto &i=source.instances[index];auto bound=i.materials;
     if(auto object=overrides.find(i.id);object!=overrides.end())for(size_t slot=0;slot<bound.size();++slot){const auto &name=source.meshes.at(i.mesh).material_slots.at(slot);auto patch=object->second.find(name);if(patch==object->second.end()||patch->second.empty())continue;
       auto m=effective_material(source,overrides,index,slot,textures);m.id="dfv-material/"+std::to_string(i.id.size())+":"+i.id+"/"+name;bound[slot]=uint32_t(materials.size());materials.push_back(std::move(m));}

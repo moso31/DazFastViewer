@@ -62,7 +62,29 @@ struct WaterSurface {
   float foam_uv_scale=1;
   bool operator==(const WaterSurface &) const=default;
 };
+struct CloudPlane {
+  // dot(normal, cloud_local_point - collider.center) - distance is in world metres.
+  Vec3 normal;
+  float distance=0;
+  bool operator==(const CloudPlane &) const=default;
+};
+inline constexpr size_t max_cloud_planes=48;
+struct CloudCollider {
+  Vec3 center,tail;
+  std::vector<CloudPlane> planes;
+  float padding=0,softness=1,decay=0,tail_length=0;
+  bool operator==(const CloudCollider &) const=default;
+};
+struct CloudVolume {
+  Vec3 half_extent{1000,1000,90},offset;
+  float density=.035f,coverage=.65f,scale=120,detail=2;
+  int steps=64;
+  std::vector<CloudCollider> colliders;
+  bool operator==(const CloudVolume &) const=default;
+};
 struct Material {
+  // Analytic volume: bounded shader cost, no simulation grid or per-frame history.
+  std::optional<CloudVolume> cloud;
   std::optional<WaterSurface> water;
   std::string id;
   Vec3 base_color{0.5f,0.5f,0.5f};

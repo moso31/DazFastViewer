@@ -1,0 +1,38 @@
+#include "cloud/document.h"
+#include "editor/document.h"
+#include "editor/scene_extension.h"
+#include "runtime/picking.h"
+#include <cmath>
+#include <iostream>
+using namespace dfv;
+static void check(bool v,const char *why){if(!v)throw std::runtime_error(why);}
+#include "cloud_collision_cases.h"
+int main(){try{
+  convex_collision_cases();
+  editor::Document d;auto v=std::make_shared<cloud::Cloud>();v->id="cloud";v->config.height=0;v->config.sources={"meteor"};cloud::install(d,v);
+  auto &scene=d.loaded.scene;auto rock=cloud::mesh(*v);rock.id="rock";for(auto &p:rock.positions){p.x/=100;p.y/=100;p.z/=9;}
+  ir::Material rock_mat;rock_mat.id="rock";scene.materials.push_back(rock_mat);scene.meshes.push_back(rock);ir::Instance object;object.id="meteor/mesh";object.instance_node="meteor";object.mesh=1;object.materials={1};object.transform=ir::Transform::translate({0,0,90});scene.instances.push_back(object);
+  cloud::Runtime runtime;auto rendered=scene;runtime.apply(d,d.clouds,rendered);auto volume=*rendered.materials[0].cloud;check(volume.colliders.size()==1,"collision missing");const auto collider=volume.colliders[0];check(cloud::transmission(collider,collider.center)==0,"cloud remains inside collider");check(cloud::transmission(collider,{500,500,500})==1,"collision erased distant clouds");
+  const auto shape=cloud::mesh(*v);check(shape.triangles.size()==12&&shape.positions.size()==8,"volume geometry budget");for(const auto &t:shape.triangles){const auto a=shape.positions[t.vertices[0]],b=shape.positions[t.vertices[1]],c=shape.positions[t.vertices[2]];ir::Vec3 u{b.x-a.x,b.y-a.y,b.z-a.z},w{c.x-a.x,c.y-a.y,c.z-a.z};check((u.y*w.z-u.z*w.y)*a.x+(u.z*w.x-u.x*w.z)*a.y+(u.x*w.y-u.y*w.x)*a.z>0,"volume face inward");}
+  auto sample=std::make_shared<cloud::Cloud>(*v);sample->config.time=6;ir::Delta delta;runtime.apply(d,{sample},rendered,&delta);auto swept=rendered.materials[0].cloud->colliders[0];check(swept.tail.z==360,"swept trail direction/length");check(cloud::transmission(swept,{0,0,80})<1,"penetration wake missing");check(cloud::transmission(swept,{0,0,80})>0,"older wake did not recover");const auto deterministic=rendered.materials[0];runtime.apply(d,{v},rendered,&delta);runtime.apply(d,{sample},rendered,&delta);check(deterministic==rendered.materials[0],"scrubbing depends on history");
+  const auto builds=runtime.hull_builds();delta={};sample->config.density=.08;runtime.apply(d,{sample},rendered,&delta);check(delta.meshes.empty()&&delta.instances.empty()&&delta.materials.size()==1&&runtime.hull_builds()==builds,"density edit rebuilt geometry/hull");delta={};runtime.apply(d,{sample},rendered,&delta);check(delta.materials.empty()&&runtime.hull_builds()==builds,"unchanged sample resubmitted shader/hull");
+  editor::apply_material_overrides(rendered,d.loaded.scene,{},&delta);runtime.apply(d,{sample},rendered,&delta);check(delta.materials.empty()&&delta.meshes.empty()&&delta.instances.empty(),"unrelated edit reset the cloud payload to load-time state");
+  rendered.instances[1].transform.value[3]=300;delta.instances.push_back({1,rendered.instances[1].transform});runtime.apply(d,{sample},rendered,&delta);check(rendered.materials[0].cloud->colliders[0].center.x==300&&runtime.hull_builds()==builds,"moved meteor did not move cloud hole or rebuilt its local hull");
+  rendered.instances[1].visible=false;delta={};delta.visibility.push_back({1,false});runtime.apply(d,{sample},rendered,&delta);check(rendered.materials[0].cloud->colliders.empty(),"hidden meteor still carves");rendered.instances[1].visible=true;
+  rendered.instances[1].transform.value[3]=100000;runtime.apply(d,{sample},rendered,&delta);check(rendered.materials[0].cloud->colliders.empty(),"distant collision was not culled");
+  rendered.instances[1].transform.value[3]=0;rendered.meshes[1].positions[0].x=-50;delta={};delta.meshes.push_back({1,rendered.meshes[1].positions});runtime.apply(d,{sample},rendered,&delta);check(cloud::transmission(rendered.materials[0].cloud->colliders[0],{-30,-8,-8})<.1f&&cloud::transmission(collider,{-30,-8,-8})==1,"geometry edit retained stale collision hull");
+  sample->config.collisions=false;runtime.apply(d,{sample},rendered,&delta);check(rendered.materials[0].cloud->colliders.empty(),"disabled collisions still present");
+  runtime::PickingScene picking;picking.update(rendered);check(picking.ray({0,0,1000},{0,0,-1}).instance==1,"cloud bounds blocked meteor picking");
+  sample->config.collisions=true;sample->config.time=8;rendered.instances[1].transform.value[11]=-100;delta={};delta.instances.push_back({1,rendered.instances[1].transform});runtime.apply(d,{sample},rendered,&delta);check(!rendered.materials[0].cloud->colliders.empty(),"meteor outside layer lost its crossing wake");
+  const auto wake=rendered.materials[0].cloud->colliders[0];check(cloud::transmission(wake,{wake.center.x,wake.center.y,0})<1,"outside meteor wake did not clear layer");
+  sample->config.time=-3;check(cloud::from_json(cloud::json(*sample))->config==sample->config,"recipe roundtrip");check(cloud::prefixed(*sample,"import/")->config.sources[0]=="import/meteor","append lost source identity");
+  editor::Document saved;cloud::install(saved,v);auto snapshot=editor::initial_snapshot(saved);snapshot.cloud_overrides={sample};auto restored=editor::restore_scene_extension(editor::scene_extension_json(saved,snapshot),{}, {},9);check(restored.document->clouds[0]->config==sample->config,"scene save/reopen lost cloud recipe");
+  editor::Document appended;editor::append_document(appended,*restored.document,"copy/");check(cloud::find(appended.clouds,"copy/cloud")!=nullptr,"append lost cloud");auto removed=editor::initial_snapshot(appended);editor::remove_target(appended,removed,0);check(appended.clouds.empty()&&removed.cloud_overrides.empty(),"deleting cloud retained recipe");
+  {editor::Document grouped;grouped.loaded.nodes.push_back({"objects",{},"Objects",true});grouped.loaded.scene.meshes.push_back(rock);grouped.loaded.scene.materials.push_back(rock_mat);grouped.loaded.scene.instances.resize(2);for(auto &i:grouped.loaded.scene.instances)i.materials={0};grouped.loaded.scene.instances[0].id="small/mesh";grouped.loaded.scene.instances[1].id="large/mesh";
+    for(int i=0;i<2;++i){runtime::Target t;t.id=grouped.loaded.scene.instances[i].id;t.instance=i;t.parent="#objects";grouped.catalog.targets.push_back(t);}cloud::install(grouped,v,false);
+    std::vector<ir::Bounds> boxes(3);boxes[0].add({0,0,0});boxes[0].add({2,3,4});boxes[1].add({10,0,0});boxes[1].add({12,3,4});
+    auto list=cloud::candidates(grouped,boxes);check(list.size()==3,"cloud AABB candidates included the cloud or lost the group");for(const auto &c:list)check(c.volume==(c.id=="objects"?144.:24.),"cloud ranking did not use world AABB union");
+    boxes[0].add({-10,0,0});list=cloud::candidates(grouped,boxes);for(const auto &c:list)if(c.id=="objects")check(c.volume==264.,"cloud ranking ignored updated geometry bounds");for(const auto &c:cloud::candidates(grouped))check(c.volume==-1,"unknown AABBs treated as evaluated");}
+  auto invalid=v->config;invalid.sources.resize(17,"meteor");bool failed=false;try{cloud::validate(invalid);}catch(...){failed=true;}check(failed,"collision budget unenforced");invalid=v->config;invalid.density=std::numeric_limits<double>::quiet_NaN();failed=false;try{cloud::validate(invalid);}catch(...){failed=true;}check(failed,"nonfinite density accepted");
+  std::cout<<"PASS: cloud density, geometry budget, analytic sweep/recovery, random time access, live collision invalidation, visibility, culling, recipe/scene roundtrip, append/delete\n";return 0;
+}catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

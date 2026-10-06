@@ -1,6 +1,7 @@
 #include "editor/renderer.h"
 #include "editor/group_transforms.h"
 #include "water/document.h"
+#include "cloud/document.h"
 #include "editor/pose_drag.h"
 #include "editor/powerpose_drag.h"
 #include "editor/render_edit_queue.h"
@@ -181,6 +182,7 @@ void Renderer::run(std::stop_token stop) {
     std::unique_ptr<ir::Scene> render_scene_ptr;
     std::shared_ptr<const Document> pending_document;
     std::unique_ptr<ir::Scene> pending_scene;
+    cloud::Runtime cloud_runtime,cloud_physics_runtime;
     city::Runtime city_runtime;uint64_t city_camera_epoch=0,water_camera_epoch=0;
     std::unique_ptr<runtime::DeformationRuntime> pending_runtime;
     std::unique_ptr<runtime::DeformationRuntime> runtime;
@@ -313,6 +315,8 @@ void Renderer::run(std::stop_token stop) {
         const auto camera=window_->mailbox.latest();pending_scene->camera=render_camera(camera,window_->width,window_->height);
         city_runtime.bind(document->cities,*pending_scene);city_runtime.apply(*pending_scene,desired.city_views);state.city=city_runtime.stats;city_camera_epoch=camera.epoch;
         {const auto eye=camera.eye();water::materials(water::effective(*document,desired),*pending_scene);water::adapt(water::effective(*document,desired),*pending_scene,{eye.x,eye.y,eye.z});water_camera_epoch=camera.epoch;}
+        cloud_runtime.apply(*document,cloud::effective(*document,desired),*pending_scene);
+        cloud_physics_runtime.clear();
         camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
         set_quality(camera.navigating||now()<camera.preview_until);
         if(!session) {
@@ -377,6 +381,8 @@ void Renderer::run(std::stop_token stop) {
             auto &p=*physics_installing;auto &r=*p.result;
             for(const auto &e:r.delta.meshes)render_scene.meshes[e.index].positions.swap(r.scene->meshes[e.index].positions);
             for(const auto &e:r.delta.instances)render_scene.instances[e.index].transform=e.transform;
+            for(const auto &e:r.delta.materials)render_scene.materials[e.index]=e.value;
+            cloud_runtime.clear();
             overlay.swap_delta(p.overlay,render_scene,r.delta);picking.swap_delta(p.picking,render_scene,r.delta);
             for(size_t k=0;k<p.targets.size();++k){auto i=p.targets[k];state.bounds[i]=p.bounds[k];state.head_bounds[i]=p.head_bounds[k];displacements[i]=p.displacements[k];}
             if(state.mesh_hashes.size()!=render_scene.meshes.size())state.mesh_hashes.resize(render_scene.meshes.size());for(auto [i,h]:p.hashes)state.mesh_hashes[i]=h;
@@ -396,7 +402,7 @@ void Renderer::run(std::stop_token stop) {
         if(auto r=physics_service.take()){
           if(r->serial!=physics_request_serial){physics_service.retire(std::move(r));}
           else if(!r->error.empty())state.physics_error=r->error;
-          else {state.physics=r->stats;state.physics_error=r->stats.warning;if(r->scene&&(!r->delta.meshes.empty()||!r->delta.instances.empty()))physics_pending=std::move(r);}
+          else {state.physics=r->stats;state.physics_error=r->stats.warning;if(r->scene&&(!r->delta.meshes.empty()||!r->delta.instances.empty())){cloud_physics_runtime.apply(*current,cloud::effective(*current,desired),*r->scene,&r->delta);physics_pending=std::move(r);}}
           physics_service.retire(std::move(r));
         }
       }
@@ -630,6 +636,7 @@ void Renderer::run(std::stop_token stop) {
             material_layout_edit=apply_material_overrides(render_scene,current->loaded.scene,desired.material_overrides,&delta);
             water::materials(water::effective(*current,desired),render_scene,&delta);
             if(desired.instance_ground!=applied_instance_ground||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,render_scene,group_frames->hierarchy,runtime->effective_poses(),&*group_frames);apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta,&bases);applied_instance_ground=desired.instance_ground;}
+            cloud_runtime.apply(*current,cloud::effective(*current,desired),render_scene,&delta);
             new_render_edit=material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
             edit_affects_render=new_render_edit;applied_revision=desired.revision;if(!new_render_edit&&!queued.pending)gpu_revision=applied_revision;state.edit_error.clear();}
           }
@@ -674,6 +681,7 @@ void Renderer::run(std::stop_token stop) {
             const auto bases=group_instance_bases(*group_source,render_scene,group_frames->hierarchy,runtime->effective_poses(),&*group_frames);
             apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta,&bases);
           }
+          cloud_runtime.apply(*current,cloud::effective(*current,desired),render_scene,&delta);
           refined_collision=result->collision;refine_pending=false;refinement_finished=true;gizmo_revision=UINT64_MAX;queued.merge(delta);clay_wait=true;
           Frame f;f.id=refine_revision;telemetry_.event("edit_refine",f,result->seconds*1000);
           for(const auto &[name,value]:result->profile.timings)telemetry_.event(("refine/"+name).c_str(),f,value.seconds*1000);

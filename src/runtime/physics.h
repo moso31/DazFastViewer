@@ -5,6 +5,8 @@
 #include <memory>
 
 namespace dfv::runtime {
+// Shared by the solver and cached geometric collision proxies.
+void initialize_physics();
 struct PhysicsTarget {uint32_t instance=0;int host=-1;PhysicsKind kind=PhysicsKind::rigid;PhysicsObjectSettings settings;const ir::Mesh *attachment_rest=nullptr;};
 struct PhysicsStats {size_t objects=0,particles=0,steps=0,active_objects=0;double prepare_ms=0,solve_ms=0;std::string warning;};
 struct PhysicsOutput {ir::Delta delta;PhysicsStats stats;};

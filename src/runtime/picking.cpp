@@ -34,7 +34,7 @@ int PickingScene::build(MeshTree &mesh,int begin,int end) {
 void PickingScene::update(const ir::Scene &scene,const std::vector<uint8_t> &pickable) {
   if(!pickable.empty()&&pickable.size()!=scene.instances.size()) throw std::runtime_error("射线对象掩码数量不一致");
   meshes_.clear();meshes_.resize(scene.meshes.size());instances_.resize(scene.instances.size());used_meshes_.assign(scene.meshes.size(),0);
-  for(size_t i=0;i<scene.instances.size();++i) {instances_[i].pickable=pickable.empty()||pickable[i];if(instances_[i].pickable) used_meshes_[scene.instances[i].mesh]=1;}
+  for(size_t i=0;i<scene.instances.size();++i) {const auto &v=scene.instances[i];const bool volume=std::any_of(v.materials.begin(),v.materials.end(),[&](auto m){return scene.materials.at(m).cloud.has_value();});instances_[i].pickable=!volume&&(pickable.empty()||pickable[i]);if(instances_[i].pickable) used_meshes_[scene.instances[i].mesh]=1;}
   for(uint32_t m=0;m<meshes_.size();++m) if(used_meshes_[m]) mesh(scene,m);
   for(uint32_t i=0;i<instances_.size();++i) instance(scene,i);
 }
@@ -61,7 +61,7 @@ void PickingScene::apply(const ir::Scene &scene,const ir::Delta &delta) {
 }
 void PickingScene::prepare_delta(const ir::Scene &scene,const ir::Delta &delta,const std::vector<uint8_t> &pickable) {
   meshes_.resize(scene.meshes.size());instances_.resize(scene.instances.size());used_meshes_.assign(scene.meshes.size(),0);std::vector<uint8_t> dirty(instances_.size());
-  for(size_t i=0;i<instances_.size();++i){instances_[i].pickable=pickable.empty()||pickable.at(i);if(instances_[i].pickable)used_meshes_[scene.instances[i].mesh]=1;}
+  for(size_t i=0;i<instances_.size();++i){const auto &v=scene.instances[i];const bool volume=std::any_of(v.materials.begin(),v.materials.end(),[&](auto m){return scene.materials.at(m).cloud.has_value();});instances_[i].pickable=!volume&&(pickable.empty()||pickable.at(i));if(instances_[i].pickable)used_meshes_[scene.instances[i].mesh]=1;}
   for(const auto &e:delta.meshes){if(used_meshes_[e.index])mesh(scene,e.index);for(size_t i=0;i<instances_.size();++i)if(scene.instances[i].mesh==e.index)dirty[i]=1;}
   for(const auto &e:delta.instances)dirty[e.index]=1;
   for(uint32_t i=0;i<dirty.size();++i)if(dirty[i]){

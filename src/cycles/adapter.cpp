@@ -15,6 +15,7 @@
 #include "scene/background.h"
 #include "scene/light.h"
 #include "scene/attribute.h"
+#include "scene/integrator.h"
 #include "util/colorspace.h"
 #include "util/transform.h"
 #include <OpenImageIO/imageio.h>
@@ -32,7 +33,18 @@ static ccl::Transform transform(const ir::Transform &t) {
   out.x=ccl::make_float4(v[0],v[1],v[2],v[3]);out.y=ccl::make_float4(v[4],v[5],v[6],v[7]);out.z=ccl::make_float4(v[8],v[9],v[10],v[11]);return out;
 }
 #include "water/shader.inl"
+#include "cloud/shader.inl"
+void CyclesAdapter::cloud_quality(const ir::Scene &source){
+  auto &i=*scene_.integrator;const bool active=std::any_of(source.materials.begin(),source.materials.end(),[](const auto &m){return m.cloud.has_value();});
+  if(active){
+    if(!volume_settings_)volume_settings_=VolumeSettings{i.get_volume_ray_marching(),i.get_volume_max_steps(),i.get_max_volume_bounce()};
+    // Explicitly use bounded ray marching. The newer Cycles default instead
+    // constructs stochastic majorant volumes and does not honor a march budget.
+    i.set_volume_ray_marching(true);i.set_volume_max_steps(384);i.set_max_volume_bounce(std::min(1,volume_settings_->bounces));
+  }else if(volume_settings_){i.set_volume_ray_marching(volume_settings_->ray_marching);i.set_volume_max_steps(volume_settings_->steps);i.set_max_volume_bounce(volume_settings_->bounces);volume_settings_.reset();}
+}
 void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,float texel_distance,float emission_strength) {
+  if(source.cloud){cloud_shader(shader,source,scene_);return;}
   if(source.water){water_shader(shader,source,scene_,render_quality_.bump_and_normal);return;}
   const auto m=ir::viewport_material(source,render_quality_);
   using namespace ccl;
@@ -304,7 +316,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     for(auto *object:objects_[edit.index]) if(object->get_geometry()->transform_applied) throw std::runtime_error("对象变换已烘焙，不能直接动态修改");
   }
   for(const auto &edit:delta.visibility) if(edit.index>=objects_.size()) throw std::runtime_error("可见性实例索引越界");
-  if((!delta.visibility.empty()&&(!graft_renders_.empty()||prune_hidden_))||(prune_hidden_&&std::any_of(delta.materials.begin(),delta.materials.end(),[](const auto &e){return !e.value.water;}))) {
+  if((!delta.visibility.empty()&&(!graft_renders_.empty()||prune_hidden_))||(prune_hidden_&&std::any_of(delta.materials.begin(),delta.materials.end(),[](const auto &e){return !e.value.water&&!e.value.cloud;}))) {
     // 保留旧快照用于比较；显隐与 Morph 同时提交时不能漏掉其他组合的几何更新。
     auto next=source_;if(delta.options) next.options=*delta.options;if(delta.camera) next.camera=*delta.camera;
     for(const auto &e:delta.meshes) next.meshes[e.index].positions=e.positions;
@@ -338,7 +350,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     }
     auto canonical=edit.value;for(auto *index:ir::texture_indices(canonical)) if(*index>=0) *index=texture_map_.at(size_t(*index));
     canonical_materials_[edit.index]=std::move(canonical);source_.materials[edit.index]=edit.value;
-    if(!edit.value.water)emission_strengths_=ir::emission_strengths(source_);
+    if(!edit.value.water&&!edit.value.cloud)emission_strengths_=ir::emission_strengths(source_);
     material(*shader,canonical_materials_[edit.index],bump_distances_.at(edit.index),emission_strengths_[edit.index]);++stats_.material_updates;
   }
   for(const auto &edit:delta.lights) {

@@ -47,6 +47,28 @@ static void planes_and_ground() {
   }
   bool rejected=false;try {ground_aligned_transform(target,input,loaded,current,{},0);} catch(const std::exception &) {rejected=true;}check(rejected,"空包围盒没有拒绝");
 }
+static void extreme_translation() {
+  for(double scale:{1.,1000.,100000.})for(auto space:{GizmoSpace::world,GizmoSpace::local})for(int axis=0;axis<3;++axis){
+    runtime::Target target;target.has_edit_frame=true;target.edit_frame=runtime::make_transform({{70,20,90},{15,-20,35}});target.translation_frame=runtime::make_transform({{},{25,40,15},{1.2f,.8f,1.1f}});
+    const auto loaded=target.edit_frame*runtime::make_transform({{50,30,20},{30,20,-10}});
+    runtime::TransformValues input;input.translation_cm={120,-70,40};input.rotation_degrees={13,17,-11};input.scale={1.3f,.7f,1.5f};input.general_scale=scale;
+    const auto parent=runtime::make_transform({{float(scale*10),float(scale*-5),float(scale*8)},{25,30,10},{1.1f,.9f,1.2f}});
+    const auto current=parent*runtime::parameter_transform(input,target,loaded)*loaded;
+    GizmoDrag drag;drag.object(target,input,loaded,current);const auto origin=drag.pivot();auto camera=view(origin);camera.distance=float(5*scale);
+    const GizmoSettings settings{GizmoTool::translate,space};drag.layout(camera,1000,800,settings,1);const auto shape=drag.shape;
+    auto p=pointer(point(shape,axis));check(drag.begin(p,camera,1000,800,settings,1,mesh())&&drag.handle==axis,"extreme translation axis not hit");
+    ir::Vec2 end;for(const auto &line:shape.lines)if(line.handle==axis){end=line.b;break;}
+    const float sx=end.x-shape.center.x,sy=end.y-shape.center.y;
+    p.x+=int(std::round(sx*.75f));p.y+=int(std::round(sy*.75f));p.moved=true;++p.revision;
+    const float amount=shape.radius*((p.x-p.start_x)*sx+(p.y-p.start_y)*sy)/(sx*sx+sy*sy);const auto a=shape.axes[axis];
+    const ir::Vec3 expected{origin.x+a.x*amount,origin.y+a.y*amount,origin.z+a.z*amount};
+    check(drag.update(p)&&drag.changed(),"extreme translation produced no edit");
+    const double error=distance(drag.pivot(),expected);if(error>std::max(2e-5,scale*2e-5))std::cerr<<"scale="<<scale<<" space="<<int(space)<<" axis="<<axis<<" error="<<error<<" amount="<<amount<<'\n';
+    check(error<=std::max(2e-5,scale*2e-5),"large-scale translation lagged behind cursor or lost its axis");
+    check(drag.transform.rotation_degrees==input.rotation_degrees&&drag.transform.scale==input.scale&&drag.transform.general_scale==input.general_scale,"translation altered rotation/scale");
+    p.x=p.start_x;p.y=p.start_y;++p.revision;drag.update(p);check(!drag.changed()&&drag.world==current,"extreme drag did not restore exact press state");
+  }
+}
 static void instance_ground() {
   Document d;d.generation=3;auto &base=d.loaded.scene;base.meshes={mesh()};
   ir::Instance source;source.id="source";base.instances.push_back(source);
@@ -85,7 +107,7 @@ static void clothing_ground() {
 }
 int main() {
   try {
-    planes_and_ground();instance_ground();clothing_ground();
+    extreme_translation();planes_and_ground();instance_ground();clothing_ground();
     const auto m=mesh();
     for(const std::string order:{"XYZ","XZY","YXZ","YZX","ZXY","ZYX"}) for(auto space:{GizmoSpace::local,GizmoSpace::world}) for(int axis=0;axis<3;++axis) {
       runtime::Target target;target.rotation_order=order;target.has_edit_frame=true;

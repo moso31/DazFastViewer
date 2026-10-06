@@ -12,7 +12,7 @@ std::vector<Candidate> candidates(const editor::Document &d,const std::vector<ir
   const editor::ObjectHierarchy hierarchy(d);std::map<std::string,ir::Bounds> bounds;
   const bool ready=instance_bounds.size()==d.loaded.scene.instances.size();
   auto add=[](ir::Bounds &to,const ir::Bounds &from){if(!from.empty){to.add(from.minimum);to.add(from.maximum);}};
-  for(size_t i=0;i<d.loaded.scene.instances.size();++i){if(find(d.waters,d.loaded.scene.instances[i].id))continue;
+  for(size_t i=0;i<d.loaded.scene.instances.size();++i){if(find(d.waters,d.loaded.scene.instances[i].id)||cloud::find(d.clouds,d.loaded.scene.instances[i].id))continue;
     auto &box=bounds[hierarchy.instances[i]];if(!ready)continue;add(box,instance_bounds[i]);
     for(const auto &group:hierarchy.groups)if(hierarchy.contains(group,hierarchy.instances[i]))add(bounds[group],instance_bounds[i]);
   }
@@ -45,9 +45,9 @@ void install(editor::Document &d,std::shared_ptr<const Water> w,bool record){
 }
 uint64_t input_stamp(const editor::Document &d,const editor::Snapshot &snapshot){
   auto j=editor::snapshot_json(d,snapshot,false);nlohmann::json inputs={{"poses",j.at("poses")},{"groups",j.at("groups")},{"subdivision",j.at("subdivision")},{"instance_ground",j.at("instance_ground")},{"objects",nlohmann::json::object()},{"resources",nlohmann::json::array()}};
-  for(auto &[id,o]:j["objects"].items())inputs["objects"][id]={{"transform",o.at("transform")},{"visible",o.at("visible")},{"morphs",o.at("morphs")},{"extension",o.at("extension")},{"unlimited",o.at("unlimited")}};
+  for(auto &[id,o]:j["objects"].items())if(!cloud::find(d.clouds,id))inputs["objects"][id]={{"transform",o.at("transform")},{"visible",o.at("visible")},{"morphs",o.at("morphs")},{"extension",o.at("extension")},{"unlimited",o.at("unlimited")}};
   std::map<uint32_t,uint64_t> geometry;
-  for(const auto &i:d.loaded.scene.instances){if(find(d.waters,i.id))continue;const auto &m=d.loaded.scene.meshes[i.mesh];
+  for(const auto &i:d.loaded.scene.instances){if(find(d.waters,i.id)||cloud::find(d.clouds,i.id))continue;const auto &m=d.loaded.scene.meshes[i.mesh];
     if(!geometry.contains(i.mesh)){runtime::GeometryKey shape;shape.points(m.positions);shape.topology(m);for(const auto &t:m.triangles)shape.add(uint64_t(t.material_slot));for(auto p:m.hidden_polygons)shape.add(uint64_t(p));geometry[i.mesh]=shape.value;}
     nlohmann::json opacity=nlohmann::json::array();for(auto mat:i.materials)opacity.push_back(d.loaded.scene.materials.at(mat).opacity);
     inputs["resources"].push_back({i.id,m.id,geometry.at(i.mesh),i.transform.value,opacity});
@@ -71,7 +71,7 @@ Inputs inputs(const editor::Document &d,const ir::Scene &scene,const Water &wate
   auto own=std::find_if(scene.instances.begin(),scene.instances.end(),[&](const auto &i){return i.id==water.id+"/surface";});if(own==scene.instances.end())throw std::runtime_error("水体实例不存在");const auto inverse=ir::inverse(own->transform);const editor::ObjectHierarchy hierarchy(d);
   Inputs result;auto &obstacles=result.objects;auto &warnings=result.warnings;size_t triangles=0;
   for(const auto &s:water.config.sources)if(!hierarchy.parents.contains(s.id)&&std::none_of(scene.instances.begin(),scene.instances.end(),[&](const auto &i){return i.id==s.id;}))throw std::runtime_error("海岸线对象已移除："+s.id);
-  for(size_t index=0;index<scene.instances.size();++index){const auto &i=scene.instances[index];if(find(d.waters,i.id))continue;bool selected=water.config.scan_scene&&i.visible,volume=false,explicit_source=false;
+  for(size_t index=0;index<scene.instances.size();++index){const auto &i=scene.instances[index];if(find(d.waters,i.id)||cloud::find(d.clouds,i.id))continue;bool selected=water.config.scan_scene&&i.visible,volume=false,explicit_source=false;
     for(const auto &s:water.config.sources)if(s.id==i.id||hierarchy.contains(s.id,hierarchy.instances[index])){selected=true;volume=s.volume;explicit_source=true;break;}
     const auto &base=scene.meshes[i.mesh];if(!selected||base.triangles.empty())continue;
     const auto transform=inverse*i.transform;ir::Bounds bounds;for(auto p:base.positions)bounds.add(transform.point(p));const auto &c=water.config;

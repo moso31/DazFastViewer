@@ -57,7 +57,8 @@ void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::Joi
     const auto id=glGenLists(1);lists_[i]=id;glNewList(id,GL_COMPILE);glBegin(GL_TRIANGLES);
     const auto &mesh=scene.meshes[instance.mesh];
     auto triangle=[&](const ir::Triangle &face) {const auto a=mesh.positions[face.vertices[0]],b=mesh.positions[face.vertices[1]],c=mesh.positions[face.vertices[2]];const auto n=normalized(cross({b.x-a.x,b.y-a.y,b.z-a.z},{c.x-a.x,c.y-a.y,c.z-a.z}));glNormal3f(n.x,n.y,n.z);for(auto v:face.vertices) {const auto p=mesh.positions[v];glVertex3f(p.x,p.y,p.z);}};
-    size_t count=0;for(const auto &face:mesh.triangles) if(mesh.draws(face)) {triangle(face);++count;}
+    const bool volume=std::any_of(instance.materials.begin(),instance.materials.end(),[&](auto m){return m<scene.materials.size()&&scene.materials[m].cloud.has_value();});
+    size_t count=0;for(const auto &face:mesh.triangles) if(!volume&&mesh.draws(face)) {triangle(face);++count;}
     glEnd();glEndList();
     triangle_counts_[i]=count;
     // During deformation feedback only the whole white mesh is drawn. Rebuild

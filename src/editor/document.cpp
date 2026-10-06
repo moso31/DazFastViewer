@@ -140,6 +140,8 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   std::erase_if(document.loaded.nodes,[&](const auto &n) {return removed.contains(n.id);});
   std::erase_if(document.waters,[&](const auto &w){return removed.contains(w->id);});
   std::erase_if(snapshot.water_overrides,[&](const auto &w){return removed.contains(w->id);});
+  std::erase_if(document.clouds,[&](const auto &v){return removed.contains(v->id);});
+  std::erase_if(snapshot.cloud_overrides,[&](const auto &v){return removed.contains(v->id);});
   for(auto &binding:document.attachments) {
     std::erase_if(binding.items,[&](const auto &i){return removed.contains(i.node);});
     std::erase_if(binding.nodes,[&](const auto &n){return removed.contains(n.id);});
@@ -283,6 +285,7 @@ void append_document(Document &destination,Document source,const std::string &id
   for(const auto &[surface,archive]:source.material_archives)destination.material_archives[{prefix+surface.first,surface.second}]=archive;
   for(const auto &city:source.cities)destination.cities.push_back(city::prefixed(*city,prefix));
   for(const auto &water:source.waters)destination.waters.push_back(water::prefixed(*water,prefix));
+  for(const auto &v:source.clouds)destination.clouds.push_back(cloud::prefixed(*v,prefix));
   a.textures.insert(a.textures.end(),b.textures.begin(),b.textures.end());
   for(auto m:b.materials) {
     m.id=prefix+m.id;

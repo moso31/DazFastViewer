@@ -46,6 +46,9 @@ class CyclesAdapter {
   std::vector<ir::Vec3> light_power_;
   void environment(const ir::RenderOptions &options);
   bool loaded_=false;
+  struct VolumeSettings {bool ray_marching;int steps,bounces;};
+  std::optional<VolumeSettings> volume_settings_;
+  void cloud_quality(const ir::Scene &);
   ir::Scene source_;
   std::vector<ir::Material> canonical_materials_;
   std::vector<ccl::Shader *> retired_shaders_;
