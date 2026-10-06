@@ -38,6 +38,23 @@ static void surface_cache_checks() {
   changed=scene;for(auto &p:changed.meshes[1].positions)p.z+=.2f;ConformRuntime follower(changed,targets,skins,graphs);require(hits()==1&&std::abs(follower.link(1)->surface[0].distance-before[0].distance-.2f)<1e-5,"附件顶点变化错误复用绑定");
   auto invalid=targets;invalid[0].conform_target="#cache-cloth";rejects([&]{ConformRuntime cyclic(scene,invalid,skins,graphs);},"缓存绕过 Fit To 循环检查");
 }
+static void rigid_root_scaling(){
+  ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,1},{1,0,1},{0,1,1},{1,1,1}};mesh.triangles={{{0,1,2}},{{1,3,2}}};scene.meshes={mesh,mesh,mesh};scene.instances.resize(3);
+  for(uint32_t i=0;i<3;++i){scene.instances[i].mesh=i;auto &m=scene.instances[i].transform;m.value[0]=m.value[5]=m.value[10]=.291f;m.value[3]=2;}
+  Target body;body.id="body/mesh";body.morphs={morph("size",{},false)};Target cloth;cloth.id="cloth/mesh";cloth.instance=1;cloth.conform_target="#body";
+  Target button;button.id="button/mesh";button.instance=2;button.rigid_follow={"#cloth",4,{0,1,2,3},true};std::vector<Target> targets={body,cloth,button};std::vector<Skin> skins;
+  for(uint32_t i=0;i<2;++i){Skin skin;skin.instance=i;skin.root_general_scale=i==0?.291f:1;Joint root;root.id=i==0?"body":"cloth";Joint joint;joint.id="hip";joint.parent=0;skin.joints={root,joint};skin.initial.resize(2);skin.weights={{{1,1}},{{1,1}},{{1,1}},{{1,1}}};skins.push_back(skin);}
+  auto bg=graph(body,0),cg=graph(cloth,1);Channel scale;scale.binding={Property::general_scale,0,0};scale.initial=.291;const auto output=uint32_t(bg.channels.size());bg.channels.push_back(scale);Expression e;e.output=output;e.multiply=true;e.code={{Op::channel,0,0}};bg.expressions.push_back(e);bg.prepare();
+  std::vector<FormulaGraph> graphs={bg,cg,graph(button,-1)};DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(3);values[0].morphs={.029209651f};std::vector<std::vector<JointPose>> poses={skins[0].initial,skins[1].initial};
+  auto length=[&]{const auto &m=scene.instances[2].transform;return distance({m.point({})},{m.point({1,0,0})});};
+  runtime.evaluate(values,poses);require(std::abs(length()-.291*.029209651)<1e-6,"rigid button lost ERC root scale through Fit To");
+  auto before=scene.instances[2].transform;values[0].transform.translation_cm.x=40;runtime.evaluate(values,poses);require(std::abs(length()-.291*.029209651)<1e-6&&std::abs(scene.instances[2].transform.value[3]-before.value[3]-.4)<1e-5,"transform-only edit doubled rigid root scale or position");
+  values[0].transform={};values[0].morphs={1};runtime.evaluate(values,poses);require(std::abs(length()-.291)<1e-6,"rigid root scale reset failed");
+  // A local bone stretch changes contact positions without resizing a rigid button.
+  poses[0][1].scale={2,2,2};runtime.evaluate(values,poses);require(std::abs(length()-.291)<1e-6,"scale_modes=none inherited local cloth stretching");
+  values[0].morphs={.029209651f};runtime.evaluate(values,poses);require(std::abs(length()-.291*.029209651)<1e-6,"rigid scale accumulated after repeated edits");
+  std::vector<ir::Transform> frames(3,ir::Transform::translate({5,0,0}));require(runtime.reframe(frames),"rigid reframe rejected common group");runtime.evaluate(values,poses);require(std::abs(length()-.291*.029209651)<1e-6,"group reframe changed rigid root scale");
+}
 static void mesh_collision() {
   ir::Scene scene;ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};
   ir::Triangle f;f.vertices={0,1,2};body.triangles.push_back(f);f.vertices={0,2,3};body.triangles.push_back(f);
@@ -249,6 +266,7 @@ static void unit() {
     values[0].unlimited_morphs.clear();values[0].morphs={2};runtime.evaluate(values,{});require(scene.meshes[0].positions[0].x==1,"重置未恢复原始通道语义");
   }
   mesh_collision();
+  rigid_root_scaling();
   root_follower_and_visibility();
   bone_attachment();
   generated_field();

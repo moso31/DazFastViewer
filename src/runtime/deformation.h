@@ -24,7 +24,7 @@ class DeformationRuntime {
   std::vector<std::vector<JointPose>> effective_poses_;
   struct Attachment {size_t target,skin,joint;ir::Transform figure,inverse_bind;};
   std::vector<Attachment> attachments_;
-  struct SurfaceAttachment {size_t target,source;ir::Transform frame;std::vector<ir::Vec3> reference;};
+  struct SurfaceAttachment {size_t target,source;ir::Transform frame;std::vector<ir::Vec3> reference;int skin=-1;};
   std::vector<SurfaceAttachment> surface_attachments_;
   struct Graft {uint32_t follower,source;ir::Transform relative;bool initialized=false;};
   std::vector<Graft> grafts_;
@@ -32,7 +32,7 @@ class DeformationRuntime {
   std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
   bool evaluated_=false;
   bool same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const;
-  ir::Delta follow_surfaces(ir::Delta delta);
+  ir::Delta follow_surfaces(ir::Delta delta,const std::vector<std::vector<JointPose>> &resolved);
   ir::Delta weld_grafts(ir::Delta delta);
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
 public:

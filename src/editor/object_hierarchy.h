@@ -49,14 +49,15 @@ struct ObjectHierarchy {
     return false;
   }
 };
-inline ir::Bounds ground_bounds(const Document &d,size_t target,const std::vector<ir::Bounds> &bounds,const std::vector<bool> &visible,bool body_only) {
-  auto result=bounds.at(target);if(body_only)return result;
+inline ir::Bounds ground_bounds(const Document &d,size_t target,const std::vector<ir::Bounds> &bounds,const std::vector<bool> &visible,bool body_only,const std::vector<ir::Transform> *worlds=nullptr,const Snapshot *snapshot=nullptr) {
+  auto reference=[&](size_t t){const auto &id=d.catalog.targets.at(t).id;const auto *w=snapshot?water::find(snapshot->water_overrides,id):nullptr;if(!w)w=water::find(d.waters,id);if(worlds&&w)return water::reference_bounds(*w,worlds->at(t));return bounds.at(t);};
+  auto result=reference(target);if(body_only)return result;
   const ObjectHierarchy hierarchy(d);
   for(size_t i=0;i<d.catalog.targets.size();++i) {
     if(i==target||i>=bounds.size()||(i<visible.size()&&!visible[i])||bounds[i].empty)continue;
     bool member=hierarchy.contains(hierarchy.targets[target],hierarchy.targets[i]);
     if(!member)try{member=attachment_host(d,i)==target;}catch(const std::exception &){}
-    if(member){result.add(bounds[i].minimum);result.add(bounds[i].maximum);}
+    if(member){const auto b=reference(i);result.add(b.minimum);result.add(b.maximum);}
   }
   return result;
 }

@@ -56,7 +56,14 @@ struct MaterialSourceChannel {
   bool mapped=false;
   bool operator==(const MaterialSourceChannel &) const = default;
 };
+struct WaterSurface {
+  float depth=20,clarity=12,ripples=.22f,foam=.65f,time=0;
+  uint32_t seed=1337;
+  float foam_uv_scale=1;
+  bool operator==(const WaterSurface &) const=default;
+};
 struct Material {
+  std::optional<WaterSurface> water;
   std::string id;
   Vec3 base_color{0.5f,0.5f,0.5f};
   Vec3 emission_color{};
@@ -135,6 +142,8 @@ struct Polygon {
   bool operator==(const Polygon &) const = default;
 };
 struct Mesh {
+  // Native water's per-vertex contact coverage, independent of texture resolution.
+  std::vector<float> water_foam;
   // GeoGraft 的目标基础拓扑；用于把附加表面纳入服装碰撞。
   uint32_t graft_target_vertices=0;
   uint32_t graft_target_polygons=0,source_polygon_count=0;

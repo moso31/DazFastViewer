@@ -3,6 +3,7 @@
 #include "runtime/picking.h"
 #include "editor/recovery.h"
 #include "editor/scene_extension.h"
+#include "water/document.h"
 #include "editor/material_panel.h"
 #include "editor/numeric_spinbox.h"
 #include "editor/hdr_color_dialog.h"
@@ -29,6 +30,14 @@ static std::shared_ptr<Document> fixture(){
   auto skin=powerpose_fixture();skin.instance=0;d->skeletons.skins={skin};d->formulas.graphs.resize(3);d->formulas.graphs[0].skin=0;return d;
 }
 static EditState state_for(std::shared_ptr<const Document> document){EditState s;s.document=std::move(document);s.snapshot=initial_snapshot(*s.document);s.save_file="first.dufex";s.context.selection={{"figure/geometry"}};s.context.active=s.context.selection.front();return s;}
+static void water_history(){
+  auto d=std::make_shared<Document>();auto w=std::make_shared<water::Water>();w->id="history-water";w->config.width=w->config.length=32;water::install(*d,w);auto state=state_for(d);
+  EditHistory history([&]{return state;},[&](const EditState &s){state=s;});
+  for(int i=1;i<=20;++i)history.execute("Water time",[&]{auto next=std::make_shared<water::Water>(*w);next->config.time=i;state.snapshot.water_overrides={next};});
+  check(history.stack().count()==20&&state.document==d,"water edits duplicated the scene document or failed to enter history");
+  history.undo();check(water::effective(*d,state.snapshot).front()->config.time==19,"water time undo failed");history.redo();check(water::effective(*d,state.snapshot).front()->config.time==20,"water time redo failed");
+  while(history.stack().canUndo())history.undo();check(state.snapshot.water_overrides.empty()&&state.document==d,"water undo did not restore the shared baseline");
+}
 static void subtree_visibility(){
   auto d=fixture();d->catalog.targets[0].character=true;
   d->catalog.targets[1].parent="#bone";d->catalog.targets[1].ancestors={"#bone","#group","#figure"};
@@ -218,4 +227,4 @@ static void recovery(){
   const auto crash_directory=temp.filePath("crash");QProcess child;child.start(QCoreApplication::applicationFilePath(),{"--crash-writer",crash_directory,temp.path()});check(child.waitForFinished(30000)&&child.exitCode()==23,"崩溃恢复子进程失败");const auto crashed=RecoverySession::candidates(crash_directory);check(crashed.size()==1,"异常进程遗留锁未识别");check(restore_recovery(RecoverySession::read(crashed.front()),55).snapshot.values[0].transform.translation_cm.x==12,"真实异常退出后丢失场景");
   auto original=RecoverySession::read(abnormal);{RecoverySession session(directory);session.checkpoint(state,{folder});check(session.flush(),"有效恢复点失败");auto invalid=state;invalid.snapshot.values[0].transform.general_scale=std::numeric_limits<double>::quiet_NaN();session.checkpoint(invalid,{folder});check(!session.flush(),"无效恢复点没有报错");check(RecoverySession::read(session.file())["scene"]["state"]["objects"].begin().value()["transform"]["general_scale"]==1,"失败写入破坏上一个恢复点");}
 }
-int main(int argc,char **argv){QApplication app(argc,argv);try{if(argc==4&&std::string(argv[1])=="--crash-writer"){auto state=disk_fixture(std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString()));RecoverySession session(QString::fromLocal8Bit(argv[2]));session.checkpoint(state,{std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString())});check(session.flush(),"崩溃前恢复点写入失败");std::_Exit(23);}subtree_visibility();attached_visibility();imported_visibility();commands();gestures_and_limits();structure();controls();recovery();std::cout<<"PASS edit history, controls, limits, structure, recovery\n";return 0;}catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}
+int main(int argc,char **argv){QApplication app(argc,argv);try{if(argc==4&&std::string(argv[1])=="--crash-writer"){auto state=disk_fixture(std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString()));RecoverySession session(QString::fromLocal8Bit(argv[2]));session.checkpoint(state,{std::filesystem::path(QString::fromLocal8Bit(argv[3]).toStdWString())});check(session.flush(),"崩溃前恢复点写入失败");std::_Exit(23);}water_history();subtree_visibility();attached_visibility();imported_visibility();commands();gestures_and_limits();structure();controls();recovery();std::cout<<"PASS edit history, controls, limits, structure, recovery\n";return 0;}catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

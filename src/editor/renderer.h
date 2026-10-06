@@ -9,6 +9,7 @@
 #include "viewport/quality.h"
 #include "bench/telemetry.h"
 #include "city/runtime.h"
+#include "water/document.h"
 #include <memory>
 #include <thread>
 #include <future>
@@ -79,6 +80,8 @@ struct RenderStatus {
   std::vector<runtime::JointPose> effective_roots;
   std::vector<ir::Bounds> bounds;
   std::vector<ir::Bounds> instance_bounds;
+  // Includes hidden instances for geometry statistics / water candidate sorting.
+  std::vector<ir::Bounds> instance_geometry_bounds;
   std::map<std::string,ir::Transform> group_worlds;
   std::vector<ir::Bounds> head_bounds;
   std::vector<bool> visible;
@@ -119,6 +122,8 @@ class Renderer {
   std::mutex mutex_;
   struct CaptureRequest {uint64_t generation,revision,camera_epoch;std::promise<ViewportCapture> result;};
   std::unique_ptr<CaptureRequest> capture_;
+  struct WaterRequest {uint64_t generation,revision;water::Water water;std::promise<water::Inputs> result;};
+  std::unique_ptr<WaterRequest> water_request_;
   void capture_frame(uint64_t generation,uint64_t revision,const CameraState &camera);
   RenderQuality requested_render_quality_;
   runtime::PhysicsOptions physics_options_;
@@ -174,6 +179,7 @@ public:
   CameraState input_camera();
   std::future<ViewportCapture> capture(uint64_t generation,uint64_t revision);
   void cancel_capture();
+  std::future<water::Inputs> water_inputs(uint64_t generation,uint64_t revision,const water::Water &);
   void orbit(float x,float y);
   void keyboard(int key,bool pressed);
   void frame(const ir::Bounds &bounds);

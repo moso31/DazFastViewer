@@ -15,6 +15,7 @@ namespace dfv::editor {
 bool physics_eligible(const Document &d,size_t t) {
   if(t>=d.catalog.targets.size()||growth_character(d,t))return false;
   const auto &target=d.catalog.targets[t];const auto &i=d.loaded.scene.instances.at(target.instance);
+  if(water::find(d.waters,i.id))return false;
   for(const auto &o:d.loaded.objects)if(o.instance==target.instance&&(o.content_type=="Actor"||o.content_type.starts_with("Actor/")))return false;
   const auto &m=d.loaded.scene.meshes.at(i.mesh);
   // GeoGraft 和 Shell 属于宿主依赖曲面，不作为独立衣物模拟。
@@ -89,6 +90,8 @@ PhysicsService::PhysicsService():worker_([this](std::stop_token stop){
         }
         std::map<int,std::vector<runtime::PhysicsTarget>> wanted;std::vector<uint32_t> environment;std::set<uint32_t> all_simulated;
         for(size_t t=0;t<q.snapshot.values.size();++t){const int host=physics_host(*q.document,t);const auto &target=q.document->catalog.targets[t];
+          // Procedural water is neither a simulated body nor a solid collider.
+          if(water::find(q.document->waters,target.id))continue;
           if(q.snapshot.values[t].physics.enabled&&q.snapshot.values[t].visible&&physics_eligible(*q.document,t)){
             runtime::PhysicsTarget v;v.instance=target.instance;v.host=host;v.settings=q.snapshot.values[t].physics;v.kind=v.settings.kind==runtime::PhysicsKind::automatic?physics_kind(*q.document,t):v.settings.kind;
             // 命令只消费一次。关闭再启用不会重放之前的运行命令。

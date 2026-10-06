@@ -56,6 +56,8 @@ public:
   void load(const ir::Scene &scene);
   // 稳定 ID 匹配资源，保留未变化的节点、纹理与设备状态；调用者持有 Scene 锁。
   bool synchronize(const ir::Scene &scene);
+  // Camera LOD changes only native water topology; preserve every unrelated mesh/cache.
+  bool update_water_meshes(const ir::Scene &,const std::vector<uint32_t> &indices);
   // 调用者持有 Cycles Scene 锁；只同步 Delta 中声明的对象。
   void apply(const ir::Delta &delta);
   const AdapterStats &stats() const {return stats_;}

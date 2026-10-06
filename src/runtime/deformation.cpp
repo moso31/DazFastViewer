@@ -70,6 +70,7 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
     const auto &instance=scene.instances.at(targets[source].instance);const auto &mesh=scene.meshes.at(instance.mesh);
     if(follow.vertex_count&&follow.vertex_count!=mesh.positions.size()) throw std::runtime_error("刚性跟随的参考顶点数量不匹配");
     SurfaceAttachment attachment{t,source,instance.transform,{}};for(auto v:follow.vertices) attachment.reference.push_back(mesh.positions.at(v));
+    for(size_t s=0;s<skins.size();++s)if(skins[s].instance==targets[source].instance){attachment.skin=int(s);break;}
     morph_.bind_parent(t,source);surface_attachments_.push_back(std::move(attachment));
   }
   for(size_t t=0;t<targets.size();++t) if(targets[t].conform_target.empty()&&targets[t].rigid_follow.target.empty()) {
@@ -150,7 +151,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     // 实例编辑不参与骨骼 / ERC 输入；沿已有依赖树传播矩阵即可。
     for(const auto &p:values) validate_transform(p.transform);
     for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);}
-    auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(morph_.evaluate())))));previous_=values;return delta;
+    auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(morph_.evaluate())),effective_poses_)));previous_=values;return delta;
   }
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
@@ -180,7 +181,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
   conform_.project(weights,morph_);
   // 碰撞必须看当前姿势的 GeoGraft 接缝，不能读取上一帧在末尾焊接的边界。
   // 最后的焊接仍保留，用于刚性跟随或插件自身碰撞之后的边界一致性。
-  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(skin_.evaluate(morph_.evaluate()))))),!evaluated_);
+  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(skin_.evaluate(morph_.evaluate()))),resolved)),!evaluated_);
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;evaluated_=true;return delta;
 }
 ir::Delta DeformationRuntime::weld_grafts(ir::Delta delta) {
@@ -201,13 +202,19 @@ ir::Delta DeformationRuntime::weld_grafts(ir::Delta delta) {
   }
   return delta;
 }
-ir::Delta DeformationRuntime::follow_surfaces(ir::Delta delta) {
+ir::Delta DeformationRuntime::follow_surfaces(ir::Delta delta,const std::vector<std::vector<JointPose>> &resolved) {
+  std::map<int,ir::Transform> roots;
   for(const auto &a:surface_attachments_) {
     const auto &follow=targets_[a.target].rigid_follow;std::vector<ir::Vec3> points;
     const auto mesh_index=scene_.instances.at(targets_[a.source].instance).mesh;
     if(evaluated_&&std::none_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==mesh_index;})) continue;
     const auto &mesh=scene_.meshes.at(mesh_index);for(auto v:follow.vertices) points.push_back(mesh.positions.at(v));
-    morph_.set_attachment(a.target,a.frame*fit_rigid(a.reference,points,follow.rotate)*ir::inverse(a.frame));
+    ir::Transform root;auto reference=a.reference;
+    if(a.skin>=0){auto found=roots.find(a.skin);if(found==roots.end())found=roots.emplace(a.skin,joint_transforms(skins_.at(a.skin),resolved.at(a.skin)).front()).first;root=found->second;for(auto &p:reference)p=root.point(p);}
+    // scale_modes=none suppresses local surface stretch, not the Figure's ERC /
+    // root scale. Fit in the already-scaled reference frame, then restore that
+    // frame once. The saved instance scale remains in a.frame (never reapplied).
+    morph_.set_attachment(a.target,a.frame*fit_rigid(reference,points,follow.rotate)*root*ir::inverse(a.frame));
   }
   // 刚性附件有自身碰撞修改器时，必须在最终挂接位置重新检查。
   const auto follow_delta=collision_.evaluate(morph_.evaluate());

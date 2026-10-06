@@ -3,6 +3,7 @@
 #include "daz/content_entry.h"
 #include "daz/pose.h"
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 
@@ -11,9 +12,9 @@ using J=nlohmann::json;
 namespace fs=std::filesystem;
 static void require(bool value,const char *message) {if(!value) throw std::runtime_error(message);}
 template<class F> static void rejects(F f,const char *message) {bool rejected=false;try {f();}catch(const std::exception &){rejected=true;}require(rejected,message);}
-static editor::Document load(const fs::path &file,const std::vector<fs::path> &roots,bool deferred=false) {
+static editor::Document load(const fs::path &file,const std::vector<fs::path> &roots,bool deferred=false,bool lazy=false) {
   editor::Document d;d.source_file=file;d.loaded=daz::load(file,{roots,false,deferred});
-  d.catalog=daz::discover_morphs(d.loaded,roots);d.skeletons=daz::load_skeletons(d.loaded);d.formulas=daz::enable_formulas(d.catalog,d.skeletons);return d;
+  d.catalog=daz::discover_morphs(d.loaded,roots,{},lazy);d.skeletons=daz::load_skeletons(d.loaded);d.formulas=daz::enable_formulas(d.catalog,d.skeletons);return d;
 }
 static ir::Scene evaluate(const editor::Document &d,const editor::Snapshot &s) {
   auto scene=d.loaded.scene;runtime::DeformationRuntime r(scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);r.evaluate(s.values,s.poses);
@@ -150,7 +151,20 @@ static void actual(const fs::path &host,const fs::path &wear,const std::vector<f
   std::cout<<J({{"status","PASS"},{"added_targets",d.catalog.targets.size()-first},{"attachment_groups",d.attachments.size()},{"host",d.catalog.targets[target].id}}).dump()<<std::endl;
 }
 int wmain(int argc,wchar_t **argv) {try {
-  if(argc>=5&&std::wstring(argv[1])==L"--material-link"){
+  if(argc>=4&&std::wstring(argv[1])==L"--rigid-report"){
+    std::vector<fs::path> roots;for(int i=3;i<argc;++i)roots.emplace_back(argv[i]);auto d=load(argv[2],roots,false,true);auto s=editor::initial_snapshot(d);
+    auto scene=d.loaded.scene;runtime::DeformationRuntime r(scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);r.evaluate(s.values,s.poses);
+    auto report=J::array();for(size_t t=0;t<d.catalog.targets.size();++t){const auto &target=d.catalog.targets[t];if(target.rigid_follow.target.empty()&&target.label!="tiny_01"&&target.label!="HSO Pants")continue;
+      const auto &base=d.loaded.scene.instances.at(target.instance),&v=scene.instances.at(target.instance);ir::Bounds bounds;for(auto p:scene.meshes[v.mesh].positions)bounds.add(v.transform.point(p));
+      J item={{"id",target.id},{"label",target.label},{"follow",target.rigid_follow.target},{"base",base.transform.value},{"evaluated",v.transform.value},{"extent",{bounds.maximum.x-bounds.minimum.x,bounds.maximum.y-bounds.minimum.y,bounds.maximum.z-bounds.minimum.z}}};
+      for(size_t k=0;k<d.skeletons.skins.size();++k)if(d.skeletons.skins[k].instance==target.instance)item["root"]={{"loaded_scale",d.skeletons.skins[k].root_general_scale},{"pose_scale",r.effective_poses().at(k).front().general_scale}};
+      if(target.label.starts_with("P BUTTON")){bool checked=false;for(const auto &owner:d.catalog.targets)if(target.rigid_follow.target=="#"+owner.id.substr(0,owner.id.rfind('/')))for(size_t k=0;k<d.skeletons.skins.size();++k)if(d.skeletons.skins[k].instance==owner.instance){
+        const auto root_scale=r.effective_poses().at(k).front().general_scale;double max_error=0;for(int c=0;c<3;++c){double a=0,b=0;for(int row=0;row<3;++row){a+=std::pow(base.transform.value[row*4+c],2);b+=std::pow(v.transform.value[row*4+c],2);}max_error=std::max(max_error,std::abs(std::sqrt(b/a)-std::abs(root_scale)));}
+        require(max_error<1e-5,"P BUTTON does not inherit evaluated Figure root scale");item["scale_check"]={{"result","PASS"},{"inherited",root_scale},{"max_axis_ratio_error",max_error}};checked=true;
+      }require(checked,"P BUTTON scale validation did not resolve its Figure");}
+      report.push_back(std::move(item));
+    }std::cout<<report.dump(2)<<std::endl;
+  }else if(argc>=5&&std::wstring(argv[1])==L"--material-link"){
     std::vector<fs::path> roots;for(int i=4;i<argc;++i)roots.emplace_back(argv[i]);const auto file=daz::content_asset(argv[3],roots);auto d=load(argv[2],roots,true);auto s=editor::initial_snapshot(d);
     const auto preset=daz::load(file,{roots,false});const auto applied=editor::apply_materials(d,0,preset,&s);require(applied>0,"实际材质链接未匹配头发表面");d.loaded.scene.validate();std::cout<<J{{"status","PASS"},{"link",fs::path(argv[3]).generic_string()},{"resolved",file.generic_string()},{"applied_surfaces",applied}}.dump(2)<<std::endl;
   }else if(argc>=5&&std::wstring(argv[1])==L"--link"){

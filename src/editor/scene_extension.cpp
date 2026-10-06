@@ -1,5 +1,6 @@
 #include "editor/scene_extension.h"
 #include "city/document.h"
+#include "water/document.h"
 #include "editor/group_transforms.h"
 #include "render_ir/options_json.h"
 #include "runtime/physics_json.h"
@@ -40,6 +41,7 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
     if(kind=="append"){auto s=load_source(source_path(op.at("file")),roots,progress,true);s->archives=d.archives;replay(*s,op.at("operations"),roots,folder,progress,depth+1);append_document(d,std::move(*s),op.at("prefix"));}
     else if(kind=="city") {auto config=city::config_from_json(op.at("config"));if(config.directory.is_relative())config.directory=folder/config.directory;city::install(d,city::generate(config,op.at("id"),roots,progress),false);}
     else if(kind=="city_remove")city::remove(d,op.at("id"),false);
+    else if(kind=="water")water::install(d,water::from_json(op.at("water")),false);
     else if(kind=="studio")ir::add_studio(d.loaded.scene);
     else if(kind=="remove"){auto v=initial_snapshot(d);remove_target(d,v,target_index(d,op.at("target")));}
     else if(kind=="remove_light"){auto v=initial_snapshot(d);const auto id=op.at("id").get<std::string>();const auto found=std::find_if(v.lights.begin(),v.lights.end(),[&](const auto &l){return l.id==id;});if(found!=v.lights.end())remove_light(d,v,size_t(found-v.lights.begin()));}
@@ -65,7 +67,7 @@ J structure(const Document &d){
 bool city_operations(const J &ops){for(const auto &op:ops){const auto kind=op.value("op",std::string{});if(kind=="city"||kind=="city_remove"||(kind=="append"&&city_operations(op.at("operations"))))return true;}return false;}
 }
 std::filesystem::path extension_path(std::filesystem::path p){p.replace_extension(".dufex");return p;}
-J snapshot_json(const Document &d,const Snapshot &s){
+J snapshot_json(const Document &d,const Snapshot &s,bool water_state){
   if(s.generation!=d.generation||s.values.size()!=d.catalog.targets.size()||s.poses.size()!=d.skeletons.skins.size())throw std::runtime_error("保存快照与场景不匹配");
   J j={{"objects",J::object()},{"poses",J::object()},{"subdivision",s.subdivision_levels},{"options",ir::options_json(s.options)},{"lights",J::array()}};
   if(s.view){for(float v:*s.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*s.view)[3]<=0)throw std::runtime_error("观察相机距离无效");j["view"]=*s.view;}
@@ -79,9 +81,11 @@ J snapshot_json(const Document &d,const Snapshot &s){
   validate_material_overrides(d.loaded.scene,s.material_overrides);j["materials"]=s.material_overrides;
   validate_group_transforms(d,s.group_transforms);j["groups"]=J::object();for(const auto &[id,v]:s.group_transforms)j["groups"][id]=transform(v);
   validate_instance_ground(d.loaded.scene,s.instance_ground);j["instance_ground"]=J::object();for(const auto &[id,v]:s.instance_ground)j["instance_ground"][id]={{"offset_m",v.offset_m},{"ratio",v.ratio},{"offset_cm",v.offset_cm},{"body_only",v.body_only}};
+  if(water_state){j["waters"]=J::array();for(const auto &w:s.water_overrides)j["waters"].push_back(water::json(*w));}
   j["cities"]=city::json(s.city_views);j["control_favorites"]=favorites(s.control_favorites);return j;
 }
 void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
+  water::Waters waters;for(const auto &value:j.value("waters",J::array())){auto w=water::from_json(value);const auto *base=water::find(d.waters,w->id);if(!base||water::find(waters,w->id)||w->config.x!=base->config.x||w->config.y!=base->config.y||w->config.level!=base->config.level)throw std::runtime_error("水体参数快照引用无效");waters.push_back(std::move(w));}
   auto next=s;next.city_views=city::views_from_json(j.value("cities",J::object()));for(const auto &[id,v]:next.city_views)if(std::none_of(d.cities.begin(),d.cities.end(),[&](const auto &c){return c->id==id;}))throw std::runtime_error("城市视图引用无效");
   next.view.reset();if(j.contains("view")){next.view=j.at("view").get<std::array<float,6>>();for(float v:*next.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*next.view)[3]<=0)throw std::runtime_error("观察相机距离无效");}
   next.group_transforms.clear();const auto groups=j.value("groups",J::object());for(const auto &[id,value]:groups.items())read_transform(next.group_transforms[id],value);validate_group_transforms(d,next.group_transforms);
@@ -99,7 +103,7 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   next.pose_pins.clear();for(const auto &p:j.value("pins",J::array())){auto skin=std::find_if(d.skeletons.skins.begin(),d.skeletons.skins.end(),[&](const auto &v){return v.id==p.at("skin").get<std::string>();});if(skin==d.skeletons.skins.end())throw std::runtime_error("固定关节的角色不存在");auto joint=std::find_if(skin->joints.begin(),skin->joints.end(),[&](const auto &v){return v.id==p.at("joint").get<std::string>();});if(joint==skin->joints.end())throw std::runtime_error("固定关节不存在");runtime::PosePin pin;pin.skin=int(skin-d.skeletons.skins.begin());pin.joint=int(joint-skin->joints.begin());pin.world=vector(p.at("world"));pin.position=p.at("position");pin.angle=p.at("angle");pin.world_orientation.value=p.at("orientation").get<std::array<float,12>>();for(auto v:pin.world_orientation.value)if(!std::isfinite(v))throw std::runtime_error("固定角度无效");next.pose_pins.push_back(pin);}
   next.material_overrides=j.value("materials",J::object()).get<MaterialOverrides>();validate_material_overrides(d.loaded.scene,next.material_overrides);
   const auto instance_ground=j.value("instance_ground",J::object());next.instance_ground.clear();for(const auto &[id,v]:instance_ground.items())next.instance_ground[id]={v.at("offset_m").get<double>(),v.at("ratio").get<double>(),v.value("offset_cm",0.),v.value("body_only",false)};validate_instance_ground(d.loaded.scene,next.instance_ground);
-  next.control_favorites=read_favorites(j.value("control_favorites",J{}));s=std::move(next);
+  next.water_overrides=std::move(waters);next.control_favorites=read_favorites(j.value("control_favorites",J{}));s=std::move(next);
 }
 J scene_extension_json(const Document &d,const Snapshot &s){
   J j={{"schema","daz-fast-viewer-scene-extension"},{"version",1},{"source",path_string(d.source_file)},{"operations",d.operations},{"state",snapshot_json(d,s)},{"archives",J::object()}};
@@ -137,6 +141,6 @@ RestoredScene restore_scene_extension(const J &j,const fs::path &folder,const st
   auto resolved=roots;for(const auto &r:j.value("content_roots",J::array())){auto p=fs::u8path(r.get<std::string>());if(fs::is_directory(p)&&std::find(resolved.begin(),resolved.end(),p)==resolved.end())resolved.push_back(p);}
   auto d=load_source(source,resolved,progress);d->archives=std::move(archives);d->generation=generation;replay(*d,j.at("operations"),resolved,folder,progress);
   if(version==2&&structure(*d)!=j.at("structure"))throw std::runtime_error("场景结构或依赖资产已变化，无法完整恢复保存的关系");
-  auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
+  auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));for(const auto &w:s.water_overrides)water::install(*d,w);s.water_overrides.clear();d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
 }
 }

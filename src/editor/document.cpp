@@ -138,6 +138,8 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   std::erase_if(document.loaded.objects,[&](const auto &o) {return removed.contains(o.id)||instance_map.at(o.instance)<0;});
   for(auto &o:document.loaded.objects) {o.instance=uint32_t(instance_map.at(o.instance));if(refers_to(o.smoothing.collision_target,removed)) o.smoothing.collision_target.clear();}
   std::erase_if(document.loaded.nodes,[&](const auto &n) {return removed.contains(n.id);});
+  std::erase_if(document.waters,[&](const auto &w){return removed.contains(w->id);});
+  std::erase_if(snapshot.water_overrides,[&](const auto &w){return removed.contains(w->id);});
   for(auto &binding:document.attachments) {
     std::erase_if(binding.items,[&](const auto &i){return removed.contains(i.node);});
     std::erase_if(binding.nodes,[&](const auto &n){return removed.contains(n.id);});
@@ -263,6 +265,12 @@ Snapshot initial_snapshot(const Document &document) {
 }
 void append_document(Document &destination,Document source,const std::string &identity_prefix) {
   destination.archives.insert(source.archives.begin(),source.archives.end());
+  // An initially empty native document still needs the appended source's libraries.
+  if(source.loaded.report.is_object()&&source.loaded.report.contains("content_roots")){
+    if(!destination.loaded.report.is_object())destination.loaded.report=nlohmann::json::object();
+    auto &roots=destination.loaded.report["content_roots"];if(!roots.is_array())roots=nlohmann::json::array();
+    for(const auto &root:source.loaded.report["content_roots"])if(std::find(roots.begin(),roots.end(),root)==roots.end())roots.push_back(root);
+  }
   auto &a=destination.loaded.scene;auto &b=source.loaded.scene;
   const int textures=int(a.textures.size());const auto materials=uint32_t(a.materials.size()),meshes=uint32_t(a.meshes.size()),instances=uint32_t(a.instances.size());
   const auto skins=int(destination.skeletons.skins.size());
@@ -274,6 +282,7 @@ void append_document(Document &destination,Document source,const std::string &id
   const auto path=source.source_file.generic_u8string();destination.operations.push_back({{"op","append"},{"prefix",prefix},{"file",std::string(path.begin(),path.end())},{"operations",source.operations},{"archive",retain_archive(destination,source.loaded.archive)}});
   for(const auto &[surface,archive]:source.material_archives)destination.material_archives[{prefix+surface.first,surface.second}]=archive;
   for(const auto &city:source.cities)destination.cities.push_back(city::prefixed(*city,prefix));
+  for(const auto &water:source.waters)destination.waters.push_back(water::prefixed(*water,prefix));
   a.textures.insert(a.textures.end(),b.textures.begin(),b.textures.end());
   for(auto m:b.materials) {
     m.id=prefix+m.id;

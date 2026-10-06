@@ -24,7 +24,8 @@ inline ir::Bounds ground_selection_bounds(const GroundSelection &selection,const
 // Compute into a copy so a bad frame cannot partially move a multi-selection.
 inline bool align_ground_selection(const Document &d,Snapshot &snapshot,const GroundSelection &selection,
   const std::vector<ir::Bounds> &bounds,const std::vector<ir::Transform> &worlds,const std::map<std::string,ir::Transform> &group_worlds) {
-  const auto combined=ground_selection_bounds(selection,bounds);const auto shift=ground_vertical_shift(combined,0);if(shift==0)return false;
+  auto reference=bounds;for(size_t t=0;t<d.catalog.targets.size();++t){const auto &id=d.catalog.targets[t].id;const auto *w=water::find(snapshot.water_overrides,id);if(!w)w=water::find(d.waters,id);if(w)reference.at(d.catalog.targets[t].instance)=water::reference_bounds(*w,worlds.at(t));}
+  const auto combined=ground_selection_bounds(selection,reference);const auto shift=ground_vertical_shift(combined,0);if(shift==0)return false;
   const ObjectHierarchy hierarchy(d);const runtime::InstanceGroups groups(d.loaded.scene);auto next=snapshot;
   for(const auto &id:selection.roots) {
     if(const auto *node=group_node(d,id)) {

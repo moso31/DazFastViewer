@@ -61,10 +61,12 @@ public:
     qApp->installEventFilter(this);setEnabled(false);
   }
   void commit(){ratio_->interpretText();offset_->interpretText();}
-  void bind(bool enabled,double ratio,double offset,bool body_only,bool collective=false){
+  void bind(bool enabled,double ratio,double offset,bool body_only,bool collective=false,bool water=false){
     binding_=true;selected_=nullptr;setEnabled(enabled);const QSignalBlocker a(ratio_),b(offset_),c(body_only_);ratio_->setValue(ratio*100);offset_->setValue(offset);body_only_->setChecked(body_only);binding_=false;
     ratio_->setEnabled(!collective);offset_->setEnabled(!collective);body_only_->setEnabled(!collective);
+    if(auto *form=qobject_cast<QFormLayout *>(ratio_->parentWidget()->layout())){form->setRowVisible(ratio_,!water);form->setRowVisible(body_only_,!water);}
     note_->setText(collective?QStringLiteral("组和多选对象按整体世界包围盒统一落地，忽略各对象的地面对齐设置，保持相对位置。") :QStringLiteral("底部高度 = 世界包围盒高度 × 百分比 + 固定偏移。正值离地，负值下沉；默认包含穿戴物。"));
+    if(water)note_->setText(QStringLiteral("按未起伏的水面基准对齐到世界地面，保留固定偏移；对齐后需要重算海岸线。"));
   }
 };
 }

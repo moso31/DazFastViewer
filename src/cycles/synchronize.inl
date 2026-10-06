@@ -2,6 +2,33 @@
 static bool same_topology(const ir::Mesh &a,const ir::Mesh &b) {
   return runtime::same_mesh_topology(a,b);
 }
+bool CyclesAdapter::update_water_meshes(const ir::Scene &source,const std::vector<uint32_t> &indices){
+  using namespace ccl;
+  if(!loaded_||source.instances.size()!=source_.instances.size()||source.meshes.size()!=source_.meshes.size())return false;
+  std::vector<ir::Mesh> prepared;prepared.reserve(indices.size());
+  for(auto index:indices){
+    if(index>=source.meshes.size())return false;const auto &data=source.meshes[index],&old=source_.meshes[index];
+    if(data.id!=old.id||data.material_slots!=old.material_slots||data.water_foam.size()!=data.positions.size()||subdivisions_[index].active()||!hairs_[index].empty())return false;
+    for(size_t i=0;i<source.instances.size();++i)if(source.instances[i].mesh==index){const auto &instance=source.instances[i];if(graft_bindings_[i].group>=0||instance.materials.size()!=1||!source.materials[instance.materials[0]].water)return false;if(instance.visible&&meshes_[index].empty()&&!data.triangles.empty())return false;}
+    for(auto *mesh:meshes_[index])if(mesh->transform_applied)return false;
+    ir::Scene check;check.meshes.push_back(data);check.validate();prepared.push_back(std::move(check.meshes[0]));
+  }
+  for(size_t k=0;k<indices.size();++k){const auto index=indices[k];auto &data=prepared[k];const auto old_count=source_.meshes[index].triangles.size();
+    for(auto *mesh:meshes_[index]){
+      auto shaders=mesh->get_used_shaders();const auto old_triangles=mesh->num_triangles();
+      mesh->clear(true);mesh->resize_mesh(int(data.positions.size()),int(data.triangles.size()));
+      auto *uv=mesh->attributes.add(ATTR_STD_UV,ustring("UVMap"))->data_for_write<float2>();
+      for(size_t face=0;face<data.triangles.size();++face){const auto &t=data.triangles[face];for(size_t c=0;c<3;++c){mesh->get_triangles()[face*3+c]=int(t.vertices[c]);uv[face*3+c]=make_float2(t.uv[c].x,t.uv[c].y);}mesh->get_shader()[face]=t.material_slot;mesh->get_smooth()[face]=data.smooth;}
+      auto *positions=mesh->get_position_for_write();for(size_t v=0;v<data.positions.size();++v)positions[v]=vector(data.positions[v]);
+      auto *foam=mesh->attributes.add(ustring("dfv_water_foam"),TypeFloat,ATTR_ELEMENT_VERTEX)->data_for_write<float>();std::copy(data.water_foam.begin(),data.water_foam.end(),foam);
+      mesh->set_used_shaders(shaders);mesh->tag_position_modified();mesh->compute_bounds();mesh->tag_update(&scene_,true);
+      stats_.unique_triangles=stats_.unique_triangles-old_triangles+mesh->num_triangles();++stats_.geometry_updates;++stats_.topology_updates;
+    }
+    for(size_t i=0;i<source_.instances.size();++i)if(source_.instances[i].mesh==index&&!objects_[i].empty())stats_.triangles=stats_.triangles-old_count+data.triangles.size();
+    vertex_counts_[index]=data.positions.size();source_.meshes[index]=std::move(data);
+  }
+  return true;
+}
 void CyclesAdapter::load(const ir::Scene &source) {
   if(loaded_) throw std::runtime_error("同一 CyclesAdapter 只允许一次完整加载，请使用同步接口");
   synchronize(source);
@@ -118,7 +145,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     if(inserted) {
       const auto old=old_geometry.find(key);if(old!=old_geometry.end()) geometry=old->second;
       const bool shader_changed=std::any_of(key.second.begin(),key.second.end(),[&](auto *s){return modified_shaders.contains(s);});
-      const bool positions_changed=previous_mesh[index]<0||data.positions!=source_.meshes[size_t(previous_mesh[index])].positions||data.displacement_rest!=source_.meshes[size_t(previous_mesh[index])].displacement_rest;
+      const bool positions_changed=previous_mesh[index]<0||data.positions!=source_.meshes[size_t(previous_mesh[index])].positions||data.displacement_rest!=source_.meshes[size_t(previous_mesh[index])].displacement_rest||data.water_foam!=source_.meshes[size_t(previous_mesh[index])].water_foam;
       array<Node *> used(key.second.size());for(size_t m=0;m<used.size();++m) used[m]=key.second[m];
       if(!data.triangles.empty()&&graft_bindings[size_t(&instance-source.instances.data())].group<0) {
         const bool rebuild=topology_changed[index]||!geometry.mesh;
@@ -135,6 +162,11 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
           }
           auto *positions=mesh->get_position_for_write();if(size_t(mesh->num_verts())!=points.size()) throw std::runtime_error("细分顶点数量与设备网格不一致");
           for(size_t v=0;v<points.size();++v) positions[v]=vector(points[v]);
+          if(!data.water_foam.empty()){
+            if(data.water_foam.size()!=points.size())throw std::runtime_error("水体泡沫顶点数量不一致");
+            auto *foam=mesh->attributes.add(ustring("dfv_water_foam"),TypeFloat,ATTR_ELEMENT_VERTEX)->data_for_write<float>();
+            std::copy(data.water_foam.begin(),data.water_foam.end(),foam);
+          }
           for(auto attribute:{ATTR_STD_VERTEX_NORMAL,ATTR_STD_POSITION_UNDISPLACED,ATTR_STD_NORMAL_UNDISPLACED,ATTR_STD_UV_TANGENT_UNDISPLACED,ATTR_STD_UV_TANGENT_SIGN_UNDISPLACED}) mesh->attributes.remove(attribute);
           mesh->set_used_shaders(used);mesh->tag_position_modified();mesh->compute_bounds();mesh->tag_update(&scene_,rebuild);if(loaded_) ++stats_.geometry_updates;changed=true;
         }

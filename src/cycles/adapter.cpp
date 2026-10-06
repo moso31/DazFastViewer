@@ -31,7 +31,9 @@ static ccl::Transform transform(const ir::Transform &t) {
   ccl::Transform out;const auto &v=t.value;
   out.x=ccl::make_float4(v[0],v[1],v[2],v[3]);out.y=ccl::make_float4(v[4],v[5],v[6],v[7]);out.z=ccl::make_float4(v[8],v[9],v[10],v[11]);return out;
 }
+#include "water/shader.inl"
 void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,float texel_distance,float emission_strength) {
+  if(source.water){water_shader(shader,source,scene_,render_quality_.bump_and_normal);return;}
   const auto m=ir::viewport_material(source,render_quality_);
   using namespace ccl;
   auto graph=make_unique<ShaderGraph>();
@@ -302,7 +304,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     for(auto *object:objects_[edit.index]) if(object->get_geometry()->transform_applied) throw std::runtime_error("对象变换已烘焙，不能直接动态修改");
   }
   for(const auto &edit:delta.visibility) if(edit.index>=objects_.size()) throw std::runtime_error("可见性实例索引越界");
-  if((!delta.visibility.empty()&&(!graft_renders_.empty()||prune_hidden_))||(prune_hidden_&&!delta.materials.empty())) {
+  if((!delta.visibility.empty()&&(!graft_renders_.empty()||prune_hidden_))||(prune_hidden_&&std::any_of(delta.materials.begin(),delta.materials.end(),[](const auto &e){return !e.value.water;}))) {
     // 保留旧快照用于比较；显隐与 Morph 同时提交时不能漏掉其他组合的几何更新。
     auto next=source_;if(delta.options) next.options=*delta.options;if(delta.camera) next.camera=*delta.camera;
     for(const auto &e:delta.meshes) next.meshes[e.index].positions=e.positions;
@@ -336,7 +338,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     }
     auto canonical=edit.value;for(auto *index:ir::texture_indices(canonical)) if(*index>=0) *index=texture_map_.at(size_t(*index));
     canonical_materials_[edit.index]=std::move(canonical);source_.materials[edit.index]=edit.value;
-    emission_strengths_=ir::emission_strengths(source_);
+    if(!edit.value.water)emission_strengths_=ir::emission_strengths(source_);
     material(*shader,canonical_materials_[edit.index],bump_distances_.at(edit.index),emission_strengths_[edit.index]);++stats_.material_updates;
   }
   for(const auto &edit:delta.lights) {
