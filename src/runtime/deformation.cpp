@@ -145,13 +145,14 @@ PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &value
   }
   payload_leases_=std::move(leases);trim_morph_cache();return progress;
 }
+ir::Delta DeformationRuntime::collide(ir::Delta delta) {return collision_enabled_?collision_.evaluate(std::move(delta)):std::move(delta);}
 ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
   if(same_shape(values,poses)) {
     diagnostics::Scope scope("transform_only");
     // 实例编辑不参与骨骼 / ERC 输入；沿已有依赖树传播矩阵即可。
     for(const auto &p:values) validate_transform(p.transform);
     for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);}
-    auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(morph_.evaluate())),effective_poses_)));previous_=values;return delta;
+    auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(morph_.evaluate())),effective_poses_)));previous_=values;return delta;
   }
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
@@ -181,7 +182,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
   conform_.project(weights,morph_);
   // 碰撞必须看当前姿势的 GeoGraft 接缝，不能读取上一帧在末尾焊接的边界。
   // 最后的焊接仍保留，用于刚性跟随或插件自身碰撞之后的边界一致性。
-  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collision_.evaluate(weld_grafts(skin_.evaluate(morph_.evaluate()))),resolved)),!evaluated_);
+  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(skin_.evaluate(morph_.evaluate()))),resolved)),!evaluated_);
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;evaluated_=true;return delta;
 }
 ir::Delta DeformationRuntime::weld_grafts(ir::Delta delta) {
@@ -217,7 +218,7 @@ ir::Delta DeformationRuntime::follow_surfaces(ir::Delta delta,const std::vector<
     morph_.set_attachment(a.target,a.frame*fit_rigid(reference,points,follow.rotate)*root*ir::inverse(a.frame));
   }
   // 刚性附件有自身碰撞修改器时，必须在最终挂接位置重新检查。
-  const auto follow_delta=collision_.evaluate(morph_.evaluate());
+  const auto follow_delta=collide(morph_.evaluate());
   for(const auto &edit:follow_delta.meshes) {
     auto found=std::find_if(delta.meshes.begin(),delta.meshes.end(),[&](const auto &previous){return previous.index==edit.index;});
     if(found==delta.meshes.end()) delta.meshes.push_back(edit);else *found=edit;

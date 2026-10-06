@@ -7,7 +7,9 @@
         std::any_of(selections.begin(),selections.end(),[&](const auto &s){return s[0]!=selected_;})) index=-1;
       else try {if(attachment_host(*document_,size_t(selected_))!=size_t(selected_)) index=-1;}catch(...) {index=-1;}
     }
-    const bool ready=index>=0&&!loading_&&state.generation==document_->generation&&state.applied_revision==snapshot_.revision&&state.error.empty()&&state.edit_error.empty()&&!state.pending_payloads;
+    // Accept the next gesture while CPU preview is catching up; the renderer
+    // starts it against that revision's fresh skeleton, without dropping input.
+    const bool ready=index>=0&&!loading_&&state.generation==document_->generation&&state.error.empty()&&state.edit_error.empty()&&state.resource_error.empty()&&!state.pending_payloads;
     powerpose_->bind(index>=0?&document_->skeletons.skins[index]:nullptr,index,selected_,document_?document_->generation:0,snapshot_.revision,roots_,ready,pose_pins_);
   }
   void select_powerpose(const runtime::BoundPosePoint &point) {

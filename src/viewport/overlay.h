@@ -14,14 +14,15 @@ class HoverOverlay {
   std::vector<std::map<int,std::pair<GLuint,size_t>>> parts_;
   std::vector<ir::Transform> transforms_;
   std::vector<bool> visible_;
+  std::vector<bool> detail_pending_;
   std::vector<ir::Bounds> bounds_;
   void draw_instance(size_t instance,GLuint list) const;
   void projection(const CameraState &camera,int width,int height,const ir::Mesh *proxy=nullptr,const ir::Transform *world=nullptr) const;
-  void rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i);
+  void rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i,bool preview=false);
 public:
   void draw_gizmo(const editor::GizmoShape &shape,int width,int height,int active=-1,float dpi=1);
   void update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions);
-  void apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta);
+  void apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta,bool preview=false);
   void prepare_delta(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta);
   void swap_delta(HoverOverlay &prepared,const ir::Scene &scene,const ir::Delta &delta);
   void draw(const CameraState &camera,int width,int height,int hovered,int joint=-1,const std::vector<uint32_t> *members=nullptr,const std::vector<std::pair<size_t,size_t>> *surfaces=nullptr);

@@ -4,6 +4,7 @@
 #include "editor/pose_drag.h"
 #include "editor/powerpose_drag.h"
 #include "editor/render_edit_queue.h"
+#include "editor/deformation_refiner.h"
 #include "editor/physics_present.h"
 #include "viewport/display.h"
 #include "viewport/overlay.h"
@@ -183,6 +184,11 @@ void Renderer::run(std::stop_token stop) {
     city::Runtime city_runtime;uint64_t city_camera_epoch=0,water_camera_epoch=0;
     std::unique_ptr<runtime::DeformationRuntime> pending_runtime;
     std::unique_ptr<runtime::DeformationRuntime> runtime;
+    DeformationRefiner refiner;
+    uint64_t refine_ticket=0,refine_revision=0;
+    bool refine_pending=false,refine_enabled=false;
+    std::vector<ir::Transform> refine_frames;
+    runtime::CollisionStats refined_collision;
     uint64_t epoch=0,camera_epoch=0,applied_revision=0,attempted_revision=0,measured_evaluation=0,measured_skinning=0,measured_transform=0;
     uint64_t retried=0,failed_revision=UINT64_MAX;
     std::vector<std::vector<ir::Vec3>> previous_positions;
@@ -203,6 +209,7 @@ void Renderer::run(std::stop_token stop) {
     RenderEditQueue queued;bool clay_wait=false;uint64_t gpu_revision=0;
     std::vector<ir::SubdivisionSettings> queued_subdivision_before;
     auto reset_render_state=[&] {
+      refiner.cancel();refine_pending=false;refine_frames.clear();refined_collision={};
       runtime.reset();render_scene_ptr.reset();pending_runtime.reset();pending_scene.reset();pending_document.reset();
       runtime_document.reset();runtime_source.reset();runtime_frames.reset();
       current.reset();picking={};regions.clear();pickable.clear();instance_groups.reset();geometry_dirty=true;
@@ -228,7 +235,7 @@ void Renderer::run(std::stop_token stop) {
         if(!document){group_source.reset();group_document.reset();group_frames.reset();applied_groups.clear();document_groups.clear();}
         if(document&&(document!=group_source||desired.group_transforms!=applied_groups)) {
           const auto begin=now();GroupFrames next(*document,desired.group_transforms);bool reused=false;
-          if(runtime&&session&&runtime_source==document&&runtime_frames){std::vector<ir::Transform> frames;for(const auto &id:next.hierarchy.targets){const auto a=next.delta(id),b=runtime_frames->delta(id);frames.push_back(a==b?ir::Transform{}:a*ir::inverse(b));}reused=runtime->reframe(frames);}
+          if(runtime&&session&&runtime_source==document&&runtime_frames){std::vector<ir::Transform> frames;for(const auto &id:next.hierarchy.targets){const auto a=next.delta(id),b=runtime_frames->delta(id);frames.push_back(a==b?ir::Transform{}:a*ir::inverse(b));}reused=runtime->reframe(frames);if(reused)refine_frames=std::move(frames);}
           if(!reused){group_document=transformed_groups(document,desired.group_transforms);document_groups=desired.group_transforms;}
           group_frames=std::move(next);group_source=document;applied_groups=desired.group_transforms;
           if(reused)timing("group_reframe",begin,desired.revision);
@@ -342,6 +349,8 @@ void Renderer::run(std::stop_token stop) {
         }
         // 新场景成功准备后才释放旧运行时及其文档；显示驱动继续保留有效帧。
         runtime.reset();render_scene_ptr=std::move(pending_scene);runtime=std::move(pending_runtime);current=document;pending_document.reset();
+        refiner.cancel();refine_pending=false;refine_frames.clear();refined_collision=runtime->collision_stats();
+        refine_enabled=refined_collision.evaluations||refined_collision.cache_hits;if(refine_enabled)runtime->defer_collision();
         runtime_document=document;runtime_source=group_source;runtime_frames=group_frames;
         regions.clear();regions.resize(render_scene_ptr->instances.size());pickable=runtime::viewport_pick_mask(*render_scene_ptr,current->catalog.targets);
         for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene_ptr->meshes.at(render_scene_ptr->instances.at(skin.instance).mesh),skin);
@@ -475,7 +484,8 @@ void Renderer::run(std::stop_token stop) {
         input_camera.epoch!=powerpose_drag.camera.epoch||window_->width!=powerpose_drag.width||window_->height!=powerpose_drag.height)) {
         powerpose_drag.active=false;state.pose_dragging=false;
       }
-      if(powerpose.serial!=powerpose_serial&&(powerpose.moved||powerpose.cancelled)) {
+      if(powerpose.serial!=powerpose_serial&&(powerpose.moved||powerpose.cancelled)&&
+         (powerpose.cancelled||powerpose.generation!=current->generation||powerpose.revision!=desired.revision||desired.revision==applied_revision)) {
         powerpose_serial=powerpose.serial;
         if(!gizmo_drag.active&&!pose_drag.active&&!powerpose.cancelled&&current==document&&powerpose.generation==current->generation&&
           powerpose.revision==desired.revision&&desired.revision==applied_revision&&powerpose.skin>=0&&powerpose.target>=0&&
@@ -578,7 +588,7 @@ void Renderer::run(std::stop_token stop) {
       if(clay_wait)wanted_preview=false;
       const bool resolution_changed=quality.percent!=applied_percent;
       const bool quality_changed=wanted_preview!=preview||resolution_changed;
-      ir::Delta delta;bool new_render_edit=false,subdivision_edit=false,material_layout_edit=false;
+      ir::Delta delta;bool new_render_edit=false,subdivision_edit=false,material_layout_edit=false,refinement_finished=false;
       const bool city_pending=!current->cities.empty()&&!navigation_preview&&city_camera_epoch!=camera.epoch;
       const bool water_pending=!current->waters.empty()&&!navigation_preview&&water_camera_epoch!=camera.epoch;
       std::vector<ir::SubdivisionSettings> previous_subdivision;
@@ -600,6 +610,9 @@ void Renderer::run(std::stop_token stop) {
             diagnostics::LoadProfile profile;diagnostics::active=&profile;
             try {delta=runtime->evaluate(desired.values,desired.poses);} catch(...) {diagnostics::active=nullptr;throw;}
             diagnostics::active=nullptr;timing("edit_evaluate",evaluate_begin,desired.revision);
+            if(refine_enabled&&(refine_pending||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty())) {
+              refine_ticket=refiner.request(runtime_document,desired,refine_frames);refine_revision=desired.revision;refine_pending=true;
+            }
             for(const auto &[name,value]:profile.timings) {Frame f;f.id=desired.revision;telemetry_.event(name.c_str(),f,value.seconds*1000);}
             if(!previous_positions.empty()) {
               std::erase_if(delta.meshes,[&](const auto &edit) {const auto &old=previous_positions.at(edit.index);return old.size()==edit.positions.size()&&std::equal(old.begin(),old.end(),edit.positions.begin(),[](auto a,auto b){return a.x==b.x&&a.y==b.y&&a.z==b.z;});});previous_positions.clear();
@@ -642,8 +655,32 @@ void Renderer::run(std::stop_token stop) {
         if(wanted_preview!=preview||resolution_changed||new_render_edit||delta.camera)queued.merge(delta,subdivision_edit||material_layout_edit);
         state.applied_revision=applied_revision;
       }
+      // Apply only the current snapshot's complete deformation. Preview remains
+      // editable while the independent CPU worker resolves clothing collisions.
+      if(refine_pending&&refine_revision==desired.revision)if(auto result=refiner.take();result&&result->ticket==refine_ticket) {
+        if(!result->error.empty()){state.edit_error=result->error;refine_pending=false;queued.clear();}
+        else {
+          for(auto &edit:result->geometry.meshes)if(render_scene.meshes.at(edit.index).positions!=edit.positions) {
+            render_scene.meshes[edit.index].positions=edit.positions;
+            auto found=std::find_if(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==edit.index;});
+            if(found==delta.meshes.end())delta.meshes.push_back(std::move(edit));else *found=std::move(edit);
+          }
+          for(const auto &edit:result->geometry.instances)if(render_scene.instances.at(edit.index).transform!=edit.transform) {
+            render_scene.instances[edit.index].transform=edit.transform;
+            auto found=std::find_if(delta.instances.begin(),delta.instances.end(),[&](const auto &e){return e.index==edit.index;});
+            if(found==delta.instances.end())delta.instances.push_back(edit);else *found=edit;
+          }
+          if(!desired.instance_ground.empty()||!group_frames->hierarchy.groups.empty()) {
+            const auto bases=group_instance_bases(*group_source,render_scene,group_frames->hierarchy,runtime->effective_poses(),&*group_frames);
+            apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta,&bases);
+          }
+          refined_collision=result->collision;refine_pending=false;refinement_finished=true;gizmo_revision=UINT64_MAX;queued.merge(delta);clay_wait=true;
+          Frame f;f.id=refine_revision;telemetry_.event("edit_refine",f,result->seconds*1000);
+          for(const auto &[name,value]:result->profile.timings)telemetry_.event(("refine/"+name).c_str(),f,value.seconds*1000);
+        }
+      }
       // 拖动期间只更新白模；松手后尝试提交，锁繁忙时保留最新 Delta，下一轮继续处理输入。
-      if(!physics_commit.valid()&&queued.pending&&!(clay_wait&&editing)) {
+      if(!refine_pending&&!physics_commit.valid()&&queued.pending&&!(clay_wait&&editing)) {
         thread_scoped_lock lock(session->scene->mutex,std::try_to_lock);
         if(lock.owns_lock()) {
           const auto begin=now();if(!queued.synchronize&&!queued.water_meshes.empty()){
@@ -706,7 +743,7 @@ void Renderer::run(std::stop_token stop) {
       display->set_sharpen(quality.sharpen);
       const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
       if(geometry_dirty) {instance_groups.emplace(render_scene);auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
-      else if(bounds_dirty) {auto begin=now();overlay.apply(render_scene,regions,delta);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
+      else if(bounds_dirty||refinement_finished) {auto begin=now();overlay.apply(render_scene,regions,delta,refine_pending);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
       if(sampling_.interaction_probe&&bounds_dirty) {
         const bool all=state.mesh_hashes.size()!=render_scene.meshes.size();state.mesh_hashes.resize(render_scene.meshes.size());
         for(size_t m=0;m<render_scene.meshes.size();++m) if(all||std::any_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==m;})) {
@@ -857,7 +894,7 @@ void Renderer::run(std::stop_token stop) {
         std::ofstream(output_/"render-state.json")<<report.dump(2);
         telemetry_.flush();
       }
-      state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=runtime->collision_stats();state.graft_seams=runtime->graft_seams();
+      state.skinning=runtime->skin_stats();state.formulas=runtime->formula_stats();state.effective=runtime->effective();state.conform=runtime->conform_stats();state.collision=refined_collision;state.graft_seams=runtime->graft_seams();
       state.effective_poses=runtime->effective_poses();state.input_poses=runtime->input_poses();state.skin_world.clear();for(const auto &skin:current->skeletons.skins) state.skin_world.push_back(render_scene.instances[skin.instance].transform);
       state.target_world.clear();for(const auto &target:current->catalog.targets)state.target_world.push_back(render_scene.instances[target.instance].transform);
       if(bounds_dirty||state.instance_bounds.size()!=render_scene.instances.size()) {

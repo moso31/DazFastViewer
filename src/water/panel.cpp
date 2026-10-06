@@ -18,8 +18,7 @@ class SourceItem final:public QTreeWidgetItem {
 public:
   using QTreeWidgetItem::QTreeWidgetItem;
   bool operator<(const QTreeWidgetItem &other)const override{
-    if(treeWidget()->sortColumn()==2){const auto a=data(2,Qt::UserRole).toDouble(),b=other.data(2,Qt::UserRole).toDouble();if(a!=b)return a<b;return data(0,Qt::UserRole).toString()<other.data(0,Qt::UserRole).toString();}
-    return QTreeWidgetItem::operator<(other);
+    const auto a=data(0,Qt::UserRole+1).toDouble(),b=other.data(0,Qt::UserRole+1).toDouble();if(a!=b)return a<b;return data(0,Qt::UserRole).toString()<other.data(0,Qt::UserRole).toString();
   }
 };
 void Panel::select(const QString &key){
@@ -48,7 +47,7 @@ bool Panel::eventFilter(QObject *object,QEvent *event){
 void Panel::expand_sources(){
   sources_->doItemsLayout();int height=sources_->header()->height()+2*sources_->frameWidth();
   for(int row=0;row<sources_->topLevelItemCount();++row)height+=sources_->sizeHintForRow(row);
-  sources_->setFixedHeight(height);sources_->setColumnWidth(1,100);sources_->setColumnWidth(2,112);
+  sources_->setFixedHeight(height);sources_->setColumnWidth(1,120);
 }
 Panel::Panel(QWidget *parent):QWidget(parent){
   setObjectName("WaterParameters");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);auto *form=new QFormLayout;layout->addLayout(form);
@@ -72,14 +71,14 @@ Panel::Panel(QWidget *parent):QWidget(parent){
   coast_=new QCheckBox(QStringLiteral("海岸线计算"));coast_->setObjectName("WaterCoast");layout->addWidget(coast_);connect(coast_,&QCheckBox::toggled,this,[this]{submit();});
   scan_=new QCheckBox(QStringLiteral("扫描场景中的可见对象"));scan_->setObjectName("WaterScanScene");scan_->setToolTip(QStringLiteral("自动对象使用表面交界；人物、柱体和船体建议在列表中明确选择排水体积。"));layout->addWidget(scan_);connect(scan_,&QCheckBox::toggled,this,[this]{submit();});
   sources_=new QTreeWidget;sources_->setObjectName("WaterSources");sources_->setHeaderLabels({QStringLiteral("参与对象"),QStringLiteral("交界方式")});sources_->setRootIsDecorated(false);sources_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);sources_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);sources_->header()->setStretchLastSection(false);sources_->header()->setSectionResizeMode(0,QHeaderView::Stretch);sources_->header()->setSectionResizeMode(1,QHeaderView::Fixed);layout->addWidget(sources_);connect(sources_,&QTreeWidget::itemChanged,this,[this]{submit();});
-  sources_->setColumnCount(3);sources_->headerItem()->setText(2,QStringLiteral("AABB 体积 (m³)"));sources_->headerItem()->setToolTip(2,QStringLiteral("点击按当前世界坐标 AABB 体积排序；组使用成员包围盒的并集。"));sources_->header()->setSectionResizeMode(2,QHeaderView::Fixed);sources_->setSortingEnabled(true);sources_->sortItems(2,Qt::DescendingOrder);
   auto *precision=new QFormLayout;layout->addLayout(precision);auto *spin=new QDoubleSpinBox;spin->setObjectName("precision");spin->setDecimals(3);spin->setRange(.02,1000);spin->setValue(.5);spin->setSingleStep(.1);spin->setKeyboardTracking(false);fields_["precision"]=spin;precision->addRow(QStringLiteral("交界采样间距（米）"),spin);spin->setToolTip(QStringLiteral("数值越小越精细，计算与网格开销越大；独立于远海 LOD。"));connect(spin,&QDoubleSpinBox::valueChanged,this,[this]{submit();});
   auto *buttons=new QHBoxLayout;calculate_=new QPushButton(QStringLiteral("重算"));calculate_->setObjectName("WaterRecalculate");cancel_=new QPushButton(QStringLiteral("取消"));cancel_->setEnabled(false);buttons->addWidget(calculate_);buttons->addWidget(cancel_);layout->addLayout(buttons);
   connect(calculate_,&QPushButton::clicked,this,[this]{if(changed)changed(config_,true);});connect(cancel_,&QPushButton::clicked,this,[this]{if(cancel)cancel();});
   message_=new QLabel;message_->setWordWrap(true);message_->setObjectName("WaterStatus");layout->addWidget(message_);hide();
   for(const auto &[id,field]:fields_){const auto key=QString::fromStdString(id);field->setProperty("waterWheelKey",key);field->setFocusPolicy(Qt::StrongFocus);auto *row=field==spin?precision:form;if(auto *label=row->labelForField(field))label->setProperty("waterWheelKey",key);}
   qApp->installEventFilter(this);
-  layout->removeWidget(sources_);layout->addWidget(sources_);
+  layout->removeWidget(sources_);sort_=new QPushButton(QStringLiteral("按AABB重新排序"));sort_->setObjectName("WaterSortSources");sort_->setToolTip(QStringLiteral("按当前对象 AABB 体积从大到小排列，不改变参与勾选和交界方式。"));layout->addWidget(sort_);layout->addWidget(sources_);
+  connect(sort_,&QPushButton::clicked,this,[this]{if(refresh_candidates)refresh_candidates();sources_->sortItems(0,Qt::DescendingOrder);});
 }
 void Panel::submit(){
   if(binding_||busy_)return;
@@ -94,6 +93,8 @@ void Panel::submit(){
   if(changed)changed(config_,false);
 }
 void Panel::bind(const Water *water,const std::vector<Candidate> &objects){
+  std::map<std::string,int> order;if(water&&bound_id_==water->id&&have_bounds_)for(int row=0;row<sources_->topLevelItemCount();++row)order.emplace(sources_->topLevelItem(row)->data(0,Qt::UserRole).toString().toStdString(),row);
+  have_bounds_=std::any_of(objects.begin(),objects.end(),[](const auto &o){return o.volume>=0;});
   if(!water||bound_id_!=water->id)select({});bound_id_=water?water->id:std::string{};
   setVisible(water!=nullptr);if(!water)return;binding_=true;config_=water->config;
 #define DFV_WATER_FIELD(n) fields_.at(#n)->setValue(config_.n)
@@ -102,10 +103,11 @@ void Panel::bind(const Water *water,const std::vector<Candidate> &objects){
 #undef DFV_WATER_FIELD
   coast_->setChecked(config_.coast);scan_->setChecked(config_.scan_scene);sources_->setSortingEnabled(false);sources_->clear();
   auto available=objects;for(const auto &s:config_.sources)if(std::none_of(available.begin(),available.end(),[&](const auto &v){return v.id==s.id;}))available.push_back({s.id,"[对象已移除] "+s.id,-1});
-  for(const auto &[id,label,volume]:available){auto *item=new SourceItem(sources_,{QString::fromStdString(label)});item->setData(0,Qt::UserRole,QString::fromStdString(id));item->setToolTip(0,QString::fromStdString(id));item->setData(2,Qt::UserRole,volume);item->setText(2,volume<0?QStringLiteral("待更新"):QString::number(volume,'g',5));item->setToolTip(2,volume<0?QStringLiteral("等待视口几何"):QString::number(volume,'g',15)+QStringLiteral(" m³"));item->setTextAlignment(2,Qt::AlignRight|Qt::AlignVCenter);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);auto found=std::find_if(config_.sources.begin(),config_.sources.end(),[&](const auto &s){return s.id==id;});item->setCheckState(0,found!=config_.sources.end()?Qt::Checked:Qt::Unchecked);auto *mode=new QComboBox;mode->addItems({QStringLiteral("表面交界"),QStringLiteral("排水体积")});mode->setCurrentIndex(found!=config_.sources.end()&&found->volume?1:0);sources_->setItemWidget(item,1,mode);connect(mode,&QComboBox::currentIndexChanged,this,[this,item]{if(item->checkState(0)!=Qt::Checked)item->setCheckState(0,Qt::Checked);else submit();});}
-  sources_->setSortingEnabled(true);
+  if(!order.empty())std::stable_sort(available.begin(),available.end(),[&](const auto &a,const auto &b){const auto rank=[&](const auto &id){auto i=order.find(id);return i==order.end()?int(order.size()):i->second;};return rank(a.id)<rank(b.id);});
+  for(const auto &[id,label,volume]:available){auto *item=new SourceItem(sources_,{QString::fromStdString(label)});item->setData(0,Qt::UserRole,QString::fromStdString(id));item->setToolTip(0,QString::fromStdString(id));item->setData(0,Qt::UserRole+1,volume);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);auto found=std::find_if(config_.sources.begin(),config_.sources.end(),[&](const auto &s){return s.id==id;});item->setCheckState(0,found!=config_.sources.end()?Qt::Checked:Qt::Unchecked);auto *mode=new QComboBox;mode->addItems({QStringLiteral("表面交界"),QStringLiteral("排水体积")});mode->setCurrentIndex(found!=config_.sources.end()&&found->volume?1:0);sources_->setItemWidget(item,1,mode);connect(mode,&QComboBox::currentIndexChanged,this,[this,item]{if(item->checkState(0)!=Qt::Checked)item->setCheckState(0,Qt::Checked);else submit();});}
+  if(order.empty())sources_->sortItems(0,Qt::DescendingOrder);
   for(int row=0;row<sources_->topLevelItemCount();++row){auto *item=sources_->topLevelItem(row);auto *mode=sources_->itemWidget(item,1);mode->setProperty("waterWheelKey","source:"+item->data(0,Qt::UserRole).toString());mode->setFocusPolicy(Qt::StrongFocus);}
   expand_sources();select(selected_);binding_=false;busy(busy_);
 }
-void Panel::busy(bool value){busy_=value;for(auto &[id,field]:fields_)field->setEnabled(!value);color_->setEnabled(!value);coast_->setEnabled(!value);scan_->setEnabled(!value);sources_->setEnabled(!value);calculate_->setEnabled(!value&&config_.coast);cancel_->setEnabled(value);}
+void Panel::busy(bool value){busy_=value;for(auto &[id,field]:fields_)field->setEnabled(!value);color_->setEnabled(!value);coast_->setEnabled(!value);scan_->setEnabled(!value);sources_->setEnabled(!value);sort_->setEnabled(!value);calculate_->setEnabled(!value&&config_.coast);cancel_->setEnabled(value);}
 }

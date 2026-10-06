@@ -21,8 +21,13 @@ int main(int argc,char **argv){QApplication app(argc,argv);try{
   editor::GroundPanel ground;ground.bind(true,0,0,false);auto *reference=ground.findChild<QDoubleSpinBox *>("GroundAlignmentOffset");check(arrows(x)==arrows(reference),"unselected water arrows differ from GroundPanel");
   check(tree->topLevelItem(0)->data(0,Qt::UserRole).toString()=="79","AABB default sort is not descending numeric order");
   auto *largest=tree->topLevelItem(0);largest->setCheckState(0,Qt::Checked);auto *largest_mode=qobject_cast<QComboBox *>(tree->itemWidget(largest,1));largest_mode->setCurrentIndex(1);
-  tree->sortItems(2,Qt::AscendingOrder);QApplication::processEvents();check(tree->topLevelItem(79)==largest&&largest->checkState(0)==Qt::Checked&&tree->itemWidget(largest,1)==largest_mode&&largest_mode->currentIndex()==1,"sorting changed source identity or mode");
-  check(tree->topLevelItem(2)->data(0,Qt::UserRole).toString()=="2","AABB sort used display text instead of numeric volume");
+  auto *sort=panel->findChild<QPushButton *>("WaterSortSources");check(tree->columnCount()==2&&sort&&sort->y()<tree->y(),"sort button missing above two-column table");
+  tree->sortItems(0,Qt::AscendingOrder);QApplication::processEvents();check(tree->topLevelItem(79)==largest,"numeric sort failed");
+  int submitted=0;panel->changed=[&](water::Config,bool){++submitted;};sort->click();check(submitted==0,"sorting submitted a scene edit");panel->changed={};
+  check(tree->topLevelItem(0)==largest&&largest->checkState(0)==Qt::Checked&&tree->itemWidget(largest,1)==largest_mode&&largest_mode->currentIndex()==1,"sorting changed source identity or mode");
+  objects[2].volume=1e9;panel->bind(&water,objects);check(tree->topLevelItem(0)->data(0,Qt::UserRole).toString()=="79","refresh reordered rows without a click");sort->click();check(tree->topLevelItem(0)->data(0,Qt::UserRole).toString()=="2","button did not use refreshed AABB volumes");
+  panel->refresh_candidates=[&]{panel->bind(&water,objects);};objects[3].volume=2e9;sort->click();check(tree->topLevelItem(0)->data(0,Qt::UserRole).toString()=="3","button did not fetch current evaluated bounds");panel->refresh_candidates={};objects[3].volume=27;
+  water.id="loading";auto unknown=objects;for(auto &o:unknown)o.volume=-1;panel->bind(&water,unknown);panel->bind(&water,objects);check(tree->topLevelItem(0)->data(0,Qt::UserRole).toString()=="2","first available bounds did not establish initial order");
   x->setFocus();wheel(x);check(x->value()==0,"focus without click permitted wheel edit");check(outer.verticalScrollBar()->value()>0,"unselected spin swallowed outer scrolling");
   QTest::mouseClick(x,Qt::LeftButton);wheel(x,120);check(x->value()==1,"selected spin rejected wheel edit");
   check(arrows(x)==arrows(reference),"selected water arrows differ from GroundPanel");

@@ -1,4 +1,5 @@
 #include "editor/document.h"
+#include "editor/deformation_refiner.h"
 #include "daz/pose.h"
 #include "diagnostics/load_profile.h"
 #include <algorithm>
@@ -20,6 +21,30 @@ static FormulaGraph graph(const Target &t,int skin) {
   for(size_t m=0;m<t.morphs.size();++m) {Channel c;c.binding={Property::morph,uint32_t(m),0};g.morph_channels.push_back(int(g.channels.size()));g.channels.push_back(c);}
   if(skin>=0) for(auto property:{Property::rotation,Property::scale,Property::center}) {Channel c;c.binding={property,1,property==Property::rotation?2u:0u};c.initial=property==Property::scale?1:0;g.channels.push_back(c);}
   g.prepare();return g;
+}
+
+static void asynchronous_refinement() {
+  auto document=std::make_shared<editor::Document>();document->generation=1;
+  ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};body.triangles={{{0,1,2}},{{0,2,3}}};
+  ir::Mesh cloth;cloth.positions={{-.5f,-.5f,-.1f},{.5f,-.5f,-.1f},{0,.5f,-.1f}};cloth.triangles={{{0,1,2}}};
+  auto &base=document->loaded.scene;base.meshes={body,cloth};base.instances.resize(2);base.instances[1].mesh=1;
+  Target a;a.id="body/mesh";a.morphs={morph("bulge",{{0,{0,0,.2f}},{1,{0,0,.2f}},{2,{0,0,.2f}},{3,{0,0,.2f}}})};
+  Target b;b.id="cloth/mesh";b.instance=1;b.smoothing.enabled=true;b.smoothing.collision_target="#body";
+  document->catalog.targets={a,b};document->formulas.graphs={graph(a,-1),graph(b,-1)};
+  editor::Snapshot snapshot;snapshot.generation=1;snapshot.values.resize(2);snapshot.values[0].morphs={0};
+  auto preview=base;DeformationRuntime runtime(preview,document->catalog.targets,document->skeletons.skins,document->formulas.graphs);runtime.evaluate(snapshot.values,{});const auto corrected=preview.meshes[1].positions;const auto collisions=runtime.collision_stats().evaluations;runtime.defer_collision();
+  editor::DeformationRefiner worker;
+  auto wait=[&](uint64_t ticket){const auto start=std::chrono::steady_clock::now();for(;;){if(auto result=worker.take()){require(result->ticket==ticket&&result->error.empty(),"stale refinement or error escaped latest mailbox");return result;}require(std::chrono::steady_clock::now()-start<std::chrono::seconds(10),"refinement worker timed out");std::this_thread::sleep_for(std::chrono::milliseconds(1));}};
+  snapshot.values[0].morphs[0]=1;runtime.evaluate(snapshot.values,{});require(runtime.collision_stats().evaluations==collisions,"preview ran full collision");require(preview.meshes[0].positions[0].z==.2f,"preview did not update morph");
+  uint64_t ticket=0;for(int i=0;i<80;++i){snapshot.values[0].morphs[0]=float(i)/80;ticket=worker.request(document,snapshot,{});}snapshot.values[0].morphs[0]=1;ticket=worker.request(document,snapshot,{});
+  auto result=wait(ticket);auto reference=base;DeformationRuntime full(reference,document->catalog.targets,document->skeletons.skins,document->formulas.graphs);full.evaluate(snapshot.values,{});
+  for(const auto &edit:result->geometry.meshes){require(edit.positions==reference.meshes[edit.index].positions,"background changed full-quality deformation");preview.meshes[edit.index].positions=edit.positions;}
+  snapshot.values[0].morphs[0]=0;runtime.evaluate(snapshot.values,{});ticket=worker.request(document,snapshot,{});result=wait(ticket);
+  require(result->geometry.meshes.at(1).positions==corrected,"refinement reset accumulated deformation");
+  const std::vector<ir::Transform> frames(2,ir::Transform::translate({3,0,0}));ticket=worker.request(document,snapshot,frames);result=wait(ticket);full.reframe(frames);full.evaluate(snapshot.values,{});
+  for(const auto &edit:result->geometry.instances)require(edit.transform==reference.instances[edit.index].transform,"worker lost Group reference frames");
+  worker.request(document,snapshot,frames);worker.cancel();require(!worker.take(),"cancel retained a result");
+  auto replacement=std::make_shared<editor::Document>(*document);replacement->generation=2;replacement->loaded.scene.instances[0].transform=ir::Transform::translate({0,0,1});ticket=worker.request(replacement,snapshot,{});result=wait(ticket);require(result->geometry.instances[0].transform==replacement->loaded.scene.instances[0].transform,"scene switch reused old geometry");
 }
 
 static void surface_cache_checks() {
@@ -202,7 +227,7 @@ static void graft_collision_restore() {
   require(distance(scene.meshes[2].positions,cloth.positions)<1e-6,"服装碰撞没有使用当前接缝位置");
 }
 static void unit() {
-  surface_cache_checks();
+  asynchronous_refinement();surface_cache_checks();
   graft_collision_restore();
   {
     // 共同祖先的平移 / 旋转 / 缩放应完全保留碰撞缓存，包括 GeoGraft。

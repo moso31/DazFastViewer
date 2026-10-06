@@ -47,7 +47,8 @@ void HoverOverlay::update(const ir::Scene &scene,const std::vector<runtime::Join
   const auto size=scene.instances.size();lists_.resize(size);parts_.resize(size);triangle_counts_.resize(size);transforms_.resize(size);visible_.resize(size);bounds_.resize(size);
   for(size_t i=0;i<size;++i) {transforms_[i]=scene.instances[i].transform;visible_[i]=scene.instances[i].visible;rebuild(scene,regions,i);}
 }
-void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i) {
+void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i,bool preview) {
+    detail_pending_.resize(scene.instances.size());detail_pending_[i]=preview;
     const auto &instance=scene.instances[i];
     bounds_[i]={};for(auto p:scene.meshes[instance.mesh].positions)bounds_[i].add(p);
     if(instance.prototype>=0) {const auto p=size_t(instance.prototype);lists_[i]=lists_[p];parts_[i]=parts_[p];triangle_counts_[i]=triangle_counts_[p];return;}
@@ -59,6 +60,9 @@ void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::Joi
     size_t count=0;for(const auto &face:mesh.triangles) if(mesh.draws(face)) {triangle(face);++count;}
     glEnd();glEndList();
     triangle_counts_[i]=count;
+    // During deformation feedback only the whole white mesh is drawn. Rebuild
+    // joint/material highlight copies once the complete correction arrives.
+    if(preview)return;
     std::map<int,std::vector<size_t>> by_joint;
     if(i<regions.size()) for(size_t t=0;t<regions[i].detail.size();++t) {
       if(!mesh.draws(mesh.triangles[t])) continue;
@@ -75,8 +79,9 @@ void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::Joi
     for(size_t c=0;c<mesh.curves.size();++c){curves[mesh.curves[c].material_slot].push_back(c);by_surface.try_emplace(mesh.curves[c].material_slot);}
     for(const auto &[slot,faces]:by_surface){const auto list=glGenLists(1);size_t count=faces.size();glNewList(list,GL_COMPILE);glBegin(GL_TRIANGLES);for(auto t:faces)triangle(mesh.triangles[t]);glEnd();glLineWidth(2);glBegin(GL_LINES);for(auto c:curves[slot]){const auto &vertices=mesh.curves[c].vertices;for(size_t v=1;v<vertices.size();++v){for(auto index:{vertices[v-1],vertices[v]}){const auto p=mesh.positions[index];glVertex3f(p.x,p.y,p.z);}++count;}}glEnd();glEndList();parts_[i][-int(slot)-2]={list,count};}
 }
-void HoverOverlay::apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta) {
-  for(const auto &e:delta.meshes) for(size_t i=0;i<scene.instances.size();++i) if(scene.instances[i].mesh==e.index) rebuild(scene,regions,i);
+void HoverOverlay::apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta,bool preview) {
+  for(const auto &e:delta.meshes) for(size_t i=0;i<scene.instances.size();++i) if(scene.instances[i].mesh==e.index) rebuild(scene,regions,i,preview);
+  if(!preview)for(size_t i=0;i<detail_pending_.size();++i)if(detail_pending_[i])rebuild(scene,regions,i);
   for(const auto &e:delta.instances) transforms_.at(e.index)=e.transform;
   for(const auto &e:delta.visibility) visible_.at(e.index)=e.visible;
 }

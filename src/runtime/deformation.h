@@ -31,6 +31,8 @@ class DeformationRuntime {
   ir::Scene &scene_;
   std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
   bool evaluated_=false;
+  bool collision_enabled_=true;
+  ir::Delta collide(ir::Delta delta);
   bool same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const;
   ir::Delta follow_surfaces(ir::Delta delta,const std::vector<std::vector<JointPose>> &resolved);
   ir::Delta weld_grafts(ir::Delta delta);
@@ -38,6 +40,9 @@ class DeformationRuntime {
 public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
+  // One-way preview policy. A separate runtime supplies the fully corrected result;
+  // its collision caches must never be fed our uncorrected preview geometry.
+  void defer_collision() {collision_enabled_=false;}
   PayloadProgress prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry=false);
   // Reuse shape caches when only Group reference frames changed. False requires a
   // new bind because a Fit To source and follower no longer share their rest frame.

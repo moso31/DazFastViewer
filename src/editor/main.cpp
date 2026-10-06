@@ -101,6 +101,7 @@ class Editor final:public EditorWindow {
   #include "editor/object_extension_test.inl"
   #include "editor/powerpose.inl"
   #include "editor/powerpose_test.inl"
+#include "editor/edit_resume_test.inl"
   #include "editor/pose_test.inl"
   #include "editor/gizmo_test.inl"
   #include "editor/group_test.inl"
@@ -989,7 +990,8 @@ class Editor final:public EditorWindow {
     if(!rebuild_test_file_.empty()) {report["scope"]="scene-rebuild-latency";report["checks"]=rebuild_checks_;report["sessions"]=status.sessions;report["initial_subdivision_level"]=rebuild_level_;report["initial_render_subdivision_level"]=rebuild_render_level_;}
     if(subdivision_stress_test_) {report["scope"]="subdivision-repeat-coalesce-budget-and-restore";report["checks"]=subdivision_checks_;report["sessions"]=status.sessions;}
     if(pose_edit_test_) {report["scope"]="native-FK-left-button-IK-selection-proxy-full-quality-cancel";report["checks"]=pose_checks_;}
-    if(powerpose_test_) {report["scope"]="powerpose-qt-proxy-commit-cancel-native-limits-pins";report["checks"]=pp_checks_;}
+    if(edit_resume_test_) {report["scope"]="powerpose-morph-reedit-before-beauty";report["checks"]=er_checks_;}
+    if(powerpose_test_&&!edit_resume_test_) {report["scope"]="powerpose-qt-proxy-commit-cancel-native-limits-pins";report["checks"]=pp_checks_;}
     if(gizmo_test_) {report["scope"]="gizmo-local-world-proxy-commit-cancel-restore";report["checks"]=gz_checks_;}
     if(group_test_) {report["scope"]="group-transform-properties-gizmo-save-undo";report["checks"]=gt_checks_;}
     if(extension_test_){report["scope"]="native-growth-weight-and-dufex";report["checks"]=extension_checks_;}
@@ -1446,6 +1448,7 @@ class Editor final:public EditorWindow {
     if(ground_test_) {ground_test_tick(state);return;}
     if(!cg_label_.empty()) {collective_ground_tick(state);return;}
     if(feedback_test_) {feedback_tick(state);return;}
+    if(edit_resume_test_) {edit_resume_tick(state);return;}
     if(powerpose_test_) {powerpose_tick(state);return;}
     if(pose_edit_test_) {pose_edit_tick(state);return;}
     if(!rebuild_test_file_.empty()) {rebuild_tick(state);return;}
@@ -1858,6 +1861,7 @@ public:
   void edit_regression_test() {edit_regression_test_=self_test_=true;}
   void history_test() {history_test_=self_test_=true;renderer_->automated_pointer();}
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
+  void edit_resume_test() {powerpose_test();edit_resume_test_=true;}
   void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
   void gizmo_test() {gizmo_test_=self_test_=true;renderer_->automated_pointer();}
   void group_transform_test() {group_test_=self_test_=true;renderer_->automated_pointer();}
@@ -1921,6 +1925,7 @@ public:
     auto *morph_body=new QWidget;auto *morph_layout=new QVBoxLayout(morph_body);morph_layout->setContentsMargins(0,0,0,0);properties->addWidget(morph_body);
     parameters_=new ParameterPanel;parameters_->shared_scroll(property_scroll);parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};morph_layout->addWidget(parameters_);
     water_panel_=new water::Panel;morph_layout->addWidget(water_panel_);
+    water_panel_->refresh_candidates=[this]{bind_water();};
     water_panel_->changed=[this](water::Config config,bool recalculate){if(const auto *w=selected_water())generate_water(std::move(config),w->id,recalculate);};water_panel_->cancel=[this]{loader_.request_stop();};
     environment_tools_=new QWidget;auto *environment_actions=new QHBoxLayout(environment_tools_);environment_actions->setContentsMargins(0,0,0,0);auto *environment_image=new QPushButton(QStringLiteral("选择环境贴图…"));environment_image->setObjectName("EnvironmentImage");auto *clear_environment_image=new QPushButton(QStringLiteral("清除贴图"));environment_actions->addWidget(environment_image);environment_actions->addWidget(clear_environment_image);morph_layout->addWidget(environment_tools_);environment_tools_->hide();
     connect(environment_image,&QPushButton::clicked,this,[this]{if(loading_||!document_)return;auto file=QFileDialog::getOpenFileName(this,QStringLiteral("环境贴图"),{},QStringLiteral("环境图像 (*.hdr *.exr *.png *.jpg *.jpeg *.tif *.tiff)"));if(file.isEmpty())return;auto edit=history_edit(QStringLiteral("选择环境贴图"));snapshot_.options.environment_file=file_path(file);for(auto &p:snapshot_.options.environment.parameters)if(p.id=="Environment Map")p.image_uri=file.toStdString();select(-2);send();});
@@ -2250,6 +2255,7 @@ int main(int argc,char **argv) {
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"pose-edit-test",QStringLiteral("副屏验证原生 FK 参数、左键 IK、选择门槛、预览和取消")});
+  parser.addOption({"edit-resume-test",QStringLiteral("Verify consecutive PowerPose and Morph edits before beauty")});
   parser.addOption({"powerpose-test",QStringLiteral("副屏验证 PowerPose 三页、灰模、提交、取消和固定约束")});
   parser.addOption({"gizmo-test",QStringLiteral("副屏验证三轴工具、Local / World、提交与取消")});
   parser.addOption({"group-transform-test",QStringLiteral("副屏验证 Group 参数、鼠标变换、保存与撤销")});
@@ -2270,7 +2276,7 @@ int main(int argc,char **argv) {
   try {
     SamplingSettings sampling;
     sampling.rebuild_probe=parser.isSet("rebuild-test");
-    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||parser.isSet("powerpose-test")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("ground-test");
+    sampling.interaction_probe=parser.isSet("interaction-test")||sampling.rebuild_probe||parser.isSet("subdivision-stress-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("ground-test");
     if(parser.isSet("sampling-settings")) {sampling.quality_override=true;nlohmann::json j;std::ifstream(file_path(parser.value("sampling-settings")))>>j;
       sampling.samples=j.value("samples",sampling.samples);sampling.adaptive_threshold=j.value("adaptive_threshold",sampling.adaptive_threshold);sampling.blue_noise=j.value("blue_noise",sampling.blue_noise);
       sampling.min_bounces=j.value("min_bounces",sampling.min_bounces);sampling.transparent_min_bounces=j.value("transparent_min_bounces",sampling.transparent_min_bounces);
@@ -2299,7 +2305,7 @@ int main(int argc,char **argv) {
     }
     auto project=ProjectSettings::load(project_file);
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("water-test")||parser.isSet("water-scene-test")||parser.isSet("city-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||parser.isSet("powerpose-test")||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("water-test")||parser.isSet("water-scene-test")||parser.isSet("city-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||parser.isSet("gizmo-test")||parser.isSet("group-transform-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("history-test"))editor.history_test();
@@ -2308,7 +2314,8 @@ int main(int argc,char **argv) {
     if(parser.isSet("water-scene-test"))editor.water_scene_test();
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
     if(parser.isSet("pose-edit-test")) editor.pose_edit_test(parser.value("pose-test-level").toInt());
-    if(parser.isSet("powerpose-test")) editor.powerpose_test();
+    if((parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))) editor.powerpose_test();
+    if(parser.isSet("edit-resume-test")) editor.edit_resume_test();
     if(parser.isSet("gizmo-test")) editor.gizmo_test();
     if(parser.isSet("group-transform-test")) editor.group_transform_test();
     if(parser.isSet("group-motion-test")) editor.group_motion_test(parser.value("group-motion-test").toStdString());

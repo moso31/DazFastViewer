@@ -15,8 +15,8 @@ class Panel final:public QWidget {
   QCheckBox *coast_,*scan_;
   QTreeWidget *sources_;
   QLabel *message_;
-  QPushButton *calculate_,*cancel_,*color_;
-  bool binding_=false,busy_=false;
+  QPushButton *calculate_,*cancel_,*color_,*sort_;
+  bool binding_=false,busy_=false,have_bounds_=false;
   std::string bound_id_;
   QString selected_;
   void select(const QString &);
@@ -30,5 +30,6 @@ public:
   void message(const QString &s){message_->setText(s);}
   std::function<void(Config,bool)> changed;
   std::function<void()> cancel;
+  std::function<void()> refresh_candidates;
 };
 }
