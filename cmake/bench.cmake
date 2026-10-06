@@ -1,4 +1,9 @@
 # 在 Cycles app 目录作用域定义，继承该版本所需的编译选项和 ABI。
+add_executable(MatteFogRenderProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/matte_fog_render.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp")
+target_include_directories(MatteFogRenderProbe PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(MatteFogRenderProbe PRIVATE ${LIB} dfv_scene)
+target_compile_definitions(MatteFogRenderProbe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(MatteFogRenderProbe PRIVATE /utf-8)
 add_executable(WaterRenderProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/water_render.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp")
 target_include_directories(WaterRenderProbe PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(WaterRenderProbe PRIVATE ${LIB} dfv_scene)

@@ -7,6 +7,11 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QVBoxLayout>
+#include <QApplication>
+#include <QComboBox>
+#include <QMouseEvent>
+#include <QWheelEvent>
+#include <QPointer>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -21,6 +26,14 @@ inline QColor preview(const Color &c){
   const double scale=std::max(1.,peak(c));
   return QColor::fromRgbF(std::clamp(srgb(c[0]/scale),0.,1.),std::clamp(srgb(c[1]/scale),0.,1.),std::clamp(srgb(c[2]/scale),0.,1.));
 }
+inline void swatch(QPushButton *button,const Color &c,bool mixed=false,bool wide=false){
+  const auto color=preview(c);const double strength=std::max(1.,peak(c));
+  if(!wide)button->setFixedWidth(strength>1?52:24);
+  button->setText(wide?QStringLiteral("选择颜色…  %1").arg(color.name()):mixed?QStringLiteral("*"):strength>=1000?QStringLiteral("HDR"):strength>1?QStringLiteral("×%1").arg(strength,0,'g',3):QString{});
+  button->setStyleSheet("background-color: "+color.name()+"; color: "+(color.lightnessF()>.5?"#111":"#fff")+"; border: 1px solid #888;");
+  button->setToolTip(QStringLiteral("选择颜色与 HDR 强度\n%1线性 RGB：%2, %3, %4\n色块强度：×%5（HDR 色块按强度归一化显示）")
+    .arg(mixed?QStringLiteral("多值；预览为第一个表面的颜色\n"):QString{}).arg(c[0],0,'g',7).arg(c[1],0,'g',7).arg(c[2],0,'g',7).arg(strength,0,'g',6));
+}
 }
 
 // The QColorDialog edits only the normalized color. Keep the original linear
@@ -34,6 +47,27 @@ class HdrColorDialog final:public QDialog {
   QSlider *slider_;
   QLabel *factor_,*preview_,*components_;
   QPushButton *brighter_,*dimmer_;
+  QPointer<QWidget> wheel_input_;
+
+  bool eventFilter(QObject *object,QEvent *event) override {
+    if(event->type()!=QEvent::MouseButtonPress&&event->type()!=QEvent::Wheel&&event->type()!=QEvent::Hide)return QDialog::eventFilter(object,event);
+    if(event->type()==QEvent::Hide&&object==this)wheel_input_.clear();
+    auto *widget=qobject_cast<QWidget *>(object);const bool owned=widget&&(widget==this||isAncestorOf(widget));
+    QWidget *input=nullptr;
+    QWidget *hit=widget;
+    if(owned&&event->type()==QEvent::MouseButtonPress)hit=childAt(mapFromGlobal(static_cast<QMouseEvent *>(event)->globalPosition().toPoint()));
+    if(owned)for(auto *w=hit;w&&w!=this;w=w->parentWidget())
+      if(qobject_cast<QAbstractSpinBox *>(w)||qobject_cast<QSlider *>(w)||qobject_cast<QComboBox *>(w)){input=w;break;}
+    if(widget&&event->type()==QEvent::MouseButtonPress&&static_cast<QMouseEvent *>(event)->button()==Qt::LeftButton){
+      if(owned)if(auto *label=qobject_cast<QLabel *>(hit);label&&label->buddy())input=label->buddy();
+      wheel_input_=input;
+      for(auto *label:findChildren<QLabel *>())if(label->buddy())label->setStyleSheet(label->buddy()==input?"QLabel { color: palette(highlight); font-weight: bold; }":"");
+    }
+    // The modal palette has no scrollable page. Hover/Tab must not edit RGB,
+    // HSV or exposure; clicking the numeric input explicitly enables its wheel.
+    if(owned&&input&&event->type()==QEvent::Wheel&&wheel_input_!=input){event->accept();return true;}
+    return QDialog::eventFilter(object,event);
+  }
 
   double maximum_exposure() const {
     const double peak=hdr_color::peak(base_);
@@ -67,9 +101,10 @@ public:
     picker_->setOptions(QColorDialog::DontUseNativeDialog|QColorDialog::NoButtons);
     picker_->setWindowFlags(Qt::Widget);picker_->setCurrentColor(hdr_color::preview(base_));layout->addWidget(picker_);
     auto *hint=new QLabel(QStringLiteral("选择基础色，再拖动曝光调整 HDR 强度；+1 EV = 强度翻倍。"));hint->setWordWrap(true);layout->addWidget(hint);
-    auto *exposure_row=new QHBoxLayout;exposure_row->addWidget(new QLabel(QStringLiteral("颜色曝光")));
+    auto *exposure_row=new QHBoxLayout;auto *exposure_label=new QLabel(QStringLiteral("颜色曝光"));exposure_row->addWidget(exposure_label);
     slider_=new QSlider(Qt::Horizontal);slider_->setObjectName("hdrExposureSlider");slider_->setSingleStep(1);slider_->setPageStep(100);slider_->setMinimumWidth(160);exposure_row->addWidget(slider_,1);
     exposure_input_=new QDoubleSpinBox;exposure_input_->setObjectName("hdrExposure");exposure_input_->setDecimals(4);exposure_input_->setSingleStep(.1);exposure_input_->setSuffix(" EV");exposure_input_->setKeyboardTracking(false);exposure_row->addWidget(exposure_input_);layout->addLayout(exposure_row);
+    exposure_label->setBuddy(exposure_input_);
     auto *buttons=new QHBoxLayout;
     dimmer_=new QPushButton(QStringLiteral("÷2"));dimmer_->setObjectName("hdrHalf");buttons->addWidget(dimmer_);
     brighter_=new QPushButton(QStringLiteral("×2"));brighter_->setObjectName("hdrDouble");buttons->addWidget(brighter_);
@@ -89,6 +124,7 @@ public:
     connect(dimmer_,&QPushButton::clicked,this,[this]{set_exposure(exposure_-1);});
     connect(zero,&QPushButton::clicked,this,[this]{set_exposure(0);});
     sync();
+    qApp->installEventFilter(this);
   }
   const hdr_color::Color &color() const{return color_;}
 };

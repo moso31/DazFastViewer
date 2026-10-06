@@ -1,8 +1,11 @@
 #include "editor/parameters.h"
+#include "render_ir/matte_fog.h"
 #include <QDateEdit>
+#include <QApplication>
 #include <QTimeEdit>
 #include "editor/numeric_slider.h"
 #include "editor/numeric_spinbox.h"
+#include "editor/hdr_color_dialog.h"
 #include "runtime/picking.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -46,20 +49,20 @@ ParameterPanel::ParameterPanel(QWidget *parent):QWidget(parent) {
   auto *split=new QSplitter;groups_=new QTreeWidget;groups_->setHeaderHidden(true);groups_->setIndentation(12);groups_->setMinimumWidth(115);
   tree_=new QTreeWidget;tree_->setHeaderHidden(true);tree_->setRootIsDecorated(false);tree_->setUniformRowHeights(true);tree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);tree_->setMinimumWidth(185);
   groups_->setObjectName("parameterGroups");tree_->setObjectName("parameterRows");
-  tree_->viewport()->installEventFilter(this);
+  qApp->installEventFilter(this);
   split->addWidget(groups_);split->addWidget(tree_);split->setStretchFactor(1,1);split->setSizes({140,250});layout->addWidget(split,1);
   for(const auto &id:QSettings().value("parameters/favorites").toStringList()) favorites_.insert(id.toStdString());
   const auto overrides=QSettings().value("parameters/favoriteOverrides").toMap();
   for(auto it=overrides.cbegin();it!=overrides.cend();++it) favorite_overrides_[it.key().toStdString()]=it.value().toBool();
   connect(search_,&QLineEdit::textChanged,this,[this]{filter();});connect(hidden_,&QCheckBox::toggled,this,[this]{filter();});
   connect(groups_,&QTreeWidget::currentItemChanged,this,[this]{filter();});
-  connect(tree_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item){current_=item?item->data(0,Qt::UserRole).toInt():-1;if(current_!=wheel_selected_) wheel_selected_=-1;});
+  connect(tree_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item){current_=item?item->data(0,Qt::UserRole).toInt():-1;if(current_!=wheel_selected_) wheel_selection(-1);});
   connect(tree_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{mount();});
   auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this]{mount();});timer->start(150);
 }
 void ParameterPanel::shared_scroll(QScrollArea *scroll) {
   shared_scroll_=scroll;setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Maximum);
-  for(auto *tree:{groups_,tree_}){tree->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);tree->viewport()->installEventFilter(this);tree->setAutoScroll(false);}
+  for(auto *tree:{groups_,tree_}){tree->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);tree->setAutoScroll(false);}
   connect(scroll->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{mount();});
   connect(groups_,&QTreeWidget::itemExpanded,this,[this]{shared_height();});connect(groups_,&QTreeWidget::itemCollapsed,this,[this]{shared_height();});shared_height();
 }
@@ -74,7 +77,20 @@ void ParameterPanel::show_item(QTreeWidgetItem *item) {
   if(!shared_scroll_){tree_->scrollToItem(item);return;}
   tree_->doItemsLayout();const auto point=tree_->viewport()->mapTo(shared_scroll_->widget(),tree_->visualItemRect(item).center());shared_scroll_->ensureVisible(point.x(),point.y(),0,50);
 }
+void ParameterPanel::wheel_selection(int row) {
+  wheel_selected_=row;
+  for(const auto &[i,w]:mounted_)if(auto *label=w->findChild<QLabel *>("valueLabel"))
+    label->setStyleSheet(i==row?"QLabel { color: palette(highlighted-text); font-weight: bold; }":"");
+}
 bool ParameterPanel::eventFilter(QObject *object,QEvent *event) {
+  if(event->type()!=QEvent::MouseButtonPress&&event->type()!=QEvent::MouseButtonDblClick&&event->type()!=QEvent::Wheel&&event->type()!=QEvent::Hide)return QWidget::eventFilter(object,event);
+  if(event->type()==QEvent::Hide&&object==this)wheel_selection(-1);
+  const auto *widget=qobject_cast<QWidget *>(object);
+  const bool owned=widget&&(widget==this||isAncestorOf(widget));
+  if(!owned) {
+    if(event->type()==QEvent::MouseButtonPress&&static_cast<QMouseEvent *>(event)->button()==Qt::LeftButton)wheel_selection(-1);
+    return QWidget::eventFilter(object,event);
+  }
   if(shared_scroll_&&event->type()==QEvent::Wheel&&(object==tree_->viewport()||object==groups_->viewport())){forward_wheel(shared_scroll_->viewport(),static_cast<QWheelEvent *>(event));return true;}
   if(event->type()!=QEvent::MouseButtonPress&&event->type()!=QEvent::MouseButtonDblClick&&event->type()!=QEvent::Wheel) return QWidget::eventFilter(object,event);
   const bool viewport=object==tree_->viewport();
@@ -83,7 +99,7 @@ bool ParameterPanel::eventFilter(QObject *object,QEvent *event) {
     const auto *mouse=static_cast<QMouseEvent *>(event);
     if(mouse->button()==Qt::LeftButton) {
       auto *item=viewport?tree_->itemAt(mouse->position().toPoint()):row.isValid()?items_.at(size_t(row.toInt())):nullptr;
-      wheel_selected_=item?item->data(0,Qt::UserRole).toInt():-1;
+      wheel_selection(item?item->data(0,Qt::UserRole).toInt():-1);
       if(item) tree_->setCurrentItem(item,0,QItemSelectionModel::ClearAndSelect);
     }
   } else if(event->type()==QEvent::Wheel&&!viewport&&row.isValid()) {
@@ -131,6 +147,7 @@ void ParameterPanel::toggle_favorite(size_t index) {
   QTimer::singleShot(0,this,[this]{filter();});
 }
 void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node) {
+  option_node_=nullptr;
   if(!target)bind_favorites(nullptr);
   target_=target;values_=values;node_=node;effective_.clear();controls_.clear();morph_rows_.clear();
   favorite_scope_.clear();scene_favorites_=false;
@@ -158,20 +175,39 @@ void ParameterPanel::bind(const runtime::Target *target,const runtime::Propertie
   }
   rebuild();
 }
-void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback) {
+void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
+                                  std::function<void(size_t,const std::array<double,3> &)> color_callback) {
+  const bool same=node&&node==option_node_&&node->id==option_node_id_;
+  const auto selected=same&&wheel_selected_>=0?controls_.at(size_t(wheel_selected_)).id:std::string{};
+  option_node_=node;option_node_id_=node?node->id:std::string{};
   target_=nullptr;values_=nullptr;controls_.clear();morph_rows_.clear();
   favorite_scope_.clear();scene_favorites_=false;
   if(node) for(size_t i=0;i<node->parameters.size();++i) {const auto &p=node->parameters[i];
-    for(size_t k=0;k<p.value.size();++k) {
-      ParameterControl c;c.id=node->id+"/"+p.id+std::to_string(k);c.label=p.label+(p.value.size()==3?std::string(" ")+"RGB"[k]:"");c.group=p.group;c.minimum=p.minimum;c.maximum=p.maximum;c.slider_minimum=p.minimum;c.slider_maximum=std::min(p.maximum,std::max(2.0,p.value[k]*2));c.step=p.step;c.initial=p.value[k];c.visible=p.visible;c.enabled=p.supported;c.choices=p.choices;
+    const bool color=(p.type=="float_color"||p.type=="color")&&p.value.size()==3;
+    for(size_t k=0;k<(color?1:p.value.size());++k) {
+      ParameterControl c;c.id=node->id+"/"+p.id+std::to_string(k);c.label=p.label+(!color&&p.value.size()==3?std::string(" ")+"RGB"[k]:"");c.group=p.group;c.minimum=p.minimum;c.maximum=p.maximum;c.slider_minimum=p.minimum;c.slider_maximum=std::min(p.maximum,std::max(2.0,p.value[k]*2));c.step=p.step;c.initial=p.value[k];c.visible=p.visible;c.enabled=p.supported;c.choices=p.choices;
       if(p.type=="bool") c.choices={"关闭","开启"};c.detail=p.image_uri+(!p.supported?"\n已保留原值，此参数尚未参与渲染":"");
+      if(ir::matte_fog_option(p.id)) {
+        c.enforce_limits=true;c.visible=true;
+        c.detail="模型与天空穿过同一片雾层。能见度是在基准高度处，物体对比度降至 2% 的距离；数值越小，雾越浓。距离单位均为米。";
+        if(p.id=="DFV Matte Fog Base Height")c.detail="雾层的世界基准高度。此高度以下密度保持恒定，以上指数衰减；默认 0 m 对应场景地面。";
+        if(p.id=="DFV Matte Fog Scale Height")c.detail="每升高此距离，雾密度降为约 37%。较小值形成低空薄雾，较大值形成厚重大气；模型和天空使用相同的密度分布。";
+        if(p.id=="DFV Matte Fog Start")c.detail="跳过相机附近此距离内的雾，同时作用于模型与天空。0 m 使用连续雾层，最适合自然大气。";
+        if(p.id=="Matte Fog Brightness Relative to Environment")c.detail="开启时随环境平均亮度变化；关闭时使用独立雾亮度。Scene Only 下可关闭此项来制作可见的远景雾。";
+      }
       if(p.id=="SS Day") {c.format=ParameterControl::Format::date;c.label="SS Day（年月日）";}
       if(p.id=="SS Time") {c.format=ParameterControl::Format::time;c.label="SS Time（时分秒）";}
       c.read=[node,i,k]{return node->parameters.at(i).value.at(k);};c.write=[this,callback,i,k](double v){callback(i,k,v);update_rows();};controls_.push_back(std::move(c));
+      if(color) {
+        auto &control=controls_.back();control.format=ParameterControl::Format::color;
+        control.read_color=[node,i]{const auto &v=node->parameters.at(i).value;return std::array<double,3>{v[0],v[1],v[2]};};
+        control.write_color=[this,callback,color_callback,i,minimum=p.minimum,maximum=p.maximum](auto v){for(auto &c:v)c=std::clamp(c,minimum,maximum);if(color_callback)color_callback(i,v);else for(size_t k=0;k<3;++k)callback(i,k,v[k]);update_rows();};
+      }
     }
   }
   rebuild();
-  if(node) for(QTreeWidgetItemIterator it(groups_);*it;++it) {
+  if(same&&!selected.empty())for(size_t i=0;i<controls_.size();++i)if(controls_[i].id==selected&&!items_[i]->isHidden()) {wheel_selection(int(i));tree_->setCurrentItem(items_[i]);break;}
+  if(node&&!same) for(QTreeWidgetItemIterator it(groups_);*it;++it) {
     const auto path=(*it)->data(0,Qt::UserRole).toString();
     if(path=="/Tone Mapping"||path=="/Environment") {groups_->setCurrentItem(*it);break;}
   }
@@ -199,10 +235,11 @@ void ParameterPanel::filter() {
   const auto q=search_->text().trimmed();const auto group=groups_->currentItem()?groups_->currentItem()->data(0,Qt::UserRole).toString():"*";int count=0;
   for(size_t i=0;i<controls_.size();++i) {
     const auto &c=controls_[i];const auto path=text(c.group);
-    const bool category=group=="*"||(group=="@favorites"&&is_favorite(c))||(group=="@used"&&std::abs(c.read())>1e-6)||(path==group||path.startsWith(group+"/"));
+    const bool used=c.read_color?hdr_color::peak(c.read_color())>1e-6:std::abs(c.read())>1e-6;
+    const bool category=group=="*"||(group=="@favorites"&&is_favorite(c))||(group=="@used"&&used)||(path==group||path.startsWith(group+"/"));
     const bool shown=category&&(hidden_->isChecked()||c.visible)&&text(c.label+" "+c.id+" "+c.group).contains(q,Qt::CaseInsensitive);items_[i]->setHidden(!shown);if(shown) ++count;
   }
-  if(wheel_selected_>=0&&items_[size_t(wheel_selected_)]->isHidden()) wheel_selected_=-1;
+  if(wheel_selected_>=0&&items_[size_t(wheel_selected_)]->isHidden()) wheel_selection(-1);
   count_->setText(QStringLiteral("%1 / %2 项").arg(count).arg(controls_.size()));shared_height();mount();
 }
 void ParameterPanel::mount() {
@@ -216,7 +253,15 @@ void ParameterPanel::mount() {
     auto *favorite=new QToolButton;favorite->setObjectName("favoriteButton");favorite->setText(is_favorite(c)?QStringLiteral("★"):QStringLiteral("☆"));favorite->setAutoRaise(true);favorite->setToolTip(QStringLiteral("收藏参数"));title->addWidget(favorite);layout->addLayout(title);
     connect(favorite,&QToolButton::clicked,this,[this,i]{toggle_favorite(size_t(i));});
     auto *line=new QHBoxLayout;line->setSpacing(4);layout->addLayout(line);
-    if(c.format==ParameterControl::Format::date) {
+    if(c.format==ParameterControl::Format::color) {
+      auto *button=new QPushButton;button->setObjectName("valueColor");button->setProperty("parameterId",text(c.id));button->setEnabled(c.enabled);line->addWidget(button,1);
+      hdr_color::swatch(button,c.read_color(),false,true);
+      connect(button,&QPushButton::clicked,this,[this,i]{
+        const auto control=controls_.at(size_t(i));const auto initial=control.read_color();
+        HdrColorDialog dialog(initial,std::max(1e-6,control.maximum),this);dialog.setWindowTitle(text(control.label));
+        if(dialog.exec()==QDialog::Accepted&&dialog.color()!=initial)control.write_color(dialog.color());
+      });
+    } else if(c.format==ParameterControl::Format::date) {
       auto *date=new QDateEdit;date->setObjectName("valueDate");date->setProperty("historyInput",true);date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setDateRange(QDate(1,1,1),QDate(9999,12,31));date->setDate(QDate::fromJulianDay(qRound64(c.read())));date->setKeyboardTracking(false);date->setEnabled(c.enabled);line->addWidget(date);
       connect(date,&QDateEdit::dateChanged,this,[this,i](QDate value){current_=i;controls_[i].write(double(value.toJulianDay()));update_rows();});
     } else if(c.format==ParameterControl::Format::time) {
@@ -241,12 +286,14 @@ void ParameterPanel::mount() {
     }
     widget->setToolTip(text(c.detail));
     auto watched=widget->findChildren<QWidget *>();watched.push_back(widget);
-    for(auto *child:watched) {child->setProperty("parameterRow",i);child->installEventFilter(this);}
+    for(auto *child:watched) child->setProperty("parameterRow",i);
+    if(i==wheel_selected_)label->setStyleSheet("QLabel { color: palette(highlighted-text); font-weight: bold; }");
     tree_->setItemWidget(items_[size_t(i)],0,widget);mounted_[i]=widget;
   }
 }
 void ParameterPanel::update_rows() {
   for(const auto &[i,w]:mounted_) {const auto &c=controls_[i];
+    if(auto *button=w->findChild<QPushButton *>("valueColor"))hdr_color::swatch(button,c.read_color(),false,true);
     if(target_&&c.morph>=0) {
       const auto &m=target_->morphs[size_t(c.morph)];QString detail=text(c.detail),status;
       if(!m.unsupported.empty()) status=QStringLiteral(" · 待支持");
@@ -275,7 +322,7 @@ bool ParameterPanel::edit_control(const std::string &id,double value) {
 }
 void ParameterPanel::query(const QString &value) {search_->setText(value);}
 void ParameterPanel::select_parameter(size_t index) {if(index<morph_rows_.size()&&morph_rows_[index]>=0) {current_=morph_rows_[index];auto *item=items_[size_t(current_)];tree_->setCurrentItem(item);show_item(item);mount();}}
-void ParameterPanel::set_slider(int value) {if(current_>=0) {const auto &c=controls_.at(size_t(current_));c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();}}
+void ParameterPanel::set_slider(int value) {if(current_>=0) {const auto &c=controls_.at(size_t(current_));if(c.read_color)return;c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();}}
 void ParameterPanel::evaluated(const std::vector<float> &values) {effective_=values;update_rows();}
 void ParameterPanel::resource_states() {update_rows();}
 }

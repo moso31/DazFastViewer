@@ -173,10 +173,48 @@ def main():
                        ("update_display(render_work)", "display_update")):
         replace("src/integrator/path_trace.cpp", f"  {call};",
                 f'  {{ const double start = time_dt(); {call}; if (dfv_event) dfv_event("{name}", (time_dt()-start)*1000.0); }}')
+    # Analytic matte fog operates on camera-visible closures, preserving cutout
+    # alpha and environment lighting. Keep this reproducible, not in .deps only.
+    replace("src/scene/background.h", "  NODE_SOCKET_API(bool, use_shader)", """  NODE_SOCKET_API(bool, use_shader)
+  NODE_SOCKET_API(float3, dfv_fog_extinction)
+  NODE_SOCKET_API(float3, dfv_fog_color)
+  NODE_SOCKET_API(float3, dfv_fog_distances)
+  NODE_SOCKET_API(bool, dfv_fog_enabled)
+  NODE_SOCKET_API(bool, dfv_fog_relative)
+  NODE_SOCKET_API(float, dfv_fog_environment)
+""")
+    replace("src/scene/background.cpp", '  SOCKET_BOOLEAN(use_shader, "Use Shader", true);', '''  SOCKET_BOOLEAN(use_shader, "Use Shader", true);
+  SOCKET_VECTOR(dfv_fog_extinction, "Fog Extinction", zero_float3());
+  SOCKET_COLOR(dfv_fog_color, "Fog Color", one_float3());
+  SOCKET_VECTOR(dfv_fog_distances, "Fog Distances", make_float3(0.0f, 0.0f, 1000.0f));
+  SOCKET_BOOLEAN(dfv_fog_enabled, "Fog Enabled", false);
+  SOCKET_BOOLEAN(dfv_fog_relative, "Fog Relative", true);
+  SOCKET_FLOAT(dfv_fog_environment, "Fog Environment", 0.0f);''')
+    replace("src/scene/background.cpp", "  kbackground->transparent = transparent;", """  kbackground->transparent = transparent;
+  kbackground->dfv_fog_extinction = make_float4(dfv_fog_extinction, dfv_fog_enabled ? 1.0f : 0.0f);
+  kbackground->dfv_fog_color = make_float4(dfv_fog_color, dfv_fog_relative ? 1.0f : 0.0f);
+  kbackground->dfv_fog_settings = make_float4(dfv_fog_distances, dfv_fog_environment);""")
+    replace("src/kernel/data_template.h", "KERNEL_STRUCT_BEGIN(KernelBackground, background)", """KERNEL_STRUCT_BEGIN(KernelBackground, background)
+KERNEL_STRUCT_MEMBER(background, float4, dfv_fog_extinction)
+KERNEL_STRUCT_MEMBER(background, float4, dfv_fog_color)
+KERNEL_STRUCT_MEMBER(background, float4, dfv_fog_settings)""")
+    files["src/kernel/integrator/dfv_matte_fog.h"] = (ROOT / "src/cycles/matte_fog_kernel.h").read_bytes()
+    files["src/kernel/integrator/dfv_fog_column.h"] = (ROOT / "src/render_ir/fog_column.h").read_bytes()
+    replace("src/kernel/CMakeLists.txt", "set(SRC_KERNEL_INTEGRATOR_HEADERS", "set(SRC_KERNEL_INTEGRATOR_HEADERS\n  integrator/dfv_matte_fog.h\n  integrator/dfv_fog_column.h")
+    for path in ("src/kernel/integrator/shade_surface.h", "src/kernel/integrator/shade_background.h"):
+        replace(path, "CCL_NAMESPACE_BEGIN", '#include "kernel/integrator/dfv_matte_fog.h"\n\nCCL_NAMESPACE_BEGIN')
+    replace("src/kernel/integrator/shade_surface.h", "      /* Write emission. */", """      dfv_matte_fog_surface(kg, state, &sd, render_buffer);
+      /* Write emission. */""")
+    replace("src/kernel/integrator/shade_background.h", "    /* Background MIS weights. */", """    L = dfv_matte_fog_background(kg, state, L);
+    /* Background MIS weights. */""")
+    # Reuse the illumination map (solid-angle weighted), independent of Draw
+    # Dome and camera atmosphere. Constant worlds use adapter's value.
+    replace("src/scene/light.cpp", "  const float map_average_radiance = cdf_total * M_PI_2_F;", """  const float map_average_radiance = cdf_total * M_PI_2_F;
+  kbackground->dfv_fog_settings.w = map_average_radiance;""")
     for name, data in files.items():
         write_changed(destination / name, data)
     manifest = {"standalone_commit": STANDALONE, "blender_commit": BLENDER, "adopted_files": adopted,
-                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry", "object-space displacement bump projection"]}
+                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry", "object-space displacement bump projection", "analytic shared surface and sky height atmosphere"]}
     write_changed(destination / "dfv-source-manifest.json", json.dumps(manifest, indent=2) + "\n")
     print(f"Cycles 构建树已生成：{destination}；接入 {len(adopted)} 个 Blender 5.2.2 文件")
 

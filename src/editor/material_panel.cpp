@@ -43,12 +43,7 @@ QString text(const std::string &s){return QString::fromUtf8(s.data(),qsizetype(s
 using hdr_color::linear;
 using hdr_color::srgb;
 void color_swatch(QPushButton *button,const J &value,bool mixed=false){
-  const auto c=value.get<hdr_color::Color>();const auto color=hdr_color::preview(c);const double strength=std::max(1.,hdr_color::peak(c));
-  button->setFixedWidth(strength>1?52:24);
-  button->setText(mixed?QStringLiteral("*"):strength>=1000?QStringLiteral("HDR"):strength>1?QStringLiteral("×%1").arg(strength,0,'g',3):QString{});
-  button->setStyleSheet("background-color: "+color.name()+"; color: "+(color.lightnessF()>.5?"#111":"#fff")+"; border: 1px solid #888;");
-  button->setToolTip(QStringLiteral("选择颜色与 HDR 强度\n%1线性 RGB：%2, %3, %4\n色块强度：×%5（HDR 色块按强度归一化显示）")
-    .arg(mixed?QStringLiteral("多值；预览为第一个表面的颜色\n"):QString{}).arg(c[0],0,'g',7).arg(c[1],0,'g',7).arg(c[2],0,'g',7).arg(strength,0,'g',6));
+  hdr_color::swatch(button,value.get<hdr_color::Color>(),mixed);
 }
 std::string utf8(const QString &s){return s.toUtf8().toStdString();}
 void thumbnail(QLabel *label,const QString &file){

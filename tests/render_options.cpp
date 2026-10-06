@@ -1,4 +1,5 @@
 #include "editor/document.h"
+#include "editor/scene_extension.h"
 #include "editor/render_edit_queue.h"
 #include "render_ir/options_json.h"
 #include "bench/camera.h"
@@ -13,6 +14,7 @@
 using namespace dfv;
 using J=nlohmann::json;
 static void require(bool b,const char *s) {if(!b) throw std::runtime_error(s);}
+#include "fog_column.inl"
 static void environment_paths(const std::filesystem::path &parent) {
   namespace fs=std::filesystem;
   const auto folder=parent/("paths-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -93,11 +95,14 @@ int main() {try {
   auto channel=[](const char *id,J value,const char *group) {return J{{"group",group},{"channel",{{"id",id},{"type","float"},{"value",value}}}};};
   for(const auto &[id,value]:std::vector<std::pair<const char *,double>>{{"Exposure Value",14},{"Shutter Speed",256},{"Aperture",8},{"Film ISO",100},{"Gamma",2.2},{"cm2 Factor",1}}) tone.push_back(channel(id,value,"/Tone Mapping"));
   env.push_back(channel("Environment Mode",1,"/Environment"));env.push_back(channel("Environment Map",1,"/Environment/Dome"));env.push_back(channel("Environment Intensity",2,"/Environment/Dome"));env.push_back(channel("Dome Rotation",34,"/Environment/Dome"));
+  auto saved_fog=channel("Matte Fog Visibility",600,"/Environment/Matte Fog");saved_fog["channel"]["visible"]=false;env.push_back(saved_fog);
+  env.push_back(channel("Ground Fog",1,"/Environment/Atmospheric Ground Fog"));
   J d={{"node_library",J::array({{{"id","tone"},{"extra",{{{"type","studio/node/tone_mapper"}},{{"type","studio_node_channels"},{"channels",tone}}}}},{{"id","env"},{"extra",{{{"type","studio/node/environment"}},{{"type","studio_node_channels"},{"channels",env}}}}}})},
     {"scene",{{"nodes",J::array({{{"id","saved-tone"},{"url","#tone"}},{{"id","saved-env"},{"url","#env"},{"extra",{{{"type","studio_node_channels"},{"channels",{{{"channel",{{"id","Environment Map"},{"current_value",3},{"image_file","studio.hdr"}}}}}}}}}}})}}}};
   std::ofstream(file)<<d.dump();auto loaded=daz::load(file,{{folder},false});const auto &o=loaded.scene.options;
   require(ir::number(o.environment,"Environment Map",0)==3&&ir::number(o.environment,"Environment Intensity",0)==2,"节点覆盖或资产通道继承失败");
   require(o.environment_file==std::filesystem::weakly_canonical(folder/"studio.hdr"),"HDRI 路径丢失");
+  require(ir::number(o.environment,"Matte Fog Visibility",0)==600&&ir::option(o.environment,"Matte Fog Visibility")->visible&&ir::option(o.environment,"Matte Fog Visibility")->supported&&!ir::option(o.environment,"Ground Fog")->supported,"DAZ fog inheritance / visibility / scope wrong");
   require(!ir::scene_lights(o)&&std::abs(ir::exposure(o)-.5f)<1e-6f,"Dome Only / EV 曝光错误");
   require(ir::options_from_json(ir::options_json(o))==o,"渲染选项保存 / 重读不一致");
   auto edited=o;ir::set_option(edited.tonemapper,0,0,15);require(ir::number(edited.tonemapper,"Shutter Speed",0)==512&&ir::exposure(edited)==.25f,"EV 未联动快门或没有减半曝光");
@@ -106,6 +111,28 @@ int main() {try {
   ir::set_option(edited.environment,3,0,-720);require(ir::number(edited.environment,"Dome Rotation",0)==-720,"环境角度被 UI 范围截断");
   auto brighter=o;for(auto &p:brighter.tonemapper.parameters) if(p.id=="Exposure Value") p.value[0]-=1;
   require(ir::display_color(brighter,{.1f,.2f,.3f}).x>ir::display_color(o,{.1f,.2f,.3f}).x,"离线色调没有应用曝光");
+  {
+    fog_columns();
+    auto fog_options=o;auto &fog=fog_options.environment;
+    const auto count=fog.parameters.size();ir::ensure_matte_fog_options(fog);require(fog.parameters.size()==count,"Matte fog channels duplicated");
+    for(const auto &p:fog.parameters)if(ir::matte_fog_option(p.id))require(p.supported&&p.visible,"Fog stayed hidden or unsupported");
+    auto set=[&](const std::string &id,double value,size_t component=0){for(size_t i=0;i<fog.parameters.size();++i)if(fog.parameters[i].id==id){ir::set_option(fog,i,component,value);return;}};
+    set("Matte Fog",1);set("Matte Fog Visibility",800);set("DFV Matte Fog Start",50);set("DFV Matte Fog Scale Height",2000);set("DFV Matte Fog Base Height",-20);
+    set("Matte Fog Visibility Tint",.5,0);set("Matte Fog Brightness",.7);set("Matte Fog Brightness Tint",.4,2);
+    const auto f=ir::matte_fog(fog_options);require(f.enabled&&f.start==50&&f.scale_height==2000&&f.base_height==-20&&std::abs(std::exp(-f.extinction.y*800)-.02)<1e-6&&std::abs(f.extinction.x/f.extinction.y-2)<1e-6&&std::abs(f.color.z-.28)<1e-6,"Fog units / tint / visibility conversion wrong");
+    auto legacy=ir::options_json(fog_options);for(auto &p:legacy["environment"]["parameters"])if(ir::matte_fog_option(p["id"])) {p["supported"]=false;p["visible"]=false;}
+    require(ir::options_from_json(legacy)==fog_options,"Old render settings did not enable saved Matte Fog values");
+    auto old=fog_options;auto &old_node=old.environment;
+    std::erase_if(old_node.parameters,[](const auto &p){return p.id=="DFV Matte Fog Base Height"||p.id=="DFV Matte Fog Scale Height";});
+    for(const auto &id:{"DFV Matte Fog Background Distance","DFV Matte Fog Horizon Height"}){ir::Option p;p.id=id;p.value={0};old_node.parameters.push_back(p);}
+    auto upgraded=ir::options_from_json(ir::options_json(old));const auto upgraded_fog=ir::matte_fog(upgraded);
+    require(upgraded_fog.enabled&&upgraded_fog.scale_height==1000&&upgraded_fog.base_height==0&&!ir::option(upgraded.environment,"DFV Matte Fog Background Distance")&&!ir::option(upgraded.environment,"DFV Matte Fog Horizon Height"),"Old background overlay did not migrate to shared atmosphere");
+    editor::Document doc;doc.loaded=loaded;doc.source_file=file;auto snapshot=editor::initial_snapshot(doc);snapshot.options=fog_options;
+    editor::save_scene_extension(folder/"fog.dufex",doc,snapshot);const auto restored=editor::load_scene_extension(folder/"fog.dufex",{folder},2);
+    require(restored.snapshot.options==fog_options,"DUFEX lost matte fog parameters");
+    set("Matte Fog Visibility",0);set("Matte Fog Brightness",-1);require(ir::number(fog,"Matte Fog Visibility",0)==.001&&ir::number(fog,"Matte Fog Brightness",1)==0,"Invalid fog input not bounded");
+    require(std::isfinite(ir::matte_fog(fog_options).extinction.x),"Zero visibility produced nonfinite extinction");
+  }
   local_pivot(folder);
   const auto count=loaded.scene.lights.size();ir::add_studio(loaded.scene);require(loaded.scene.lights.size()==count,"覆盖了保存的环境光照");
   editor::Document document;document.loaded=loaded;auto snapshot=editor::initial_snapshot(document);require(snapshot.options==o,"快照未继承渲染选项");editor::collect_resources(document);require(document.loaded.scene.options==o,"资源回收丢失环境");

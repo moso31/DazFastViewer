@@ -629,6 +629,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       }
       options.parameters.push_back(std::move(p));
     }
+    if(environment)ir::ensure_matte_fog_options(options);
     if(environment&&int(ir::number(options,"Environment Mode",0))==2) warn("sun_sky_approximation",id,"Sun-Sky Only 使用 Cycles 多次散射天空与日期/经纬度太阳方向；保留场景灯光/贴图忽略语义。未等价复现 Iray 测光、Sun Node、穹顶倾斜、辉光、色调、地平线和地面参数。");
   }
   for(const auto &[id,node]:nodes) {

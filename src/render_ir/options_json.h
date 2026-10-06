@@ -1,5 +1,6 @@
 #pragma once
 #include "render_ir/options.h"
+#include "render_ir/matte_fog.h"
 #include <nlohmann/json.hpp>
 namespace dfv::ir {
 inline nlohmann::json options_json(const RenderOptions &options) {
@@ -20,6 +21,6 @@ inline RenderOptions options_from_json(const nlohmann::json &data) {
       if(!std::isfinite(p.minimum)||!std::isfinite(p.maximum)||p.minimum>p.maximum||!std::isfinite(p.step)) throw std::runtime_error("无效参数范围");
       for(auto v:p.value) if(!std::isfinite(v)) throw std::runtime_error("参数包含非有限值");node->parameters.push_back(std::move(p));
     }
-  }return result;
+  }ensure_matte_fog_options(result.environment);return result;
 }
 }

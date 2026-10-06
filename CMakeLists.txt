@@ -43,7 +43,7 @@ foreach(required "${DFV_BLENDER_SOURCE}/.git" "${DFV_STANDALONE_SOURCE}/.git"
   endif()
 endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-  "${DFV_ROOT}/tools/prepare_cycles.py" "${DFV_ROOT}/tools/dependencies.lock.json"
+  "${DFV_ROOT}/tools/prepare_cycles.py" "${DFV_ROOT}/src/cycles/matte_fog_kernel.h" "${DFV_ROOT}/src/render_ir/fog_column.h" "${DFV_ROOT}/tools/dependencies.lock.json"
   "${DFV_ROOT}/specs/001-cycles-static-camera/evidence/source-differences.json")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E env PYTHONUTF8=1 "${Python3_EXECUTABLE}" "${DFV_ROOT}/tools/prepare_cycles.py"
   --blender "${DFV_BLENDER_SOURCE}" --standalone "${DFV_STANDALONE_SOURCE}"

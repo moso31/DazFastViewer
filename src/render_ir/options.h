@@ -42,6 +42,7 @@ inline void set_option(OptionNode &node,size_t index,size_t component,double val
   auto &p=node.parameters.at(index);if(!p.supported||!std::isfinite(value)) throw std::runtime_error("无效或尚不支持的渲染参数");
   if(p.type=="bool"||p.type=="enum"||p.type=="int") value=std::round(value);
   if(p.type=="bool"||p.type=="enum") value=std::clamp(value,p.minimum,p.maximum);
+  if(p.id.starts_with("Matte Fog")||p.id.starts_with("DFV Matte Fog"))value=std::clamp(value,p.minimum,p.maximum);
   if((p.id=="Gamma"||p.id=="Aperture"||p.id=="Shutter Speed"||p.id=="White Point Scale"||p.id=="White Point")&&value<=0) throw std::runtime_error("此参数必须大于零");
   p.value.at(component)=value;
   auto update=[&](const std::string &id,double v) {for(auto &q:node.parameters) if(q.id==id&&!q.value.empty()) q.value[0]=v;};

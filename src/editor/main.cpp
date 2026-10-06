@@ -917,7 +917,8 @@ class Editor final:public EditorWindow {
     if(document_&&(index==-2||index==-3)) {
       auto *node=index==-2?&snapshot_.options.environment:&snapshot_.options.tonemapper;selection_->setText(text(node->label));
       parameters_->bind_favorites(&*snapshot_.control_favorites,index==-2?"options/environment":"options/tonemapper");
-      parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){auto edit=history_edit(QStringLiteral("修改环境与色调：")+text(node->parameters.at(p).label));try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
+      parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){auto edit=history_edit(QStringLiteral("修改环境与色调：")+text(node->parameters.at(p).label));try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}},
+        [this,node](size_t p,const std::array<double,3> &v){try {auto next=*node;for(size_t c=0;c<3;++c)ir::set_option(next,p,c,v[c]);auto edit=history_edit(QStringLiteral("修改环境与色调颜色：")+text(node->parameters.at(p).label));*node=std::move(next);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
     }
     if(!selected_group_.empty()){bind_group();return;}
     if(index<0 || !document_) {auto *item=active_selection(hierarchy_);selection_->setText(index<=-4&&item?item->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}

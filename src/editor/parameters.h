@@ -2,6 +2,7 @@
 #include "runtime/morph.h"
 #include <QWidget>
 #include <functional>
+#include <array>
 #include <map>
 #include <set>
 class QScrollArea;
@@ -21,12 +22,14 @@ struct ParameterControl {
   bool enabled=true,visible=true;
   bool float_backed=false;
   bool enforce_limits=false;
-  enum class Format {number,date,time};
+  enum class Format {number,date,time,color};
   Format format=Format::number;
   std::vector<std::string> choices;
   std::set<int> disabled_choices;
   std::function<double()> read;
   std::function<void(double)> write;
+  std::function<std::array<double,3>()> read_color;
+  std::function<void(const std::array<double,3> &)> write_color;
 };
 class ParameterPanel final:public QWidget {
   const runtime::Target *target_=nullptr;
@@ -40,6 +43,9 @@ class ParameterPanel final:public QWidget {
   QLabel *count_;
   int current_=-1;
   int wheel_selected_=-1;
+  void wheel_selection(int row);
+  ir::OptionNode *option_node_=nullptr;
+  std::string option_node_id_;
   std::string node_;
   std::vector<float> effective_;
   std::vector<ParameterControl> controls_,extra_;
@@ -69,9 +75,10 @@ public:
   void import_favorites(const runtime::Target *target,std::optional<runtime::FavoriteState> &state) const;
   void bind_favorites(const runtime::FavoriteState *state,const std::string &node={}) {saved_favorites_=state;saved_favorite_node_=node;}
   void bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node={});
-  void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback);
+  void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
+                    std::function<void(size_t,const std::array<double,3> &)> color_callback={});
   void set_extra(std::vector<ParameterControl> controls) {extra_=std::move(controls);}
-  void bind_controls(std::vector<ParameterControl> controls) {target_=nullptr;values_=nullptr;favorite_scope_.clear();scene_favorites_=false;controls_=std::move(controls);morph_rows_.clear();rebuild();}
+  void bind_controls(std::vector<ParameterControl> controls) {option_node_=nullptr;target_=nullptr;values_=nullptr;favorite_scope_.clear();scene_favorites_=false;controls_=std::move(controls);morph_rows_.clear();rebuild();}
   void refresh(size_t index);
   void query(const QString &text);
   void select_parameter(size_t index);

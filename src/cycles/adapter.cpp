@@ -3,6 +3,7 @@
 #include "render_ir/emission.h"
 #include "diagnostics/load_profile.h"
 #include "render_ir/options.h"
+#include "render_ir/matte_fog.h"
 #include "render_ir/sun_sky.h"
 #include "scene/scene.h"
 #include "scene/camera.h"
@@ -275,6 +276,15 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
     graph->connect(direction,tex->input("Vector"));
     auto *tint=graph->create_node<VectorMathNode>();tint->set_math_type(NODE_VECTOR_MATH_MULTIPLY);tint->set_vector2(vector(ir::color(n,"Environment Tint")));graph->connect(tex->output("Color"),tint->input("Vector1"));graph->connect(tint->output("Vector"),bg->input("Color"));
   }
+  const auto fog=ir::matte_fog(options);
+  scene_.background->set_dfv_fog_enabled(fog.enabled);
+  scene_.background->set_dfv_fog_extinction(vector(fog.extinction));
+  scene_.background->set_dfv_fog_color(vector(fog.color));
+  scene_.background->set_dfv_fog_relative(fog.relative);
+  // Textured/sky worlds replace this fallback with their illumination-map average.
+  scene_.background->set_dfv_fog_environment(average(bg->get_color())*bg->get_strength());
+  scene_.background->set_dfv_fog_distances(make_float3(fog.start,fog.base_height,fog.scale_height));
+  scene_.background->tag_update(&scene_);
   ShaderOutput *surface=bg->output("Background");
   if(!n.id.empty()&&!ir::number(n,"Draw Dome",0)) {
     auto *back=graph->create_node<BackgroundNode>();back->set_color(make_float3(options.backdrop[0],options.backdrop[1],options.backdrop[2]));back->set_strength(1);

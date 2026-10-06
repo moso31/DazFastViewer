@@ -2,7 +2,7 @@
 #include <QVBoxLayout>
 #include <QFormLayout>
 #include <QGroupBox>
-#include <QColorDialog>
+#include "editor/hdr_color_dialog.h"
 #include <QSignalBlocker>
 #include <QApplication>
 #include <QScrollArea>
@@ -67,7 +67,7 @@ Panel::Panel(QWidget *parent):QWidget(parent){
   scalar("foam_width",QStringLiteral("岸边泡沫宽度（米）"),.01,1000,.1);scalar("foam_strength",QStringLiteral("泡沫覆盖率"),0,1,.05);scalar("seed",QStringLiteral("随机种子"),0,4294967295.,1,0);
   scalar("foam_uv_scale",QStringLiteral("泡沫 UV 缩放"),.01,100,.1,2);
   fields_["foam_uv_scale"]->setToolTip(QStringLiteral("1 保持原纹理大小；数值越大，泡沫纹理越细密。仅调整泡沫纹理，不改变泡沫带宽度或细波纹，无需重算。"));
-  color_=new QPushButton(QStringLiteral("选择水色…"));form->addRow(QStringLiteral("深水颜色"),color_);connect(color_,&QPushButton::clicked,this,[this]{const auto c=config_.color;const auto selected=QColorDialog::getColor(QColor::fromRgbF(c.x,c.y,c.z),this,QStringLiteral("水体颜色"));if(selected.isValid()){config_.color={float(selected.redF()),float(selected.greenF()),float(selected.blueF())};submit();}});
+  color_=new QPushButton;form->addRow(QStringLiteral("深水颜色"),color_);connect(color_,&QPushButton::clicked,this,[this]{const auto c=config_.color;const editor::hdr_color::Color initial{c.x,c.y,c.z};editor::HdrColorDialog dialog(initial,1,this);dialog.setWindowTitle(QStringLiteral("深水颜色"));if(dialog.exec()==QDialog::Accepted&&dialog.color()!=initial){const auto &v=dialog.color();config_.color={float(v[0]),float(v[1]),float(v[2])};editor::hdr_color::swatch(color_,v,false,true);submit();}});
   coast_=new QCheckBox(QStringLiteral("海岸线计算"));coast_->setObjectName("WaterCoast");layout->addWidget(coast_);connect(coast_,&QCheckBox::toggled,this,[this]{submit();});
   scan_=new QCheckBox(QStringLiteral("扫描场景中的可见对象"));scan_->setObjectName("WaterScanScene");scan_->setToolTip(QStringLiteral("自动对象使用表面交界；人物、柱体和船体建议在列表中明确选择排水体积。"));layout->addWidget(scan_);connect(scan_,&QCheckBox::toggled,this,[this]{submit();});
   sources_=new QTreeWidget;sources_->setObjectName("WaterSources");sources_->setHeaderLabels({QStringLiteral("参与对象"),QStringLiteral("交界方式")});sources_->setRootIsDecorated(false);sources_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);sources_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);sources_->header()->setStretchLastSection(false);sources_->header()->setSectionResizeMode(0,QHeaderView::Stretch);sources_->header()->setSectionResizeMode(1,QHeaderView::Fixed);layout->addWidget(sources_);connect(sources_,&QTreeWidget::itemChanged,this,[this]{submit();});
@@ -97,6 +97,7 @@ void Panel::bind(const Water *water,const std::vector<Candidate> &objects){
   have_bounds_=std::any_of(objects.begin(),objects.end(),[](const auto &o){return o.volume>=0;});
   if(!water||bound_id_!=water->id)select({});bound_id_=water?water->id:std::string{};
   setVisible(water!=nullptr);if(!water)return;binding_=true;config_=water->config;
+  editor::hdr_color::swatch(color_,{config_.color.x,config_.color.y,config_.color.z},false,true);
 #define DFV_WATER_FIELD(n) fields_.at(#n)->setValue(config_.n)
   DFV_WATER_FIELD(density);DFV_WATER_FIELD(foam_uv_scale);
   DFV_WATER_FIELD(x);DFV_WATER_FIELD(y);DFV_WATER_FIELD(level);DFV_WATER_FIELD(width);DFV_WATER_FIELD(length);DFV_WATER_FIELD(depth);DFV_WATER_FIELD(clarity);DFV_WATER_FIELD(wave_height);DFV_WATER_FIELD(wavelength);DFV_WATER_FIELD(steepness);DFV_WATER_FIELD(direction);DFV_WATER_FIELD(time);DFV_WATER_FIELD(ripples);DFV_WATER_FIELD(roughness);DFV_WATER_FIELD(foam_width);DFV_WATER_FIELD(foam_strength);DFV_WATER_FIELD(precision);DFV_WATER_FIELD(seed);

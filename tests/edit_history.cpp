@@ -1,4 +1,5 @@
 #include "editor/edit_history.h"
+#include "render_ir/matte_fog.h"
 #include "editor/history_input.h"
 #include "runtime/picking.h"
 #include "editor/recovery.h"
@@ -129,6 +130,7 @@ static void commands(){
   roundtrip("subdivision",[&]{current.snapshot.subdivision_levels["mesh"]=2;});
   roundtrip("lights",[&]{ir::AreaLight light;light.id="new";current.snapshot.lights.push_back(light);});
   roundtrip("options",[&]{current.snapshot.options.backdrop={.1f,.2f,.3f};});
+  roundtrip("matte fog",[&]{auto &env=current.snapshot.options.environment;env.id="environment";ir::ensure_matte_fog_options(env);for(auto &p:env.parameters){if(p.id=="Matte Fog")p.value={1};if(p.id=="Matte Fog Visibility")p.value={750};if(p.id=="DFV Matte Fog Start")p.value={30};}});
   roundtrip("materials",[&]{current.snapshot.material_overrides["figure"]["Skin"]["roughness"]=.7;current.snapshot.material_overrides["dress"]["Nails"]["roughness"]=.4;});
   roundtrip("favorites",[&]{current.snapshot.values[0].favorites.emplace();current.snapshot.values[0].favorites->nodes[""]["morph"]=true;current.snapshot.control_favorites.emplace();current.snapshot.control_favorites->nodes["options/environment"]["x"]=false;});
   current.manual=true;roundtrip("draft",[&]{current.pending[{"figure/geometry","morph"}]={current.snapshot.values[0].morphs[0],true};current.snapshot.values[0].morphs[0]=.95f;});
