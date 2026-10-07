@@ -616,7 +616,7 @@ void Renderer::run(std::stop_token stop) {
             diagnostics::LoadProfile profile;diagnostics::active=&profile;
             try {delta=runtime->evaluate(desired.values,desired.poses);} catch(...) {diagnostics::active=nullptr;throw;}
             diagnostics::active=nullptr;timing("edit_evaluate",evaluate_begin,desired.revision);
-            if(refine_enabled&&(refine_pending||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty())) {
+            if(refine_enabled&&(refine_pending||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.grafts.empty()||!delta.masks.empty())) {
               refine_ticket=refiner.request(runtime_document,desired,refine_frames);refine_revision=desired.revision;refine_pending=true;
             }
             for(const auto &[name,value]:profile.timings) {Frame f;f.id=desired.revision;telemetry_.event(name.c_str(),f,value.seconds*1000);}
@@ -637,7 +637,7 @@ void Renderer::run(std::stop_token stop) {
             water::materials(water::effective(*current,desired),render_scene,&delta);
             if(desired.instance_ground!=applied_instance_ground||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,render_scene,group_frames->hierarchy,runtime->effective_poses(),&*group_frames);apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta,&bases);applied_instance_ground=desired.instance_ground;}
             cloud_runtime.apply(*current,cloud::effective(*current,desired),render_scene,&delta);
-            new_render_edit=material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty();
+            new_render_edit=material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty()||!delta.grafts.empty()||!delta.masks.empty();
             edit_affects_render=new_render_edit;applied_revision=desired.revision;if(!new_render_edit&&!queued.pending)gpu_revision=applied_revision;state.edit_error.clear();}
           }
           catch(const std::exception &e) {
@@ -656,7 +656,7 @@ void Renderer::run(std::stop_token stop) {
         }
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
         wanted_preview=navigation_preview||(!clay_wait&&!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
-        if(!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty())clay_wait=true;
+        if(!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.grafts.empty()||!delta.masks.empty())clay_wait=true;
         if(clay_wait)wanted_preview=false;
         if(subdivision_edit&&queued_subdivision_before.empty())queued_subdivision_before=previous_subdivision;
         if(wanted_preview!=preview||resolution_changed||new_render_edit||delta.camera)queued.merge(delta,subdivision_edit||material_layout_edit);
@@ -749,7 +749,7 @@ void Renderer::run(std::stop_token stop) {
       GLContext::Binding binding(window_->present_context);
       display->set_reconstruction(quality.reconstruction);
       display->set_sharpen(quality.sharpen);
-      const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty();
+      const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.masks.empty();
       if(geometry_dirty) {instance_groups.emplace(render_scene);auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
       else if(bounds_dirty||refinement_finished) {auto begin=now();overlay.apply(render_scene,regions,delta,refine_pending);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
       if(sampling_.interaction_probe&&bounds_dirty) {

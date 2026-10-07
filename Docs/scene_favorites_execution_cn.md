@@ -28,7 +28,7 @@
 - 使用项目中完整的四个内容库路径，以按需加载方式核对原始 `H:/G1/Scenes/test7.duf`：13 个对象全部对照一致；女性角色 26 项、下颌骨 1 项，两个男性角色各 14 项，共 55 项。证据：`artifacts/favorites/test7-catalog.json`、`test7-check.json`。
 - 真实资产目录仍报告两个 Neko 眼睛 Morph 的差值 count 不一致；这些资源不属于本次收藏列表，未作为本次修复范围。
 - 源 DUF 前后 SHA-256 一致，见 `artifacts/favorites/source-hash.json`。
-- 最新编辑器已重新构建并部署到 `out/DazFastViewer.exe`，见 `artifacts/favorites-final-stage.log`。运行中的旧进程保留，重新启动后使用新版。
+- 最新编辑器已重新构建并部署到 历史验证的可执行文件，见 `artifacts/favorites-final-stage.log`。运行中的旧进程保留，重新启动后使用新版。
 
 真实场景验证覆盖目录读取；收藏交互在 Qt 离屏测试中验证，没有进行新的 GPU 场景截图验收。
 

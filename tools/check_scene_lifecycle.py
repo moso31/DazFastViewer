@@ -45,7 +45,7 @@ def main():
         (fixtures / f"{name}.ppm").write_bytes(b"P6\n1024 1024\n255\n" + bytes(color) * (1024 * 1024))
     with (output / "editor.log").open("w", encoding="utf-8") as log:
         subprocess.run([
-            str(root / "out/DazFastViewer.exe"), "--file", str(fixtures / "first.duf"),
+            str(root / "out/vs2022/Release/DazFastViewer.exe"), "--file", str(fixtures / "first.duf"),
             "--lifecycle-test", str(fixtures / "second.duf"), "--output", str(output),
             "--content-root", str(fixtures),
             "--lifecycle-rounds", str(args.cycles),

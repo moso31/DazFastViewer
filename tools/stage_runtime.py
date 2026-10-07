@@ -71,23 +71,47 @@ def runtime_manifest(out, deployed):
     return {p.relative_to(out).as_posix(): sha256(p) for p in sorted(deployed)}
 
 
+def runtime_output(build, configuration, cache, output=None):
+    """从配置确定部署目录；preset 的多配置构建按实际配置分开部署。"""
+    if output is not None:
+        destination = Path(output)
+    else:
+        configured = cache.get('CMAKE_INSTALL_PREFIX')
+        if configured:
+            destination = Path(configured)
+            if (destination.name in ('Release', 'Debug', 'RelWithDebInfo', 'MinSizeRel')
+                    and destination.parent.name == Path(build).name):
+                destination = destination.with_name(configuration)
+        else:
+            generator = cache.get('CMAKE_GENERATOR', '')
+            year = generator.rsplit(' ', 1)[-1] if generator.startswith('Visual Studio ') else '2022'
+            destination = ROOT / 'out' / ('vs' + year) / configuration
+    destination = destination.resolve()
+    if destination == (ROOT / 'out').resolve():
+        raise RuntimeError('Choose a configuration directory such as out/vs2022/Release.')
+    return destination
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/vs2022')
     parser.add_argument('--configuration', choices=['Release', 'Debug', 'RelWithDebInfo', 'MinSizeRel'], default='Release')
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--replace-build', action='store_true', help='Replace a runtime package from another build directory, keeping the same configuration')
     parser.add_argument('--editor-only', action='store_true', help='Deploy the IDE startup target without requiring the benchmark to be built')
     args = parser.parse_args()
     build = args.build_dir.resolve()
     configuration = args.configuration
     cache = read_cache(build / 'CMakeCache.txt')
+    out = runtime_output(build, configuration, cache, args.output)
     kernels = runtime_kernels(build, cache)
-    out = (args.output or ROOT / 'out' / build.name / configuration).resolve()
     out.mkdir(parents=True, exist_ok=True)
     marker = out / '.dfv-runtime.json'
     identity = {'build_dir': str(build), 'configuration': configuration}
-    if marker.is_file() and json.loads(marker.read_text()) != identity:
-        raise RuntimeError(f'{out} belongs to a different build/configuration; choose a separate --output.')
+    if marker.is_file():
+        owner = json.loads(marker.read_text())
+        if owner != identity and not (args.replace_build and owner.get('configuration') == configuration):
+            raise RuntimeError(f'{out} belongs to a different build/configuration; choose a separate --output or use --replace-build for an intentional migration within the same configuration.')
     qt = Path(cache['DFV_QT_ROOT'])
     libraries = Path(cache['DFV_LIB_DIR'])
     executables = ['DazFastViewer.exe'] if args.editor_only else ['CyclesViewportBench.exe', 'DazFastViewer.exe']

@@ -64,7 +64,7 @@
 
 界面计时从 Enter 提交到结果模型更新并处理界面事件；缩略图继续异步加载，不将所有结果图片解码计入搜索完成。自动输入模式另有 140 毫秒防抖。首次扫描前没有完整索引，不能将首次完整建库也声明为一秒内完成。
 
-验证覆盖：分类配额互不挤占、路径与搜索去重、重启恢复、类型识别、重叠内容库、Unicode、字面匹配、目录边界、过期搜索取消、扫描切换取消、缓存恢复、新增 / 删除刷新、真实缩略图读取、Ctrl＋滚轮及键盘激活。已有 13 项工程测试与新增 `content_browser` 共 14 项通过；上游 `cycles_version` 依赖未部署的 `out/cycles.exe`，不属于本项目 `tools/build.ps1` 的工程验证集合。
+验证覆盖：分类配额互不挤占、路径与搜索去重、重启恢复、类型识别、重叠内容库、Unicode、字面匹配、目录边界、过期搜索取消、扫描切换取消、缓存恢复、新增 / 删除刷新、真实缩略图读取、Ctrl＋滚轮及键盘激活。已有 13 项工程测试与新增 `content_browser` 共 14 项通过；上游 `cycles_version` 依赖未部署的 上游独立程序 `cycles.exe`，不属于本项目 `tools/build.ps1` 的工程验证集合。
 
 副屏独立浏览器验证使用真实场景缩略图和 DTPC03 姿势，证据保存于 `artifacts/content-browser/`：`icons.png`、`search.png`、`recent.png`、`tooltip.png`；性能记录为 `search-benchmark.json`、`search-benchmark-warm.json`。副屏浏览器验证使用临时设置文件，不写入用户的近期记录。
 
@@ -73,10 +73,10 @@
 ./tools/build.ps1
 
 # 独立搜索测量（需 Qt bin 在 PATH 中）
-./build/bin/Release/ContentBrowserTest.exe --benchmark H:/G1 H:/G3
+./build/vs2022/bin/Release/ContentBrowserTest.exe --benchmark H:/G1 H:/G3
 
 # 真实缩略图及搜索的副屏验证
-./build/bin/Release/ContentBrowserTest.exe --visual
+./build/vs2022/bin/Release/ContentBrowserTest.exe --visual
 ```
 
 实现位于 `src/editor/content_browser.*`、`src/editor/content_catalog.*`，由 `src/editor/main.cpp` 接入成功加载 / 应用入口；测试位于 `tests/content_browser.cpp`。

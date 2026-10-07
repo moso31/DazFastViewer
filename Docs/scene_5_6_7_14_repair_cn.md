@@ -28,7 +28,7 @@
 
 工程检查覆盖共享实例、普通／打包实例的放置、引用循环、微小缩放求逆、缺失贴图与严格模式、宿主面遮盖、角色隔离、关闭／删除附加件、隐藏面的射线选取，以及未激活蒙皮能力的放行和激活后的拒绝。
 
-本轮项目约定的 14 项 CTest 全部通过，最终构建、测试和部署见 `build-release-final.log`、`build-14.log`、`stage-release.log`。直接不加筛选运行 CTest 还包含上游 `cycles_version`，它引用产品包不发布的 `out/cycles.exe`，因此该项为 Not Run；最终采用项目构建脚本原有的 14 项测试范围。
+本轮项目约定的 14 项 CTest 全部通过，最终构建、测试和部署见 `build-release-final.log`、`build-14.log`、`stage-release.log`。直接不加筛选运行 CTest 还包含上游 `cycles_version`，它引用产品包不发布的 上游独立程序 `cycles.exe`，因此该项为 Not Run；最终采用项目构建脚本原有的 14 项测试范围。
 
 CPU 加载工具包含参数发现、公式编译、首次完整形变和选取树，不含 Qt/Cycles/GPU：`test5-cpu-final` 68.58 秒、`test6-cpu-final` 121.12 秒、`14-cpu-fixed` 129.87 秒，均 PASS。测量期间有其他开发工作，不作为隔离环境的加载性能基准。
 
@@ -54,7 +54,7 @@ Sun-sky 的曝光／天空模型、部分复杂毛发和 PBRSkin 仍属于跨渲
 
 ## 复现与部署
 
-运行入口为 `out/DazFastViewer.exe`。同一发布包逐场景验证的完整参数保存在 `artifacts/scene-repair/release-commands.json`；构建清单为 `release-build-manifest.json`。编辑器 SHA-256：`f8e2d81cb6792b8d5e3a3abe0e67d5bcd59efd0884cd7adf367940fde2aade8f`。检查确认清单中的源码哈希均与工作树一致。
+运行入口为 历史验证的可执行文件。同一发布包逐场景验证的完整参数保存在 `artifacts/scene-repair/release-commands.json`；构建清单为 `release-build-manifest.json`。编辑器 SHA-256：`f8e2d81cb6792b8d5e3a3abe0e67d5bcd59efd0884cd7adf367940fde2aade8f`。检查确认清单中的源码哈希均与工作树一致。
 
 四场景最终 `editor-check.json` 均为 PASS，汇总见 `verification-summary.json`。其中 `test5-release` 为实例场景交互验证，`test6-release`／`14-release` 为实际画面捕获，`test7-release` 为四个插件的 Visible 切换与恢复；这些不同检查范围不能互相替代。
 

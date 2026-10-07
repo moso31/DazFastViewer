@@ -24,7 +24,7 @@ Morph 发现曾在每个参数内部复制并遍历整个 scene modifier 数组�
 
 ## 已取得的验证证据
 
-- 9 项项目 CTest 通过，包含原 Morph / Skeleton / Formula 回归及新增 `scene_workflow`。上游 `cycles_version` 依赖未构建的 `out/cycles.exe`，不属于项目脚本指定的这 9 项检查；曾尝试全量 CTest 时，该项未运行。
+- 9 项项目 CTest 通过，包含原 Morph / Skeleton / Formula 回归及新增 `scene_workflow`。上游 `cycles_version` 依赖未构建的 上游独立程序 `cycles.exe`，不属于项目脚本指定的这 9 项检查；曾尝试全量 CTest 时，该项未运行。
 - `artifacts/scene-workflow/test2-final.json`：真实 `H:\G1\Scenes\test2.duf` 载入 14 个几何对象和 14 套蒙皮（四个人物及服装 / 附件）。本轮记录：几何 1.00 秒，累计 Morph 61.76 秒、骨架 63.33 秒、公式 64.15 秒、初次求值 67.57 秒。
 - 对首个人物应用 `H:\G1\Presets\Shaping\face_08.duf`：1,672 个 Morph 通道被应用。此阶段旧检查要求其他 13 个对象不变，遗漏了关联服装应跟随的语义；现已修正为允许所属穿戴物更新、无关人物和穿戴物保持不变，最新证据见穿戴物跟随报告。
 - `artifacts/scene-workflow/ui-final/editor-check.json`：副屏两次射线点击、树选 Head、通过 Head 的 Jaw Open 别名实际变形、悬停、缩放以及布局写入磁盘 / 恢复均 PASS。最终 viewport 为 784×725，Head 仍保持选择；渲染报告无 GPU 回读。

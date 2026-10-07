@@ -50,7 +50,7 @@ def measure(args: argparse.Namespace) -> bool:
     import psutil  # 仅性能采样需要；inventory 使用 Python 标准库即可。
 
     root = Path(__file__).resolve().parents[1]
-    executable = root / ("build/Release/SceneLoadProfile.exe" if args.kind == "cpu" else "out/DazFastViewer.exe")
+    executable = root / ("build/vs2022/bin/Release/SceneLoadProfile.exe" if args.kind == "cpu" else "out/vs2022/Release/DazFastViewer.exe")
     executable_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
     environment = os.environ.copy()
     if args.cache:

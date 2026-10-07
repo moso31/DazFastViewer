@@ -44,7 +44,7 @@ inline int graft_check(const ccl::DeviceInfo &device,const std::filesystem::path
     checks.push_back({{"stage",name},{"max_position_error_m",maximum},{"max_normal_error",normal_error},{"triangles",count}});
     std::ofstream(output/"graft-check.json")<<J({{"status","RUNNING"},{"checks",checks}}).dump(2);
   };
-  auto apply=[&](const ir::Delta &d) {thread_scoped_lock lock(scene.mutex);adapter.apply(d);for(auto &e:d.meshes) source.meshes[e.index].positions=e.positions;for(auto &e:d.instances) source.instances[e.index].transform=e.transform;for(auto &e:d.visibility) source.instances[e.index].visible=e.visible;for(auto &e:d.materials) source.materials[e.index]=e.value;};
+  auto apply=[&](const ir::Delta &d) {thread_scoped_lock lock(scene.mutex);adapter.apply(d);for(auto &e:d.meshes) source.meshes[e.index].positions=e.positions;for(auto &e:d.instances) source.instances[e.index].transform=e.transform;for(auto &e:d.visibility) source.instances[e.index].visible=e.visible;for(auto &e:d.materials) source.materials[e.index]=e.value;for(auto &e:d.grafts)source.instances[e.index].graft_enabled=e.enabled;for(auto &e:d.masks)source.meshes[e.index].hidden_polygons=e.hidden_polygons;};
   auto sync=[&](ir::Scene next) {thread_scoped_lock lock(scene.mutex);const bool changed=adapter.synchronize(next);source=std::move(next);return changed;};
   run("initial");require(mesh_named("body/graft/original")==mesh_named("body/graft/copy"),"同形同材质实例没有共享组合网格");require(!sync(source),"静止快照重复提交组合网格");
   ir::Delta morph;auto body=source.meshes[0].positions,patch=source.meshes[1].positions;body[5].z+=.12f;patch[4].z+=.17f;morph.meshes={{0,body},{1,patch}};apply(morph);run("host-and-graft-morph");
@@ -56,6 +56,9 @@ inline int graft_check(const ccl::DeviceInfo &device,const std::filesystem::path
   auto invalid=source;invalid.meshes[0].subdivision.level=7;bool rejected=false;try {thread_scoped_lock lock(scene.mutex);adapter.synchronize(invalid);}catch(...) {rejected=true;}require(rejected,"非法细分没有拒绝");run("reject-invalid-level");
   auto detached=initial;detached.instances[1].graft_source=-1;detached.meshes[0].hidden_polygons.clear();sync(detached);run("detach");require(mesh_named("body")&&mesh_named("graft"),"解除后未恢复独立对象");
   sync(initial);run("reattach");
+  ir::Delta disable;disable.grafts={{1,false},{3,false}};disable.visibility={{1,false},{3,false}};disable.masks={{0,{}}};apply(disable);run("disable-and-restore-host");
+  auto *restored_host=mesh_named("body");require(restored_host,"停用后没有恢复独立宿主渲染对象");runtime::Subdivision original_host(source.meshes[0],false);require(restored_host->num_triangles()==original_host.triangles().size(),"停用后原宿主仍有缺面");
+  ir::Delta enable;enable.grafts={{1,true},{3,true}};enable.visibility={{1,true},{3,true}};enable.masks={{0,{4}}};apply(enable);run("enable-and-restore-graft");require(mesh_named("body/graft/original"),"重新启用没有恢复组合渲染");
   auto removed=initial;removed.instances.erase(removed.instances.begin()+2,removed.instances.begin()+4);removed.instances.erase(removed.instances.begin()+1);removed.meshes[0].hidden_polygons.clear();sync(removed);run("delete-graft-and-copies");require(!mesh_named("body/graft/original"),"删除后残留组合对象");
   sync(initial);run("restore-all");
   // 完全隐藏的普通几何释放后，要能同时恢复最新顶点、材质和变换。

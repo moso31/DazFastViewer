@@ -43,18 +43,18 @@
 真实资源验证通过无窗口专项入口运行，检查加载、人物平移、解除及重新绑定：
 
 ```powershell
-build/Release/AttachmentWorkflowTest.exe --actual <角色DUF> <附件DUF> <内容库1> <内容库2>
+build/vs2022/bin/Release/AttachmentWorkflowTest.exe --actual <角色DUF> <附件DUF> <内容库1> <内容库2>
 ```
 
 副屏编辑器专项入口经过实际资源打开流程，先平移角色并转头，再添加、解除和重新绑定，等待每一步的渲染版本完成后检查并截图：
 
 ```powershell
-out/DazFastViewer.exe --self-test --file <角色DUF> --wear-test <附件DUF或受支持的产品入口> --output artifacts/attachment-ui
+out/vs2022/Release/DazFastViewer.exe --self-test --file <角色DUF> --wear-test <附件DUF或受支持的产品入口> --output artifacts/attachment-ui
 ```
 
 验证产物保存在本地 `artifacts/attachment-*.log`、`artifacts/attachment-ui-top/` 等目录，不提交商业资产或截图。
 
-最终构建的 16 项工程测试全部通过，日志为 `artifacts/attachment-final-build.log`，程序已部署到 `out/DazFastViewer.exe`。以下真实资源均完成加载、移动宿主、解除和重新绑定：
+最终构建的 16 项工程测试全部通过，日志为 `artifacts/attachment-final-build.log`，程序已部署到 历史验证的可执行文件。以下真实资源均完成加载、移动宿主、解除和重新绑定：
 
 | 资源 | 宿主 | 结果与日志 |
 | --- | --- | --- |

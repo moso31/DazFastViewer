@@ -47,7 +47,7 @@
 
 新增回归覆盖公式抵消值、带保存缩放的 ERC、缺失附件输出、带 orientation 的缩放补偿、嵌套 Figure 姿势隔离、生成跟随场的连续性及完整重置；骨骼附件覆盖旋转、ERC 缩放、子对象传播、手动实例变换、重复求值、重置、保存姿势不重复应用、追加角色隔离。追加 / 删除时还验证原始负输入没有被二次限幅。
 
-最终 10 项工程 CTest 全部通过，构建与部署日志为 `artifacts/geometry-delivery-build.log`。日志包含上游 CMake `FindCUDA` 策略警告，PowerShell 因 stderr 记录返回非零；日志中的各构建目标、10 项测试和运行文件部署均已完成，并单独核对了构建产物与 `out/DazFastViewer.exe` 的 SHA-256 一致：`F6C78A7486DD566F0CEC89DAAF0BAC4685E3874862E9FB2A8D2D28E38FC86BDD`。
+最终 10 项工程 CTest 全部通过，构建与部署日志为 `artifacts/geometry-delivery-build.log`。日志包含上游 CMake `FindCUDA` 策略警告，PowerShell 因 stderr 记录返回非零；日志中的各构建目标、10 项测试和运行文件部署均已完成，并单独核对了构建产物与 历史验证的可执行文件 的 SHA-256 一致：`F6C78A7486DD566F0CEC89DAAF0BAC4685E3874862E9FB2A8D2D28E38FC86BDD`。
 
 真实 `3.duf` 的完整场景显示验证在 `artifacts/geometry-delivery-ui`，37 个对象 / 31 套蒙皮。完整场景的正面视角被大角色遮挡，因此另外从原 DUF 生成仅保留 lit / lit2 及附件的测试副本 `artifacts/geometry-two-characters/scene.duf`，原文件没有改动。最终部署版本的双角色实际 Cycles 截图为 `artifacts/geometry-two-characters/final-ui/scene.png`；同目录 `editor-check.json` 显示 18 对象 / 18 套蒙皮、PASS，副屏窗口已退出。已人工查看这张截图，眼镜回到眼部，脸型及服装整体形态恢复；仍可见局部衣物穿插。
 

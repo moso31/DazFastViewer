@@ -9,7 +9,11 @@ namespace dfv::daz {
 struct LoadOptions {std::vector<std::filesystem::path> content_roots;bool strict=false;bool defer_selection=false;};
 // 穿戴预设中的选择引用在追加到目标文档后解析，不当作文件内部 ID。
 bool selection_reference(const std::string &uri);
-struct GeometrySource {std::filesystem::path file;std::string id;};
+struct GeometrySource {
+  std::filesystem::path file;std::string id;
+  // 内嵌蒙皮的根节点 source 明确指向单节点、单几何道具时，保留已验证的节点身份。
+  std::string node;
+};
 struct MaterialSelectionSet {
   std::string name,parent;
   std::vector<std::string> materials;

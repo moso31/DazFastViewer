@@ -25,6 +25,12 @@ try {
     if (-not $OutputDir) { $OutputDir = Join-Path $ProjectRoot "out\vs$year\$Configuration" }
     $BuildDir = [IO.Path]::GetFullPath($BuildDir)
     $OutputDir = [IO.Path]::GetFullPath($OutputDir)
+    if ($BuildDir.TrimEnd('\','/') -eq (Join-Path $ProjectRoot 'build')) {
+        throw "BuildDir must identify the toolchain, for example build\vs$year."
+    }
+    if ($OutputDir.TrimEnd('\','/') -eq (Join-Path $ProjectRoot 'out')) {
+        throw "OutputDir must identify the toolchain and configuration, for example out\vs$year\$Configuration."
+    }
     $commonArchitectures = 'sm_75;sm_80;sm_86;sm_89;sm_90;sm_100;sm_120'
     if ($CudaArchitectures -eq 'Common') { $CudaArchitectures = $commonArchitectures }
     if ($CudaArchitectures -eq 'Auto') {

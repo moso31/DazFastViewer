@@ -8,6 +8,19 @@
 #include <set>
 
 namespace dfv::editor {
+std::vector<size_t> geograft_targets(const Document &document,size_t selected) {
+  const auto &scene=document.loaded.scene;const auto host=document.catalog.targets.at(selected).instance;std::vector<size_t> result;
+  for(size_t t=0;t<document.catalog.targets.size();++t) {
+    auto i=document.catalog.targets[t].instance;const auto &instance=scene.instances.at(i);
+    if(instance.shell_source>=0||instance.graft_source<0||scene.meshes.at(instance.mesh).graft_vertex_pairs.empty())continue;
+    std::set<uint32_t> seen;
+    while(seen.insert(i).second) {
+      if(i==host){result.push_back(t);break;}
+      const auto source=scene.instances.at(i).graft_source;if(source<0)break;i=uint32_t(source);
+    }
+  }
+  return result;
+}
 std::string retain_archive(Document &d,const std::shared_ptr<daz::SourceArchive> &archive){
   if(!archive)return {};for(const auto &[id,p]:d.archives)if(p==archive)return id;
   const auto id=archive->identity();d.archives.emplace(id,archive);return id;

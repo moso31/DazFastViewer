@@ -22,6 +22,7 @@ static ir::Scene evaluate(const editor::Document &d,const editor::Snapshot &s) {
 }
 static ir::Vec3 point(const ir::Scene &scene,size_t instance,size_t vertex=0) {const auto &i=scene.instances.at(instance);return i.transform.point(scene.meshes.at(i.mesh).positions.at(vertex));}
 static double distance(ir::Vec3 a,ir::Vec3 b) {return std::abs(a.x-b.x)+std::abs(a.y-b.y)+std::abs(a.z-b.z);}
+#include "derived_wearable.inl"
 static void unit() {
   const auto folder=fs::temp_directory_path()/("dfv-wear-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   fs::create_directories(folder/"data/Body/Morphs");fs::create_directories(folder/"data/Wear");
@@ -77,6 +78,7 @@ static void unit() {
   require(!daz::inspect_contents(alias_only).requires_selection,"普通场景中的参数地址被误当成穿戴目标");
   rejects([&]{daz::load(folder/"wear.duf",{{folder},false});},"没有目标上下文时静默加载了附件");
   auto d=load(folder/"body.duf",{folder});const auto original=d;auto source=load(folder/"wear.duf",{folder},true);
+  derived_wearable_tests(folder,base,original);
   require(source.loaded.objects[0].preferred_base=="/Genesis 8/Female","未保留兼容基型");
   d.generation=2;editor::append_document(d,std::move(source));editor::attach_import(d,2,0);
   require(d.catalog.targets[2].conform_target=="#body0"&&d.catalog.targets[2].smoothing.collision_target=="#body0","Fit To / 碰撞目标没有解析到已有角色");
@@ -123,12 +125,15 @@ static void unit() {
   editor::fit_attachment(deleting,2,1);
   require(original.catalog.targets.size()==2&&original.loaded.scene.meshes.at(original.loaded.scene.instances[0].mesh).hidden_polygons.empty(),"待提交修改污染了原文档");
   const auto archive=folder/"attachments.dufex";editor::save_scene_extension(archive,d,snapshot);
+  auto disabled_snapshot=snapshot;disabled_snapshot.values[2].graft_enabled=false;editor::save_scene_extension(folder/"disabled.dufex",d,disabled_snapshot);
   const auto rigid_archive=folder/"rigid.dufex";const auto rigid_snapshot=editor::initial_snapshot(rigid_document);editor::save_scene_extension(rigid_archive,rigid_document,rigid_snapshot);
   auto mask=wear;mask["geometry_library"][0]["graft"]["vertex_pairs"]={{"count",0},{"values",J::array()}};mask["scene"]=preset["scene"];auto &mask_nodes=mask["scene"]["nodes"];mask_nodes.erase(mask_nodes.begin()+1,mask_nodes.end());mask_nodes[0]["url"]="#figure";mask_nodes[0]["geometries"][0]["url"]="#mesh";mask["scene"]["materials"].erase(1);mask["scene"]["modifiers"]=J::array();
   std::ofstream(folder/"mask.duf")<<mask;auto mask_document=original;mask_document.generation=6;editor::append_document(mask_document,load(folder/"mask.duf",{folder},true));editor::attach_import(mask_document,2,0);
   editor::save_scene_extension(folder/"mask.dufex",mask_document,editor::initial_snapshot(mask_document));
   for(const auto &name:{"body.duf","wear.duf","rigid.duf","mask.duf"})fs::remove(folder/name);
   auto restored=editor::load_scene_extension(archive,{folder},11);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,snapshot),"GeoGraft / Fit To 场景保存重开不一致");
+  auto disabled_restored=editor::load_scene_extension(folder/"disabled.dufex",{folder},14);auto disabled_scene=evaluate(*disabled_restored.document,disabled_restored.snapshot);
+  require(!disabled_restored.snapshot.values[2].graft_enabled&&disabled_restored.snapshot.values[2].visible&&!disabled_scene.instances[2].visible&&disabled_scene.meshes[disabled_scene.instances[0].mesh].hidden_polygons.empty(),"保存重开没有恢复 Geograft 停用与宿主表面");
   const auto expected=evaluate(d,snapshot),actual=evaluate(*restored.document,restored.snapshot);for(size_t i=0;i<expected.instances.size();++i)require(distance(point(expected,i),point(actual,i))<1e-6,"重放附件变形结果变化");
   auto rigid_restored=editor::load_scene_extension(rigid_archive,{folder},12);require(rigid_restored.document->catalog.targets[3].rigid_follow.target=="#body0","DUFEX 丢失表面刚性跟随目标");evaluate(*rigid_restored.document,rigid_restored.snapshot);
   auto mask_restored=editor::load_scene_extension(folder/"mask.dufex",{folder},13);const auto &mask_scene=mask_restored.document->loaded.scene;require(mask_scene.meshes[mask_scene.instances[2].mesh].graft_vertex_pairs.empty()&&mask_scene.meshes[mask_scene.instances[0].mesh].hidden_polygons==std::vector<uint32_t>{0},"DUFEX 丢失无接缝的服装遮罩");

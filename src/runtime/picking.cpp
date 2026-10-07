@@ -54,6 +54,7 @@ void PickingScene::instance(const ir::Scene &scene,uint32_t index) {
 }
 void PickingScene::apply(const ir::Scene &scene,const ir::Delta &delta) {
   std::vector<uint8_t> dirty(instances_.size());
+  for(const auto &e:delta.masks)if(used_meshes_.at(e.index)) {mesh(scene,e.index);for(size_t i=0;i<instances_.size();++i)if(instances_[i].mesh==e.index)dirty[i]=1;}
   for(const auto &e:delta.meshes) if(used_meshes_.at(e.index)) {mesh(scene,e.index);for(size_t i=0;i<instances_.size();++i) if(instances_[i].mesh==e.index) dirty[i]=1;}
   for(const auto &e:delta.instances) dirty.at(e.index)=1;
   for(const auto &e:delta.visibility) dirty.at(e.index)=1;

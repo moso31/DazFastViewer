@@ -20,10 +20,10 @@ CPU 和 Qt 回归覆盖同一角色左右指尖增选／取消、跨角色活动
 
 ```powershell
 python tools/make_joint_selection_fixture.py artifacts/joint-selection-fixture
-out/DazFastViewer.exe --self-test --joint-selection-test --file artifacts/joint-selection-fixture/scene.duf --project artifacts/joint-selection-fixture/project.json --output artifacts/joint-selection-run
+out/vs2022/Release/DazFastViewer.exe --self-test --joint-selection-test --file artifacts/joint-selection-fixture/scene.duf --project artifacts/joint-selection-fixture/project.json --output artifacts/joint-selection-run
 ```
 
-副屏夹具通过视口 Ctrl 增选右中指末节、F 聚焦双指尖、激活另一角色后 Ctrl 取消左指尖、F 聚焦剩余右指尖四项检查。记录见 `artifacts/joint-selection-run-3/editor-check.json` 与 `joint-multi-focus.png`。原有两对象多选／细分／数值联动复测也通过，见 `artifacts/edit-regression-after-joint-fix/editor-check.json`。这里使用独立合成骨架验证交互，没有重跑真实角色场景；`out/DazFastViewer.exe` 与诊断视口均已重新构建、暂存。
+副屏夹具通过视口 Ctrl 增选右中指末节、F 聚焦双指尖、激活另一角色后 Ctrl 取消左指尖、F 聚焦剩余右指尖四项检查。记录见 `artifacts/joint-selection-run-3/editor-check.json` 与 `joint-multi-focus.png`。原有两对象多选／细分／数值联动复测也通过，见 `artifacts/edit-regression-after-joint-fix/editor-check.json`。这里使用独立合成骨架验证交互，没有重跑真实角色场景；历史验证的可执行文件 与诊断视口均已重新构建、暂存。
 
 ## DAZ 曲面细分
 
@@ -58,6 +58,6 @@ Morph 与对象缩放的 float 值按最短可往返十进制显示，后台同�
 - 保存 2% 且 ERC 扣除 1 个百分点的夹具显示 1%；输入 100.01 后读回及显示为 100.01。
 - CPU 回归覆盖视口／离线级别、Catmark／Bilinear／Loop、角点规则、UV、隐藏面、重复形变无漂移、场景覆盖及不同实例设置隔离。
 
-复现副屏检查：先执行 `python tools/make_edit_regression_fixture.py artifacts/edit-regression-fixture`，再执行 `out/DazFastViewer.exe --self-test --edit-regression-test --file artifacts/edit-regression-fixture/scene.duf --project artifacts/edit-regression-fixture/project.json --output artifacts/edit-regression-run`。
+复现副屏检查：先执行 `python tools/make_edit_regression_fixture.py artifacts/edit-regression-fixture`，再执行 `out/vs2022/Release/DazFastViewer.exe --self-test --edit-regression-test --file artifacts/edit-regression-fixture/scene.duf --project artifacts/edit-regression-fixture/project.json --output artifacts/edit-regression-run`。
 
 真实 `H:/G1/Scenes/test3.duf` 在副屏加载／渲染通过：23 个对象、22 套蒙皮；19 个对象启用细分，其中 2 个为 2 级、17 个为 1 级；Cycles 实际提交 3,177,370 个唯一三角面。角色 B 的 DUF 保存 Scale 为 161%，截图显示包含 ERC 的最终 160%。记录见 `artifacts/subdivision-test3-run/editor-check.json`、`editor-render.json`、`scene.png`。本轮截图只验证加载与形态，不用于噪点收敛或 DAZ / Iray Golden 验收。

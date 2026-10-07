@@ -1,6 +1,6 @@
 # 008：FK／IK 实施与验证记录
 
-日期：2026-09-24。用户本轮授权范围已实现；正式程序为 `out/DazFastViewer.exe`。本轮未创建 Git 提交，也未改写用户 DUF／DSF 资源。
+日期：2026-09-24。用户本轮授权范围已实现；正式程序为 历史验证的可执行文件。本轮未创建 Git 提交，也未改写用户 DUF／DSF 资源。
 
 2026-09-25 更新：已追加默认关闭的角度固定及松手恢复优化，最新能力和计时见 [追加执行记录](refinement-report.md)。下文保留首版交付结果。
 
@@ -21,7 +21,7 @@
 
 `artifacts/008-final-build.log` 中全部项目目标 Release 构建成功；`artifacts/008-final-ctest.log` 中项目规定的 **18 项测试全部通过**。新增 `pose_edit` 覆盖 FK 锁定／限位、可达／不可达 IK、共线奇点、无关分支、ERC 输入隔离、单选门槛、代理输入不变性和固定点。`skeleton_pose` 增补 DSF 元数据、DUF 覆盖及双角色隔离。
 
-完整无筛选 CTest 中另有上游 `cycles_version`，其命令指向本工程未生成的 `out/cycles.exe`，早期运行结果为 Not Run。最终使用 `tools/build.ps1` 原有的项目目标筛选并加入 `pose_edit`，不将该上游项算作通过。
+完整无筛选 CTest 中另有上游 `cycles_version`，其命令指向本工程未生成的 上游独立程序 `cycles.exe`，早期运行结果为 Not Run。最终使用 `tools/build.ps1` 原有的项目目标筛选并加入 `pose_edit`，不将该上游项算作通过。
 
 Genesis 8／8.1 各完成以下检查，原始 JSON 位于 `artifacts/008/g8-final/pose-edit.json` 和 `artifacts/008/g81-final/pose-edit.json`：
 

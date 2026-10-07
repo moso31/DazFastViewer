@@ -1,6 +1,6 @@
 # 换装增量更新与细分简化执行记录
 
-日期：2026-09-24。承接[优化前分析](scene_rebuild_latency_analysis_cn.md)，按用户授权实施性能优化，并将细分界面简化为一个关键参数。程序部署到 `out/DazFastViewer.exe`，原始 DAZ 资源保持只读。
+日期：2026-09-24。承接[优化前分析](scene_rebuild_latency_analysis_cn.md)，按用户授权实施性能优化，并将细分界面简化为一个关键参数。程序部署到 历史验证的可执行文件，原始 DAZ 资源保持只读。
 
 ## 使用变化
 
@@ -56,7 +56,7 @@
 - HD Nipples 基础资产入口完成带姿势宿主的穿戴、解除和重新绑定，116 对基础网格接缝最大误差为 0 米。
 - FE Low Ponytail 实际头发完成穿戴、解除和重新绑定，包含 35,638 条渲染曲线。
 
-构建日志：`artifacts/rebuild-optimization-delivery-build.log`。各专项结果位于 `artifacts/rebuild-optimization/{stress-delivery,edit-regression-release,recovery-final,lifecycle,displacement-release,material-final,lazy-release,graft-delivery,hair-delivery}`。最终程序、源码哈希由 `out/build-manifest.json` 记录。
+构建日志：`artifacts/rebuild-optimization-delivery-build.log`。各专项结果位于 `artifacts/rebuild-optimization/{stress-delivery,edit-regression-release,recovery-final,lifecycle,displacement-release,material-final,lazy-release,graft-delivery,hair-delivery}`。最终程序、源码哈希由 历史部署清单 记录。
 
 ## 边界
 

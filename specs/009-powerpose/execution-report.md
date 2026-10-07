@@ -83,7 +83,7 @@ Qt 离屏测试实际发送鼠标事件遍历全部 680 个方向，并检查轻
 
 ### 发布与证据
 
-正式程序已部署到 `out/DazFastViewer.exe`，SHA-256 为 `9a6e556b5d8c171574070043b2ff2809f0d6bd1594a743ca25467cde90b09963`。`out/build-manifest.json` 中的编辑器哈希及 161 项源码哈希全部核对一致。人工 JSON 按字节原样归档，所有测试结果、报告哈希和统计见 [implementation-summary.json](evidence/implementation-summary.json)。
+正式程序已部署到 历史验证的可执行文件，SHA-256 为 `9a6e556b5d8c171574070043b2ff2809f0d6bd1594a743ca25467cde90b09963`。历史部署清单 中的编辑器哈希及 161 项源码哈希全部核对一致。人工 JSON 按字节原样归档，所有测试结果、报告哈希和统计见 [implementation-summary.json](evidence/implementation-summary.json)。
 
 用户原有程序窗口未关闭；重启后加载新版，可通过“视图 → PowerPose”打开面板。本轮未创建 Git 提交。
 

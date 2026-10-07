@@ -1,18 +1,20 @@
 # DAZ 轻量级 Cycles Runtime —— 实现规范（含模型路由）
 
+当前构建入口与运行目录见 [Windows 构建文档](build_windows_cn.md)：VS 2022 Release 使用 `build/vs2022` 和 `out/vs2022/Release`。Qt UI 的工程技能位于 `.agents/skills/dazfastviewer-qt-ui/SKILL.md`，具体交互规则见根目录 [AGENTS.md](../AGENTS.md)。下文版本与部署摘要为历史记录。
+
 ## 本地开发环境与版本基线（用户补充，2026-09-25 更新）
 
-- **008 追加改进**：新增默认关闭的“固定角度（IK）”，与位置固定独立，支持保持世界朝向拖动及完整 ERC 提交校准。优化碰撞查询并去除多余渲染过渡，test7 高细分松手恢复约 6.93 → 2.51 s，真实发丝专项约 4.05 → 1.86 s；未减少碰撞质量或发丝数量。18 项回归与副屏角度／完整恢复检查通过，已更新 `out`；计时口径、当前布局差异及边界见 [追加记录](../specs/008-fk-ik/refinement-report.md)。
+- **008 追加改进**：新增默认关闭的“固定角度（IK）”，与位置固定独立，支持保持世界朝向拖动及完整 ERC 提交校准。优化碰撞查询并去除多余渲染过渡，test7 高细分松手恢复约 6.93 → 2.51 s，真实发丝专项约 4.05 → 1.86 s；未减少碰撞质量或发丝数量。18 项回归与副屏角度／完整恢复检查通过，已更新 运行包；计时口径、当前布局差异及边界见 [追加记录](../specs/008-fk-ik/refinement-report.md)。
 
 - **008 FK／IK 已实现**：部位属性按 DSF／DUF 的实际通道开放，遵守锁定和限位；仅按下前已单选本角色时，左键拖动才启动 IK。增加部位位置固定、取消及松手完整更新。复杂场景使用独立基础灰模代理，拖动不处理服装／StrandBasedHair／细分，不改资产设置。18 项工程测试、G8／G8.1 原生通道和副屏操作通过；高细分／真实发丝专项的输入到呈现中位数约 21 ms，松手完整恢复分别约 6.93／4.05 s。实现取舍、证据和边界见 [008 执行记录](../specs/008-fk-ik/execution-report.md)。以下“008 未开始”均为此前历史记录。
 
-- **追加同角色骨骼多选修复**：Ctrl 点击根据命中角色在整个多选集合中的骨骼层级增选／取消，不再退回角色整体；悬停与点击保持一致。左右中指末节多选、跨角色切换后取消及 F 聚焦通过副屏合成骨架回归，原有跨模型多选也通过复测，详见[修复记录](selection_subdivision_values_repair_cn.md)。`out` 已更新，008 未开始。
+- **追加同角色骨骼多选修复**：Ctrl 点击根据命中角色在整个多选集合中的骨骼层级增选／取消，不再退回角色整体；悬停与点击保持一致。左右中指末节多选、跨角色切换后取消及 F 聚焦通过副屏合成骨架回归，原有跨模型多选也通过复测，详见[修复记录](selection_subdivision_values_repair_cn.md)。运行包 已更新，008 未开始。
 
 - **追加多选／SubD／数值修复**：场景树及视口支持 Ctrl＋左键增选／取消，F 与侧键按多选范围聚焦；导入 DAZ 细分级别、渲染最低级别、算法及边界设置，通过 OpenSubdiv 实际生成细分几何；Scale 显示包含 ERC 的最终值，修复 float 输入的显示尾数。15 项工程测试和副屏联动检查通过。Legacy／Preserve Cage／HD／自适应细分的边界见[本轮记录](selection_subdivision_values_repair_cn.md)。008 未开始。
 
 - **追加材质／置换／选取修复**：补齐 LIE 图像库引用、皮肤 SSS 模式与透光颜色、凹凸尺度及原生置换贴图；Instance 仅保留一级树项，整组选取／高亮／聚焦。修复超远聚焦、GeoGraft 选取、Sun-sky Only UI 与日期时间控件。14 项工程测试和 9 阶段 OptiX 置换检查通过；用户已验收 instancing，并确认手动调整机位后的渲染正常。DAZ 自适应细分尚未加入，详见[本轮记录](material_picking_focus_followup_cn.md)。不计为 008。
 
-- **追加接缝／Group／环境生命周期修复**：GeoGraft 按原生 `vertex_pairs` 对齐最终形变顶点，Golden Palace 的 44 对接缝误差为 0；恢复 Group 场景树层级，修复新建空场景后从内容库打开 14 丢失环境／ToneMapper 的问题。14 项 CTest 及副屏真实操作顺序验证通过，`out` 已更新，见[追加记录](scene_followup_seams_groups_environment_cn.md)。008 未开始。
+- **追加接缝／Group／环境生命周期修复**：GeoGraft 按原生 `vertex_pairs` 对齐最终形变顶点，Golden Palace 的 44 对接缝误差为 0；恢复 Group 场景树层级，修复新建空场景后从内容库打开 14 丢失环境／ToneMapper 的问题。14 项 CTest 及副屏真实操作顺序验证通过，运行包 已更新，见[追加记录](scene_followup_seams_groups_environment_cn.md)。008 未开始。
 
 - **007 后 test5／test6／test7／14 场景修复**：补充普通实例及打包人群实例、GeoGraft 宿主隐藏面、父组可见性、旧材质／MDL 木纹与高光颜色贴图映射，以及可降级的贴图缺失处理。`test5` 的 824 个人群条目和 10 辆坦克副本共享最终网格；`test7` 四个插件关闭 Visible 后不恢复宿主遮盖面。`14` 的安装资源路径、未激活旧式蒙皮权重、隐藏走廊遮挡教室问题已定位修复。Sun-sky Only 接入 Cycles 原生天空近似，保留尚未通过 Iray Golden 的边界。实际计数、截图、性能口径和回归见[本轮执行记录](scene_5_6_7_14_repair_cn.md)，008 未开始。
 

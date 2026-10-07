@@ -1,6 +1,6 @@
 # 两份真实 DUF 的执行报告
 
-日期：2026-09-20。实际使用独立 `out/CyclesViewportBench.exe`，没有启动 Blender、DAZ Studio 或 Iray。
+日期：2026-09-20。实际使用独立 历史验证的可执行文件，没有启动 Blender、DAZ Studio 或 Iray。
 
 ## 用户手动验收
 

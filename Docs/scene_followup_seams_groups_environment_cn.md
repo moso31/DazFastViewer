@@ -37,6 +37,6 @@ Golden Palace 实际关闭／恢复 Visible 通过属性、场景树和渲染状
 
 可查看[重新打开后的教室](../artifacts/scene-followup/reopen/reopened-scene.png)、[流程检查](../artifacts/scene-followup/reopen/editor-check.json)、[接缝及显隐检查](../artifacts/scene-followup/graft-visible/editor-check.json)和[汇总](../artifacts/scene-followup/verification-summary.json)。截图在低样本数时捕获，只验证场景和照明存在，不作为 Iray 材质 Golden。
 
-`out/DazFastViewer.exe` 已部署；SHA-256 为 `d3daa65a48d4794df3101343a81442d611d54f7b909dfe04d866bc6bfb80f707`。`release-build-manifest.json` 中的源码及程序哈希已与工作树／发布包核对一致。本轮没有创建 Git 提交。
+历史验证的可执行文件 已部署；SHA-256 为 `d3daa65a48d4794df3101343a81442d611d54f7b909dfe04d866bc6bfb80f707`。`release-build-manifest.json` 中的源码及程序哈希已与工作树／发布包核对一致。本轮没有创建 Git 提交。
 
 本轮修复基础网格边界的位置连续性，不代表实现 SubD／HD 或消除跨材质的法线、纹理差异；Sun-sky 与 Iray 的亮度近似边界保持不变。

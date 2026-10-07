@@ -7,7 +7,7 @@ import subprocess
 
 ROOT=Path(__file__).resolve().parents[1]
 dumpbin=Path("C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/dumpbin.exe")
-out=ROOT/"out"
+out=ROOT/"out/vs2022/Release"
 files={p.name.lower():p for p in out.iterdir() if p.suffix.lower() in (".dll",".exe")}
 queue=["cyclesviewportbench.exe"]
 visited={}

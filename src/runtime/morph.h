@@ -67,6 +67,7 @@ struct Properties {
   double ground_alignment_ratio=0; // 每个对象独立的操作设置，修改比例本身不触发几何求值。
   double ground_alignment_offset_cm=0;
   bool ground_alignment_body_only=false;
+  bool graft_enabled=true;
   bool operator==(const Properties &) const = default;
 };
 void validate_transform(const TransformValues &value);
@@ -95,6 +96,7 @@ public:
   bool set_morph(size_t target,size_t morph,float value,bool enforce_limits=true);
   bool set_transform(size_t target,const TransformValues &value);
   void set_visible(size_t target,bool visible);
+  void set_graft_enabled(size_t target,bool enabled);
   void bind_parent(size_t target,size_t parent);
   void set_attachment(size_t target,const ir::Transform &delta);
   void set_reference_frames(const std::vector<ir::Transform> &frames,const std::vector<ir::Transform> &attachment_frames);

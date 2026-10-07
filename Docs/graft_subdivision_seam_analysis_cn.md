@@ -112,13 +112,13 @@ Golden Palace 的 44 条边、HD Nipples 的 116 条边全部匹配，未匹配�
 
 应覆盖宿主及附件 Morph／姿势变化、细分切换、附件删除／重新挂接、嵌套 GeoGraft、多角色实例隔离与内存预算。不要只同步等级、再次复制基础顶点或把 UV 强行改成相同值；只拉齐细分后的边缘也不能保证邻域曲面和法线连续。
 
-本轮完成原因定位、可重复的 CPU 测量、原始 UV 核对及 GPU 灰模对照。新增 `GraftSeamProbe` 为 `EXCLUDE_FROM_ALL` 的专项目标，边界捕获默认关闭；它不改变正常渲染的细分结果。`out/DazFastViewer.exe` 仍为提交前已部署的版本，**本轮未宣称生产程序已修复该接缝，也未部署实验合并网格**。新的诊断代码、测试和报告暂留工作区。
+本轮完成原因定位、可重复的 CPU 测量、原始 UV 核对及 GPU 灰模对照。新增 `GraftSeamProbe` 为 `EXCLUDE_FROM_ALL` 的专项目标，边界捕获默认关闭；它不改变正常渲染的细分结果。历史验证的可执行文件 仍为提交前已部署的版本，**本轮未宣称生产程序已修复该接缝，也未部署实验合并网格**。新的诊断代码、测试和报告暂留工作区。
 
 复现 CPU 诊断：
 
 ```powershell
 cmake --build build --config Release --target GraftSeamProbe
-build/Release/GraftSeamProbe.exe artifacts/graft-seams/test7-ev13.duf DazFastViewer.project.json artifacts/graft-seams/probe
+build/vs2022/bin/Release/GraftSeamProbe.exe artifacts/graft-seams/test7-ev13.duf DazFastViewer.project.json artifacts/graft-seams/probe
 python artifacts/graft-seams/check_uv_sources.py
 ```
 

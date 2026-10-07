@@ -9,6 +9,6 @@
 - Planned Use：从 DAZ 原始多边形构造均匀细分模板，插值形变后的顶点和 UV。
 - 是否复制实现源码：否；调用已安装头文件与静态库。
 - 是否修改第三方源码：否。
-- 是否进入发布二进制：是，静态链接 CPU 库；许可和 NOTICE 随 `out/licenses/opensubdiv` 分发。
+- 是否进入发布二进制：是，静态链接 CPU 库；许可和 NOTICE 随 `out/vs2022/Release/licenses/opensubdiv` 分发。
 
 库的 LFS 物化命令：`git -C .research/windows-libs-metadata lfs pull --include="opensubdiv/lib/osdCPU.lib,opensubdiv/lib/osdCPU_d.lib" --exclude=""`。

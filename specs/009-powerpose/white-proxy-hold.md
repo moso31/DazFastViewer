@@ -22,4 +22,4 @@
 
 Genesis 8 Female 的既有 IK 副屏回归也通过，完成至 stage 27（14 条检查），普通 IK 与固定角度 IK 的首张正常呈现均属于新的渲染版本。证据位于 `artifacts/009-powerpose/white-hold/ik`。两组 GUI 都在副屏 `VG279QL1A`，不移动系统光标。
 
-已部署 `out/DazFastViewer.exe`，SHA-256 为 `f0faf1497e40e88fbd0946923971877e71861e60caa83c8837894eaf9e13aa79`；发布清单的 161 项源码哈希与工作区一致。验证摘要见 [white-proxy-hold.json](evidence/white-proxy-hold.json)。重启程序后生效，本轮未创建 Git 提交。
+已部署 历史验证的可执行文件，SHA-256 为 `f0faf1497e40e88fbd0946923971877e71861e60caa83c8837894eaf9e13aa79`；发布清单的 161 项源码哈希与工作区一致。验证摘要见 [white-proxy-hold.json](evidence/white-proxy-hold.json)。重启程序后生效，本轮未创建 Git 提交。

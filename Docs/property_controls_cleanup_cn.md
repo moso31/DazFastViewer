@@ -6,4 +6,4 @@
 
 20 项工程检查通过。副屏加载 Genesis 8 Female，场景树隐藏／恢复通过，未重建会话或更新几何；实际截图确认两个控件已移除且重置按钮保留。证据位于 `artifacts/property-controls-cleanup`。
 
-新版已部署到 `out/DazFastViewer.exe`，SHA-256 为 `d27b36da31a636f803253e3276ab53241f631169f32105aeedb4d54fc15322a2`；161 项源码哈希一致。保留本轮开始时已有的 PowerPose 紧凑布局改动；本轮未创建 Git 提交。
+新版已部署到 历史验证的可执行文件，SHA-256 为 `d27b36da31a636f803253e3276ab53241f631169f32105aeedb4d54fc15322a2`；161 项源码哈希一致。保留本轮开始时已有的 PowerPose 紧凑布局改动；本轮未创建 Git 提交。

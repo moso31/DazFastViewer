@@ -21,7 +21,7 @@ def main():
     args = parser.parse_args()
     directory = args.output.resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    command = [str(ROOT / "out/CyclesViewportBench.exe"), "--file", args.file,
+    command = [str(ROOT / "out/vs2022/Release/CyclesViewportBench.exe"), "--file", args.file,
                "--monitor", "2", "--width", "1600", "--height", "900",
                "--samples", "64", "--preview-seconds", "6", "--output", str(directory)]
     with (directory / "preview.log").open("wb") as log:

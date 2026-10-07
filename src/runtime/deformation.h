@@ -28,6 +28,10 @@ class DeformationRuntime {
   std::vector<SurfaceAttachment> surface_attachments_;
   struct Graft {uint32_t follower,source;ir::Transform relative;bool initialized=false;};
   std::vector<Graft> grafts_;
+  struct GraftMask {uint32_t follower,source;bool switchable;};
+  std::vector<GraftMask> graft_masks_;
+  std::vector<std::set<uint32_t>> mask_bases_;
+  std::map<uint32_t,bool> graft_visibility_;
   ir::Scene &scene_;
   std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
   bool evaluated_=false;
@@ -36,6 +40,8 @@ class DeformationRuntime {
   bool same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const;
   ir::Delta follow_surfaces(ir::Delta delta,const std::vector<std::vector<JointPose>> &resolved);
   ir::Delta weld_grafts(ir::Delta delta);
+  void bind_graft_masks();
+  ir::Delta activate_grafts(const std::vector<Properties> &values,ir::Delta delta);
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
 public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);

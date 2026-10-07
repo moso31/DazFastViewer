@@ -17,6 +17,6 @@ Slider 原本直接对回读的 float 数值累加步长，连续滚动会累积
 
 `tests/parameter_wheel.inl` 通过长列表与真实 Qt 滚轮事件验证选择和翻页规则，覆盖文本框内部编辑区、虚拟行重建、绑定切换、同事件多个刻度及高分辨率滚轮。精度用例包含 `100.01 → 100.51 → 100.01`、float 百分比换算和 `0.123456 → 0.123457`，同时检查保存值与显示文本。
 
-专项回归纳入 `ParameterControlsTest`；Release 构建与工程规定的 18 项回归全部通过，并部署至 `out/DazFastViewer.exe`。最终回归及发布日志位于 `artifacts/parameter-wheel-final.log`。源码清单与发布二进制哈希核对一致，编辑器 SHA-256 为 `727c8fe37464ef7fc493b923b65b6f231f1a5eb6b386c815a8e2fb137dd64590`。测试使用 Qt 离屏模式，不移动用户窗口或修改原始 DUF。
+专项回归纳入 `ParameterControlsTest`；Release 构建与工程规定的 18 项回归全部通过，并部署至 历史验证的可执行文件。最终回归及发布日志位于 `artifacts/parameter-wheel-final.log`。源码清单与发布二进制哈希核对一致，编辑器 SHA-256 为 `727c8fe37464ef7fc493b923b65b6f231f1a5eb6b386c815a8e2fb137dd64590`。测试使用 Qt 离屏模式，不移动用户窗口或修改原始 DUF。
 
-首次直接运行全部 CTest 时，额外的上游 `cycles_version` 因缺少独立 `out/cycles.exe` 未运行；该项不在 `tools/build.ps1` 规定的 18 项工程回归内。此次未增加或修改上游独立程序。原始记录保留在 `artifacts/parameter-wheel-release.log`。
+首次直接运行全部 CTest 时，额外的上游 `cycles_version` 因缺少独立 上游独立程序 `cycles.exe` 未运行；该项不在 `tools/build.ps1` 规定的 18 项工程回归内。此次未增加或修改上游独立程序。原始记录保留在 `artifacts/parameter-wheel-release.log`。

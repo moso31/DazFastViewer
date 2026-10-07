@@ -53,9 +53,9 @@
 完整场景运行时检查：
 
 ```powershell
-build/Release/SceneWorkflowTest.exe --fidelity H:/G1/Scenes/test.duf artifacts/scene-fidelity/actual-final.json
+build/vs2022/bin/Release/SceneWorkflowTest.exe --fidelity H:/G1/Scenes/test.duf artifacts/scene-fidelity/actual-final.json
 ```
 
 几何诊断通过 `SceneWorkflowTest --geometry` 输出碰撞前后位置。`ConformRuntimeTest --collision-cache INPUT OUTPUT` 可在已导出的蒙皮结果上复验碰撞，避免每次重新扫描商业 Morph 库；缓存需附带源面编号、GeoGraft 信息和显式碰撞配置。
 
-部署入口为 `out/DazFastViewer.exe`，SHA-256 为 `7330df4af560086c5fc1353cee1106c8fe17c296c8325dc0c5253ede17272b67`。程序与构建产物一致，摘要见 `artifacts/scene-fidelity/summary.json`。本轮按用户要求以中文提交说明归档到本地 Git，提交记录见 `git log`。
+部署入口为 历史验证的可执行文件，SHA-256 为 `7330df4af560086c5fc1353cee1106c8fe17c296c8325dc0c5253ede17272b67`。程序与构建产物一致，摘要见 `artifacts/scene-fidelity/summary.json`。本轮按用户要求以中文提交说明归档到本地 Git，提交记录见 `git log`。

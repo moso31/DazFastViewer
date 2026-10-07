@@ -57,6 +57,7 @@ struct Snapshot {
   std::vector<runtime::PosePin> pose_pins;
 };
 Snapshot initial_snapshot(const Document &document);
+std::vector<size_t> geograft_targets(const Document &document,size_t selected);
 std::string retain_archive(Document &document,const std::shared_ptr<daz::SourceArchive> &archive);
 std::shared_ptr<daz::SourceArchive> material_archive(const Document &,MaterialSurface,const std::string &owner);
 const ir::Mesh &subdivision_mesh(const Document &document,size_t target);

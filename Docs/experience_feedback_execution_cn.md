@@ -6,7 +6,7 @@
 
 2026-09-26，用户确认“验收全部通过”，授权归档并提交 Git。本次归档覆盖全部体验反馈及后续设置菜单、黄色选区穿透服装的修订；下文保留实施过程与各批验证证据。
 
-验收版本为 `out/DazFastViewer.exe`，SHA-256：`d69739ca733a81d72433a9eaf56d565a7eae6e299c194f22cf669072e6787028`。归档前再次核对部署清单，200 个源码哈希全部一致，可执行文件与清单匹配。提交包含源码、测试、构建脚本及文档；`out/`、`build/`、`artifacts/` 按仓库规则保留本地，原始 DUF 未改动。
+验收版本为 历史验证的可执行文件，SHA-256：`d69739ca733a81d72433a9eaf56d565a7eae6e299c194f22cf669072e6787028`。归档前再次核对部署清单，200 个源码哈希全部一致，可执行文件与清单匹配。提交包含源码、测试、构建脚本及文档；运行包、`build/`、`artifacts/` 按仓库规则保留本地，原始 DUF 未改动。
 
 沿用已通过的 24 项工程回归、真实场景检查，以及最终修订后的四项相关回归、副屏 OpenGL 与编辑器验证；本次仅整理验收文档，没有修改实现。Git 提交记录即为本次归档版本。
 
@@ -17,7 +17,7 @@
 3. 视口：交互期间全场景白模、穿衣角色选择区域深度冲突。副屏 OpenGL、实际 Gizmo 与 PowerPose 检查通过。
 4. 材质：以 BC Boxing 验证自发光读取和渲染。GPU、单双面及室内视角验证通过。
 5. 渲染：50%～100% 视口分辨率与升采样。工程、GPU 和真实窗口切换验证通过。
-6. 集中回归与发布。24 项工程检查、实景检查和最终部署校验通过，已更新 `out`。
+6. 集中回归与发布。24 项工程检查、实景检查和最终部署校验通过，已更新 运行包。
 
 `6.duf` 的头部异常仅在原因明确、修复风险可控时处理；否则记录调查证据和保留原因，不改动相关加载行为。
 
@@ -84,8 +84,8 @@
 - 实际双角色／哑铃的生长、测量、收藏、两次 DUFEX 保存重开及密度修改 8 项检查通过：`growth-gui-final/editor-check.json`。确认原生 A=16 岁、B=3 岁、道具密度=7500；年龄往返、90→92 缩放、实例隔离及保存值一致。旧测试对首次年龄=3、密度=1000 的假设已按本次需求更新，未通过修改生产默认值来迁就测试。
 - 双角色实际 PowerPose 15 项通过：`powerpose-real/editor-check.json`。涵盖身体、手部、头部、固定点和三种取消路径；恢复后的几何哈希一致。已检查 `B09-left-proxy.png`，另一角色及衣服、头发、地面在拖动期间可见。
 - 最后一次 UI 布局修正后重新执行全部 24 项规定工程检查，全部通过，耗时 10.17 秒：`final-regression.log`。
-- `release-check.json`：部署清单的 200 个源码文件哈希一致，`out/DazFastViewer.exe`、`out/CyclesViewportBench.exe` 同时与构建输出及清单匹配，三个原始 DUF 再次核对均未改变。`git diff --check` 通过。
-- 本轮产物已暂存到 `out`，重启该目录的编辑器即可使用；未执行 Git 提交或推送。验证产物保留在本地 `artifacts/experience-feedback/`，源码和文档改动留在工作区供审阅。
+- `release-check.json`：部署清单的 200 个源码文件哈希一致，`out/vs2022/Release/DazFastViewer.exe`、`out/vs2022/Release/CyclesViewportBench.exe` 同时与构建输出及清单匹配，三个原始 DUF 再次核对均未改变。`git diff --check` 通过。
+- 本轮产物已暂存到 运行包，重启该目录的编辑器即可使用；未执行 Git 提交或推送。验证产物保留在本地 `artifacts/experience-feedback/`，源码和文档改动留在工作区供审阅。
 
 ### 后续修订：设置菜单与黄色穿透选区
 
@@ -94,4 +94,4 @@
 - 重新构建编辑器、渲染基准及相关检查程序通过。`settings-highlight-tests.log`：`parameter_controls`、`editor_chrome`、`content_browser`、`ui_scale` 四项通过，包含菜单数值输入、缩放与渲染倍率独立、旧快捷键不生效及偏好保存。
 - `settings-highlight-overlay.log`：副屏原生 OpenGL 通过单次黄色合成、20 微米贴合衣物与有间距遮挡物的穿透、部位范围、隐藏对象、白模与升采样检查。截图 `overlay/clothing-through-highlight.png`、`overlay/joint-through-highlight.png`。
 - `settings-highlight-gui-final/editor-check.json`：副屏编辑器通过设置菜单数值调整、50%／67%／75% 渲染倍率、150% UI、原生视口旧快捷键不生效和菜单恢复 100%。始终使用同一渲染会话且没有几何重建。首次空场景运行停留在显示 1 样本，未满足诊断要求的 8 样本，已中止；最终使用现有双平面发光检查场景完成验证，首次运行未计为通过。
-- `settings-highlight-release.json`：200 个源码哈希及编辑器、基准程序均与 `out` 部署一致；`git diff --check` 通过。本轮继续保留工作区修改，未提交 Git。
+- `settings-highlight-release.json`：200 个源码哈希及编辑器、基准程序均与 运行包 部署一致；`git diff --check` 通过。本轮继续保留工作区修改，未提交 Git。

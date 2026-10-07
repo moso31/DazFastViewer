@@ -59,7 +59,7 @@
 
 ## 发布
 
-程序已部署到 `out/DazFastViewer.exe`；重新启动程序后加载原始 test7 即使用新路径，曝光 13 仅是对照图的观察设置。源码与二进制清单核对通过，记录位于 `artifacts/graft-fix/delivery-integrity.json`、`delivery-summary.json` 和 `out/build-manifest.json`。
+程序已部署到 历史验证的可执行文件；重新启动程序后加载原始 test7 即使用新路径，曝光 13 仅是对照图的观察设置。源码与二进制清单核对通过，记录位于 `artifacts/graft-fix/delivery-integrity.json`、`delivery-summary.json` 和 历史部署清单。
 
 - 编辑器 SHA-256：`5a1a9c230c7eea11f8ad1a45caa0e0c339f616c1670ba5bad8df8a13445a2035`。
 - 原始 test7 SHA-256 未改变：`0ee163fb9032ed36c00d574816212b31895c4d81104c58688442c9b39715c05d`。

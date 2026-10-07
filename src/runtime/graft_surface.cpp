@@ -21,7 +21,7 @@ uint32_t graft_root(const ir::Scene &scene,uint32_t instance) {
 }
 std::vector<std::vector<uint32_t>> graft_groups(const ir::Scene &scene) {
   std::map<uint32_t,std::vector<uint32_t>> groups;
-  for(uint32_t i=0;i<scene.instances.size();++i) if(scene.instances[i].prototype<0&&scene.instances[i].graft_source>=0) groups[graft_root(scene,i)].push_back(i);
+  for(uint32_t i=0;i<scene.instances.size();++i) if(scene.instances[i].prototype<0&&scene.instances[i].graft_source>=0&&scene.instances[i].graft_enabled) groups[graft_root(scene,i)].push_back(i);
   std::vector<std::vector<uint32_t>> result;
   for(auto &[root,pending]:groups) {
     std::vector<uint32_t> group{root};std::set<uint32_t> added{root};

@@ -7,7 +7,7 @@ import subprocess
 import time
 
 ROOT=Path(__file__).resolve().parents[1]
-EXE=ROOT/"out/CyclesViewportBench.exe"
+EXE=ROOT/"out/vs2022/Release/CyclesViewportBench.exe"
 USER=ctypes.WinDLL("user32",use_last_error=True)
 USER.PostMessageW.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
 USER.ShowWindow.argtypes=[wintypes.HWND,ctypes.c_int]

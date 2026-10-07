@@ -11,6 +11,7 @@ struct RenderEditQueue {
   void merge(const ir::Delta &next,bool full=false) {
     auto update=[](auto &saved,const auto &changes){for(const auto &change:changes){auto it=std::find_if(saved.begin(),saved.end(),[&](const auto &v){return v.index==change.index;});if(it==saved.end())saved.push_back(change);else *it=change;}};
     update(delta.meshes,next.meshes);update(delta.instances,next.instances);update(delta.visibility,next.visibility);update(delta.lights,next.lights);update(delta.materials,next.materials);
+    update(delta.grafts,next.grafts);update(delta.masks,next.masks);
     if(next.camera)delta.camera=next.camera;if(next.options)delta.options=next.options;
     synchronize|=full;pending=true;
   }

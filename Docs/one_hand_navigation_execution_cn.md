@@ -29,7 +29,7 @@ Hierarchy 菜单、F 和后侧键统一调用 `focus_selection()`，保留当前
 ## 验证入口
 
 ```powershell
-./out/DazFastViewer.exe --file H:/g1/Scenes/test.duf --project DazFastViewer.project.json --output artifacts/one-hand-navigation/test-scene --navigation-test --keep-open-after-test
+./out/vs2022/Release/DazFastViewer.exe --file H:/g1/Scenes/test.duf --project DazFastViewer.project.json --output artifacts/one-hand-navigation/test-scene --navigation-test --keep-open-after-test
 ```
 
 `--navigation-test` 包含键盘、原右键导航、中键、后侧键、单击排除及 Hierarchy 联动检查。`--keep-open-after-test` 在报告写出后结束自动操作、回到第一个角色的视角并保留客户端，供用户直接体验。

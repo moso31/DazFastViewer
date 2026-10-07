@@ -4,7 +4,7 @@
 
 ## 测量口径
 
-保留修改前的程序 `out/DazFastViewer.interaction-baseline.exe`，仅加入计时与短操作入口；优化程序运行同一场景、同一项目配置及同样的前八项操作。每组相机或角色连续操作持续约 480 毫秒，发送八次输入；尺寸操作单独记录。初次加载和着色器准备不计入交互延迟。
+保留修改前的程序 历史验证的可执行文件，仅加入计时与短操作入口；优化程序运行同一场景、同一项目配置及同样的前八项操作。每组相机或角色连续操作持续约 480 毫秒，发送八次输入；尺寸操作单独记录。初次加载和着色器准备不计入交互延迟。
 
 “第一张新图”指输入后新渲染版本首次完成 `SwapBuffers` 提交；“恢复完整分辨率”指停止操作后，最新相机／编辑版本首次以完整视口尺寸呈现。每次均核对版本和尺寸，不能用旧图继续显示或仅完成 CPU 求值代替。这里没有测量显示器物理扫描输出；也不将第一张完整分辨率画面等同于噪点收敛。
 
@@ -67,10 +67,10 @@
 ## 复测入口
 
 ```powershell
-./out/DazFastViewer.exe --file H:/G1/Scenes/test3.duf --project DazFastViewer.project.json --output artifacts/interaction-performance/recheck --interaction-test
+./out/vs2022/Release/DazFastViewer.exe --file H:/G1/Scenes/test3.duf --project DazFastViewer.project.json --output artifacts/interaction-performance/recheck --interaction-test
 python tools/analyze_interaction.py artifacts/interaction-performance/recheck
 ```
 
 测试使用临时界面布局，不保存 DUF 修改。额外检查显示缓冲扩容／缩小、面板浮动／移动／恢复、编辑保持与释放，并对恢复后的局部几何和全部实例矩阵进行精确核对。
 
-Release 编辑器和基准程序已部署到 `out`。最终部署程序与性能测量程序的差异仅为上述头部选取自测的定位和遮挡处理；渲染器／运行时实现相同，二者 SHA-256 均记录在 `comparison-manifest.json`。14 项工程检查、真实场景性能检查、32 项导航、异步 Morph 与真实选取检查均完成；`git diff --check` 通过。本轮代码和文档按用户授权以中文说明提交到本地 Git，记录见 `git log`。
+Release 编辑器和基准程序已部署到 运行包。最终部署程序与性能测量程序的差异仅为上述头部选取自测的定位和遮挡处理；渲染器／运行时实现相同，二者 SHA-256 均记录在 `comparison-manifest.json`。14 项工程检查、真实场景性能检查、32 项导航、异步 Morph 与真实选取检查均完成；`git diff --check` 通过。本轮代码和文档按用户授权以中文说明提交到本地 Git，记录见 `git log`。

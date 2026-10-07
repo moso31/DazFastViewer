@@ -32,4 +32,4 @@
 
 详细功能说明见[项目与渲染设置](project_render_settings_cn.md)，原始加载分析见[大场景加载调研](large_scene_load_investigation_cn.md)。
 
-最终验证：完整 Release 构建与 28 项常规回归通过；真实 GPU 确认 20.00 比 10.00 继续增强，且调整强度不重建会话或清空采样。滑块位置、范围、数值同步、旧配置迁移及保存恢复均通过检查。新版已部署到 `out/DazFastViewer.exe`，证据位于 `artifacts/viewport-sharpen-slider-20260928/`。
+最终验证：完整 Release 构建与 28 项常规回归通过；真实 GPU 确认 20.00 比 10.00 继续增强，且调整强度不重建会话或清空采样。滑块位置、范围、数值同步、旧配置迁移及保存恢复均通过检查。新版已部署到 历史验证的可执行文件，证据位于 `artifacts/viewport-sharpen-slider-20260928/`。

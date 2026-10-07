@@ -49,7 +49,7 @@ inline std::vector<std::vector<size_t>> visibility_children(const ir::Scene &sce
 }
 inline std::vector<bool> effective_visibility(const std::vector<Target> &targets,const std::vector<std::vector<size_t>> &children,const std::vector<Properties> &values) {
   std::vector<bool> visible(targets.size());std::vector<size_t> hidden;
-  for(size_t t=0;t<targets.size();++t) {visible[t]=values.at(t).visible&&targets[t].ancestors_visible;if(!visible[t])hidden.push_back(t);}
+  for(size_t t=0;t<targets.size();++t) {visible[t]=values.at(t).visible&&values[t].graft_enabled&&targets[t].ancestors_visible;if(!visible[t])hidden.push_back(t);}
   while(!hidden.empty()) {
     const auto owner=hidden.back();hidden.pop_back();
     for(auto child:children.at(owner))if(visible[child]){visible[child]=false;hidden.push_back(child);}

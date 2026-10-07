@@ -43,6 +43,6 @@ DUF 的容器定位与 [DAZ 官方文件格式说明](https://docs.daz3d.com/pub
 
 真实场景最终验证见 `artifacts/scene-lifecycle/scene3-complete-ui`：副屏显示 PASS，37 个资产对象、31 套蒙皮、三个人物各 6,808 项参数。渲染使用 38 个网格，其中一个为预览地面；25 条跟随关系绑定 1,368,903 个顶点，并匹配 209 个穿戴物原生 Morph。Morph、Formula 和保存姿势已进入实际变形，最大顶点位移约 0.917 米；显示世代一致，GPU 互操作回读为 0。截图为同目录 `scene.png`。
 
-`scene3-final.json`、`scene3-ui` 为遗漏源资产继承的中间结果；`scene3-derived-ui` 保留了随后发现的骨骼 ID / name 歧义失败记录，均不作为最终完成证据。最终汇总与部署二进制 SHA-256 位于 `artifacts/scene-lifecycle/summary.json`，已验证 `out/DazFastViewer.exe` 与本轮构建产物一致。
+`scene3-final.json`、`scene3-ui` 为遗漏源资产继承的中间结果；`scene3-derived-ui` 保留了随后发现的骨骼 ID / name 歧义失败记录，均不作为最终完成证据。最终汇总与部署二进制 SHA-256 位于 `artifacts/scene-lifecycle/summary.json`，已验证 历史验证的可执行文件 与本轮构建产物一致。
 
 本场景最终首次显示约需 5 分钟，主要仍受完整资源与参数发现影响。当前结果证明该场景能加载、求值和显示，不代表完整 DAZ Studio Golden、一般 TriAx、HD / SubD、Iray 等价材质或多帧动画已经完成。

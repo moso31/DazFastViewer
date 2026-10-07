@@ -13,6 +13,7 @@ ir::Delta update_geometry_shells(ir::Scene &scene,ir::Delta delta,bool force) {
     const auto &source=scene.instances.at(size_t(shell.shell_source));const auto &host=scene.meshes.at(source.mesh);auto &mesh=scene.meshes.at(shell.mesh);
     if(mesh.positions.size()!=host.positions.size())throw std::runtime_error("Geometry Shell 与宿主顶点数不一致");
     const bool dirty=force||std::any_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &d){return d.index==source.mesh||d.index==shell.mesh;})||
+      std::any_of(delta.masks.begin(),delta.masks.end(),[&](const auto &d){return d.index==source.mesh;})||
       std::any_of(delta.instances.begin(),delta.instances.end(),[&](const auto &d){return d.index==index||d.index==uint32_t(shell.shell_source);});
     if(dirty) {
       const auto relative=ir::inverse(scene.instances.at(size_t(shell.shell_root)).transform)*source.transform;std::vector<ir::Vec3> points;points.reserve(host.positions.size());

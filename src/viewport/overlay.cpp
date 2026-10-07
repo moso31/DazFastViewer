@@ -81,6 +81,7 @@ void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::Joi
     for(const auto &[slot,faces]:by_surface){const auto list=glGenLists(1);size_t count=faces.size();glNewList(list,GL_COMPILE);glBegin(GL_TRIANGLES);for(auto t:faces)triangle(mesh.triangles[t]);glEnd();glLineWidth(2);glBegin(GL_LINES);for(auto c:curves[slot]){const auto &vertices=mesh.curves[c].vertices;for(size_t v=1;v<vertices.size();++v){for(auto index:{vertices[v-1],vertices[v]}){const auto p=mesh.positions[index];glVertex3f(p.x,p.y,p.z);}++count;}}glEnd();glEndList();parts_[i][-int(slot)-2]={list,count};}
 }
 void HoverOverlay::apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta,bool preview) {
+  for(const auto &e:delta.masks)for(size_t i=0;i<scene.instances.size();++i)if(scene.instances[i].mesh==e.index)rebuild(scene,regions,i,preview);
   for(const auto &e:delta.meshes) for(size_t i=0;i<scene.instances.size();++i) if(scene.instances[i].mesh==e.index) rebuild(scene,regions,i,preview);
   if(!preview)for(size_t i=0;i<detail_pending_.size();++i)if(detail_pending_[i])rebuild(scene,regions,i);
   for(const auto &e:delta.instances) transforms_.at(e.index)=e.transform;

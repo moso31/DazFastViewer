@@ -1,6 +1,6 @@
 # 快速物理独立探针
 
-仅用于 [可行性调研](../../Docs/fast_physics_feasibility_cn.md)，不接入主程序，也不部署 `out`。测试刚体落地／无地面下落，以及移动固定边的三档布料与简单障碍碰撞。它不验证真实 DAZ 资产、头发、Qt 交互或 Cycles 性能。
+仅用于 [可行性调研](../../Docs/fast_physics_feasibility_cn.md)，不接入主程序，也不部署 运行包。测试刚体落地／无地面下落，以及移动固定边的三档布料与简单障碍碰撞。它不验证真实 DAZ 资产、头发、Qt 交互或 Cycles 性能。
 
 本机已验证：Windows x64、VS 2022、MSVC 19.44、CMake 3.31.6、Jolt v5.6.0，提交 `e77f175595e64cb44218cc9d9d56fc365ad0e36a`。
 

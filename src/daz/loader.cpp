@@ -54,6 +54,17 @@ const Json &values(const Json &object) {
   if(object.contains("count") && object.at("count").get<size_t>()!=object["values"].size()) fail("数组 count 与内容不一致");
   return object["values"];
 }
+bool same_geometry_topology(const Json &derived,const Json &base) {
+  if(!base.contains("vertices")||!base.contains("polylist")) return false;
+  if(values(derived.at("vertices")).size()!=values(base.at("vertices")).size()) return false;
+  const auto &a=values(derived.at("polylist")),&b=values(base.at("polylist"));
+  if(a.size()!=b.size()) return false;
+  for(size_t p=0;p<a.size();++p) {
+    if(a[p].size()!=b[p].size()) return false;
+    for(size_t v=2;v<a[p].size();++v) if(a[p][v]!=b[p][v]) return false;
+  }
+  return true;
+}
 struct Repository {
   std::vector<fs::path> roots;
   std::optional<std::vector<fs::path>> iray_roots;
@@ -109,11 +120,14 @@ struct Repository {
     {std::vector<std::jthread> workers;for(size_t worker=0;worker<std::min<size_t>(4,files.size());++worker)workers.emplace_back([&]{DocumentScope scope(archive);for(;;){const auto i=next.fetch_add(1);if(i>=files.size())break;try{values[i]=parse(files[i]);}catch(...){errors[i]=std::current_exception();}}});}
     for(size_t i=0;i<files.size();++i) {if(errors[i])std::rethrow_exception(errors[i]);const auto key=utf8(files[i]);dependencies.insert(key);document_keys[files[i]]=key;documents.emplace(key,std::move(values[i]));}
   }
-  std::pair<fs::path,const Json *> asset(const std::string &uri,const fs::path &owner,const char *library) {
+  std::pair<fs::path,const Json *> asset(const std::string &uri,const fs::path &owner,const char *library,const Json *derived=nullptr) {
     diagnostics::Scope scope("asset_lookup");
     const auto hash=uri.find('#');if(hash==std::string::npos) fail("资产引用缺少 fragment: "+uri);
     const auto id=decode(uri.substr(hash+1));const auto file=path(uri,owner);const auto &doc=document(file);
     if(doc.contains(library)) for(const auto &entry:doc.at(library)) if(entry.value("id","")==id) return {file,&entry};
+    // 仅恢复内嵌派生几何的失效 source；单几何资产仍须逐面核对顶点索引。
+    const auto &entries=array_member(doc,library);
+    if(derived&&std::string_view(library)=="geometry_library"&&entries.size()==1&&same_geometry_topology(*derived,entries.front())) return {file,&entries.front()};
     // 产品更新后默认 UV 的生成 ID 可能只改变十六进制后缀；仅在同一文件中唯一匹配时兼容。
     if(std::string_view(library)=="uv_set_library"&&doc.contains(library)) {
       auto stable=[](const std::string &value){const auto suffix=value.rfind("-0x");if(suffix==std::string::npos||suffix+3==value.size())return value;
@@ -836,16 +850,29 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       // DUF 可以内嵌派生几何；保持其顶点、UV 与材质，同时解析可继承的源资产身份。
       auto owner=geometry_file;const Json *derived=&g;std::set<std::pair<fs::path,std::string>> ancestors{{owner,g.at("id").get<std::string>()}};
       while(!derived->value("source","").empty()) {
-        const auto [source_file,base]=repo.asset(derived->at("source"),owner,"geometry_library");const auto source_id=base->at("id").get<std::string>();
+        const auto source_uri=derived->at("source").get<std::string>();
+        const auto [source_file,base]=repo.asset(source_uri,owner,"geometry_library",derived);const auto source_id=base->at("id").get<std::string>();
         if(!ancestors.emplace(source_file,source_id).second) fail("派生几何 source 形成循环: "+uri);
-        bool compatible=values(derived->at("vertices")).size()==values(base->at("vertices")).size();
-        const auto &a=values(derived->at("polylist")),&b=values(base->at("polylist"));compatible&=a.size()==b.size();
-        for(size_t p=0;compatible&&p<a.size();++p) {
-          compatible=a[p].size()==b[p].size();
-          for(size_t v=2;compatible&&v<a[p].size();++v) compatible=a[p][v]==b[p][v];
+        if(!same_geometry_topology(*derived,*base)) {warn("derived_geometry_topology",geometry_id,"派生几何拓扑不同，未继承源资产的 Morph / 蒙皮索引");break;}
+        if(decode(source_uri.substr(source_uri.find('#')+1))!=source_id)
+          warn("derived_geometry_source_repaired",geometry_id,"源几何 ID 失效，按单几何资产的完整拓扑恢复："+source_uri+" → "+source_id);
+        GeometrySource inherited{source_file,source_id};
+        // Loafers 这类资源在 DUF 中为静态道具补充骨架；只承认明确的根节点来源和唯一几何。
+        const auto &source_document=repo.document(source_file);const auto &source_nodes=array_member(source_document,"node_library");
+        const auto node_uri=instance.value("url",std::string{}),node_source=node.value("source",std::string{});
+        if(owner==geometry_file&&out.objects.back().figure&&array_member(source_document,"geometry_library").size()==1&&source_nodes.size()==1&&
+           source_nodes.front().value("type","")=="node"&&array_member(source_document,"modifier_library").empty()&&
+           node_uri.find('#')!=std::string::npos&&node_source.find('#')!=std::string::npos&&repo.path(node_uri,file)==geometry_file) {
+          const auto root="#"+decode(node_uri.substr(node_uri.find('#')+1));std::set<std::string> bound_geometries;
+          for(const auto &modifier:array_member(repo.document(geometry_file),"modifier_library")) if(modifier.contains("skin")) {
+            const auto &skin=modifier.at("skin");if(decode(skin.value("node",""))==root) bound_geometries.insert(decode(skin.value("geometry","")));
+          }
+          // 两个 source 在同一所有者中声明同一文件；不额外解析可选节点来源，以免其缺失影响几何载入。
+          if(bound_geometries==std::set<std::string>{"#"+g.at("id").get<std::string>()}&&
+             decode(node_source.substr(0,node_source.find('#')))==decode(source_uri.substr(0,source_uri.find('#')))&&
+             decode(node_source.substr(node_source.find('#')+1))==source_nodes.front().at("id").get<std::string>()) inherited.node=source_nodes.front().at("id").get<std::string>();
         }
-        if(!compatible) {warn("derived_geometry_topology",geometry_id,"派生几何拓扑不同，未继承源资产的 Morph / 蒙皮索引");break;}
-        out.objects.back().geometry_sources.push_back({source_file,source_id});owner=source_file;derived=base;
+        out.objects.back().geometry_sources.push_back(std::move(inherited));owner=source_file;derived=base;
       }
       out.objects.back().material_selection_sets=read_material_selection_sets(g);
       if(out.objects.back().material_selection_sets.empty())for(const auto &source:out.objects.back().geometry_sources){
@@ -1030,7 +1057,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   }
   out.report["geometry_sources"]=Json::array();
   for(const auto &object:out.objects) for(const auto &source:object.geometry_sources)
-    out.report["geometry_sources"].push_back({{"object",object.id},{"file",utf8(source.file)},{"geometry",source.id},{"topology_verified",true}});
+    out.report["geometry_sources"].push_back({{"object",object.id},{"file",utf8(source.file)},{"geometry",source.id},{"topology_verified",true},{"verified_node",source.node}});
   if(options.strict && !warnings.empty()) fail("严格模式拒绝未支持语义；请先用 --inspect 查看诊断");
   for(auto &[path,document]:repo.documents)out.source_documents.push_back(std::move(document));
   for(auto &object:out.objects)object.archive=archive;

@@ -2,7 +2,7 @@
 
 后续实现已完成，见[优化执行记录](scene_rebuild_optimization_execution_cn.md)。本文保留优化前基线与当时建议；细分界面以用户后续要求为准，已合并为一个“渲染细分等级”。
 
-日期：2026-09-24。本轮完成源码定位、最近会话日志分析和副屏定量复测；仅增加诊断能力，尚未实施渲染策略优化。正式 `out/DazFastViewer.exe` 的 SHA256 与上一轮发布清单一致，诊断程序单独位于 `out/DazFastViewer-profile.exe`。
+日期：2026-09-24。本轮完成源码定位、最近会话日志分析和副屏定量复测；仅增加诊断能力，尚未实施渲染策略优化。正式 历史验证的可执行文件 的 SHA256 与上一轮发布清单一致，诊断程序单独位于 历史验证的可执行文件。
 
 ## 结论
 
@@ -85,7 +85,7 @@
 新增 `--rebuild-test <服装DUF>`，只在该模式启用初次形变、绑定、细分等细分计时及空画面事件；正常编辑器不采集这些额外数据。使用已有副屏限制，原始资产保持只读。
 
 ```powershell
-python tools/profile_rebuild.py --binary out/DazFastViewer-profile.exe `
+python tools/profile_rebuild.py --binary out/vs2022/Release/DazFastViewer-profile.exe `
   --scene H:/G1/Scenes/test7.duf `
   --wearable 'H:/G1/People/Genesis 8 Female/Clothing/Aesthetic House/AH Nightwear Set 01 For G8/AH NWS1 ALL! G8.duf' `
   --output artifacts/rebuild-profile/test7

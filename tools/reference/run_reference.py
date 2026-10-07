@@ -43,7 +43,7 @@ def main():
         directory = args.output.resolve() / case
         directory.mkdir(parents=True, exist_ok=True)
         runtime, reference = directory / "runtime", directory / "reference"
-        run([PROJECT / "out/CyclesViewportBench.exe", "--export-scene" if args.export_only else "--smoke",
+        run([PROJECT / "out/vs2022/Release/CyclesViewportBench.exe", "--export-scene" if args.export_only else "--smoke",
              "--file", file, "--content-root", root, "--width", args.width, "--height", args.height,
              "--samples", args.samples, "--output", runtime,
              *(["--material-delta-check"] if args.verify_delta and case == "prop" else [])], directory / "runtime.log")

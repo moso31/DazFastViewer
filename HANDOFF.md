@@ -1,5 +1,13 @@
 # 交接记录
 
+## 当前构建与运行约定
+
+2026-10-07：VS 2022 Release 使用 `tools/build.ps1 -VisualStudio 2022 -Configuration Release`，生成文件位于 `build/vs2022`，日常运行和验收入口为 `out/vs2022/Release/DazFastViewer.exe`。根目录解决方案引用该构建目录；IDE 调试使用 `build/vs2022/bin/Release` 中刚构建的程序。部署通过 `tools/stage_runtime.py --build-dir build/vs2022 --configuration Release` 更新，按 CMake 配置确定运行包目录。
+
+Geograft 的启用状态独立于 Visible，在对象属性与 Morph 的 `Geograft` 组内控制；选择角色可操作其附属 Geograft。停用时移除该附件对角色身体的遮罩并恢复原身体渲染，其他附件的遮罩继续生效。状态支持历史撤销／重做及 DUFEX 保存。内容库右键「拷贝实际路径」解析链接后复制最终资源的本机路径。Qt UI 技能随工程保存在 `.agents/skills/dazfastviewer-qt-ui/SKILL.md`。
+
+下文的历史二进制摘要仅记录当时验证结果，不能用来判断当前部署。当前版本以运行包中的 `build-manifest.json` 为准。
+
 ## 连续姿态 / Morph 编辑与水体手动排序
 
 2026-10-06：`test6.duf` 的 PowerPose 松手后阻塞主要来自交互线程上的完整衣物 / 头发碰撞。基线每次 CPU 形变约 1.2–1.6 秒。现在预览运行时完成 ERC、Morph、蒙皮、Fit To 和刚性跟随后即可接收下一笔输入；独立的 `DeformationRefiner` 持有自己的场景与完整运行时，在后台完成原有碰撞管线。只保留一个运行任务、一个可替换的最新请求和一个结果，以 ticket 丢弃旧结果。只在场景确有碰撞绑定时启用，不降低最终几何、碰撞或渲染质量。
@@ -180,7 +188,7 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 2026-09-27：新增独立“撤销／重做模块”，使用与顶部旋转图标一致的黑白左／右回转箭头，默认位于菜单与变换组之间。复用编辑菜单的 QAction，操作名称、快捷键和可用状态同步；支持移动、浮动、隐藏与布局保存。清空历史现在发布状态通知，避免空历史仍显示可撤销。恢复旧布局后按当前图标尺寸重新保留两个按钮的宽度。
 
-历史、工具栏与缩放三项工程回归通过；实际编辑器 23 项历史检查通过，包含按钮点击、置灰与恢复旧布局后两按钮同时可见。程序已部署到 `out` 并核对源码与可执行文件哈希。验证记录位于 `artifacts/history-toolbar/`、`artifacts/history-toolbar-*.log`。额外的原生窗口拖动脚本未通过预期位移断言（测得 88/44 或 0/0，预期 60/40）；未据此修改窗口拖动逻辑。
+历史、工具栏与缩放三项工程回归通过；实际编辑器 23 项历史检查通过，包含按钮点击、置灰与恢复旧布局后两按钮同时可见。程序已部署到 运行包 并核对源码与可执行文件哈希。验证记录位于 `artifacts/history-toolbar/`、`artifacts/history-toolbar-*.log`。额外的原生窗口拖动脚本未通过预期位移断言（测得 88/44 或 0/0，预期 60/40）；未据此修改窗口拖动逻辑。
 
 ## 最新：场景撤销／重做与异常恢复
 
@@ -188,19 +196,19 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 每次提交及撤销／重做异步写入独立原子恢复文件，正常退出保存最终状态并写退出标记；异常中断后按项目提示恢复最后已落盘场景及暂存参数。每进程独立锁避免多窗口误判。恢复文件复用 DUFEX 并补充原始输入和上下文，不覆盖用户源文件；跨进程不保留完整撤销队列。新增操作的接入约定、覆盖清单和资源依赖边界见 [撤销与恢复说明](Docs/undo_redo_cn.md)。
 
-27 项工程 CTest 通过。历史专项覆盖真实 Qt 数值／材质控件、分支、50 条裁剪、动态上限、结构恢复和异常终止子进程；实际编辑器 22 项历史检查通过，真实 G8F 的 15 组 Gizmo 拖动通过一次一条、撤销／重做及取消检查。证据位于 `artifacts/history/` 和 `artifacts/history-*.log`。程序部署到 `out`，本轮未创建 Git 提交。
+27 项工程 CTest 通过。历史专项覆盖真实 Qt 数值／材质控件、分支、50 条裁剪、动态上限、结构恢复和异常终止子进程；实际编辑器 22 项历史检查通过，真实 G8F 的 15 组 Gizmo 拖动通过一次一条、撤销／重做及取消检查。证据位于 `artifacts/history/` 和 `artifacts/history-*.log`。程序部署到 运行包，本轮未创建 Git 提交。
 
 ## 最新：统一黑白线框文件夹图标并提交
 
 2026-09-27：内容浏览器目录树、右侧资源列表的默认文件夹，以及材质文件参数的定位按钮，统一使用黑白线框图标。沿用顶部工具栏的线宽和圆角，按尺寸绘制并适配选中／禁用状态；资源自带缩略图仍优先显示。按用户要求，本次提交包含这一图标调整和此前尚未提交的 DJL、内容导航、UV 兼容、角色分类、连续编辑及贴合缓存修复。
 
-内容浏览器与材质回归通过，副屏验证目录树、资源列表和材质定位按钮的实际显示。程序已更新到 `out`。本轮记录：`artifacts/folder-icons-build.log`、`folder-icons-tests.log`、`folder-icons-visual.log`、`folder-icons-material-visual.log`。
+内容浏览器与材质回归通过，副屏验证目录树、资源列表和材质定位按钮的实际显示。程序已更新到 运行包。本轮记录：`artifacts/folder-icons-build.log`、`folder-icons-tests.log`、`folder-icons-visual.log`、`folder-icons-material-visual.log`。
 
 ## 最新：目录树截断、Xanthe 材质 UV 与重复贴合计算
 
 2026-09-27：修复内容库目录树列宽沿用旧值导致拉宽后仍省略文件名的问题。Xanthe `.duf.djl` 的材质目标存在旧 UV 生成 ID，新增同文件唯一同名 UV 的后缀兼容，继续拒绝歧义和拓扑不匹配；真实颜色、深色发根、挑染和 Fantasy 材质链接均应用到 6 个表面。上一轮只检查 Style，遗漏了这条材质路径。
 
-导入校验与渲染准备复用静止几何绑定，缓存上限约 128 MiB / 32 项。基础 G8F + Xanthe 的重复运行时准备约 466 ms → 17 ms，顶点与 Morph 权重哈希一致；完整界面首帧仍约 5 秒，本轮未测到明显整体提速。26 项工程测试通过，`out` 已更新并核对哈希。详见 [修复与测量记录](Docs/content_followup_fixes_cn.md)。
+导入校验与渲染准备复用静止几何绑定，缓存上限约 128 MiB / 32 项。基础 G8F + Xanthe 的重复运行时准备约 466 ms → 17 ms，顶点与 Morph 权重哈希一致；完整界面首帧仍约 5 秒，本轮未测到明显整体提速。26 项工程测试通过，运行包 已更新并核对哈希。详见 [修复与测量记录](Docs/content_followup_fixes_cn.md)。
 
 ## 最新：DJL、内容导航与光追首帧期间连续编辑
 
@@ -212,7 +220,7 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 2026-09-27：移除地面对齐入口的骨架限制，普通模型使用自己的当前世界矩阵和包围盒；附件对齐自身，骨骼选择仍作用于所属模型。DAZ Instance 使用整个条目的可见几何包围盒，全部零件同步沿世界竖直轴移动，保持原型及其他实例独立。实例位移／比例以稳定身份写入 DUFEX，兼容旧文件、追加前缀、刷新和删除清理；渲染侧只在实例设置改变时更新矩阵，保留现有 Cycles 会话。
 
-26 项工程测试通过；Gizmo 数学检查追加多零件 Instance、原型隔离、正负比例、重复对齐、恢复、DUFEX 往返和旧文件兼容。正式程序在副屏运行两个带旋转／非均匀缩放的普通物体及一个 Instance，9 组原生 Ctrl+D 检查通过，其他对象和相机不变，全程 1 个会话，最后恢复原矩阵。证据：`artifacts/ground-objects/gui/ground-objects.json`、`editor-check.json`；构建日志：`artifacts/ground-objects-build.log`。程序已更新到 `out`，未提交 Git。
+26 项工程测试通过；Gizmo 数学检查追加多零件 Instance、原型隔离、正负比例、重复对齐、恢复、DUFEX 往返和旧文件兼容。正式程序在副屏运行两个带旋转／非均匀缩放的普通物体及一个 Instance，9 组原生 Ctrl+D 检查通过，其他对象和相机不变，全程 1 个会话，最后恢复原矩阵。证据：`artifacts/ground-objects/gui/ground-objects.json`、`editor-check.json`；构建日志：`artifacts/ground-objects-build.log`。程序已更新到 运行包，未提交 Git。
 
 ## 最新：隐藏对象属性与 Morph 调参时的更新提示
 
@@ -244,7 +252,7 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 最终统一重编译后，26 项工程测试全部通过；材质专项覆盖实际 Qt 控件、对象隔离、贴图、无效数据拒绝、旧 DUFEX、磁盘保存与预设重放。副屏实际 Renderer／OptiX 九阶段图像检查通过，基础色、贴图、Diffuse Overlay、透明、自发光、还原和恢复全程一个会话。正式编辑器加载与材质标签、副屏面板布局均已验证。开发期间曾因材质结构变更与增量编译交错导致旧 ConformRuntimeTest 对象布局残留，最终已统一重新编译并通过全部回归。
 
-已部署 `out/DazFastViewer.exe`；源码与二进制哈希核对记录在 `artifacts/materials/validation.json`，其余证据在同目录。未改动用户源资产或关闭其他应用，本轮未创建 Git 提交。
+已部署 历史验证的可执行文件；源码与二进制哈希核对记录在 `artifacts/materials/validation.json`，其余证据在同目录。未改动用户源资产或关闭其他应用，本轮未创建 Git 提交。
 
 ## 最新：提交本地渲染与设置修改
 
@@ -256,13 +264,13 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 修复 QDockWidget 在绘制标题时使用创建时缓存字体的问题，标题绘制与裁切统一使用当前控件字体。回归先复现 100%／200% 实际字高均为 9 像素，再验证修复后为 9／18 像素；Windows 实际窗口和离屏测试均通过，覆盖停靠标签、面板内容、还原字号与缩放期间新建面板。
 
-完整构建及 25 项工程检查通过。已部署 `out/DazFastViewer.exe`，SHA-256 `42942b637d512d99dbadd670d6171718b76d91d738addbc4b834619ce7eb0abc`，208 项源码哈希一致。证据在 `artifacts/settings-followup/validation.json`；本次没有重新进行 GPU 性能测试，没有关闭用户程序，没有创建 Git 提交。使用说明见 [项目与渲染设置](Docs/project_render_settings_cn.md)。
+完整构建及 25 项工程检查通过。已部署 历史验证的可执行文件，SHA-256 `42942b637d512d99dbadd670d6171718b76d91d738addbc4b834619ce7eb0abc`，208 项源码哈希一致。证据在 `artifacts/settings-followup/validation.json`；本次没有重新进行 GPU 性能测试，没有关闭用户程序，没有创建 Git 提交。使用说明见 [项目与渲染设置](Docs/project_render_settings_cn.md)。
 
 ## 最新：项目设置分组选项卡与持久渲染画质
 
 “项目 → 项目设置”已拆为“资源与保存”和“渲染”两页。资源库路径、保存文件采用 Morph 风格折叠模块；原一级“设置”的界面缩放、视口倍率及升采样迁入渲染页，旧偏好自动继承。新增 512／1024／2048／4096／无限制纹理精度、SSS、凹凸与法线和透明层数上限，默认保持原画质。保存后恢复全部设置、页签及折叠状态，取消不写入。质量变化先释放旧 GPU 会话，再构建新资源，保留文档、未保存编辑和相机；相同参数不重建。
 
-25 项工程检查通过；真实 Renderer / OptiX 小场景验证全部纹理档位及恢复，4096 → 512 释放 63 MiB，恢复后回到原分配量；七次会话覆盖纹理与额外材质开关，透明层数实际应用为 8。未关闭其他应用，未写入用户场景；不把小场景结果称作 test9 吞吐验收。已更新 `out/DazFastViewer.exe`，SHA-256 `8720a1dc7f9856a738eaba02185559705697502e0ec51d6a053fa6d4f2957bf5`，208 项源码清单一致。说明见 [项目与渲染设置](Docs/project_render_settings_cn.md)，证据在 `artifacts/project-render-settings/validation.json`。本轮未创建 Git 提交。
+25 项工程检查通过；真实 Renderer / OptiX 小场景验证全部纹理档位及恢复，4096 → 512 释放 63 MiB，恢复后回到原分配量；七次会话覆盖纹理与额外材质开关，透明层数实际应用为 8。未关闭其他应用，未写入用户场景；不把小场景结果称作 test9 吞吐验收。已更新 历史验证的可执行文件，SHA-256 `8720a1dc7f9856a738eaba02185559705697502e0ec51d6a053fa6d4f2957bf5`，208 项源码清单一致。说明见 [项目与渲染设置](Docs/project_render_settings_cn.md)，证据在 `artifacts/project-render-settings/validation.json`。本轮未创建 Git 提交。
 
 ## 最新：test9 性能复测未达标，继续修正诊断与产品差异
 
@@ -276,7 +284,7 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 编辑器现默认裁剪完全隐藏的 GPU 对象与未使用材质资源，并将交互显示批次目标设为 0.125 秒；保留全部可见对象、原始纹理、SSS、反弹数和关闭降噪。提供可恢复旧策略的诊断配置、`--render-profile` 顺序头部／材质消融及分析脚本。原始画质四个目标的首轮平均每样本从 322–927 ms 降至 66–114 ms，观测约 4.9–9.9 倍；详见 [性能调查](Docs/render_performance_analysis_cn.md)。2K 纹理实验只对 big_01 有明显额外收益，未设为默认。
 
-正式构建通过 24 项工程检查；显隐、共享实例、GeoGraft 和同时恢复 Morph 的 17 阶段 GPU 回归通过，两种策略的 17 张输出逐像素一致。正式程序对提取的 big_01 完成隐藏 strand hair 的显示／隐藏往返，保持一个 Session，最终曲线数回到 0。程序已部署 `out/DazFastViewer.exe`，源码清单 202 项一致。原始 DUF 哈希未变，本轮未提交 Git；完整原始证据在 `artifacts/render-performance/`。
+正式构建通过 24 项工程检查；显隐、共享实例、GeoGraft 和同时恢复 Morph 的 17 阶段 GPU 回归通过，两种策略的 17 张输出逐像素一致。正式程序对提取的 big_01 完成隐藏 strand hair 的显示／隐藏往返，保持一个 Session，最终曲线数回到 0。程序已部署 历史验证的可执行文件，源码清单 202 项一致。原始 DUF 哈希未变，本轮未提交 Git；完整原始证据在 `artifacts/render-performance/`。
 
 ## 最新：体验反馈全部验收通过，归档提交
 
@@ -288,7 +296,7 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 2026-09-26：按最新反馈，UI 缩放改为“设置 → 界面缩放”的独立百分比参数，移除全部 Ctrl＋／Ctrl＝／Ctrl－／Ctrl＋0 缩放快捷键及原生视口拦截；“设置 → 视口渲染”提供独立渲染分辨率倍率与升采样选项，两项偏好分别保存。黄色选择遮罩改为忽略深度，始终覆盖服装等遮挡物，仍只合成一次黄色以避免重叠加深；保留部位范围和隐藏对象规则。
 
-本次四项相关工程回归、副屏 OpenGL 遮罩检查及真实编辑器设置／渲染倍率检查均通过，`out` 已更新并核对 200 个源码哈希与两个可执行文件一致。最新证据位于 `artifacts/experience-feedback/settings-highlight-*`；完整记录见 [体验反馈执行记录](Docs/experience_feedback_execution_cn.md)。本轮未提交 Git。
+本次四项相关工程回归、副屏 OpenGL 遮罩检查及真实编辑器设置／渲染倍率检查均通过，运行包 已更新并核对 200 个源码哈希与两个可执行文件一致。最新证据位于 `artifacts/experience-feedback/settings-highlight-*`；完整记录见 [体验反馈执行记录](Docs/experience_feedback_execution_cn.md)。本轮未提交 Git。
 
 ## 最新：体验反馈分批实施与验证完成
 
@@ -298,7 +306,7 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 自发光支持颜色／亮度贴图、色温、六种单位、面积／光效换算和单双面，实际 BC Boxing 的 18 个发光材质及室内视角验证通过；独立 GPU 场景确认照亮邻近地面及单双面差异。亮度沿用项目预览归一化，IES 仍为漫发射近似，不能视为 Iray 绝对光度等价。
 
-最终 24 项工程回归全部通过；副屏 GUI 检查包括实际 Gizmo 19 项、PowerPose 15 项、生长／密度／DUFEX 8 项，以及 UI 字体／布局／原生视口快捷键和各分辨率切换。证据位于 `artifacts/experience-feedback/`。`out` 已更新，部署清单 200 个源码哈希及两个可执行文件一致；本轮未提交或推送 Git。后续启动使用 `out/DazFastViewer.exe`，继续遵守 GUI 仅在第二显示器运行的约定。
+最终 24 项工程回归全部通过；副屏 GUI 检查包括实际 Gizmo 19 项、PowerPose 15 项、生长／密度／DUFEX 8 项，以及 UI 字体／布局／原生视口快捷键和各分辨率切换。证据位于 `artifacts/experience-feedback/`。运行包 已更新，部署清单 200 个源码哈希及两个可执行文件一致；本轮未提交或推送 Git。后续启动使用 `out/vs2022/Release/DazFastViewer.exe`，继续遵守 GUI 仅在第二显示器运行的约定。
 
 ## 最新：本地改动统一提交
 
@@ -310,7 +318,7 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 肢体只测量左侧的 13 项作为对称代表，详情去掉左右字样，保留主要部位粗体；重量为单侧数值，全身体重仍按完整模型计算。
 
-23 项工程回归及真实双角色／道具的 11 阶段界面检查通过，包含收藏取消后的两次保存重开、单侧详情截图、年龄 Scale 精度与倍率显示。证据：`artifacts/favorites-weight/`；实现口径见 [实施记录](Docs/growth_weight_dufex_execution_cn.md)。新版已部署 `out/DazFastViewer.exe`，SHA-256 为 `61aec4d882bc8e159c70e57f4272c9d1b3bc3db7aec73cfafd9b01aa335f9c24`，188 项源码清单一致，原始 test.duf 哈希未变。此前未提交改动均保留，本轮未创建 Git 提交。
+23 项工程回归及真实双角色／道具的 11 阶段界面检查通过，包含收藏取消后的两次保存重开、单侧详情截图、年龄 Scale 精度与倍率显示。证据：`artifacts/favorites-weight/`；实现口径见 [实施记录](Docs/growth_weight_dufex_execution_cn.md)。新版已部署 历史验证的可执行文件，SHA-256 为 `61aec4d882bc8e159c70e57f4272c9d1b3bc3db7aec73cfafd9b01aa335f9c24`，188 项源码清单一致，原始 test.duf 哈希未变。此前未提交改动均保留，本轮未创建 Git 提交。
 
 ## 最新：生长面板精简、测量倍率与默认空场景
 
@@ -320,13 +328,13 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 23 项工程回归通过，真实双角色／哑铃完成 11 阶段界面与保存重开验证，空场景移动／缩放后正常刷新。最终证据为 `artifacts/growth-ui/{character-release,empty-release}`，详见 [调整与验证说明](Docs/growth_weight_ui_cn.md)。
 
-新版已部署 `out/DazFastViewer.exe`，SHA-256 为 `45c020cedf86472ae7311b64be8779e72177cf32f513b2ae0ff6b4b2a5b78b57`，187 项源码清单一致，原始 test.duf 哈希未变。保留此前未提交改动，本轮未创建 Git 提交。
+新版已部署 历史验证的可执行文件，SHA-256 为 `45c020cedf86472ae7311b64be8779e72177cf32f513b2ae0ff6b4b2a5b78b57`，187 项源码清单一致，原始 test.duf 哈希未变。保留此前未提交改动，本轮未创建 Git 提交。
 
 ## 最新：顶部空白拖动窗口修复
 
 2026-09-26：修正顶部工具栏大片空白未被识别为标题区的问题；按实际按钮、输入框和样式把手范围排除交互控件，其余顶部空白支持系统窗口拖动。补齐 Qt 鼠标消息路径，保留双击最大化／还原和最大化后拖动还原；模块把手继续独立重排与浮动。
 
-23 项工程回归及 100%／150% 下的真实系统鼠标拖动检查通过，包含带原生视口的窗口、普通状态 60 × 40 像素位移、最大化拖动还原、按钮和模块布局。已部署 `out/DazFastViewer.exe`，SHA-256：`212d5007277d11586f116fd7882b243535a70794f5964eeccc46f3703ff70344`，183 项源码一致。详见 [修复记录](Docs/window_drag_fix_cn.md)及 `artifacts/window-drag/`。保留已有生长、重量与 DUFEX 本地改动，本轮未提交 Git。
+23 项工程回归及 100%／150% 下的真实系统鼠标拖动检查通过，包含带原生视口的窗口、普通状态 60 × 40 像素位移、最大化拖动还原、按钮和模块布局。已部署 历史验证的可执行文件，SHA-256：`212d5007277d11586f116fd7882b243535a70794f5964eeccc46f3703ff70344`，183 项源码一致。详见 [修复记录](Docs/window_drag_fix_cn.md)及 `artifacts/window-drag/`。保留已有生长、重量与 DUFEX 本地改动，本轮未提交 Git。
 
 ## 最新：原生生长、重量与 DUFEX 场景保存
 
@@ -336,13 +344,13 @@ Pose 在内容库图标和列表入口支持普通单击应用全身、Ctrl+左�
 
 23 项规定回归通过；真实双角色与哑铃完成注册、年龄往返、折叠、参数隔离、密度乘法和两次保存重开检查，包含几何数量一致。证据为 `artifacts/growth-weight/gui-final-release/`，详细口径与边界见 [实施记录](Docs/growth_weight_dufex_execution_cn.md)。验收场景从原始 test.duf 提取两个角色与道具，不代表原场景全部穿戴物已逐项验证。
 
-新版已部署 `out/DazFastViewer.exe`，SHA-256 为 `0eccb000247d15f8c1c3b0a8d7e19274839d57decf7fcf1359c85fd2db26dd11`，183 项源码清单一致，原始 `H:/g1/Scenes/test.duf` 哈希未改变。本轮未创建 Git 提交。
+新版已部署 历史验证的可执行文件，SHA-256 为 `0eccb000247d15f8c1c3b0a8d7e19274839d57decf7fcf1359c85fd2db26dd11`，183 项源码清单一致，原始 `H:/g1/Scenes/test.duf` 哈希未改变。本轮未创建 Git 提交。
 
 ## 最新：旋转中心锚点与本地改动提交
 
 2026-09-25：旋转环中心新增带深色描边的白色菱形锚点，只指示节点轴心，不参与命中或拖动；静止、拖动代理和等待正式渲染时沿用同一绘制逻辑，随 DPI 缩放。22 项工程回归通过，副屏已核对 Local／World 中心显示。
 
-新版已部署 `out/DazFastViewer.exe`，SHA-256 为 `732edf83b0751b435ffc2b2b2f0e79c088ba6e12cb19c07360fd26a156b6c207`，168 项源码清单一致。验证证据在 `artifacts/gizmo-center/`。本次按用户要求将此前全部本地改动一并提交，范围包括 Gizmo、模块化顶部栏、IK 回退、地面对齐及测试和说明。
+新版已部署 历史验证的可执行文件，SHA-256 为 `732edf83b0751b435ffc2b2b2f0e79c088ba6e12cb19c07360fd26a156b6c207`，168 项源码清单一致。验证证据在 `artifacts/gizmo-center/`。本次按用户要求将此前全部本地改动一并提交，范围包括 Gizmo、模块化顶部栏、IK 回退、地面对齐及测试和说明。
 
 ## 最新：Gizmo 平面移动、IK 回退与地面对齐
 
@@ -352,7 +360,7 @@ Local／World 右侧新增独立“角色功能模块”，提供小人向下落
 
 22 项工程回归通过；新增 12 组平面拖动检查、4 种父级变换下的地面对齐比例检查。最终程序通过双角色 19 项 Gizmo／地面对齐、基础角色 14 项 FK／IK，以及 100%／150% 原生顶部栏验证。双角色比例和位置互不影响，最终几何与矩阵精确恢复。
 
-已部署 `out/DazFastViewer.exe`，SHA-256：`651d4520f09d460a8468121468e08847056ac0bec03e4eb6172a7a087a97258e`，168 项源码清单一致。详见 [使用与验证记录](Docs/gizmo_controls_cn.md)与 `artifacts/gizmo-v2/validation.json`。本轮未创建 Git 提交。
+已部署 历史验证的可执行文件，SHA-256：`651d4520f09d460a8468121468e08847056ac0bec03e4eb6172a7a087a97258e`，168 项源码清单一致。详见 [使用与验证记录](Docs/gizmo_controls_cn.md)与 `artifacts/gizmo-v2/validation.json`。本轮未创建 Git 提交。
 
 ## 最新：Gizmo 节点操作与模块化顶部栏
 
@@ -360,7 +368,7 @@ Local／World 右侧新增独立“角色功能模块”，提供小人向下落
 
 应用图标、菜单、3D 工具和窗口按钮默认合并一行。图标固定左上，菜单与工具可独立重排、换行、浮动或隐藏并继承布局。22 项工程回归、72 组旋转／奇点、100%／150% 原生窗口检查通过；基础角色及 35,638 根发丝场景各 13 项实际交互通过，恢复后几何和矩阵一致。复杂场景验证后的最终改动仅为双行顶部栏固定控件的顶边对齐，已复测界面。
 
-已部署 `out/DazFastViewer.exe`，SHA-256 为 `9c9ea0d878100872d9e4bf682253b095638974ac057a6d84bc9b5631300148df`，168 项源码哈希一致。详见 [Gizmo 使用与验证记录](Docs/gizmo_controls_cn.md)，原始证据为 `artifacts/gizmo/validation.json`。原资产保持只读，本轮未创建 Git 提交。
+已部署 历史验证的可执行文件，SHA-256 为 `9c9ea0d878100872d9e4bf682253b095638974ac057a6d84bc9b5631300148df`，168 项源码哈希一致。详见 [Gizmo 使用与验证记录](Docs/gizmo_controls_cn.md)，原始证据为 `artifacts/gizmo/validation.json`。原资产保持只读，本轮未创建 Git 提交。
 
 ## 最新：对象属性面板控件精简
 
@@ -370,19 +378,19 @@ Local／World 右侧新增独立“角色功能模块”，提供小人向下落
 
 2026-09-25：Template Set／Template 合并为一行，顶部及底部说明按单行高度显示，四项操作提示收紧为两行，更多高度交给姿态图。长说明省略并保留悬停全文。500／330 像素面板的三页及联动组提示已在副屏核对，20 项工程检查通过；布局与模板页继承继续有效。
 
-新版已部署 `out/DazFastViewer.exe`，SHA-256 为 `9383c2d4c48de50d5fef899252f1fe6a60883d5dee4c378cebd81d5ab94ed7c9`，161 项源码哈希一致。证据在 `artifacts/009-powerpose/compact`，详见 [布局记录](specs/009-powerpose/layout-persistence.md)。本轮未创建 Git 提交。
+新版已部署 历史验证的可执行文件，SHA-256 为 `9383c2d4c48de50d5fef899252f1fe6a60883d5dee4c378cebd81d5ab94ed7c9`，161 项源码哈希一致。证据在 `artifacts/009-powerpose/compact`，详见 [布局记录](specs/009-powerpose/layout-persistence.md)。本轮未创建 Git 提交。
 
 ## 最新：PowerPose 布局与模板页继承
 
 2026-09-25：PowerPose 沿用主窗口的停靠布局保存，并新增 Body／Hands／Head 当前模板页持久化。下次启动继承位置、大小、停靠／浮动、显隐、前台标签及模板页；旧设置默认 Body。实际面板在两个独立离屏进程中的五项保存／恢复检查及 20 项工程回归通过，未改动用户设置。
 
-新版已部署 `out/DazFastViewer.exe`，SHA-256 为 `929890f8e94333a1d7af937a06e98c031f90460cf4375385b31c9fd7eb3968fe`，161 项源码哈希一致。详见 [布局继承记录](specs/009-powerpose/layout-persistence.md)。启动新版、调整后正常退出即可保存；本轮未创建 Git 提交。
+新版已部署 历史验证的可执行文件，SHA-256 为 `929890f8e94333a1d7af937a06e98c031f90460cf4375385b31c9fd7eb3968fe`，161 项源码哈希一致。详见 [布局继承记录](specs/009-powerpose/layout-persistence.md)。启动新版、调整后正常退出即可保存；本轮未创建 Git 提交。
 
 ## 最新：PowerPose 松手保留白模
 
 2026-09-25：修复 PowerPose 松手后短暂显示编辑前渲染图的问题。恢复状态现独立保存本次工具和输入版本，PowerPose 使用自己的最后白模，等到本次提交对应的首张正常渲染帧就绪才切换；IK 沿用相同流程。20 项工程检查、复杂发丝场景 15 项 PowerPose 交互、既有 IK 副屏回归通过；12 对拖动末帧／等待帧截图逐像素一致。
 
-`out/DazFastViewer.exe` 已更新，SHA-256 为 `f0faf1497e40e88fbd0946923971877e71861e60caa83c8837894eaf9e13aa79`，161 项源码哈希一致，重启后生效。证据为 `artifacts/009-powerpose/white-hold`，详见 [白模等待修复](specs/009-powerpose/white-proxy-hold.md)。本轮未创建 Git 提交；下文旧哈希属于此前交付。
+历史验证的可执行文件 已更新，SHA-256 为 `f0faf1497e40e88fbd0946923971877e71861e60caa83c8837894eaf9e13aa79`，161 项源码哈希一致，重启后生效。证据为 `artifacts/009-powerpose/white-hold`，详见 [白模等待修复](specs/009-powerpose/white-proxy-hold.md)。本轮未创建 Git 提交；下文旧哈希属于此前交付。
 
 ## 最新：009 PowerPose 已实现并部署
 
@@ -392,15 +400,15 @@ Qt 面板已接入原生通道限位、Bend／Twist 代理、灰模预览、一�
 
 20 项工程检查、四套角色 2,720 项方向检查、100%／150% Qt 手势检查和三组副屏共 45 项交互全部通过；恢复后逐顶点误差为零。正式证据为 `artifacts/009-powerpose/{gui-g8f-release,gui-g81m-release,gui-hair-release}`。复杂场景为原 test.duf 提取的角色 A 及挂接物，包含 35,638 根发丝，不代表原三角色全场景验收。详见 [009 实施记录](specs/009-powerpose/execution-report.md)和 [验证汇总](specs/009-powerpose/evidence/implementation-summary.json)。
 
-`out/DazFastViewer.exe` 已更新，SHA-256 为 `9a6e556b5d8c171574070043b2ff2809f0d6bd1594a743ca25467cde90b09963`，发布清单的 161 项源码哈希一致。原始资源未改写，用户原窗口未关闭，重启后生效；本轮未创建 Git 提交。此前预案中的待核措辞为历史记录，不是当前状态。
+历史验证的可执行文件 已更新，SHA-256 为 `9a6e556b5d8c171574070043b2ff2809f0d6bd1594a743ca25467cde90b09963`，发布清单的 161 项源码哈希一致。原始资源未改写，用户原窗口未关闭，重启后生效；本轮未创建 Git 提交。此前预案中的待核措辞为历史记录，不是当前状态。
 
 ## 最新：参数滚轮选择与小数精度
 
-2026-09-25：参数列表仅允许在左键选中的行上滚轮调参，其他行转交列表翻页；点击名称、Slider、数字框共用行选择。Slider 滚轮复用数字框的十进制步进，修复连续滚动及百分比换算的 float 尾数。专项离屏交互及工程规定的 18 项回归通过，已部署 `out/DazFastViewer.exe`，需重启使用。详见 [滚轮修复记录](Docs/parameter_wheel_execution_cn.md)。本轮未创建 Git 提交。
+2026-09-25：参数列表仅允许在左键选中的行上滚轮调参，其他行转交列表翻页；点击名称、Slider、数字框共用行选择。Slider 滚轮复用数字框的十进制步进，修复连续滚动及百分比换算的 float 尾数。专项离屏交互及工程规定的 18 项回归通过，已部署 历史验证的可执行文件，需重启使用。详见 [滚轮修复记录](Docs/parameter_wheel_execution_cn.md)。本轮未创建 Git 提交。
 
 ## 最新：DUF 场景收藏继承
 
-2026-09-25：对象属性与 Morph 的收藏页现继承 DUF 节点的收藏列表，支持角色、骨骼变换、编码名称及 `/Value`，按场景／对象／骨骼隔离本机手动覆盖。同名资源优先匹配场景实际引用，避免重复显示头部别名。18 项 CTest 通过；原始 test7 的 13 个对象、55 项收藏逐项核对通过，源文件哈希不变。新版已部署 `out/DazFastViewer.exe`，运行中的旧程序需重启。详见 [收藏继承记录](Docs/scene_favorites_execution_cn.md)。本轮未创建 Git 提交。
+2026-09-25：对象属性与 Morph 的收藏页现继承 DUF 节点的收藏列表，支持角色、骨骼变换、编码名称及 `/Value`，按场景／对象／骨骼隔离本机手动覆盖。同名资源优先匹配场景实际引用，避免重复显示头部别名。18 项 CTest 通过；原始 test7 的 13 个对象、55 项收藏逐项核对通过，源文件哈希不变。新版已部署 历史验证的可执行文件，运行中的旧程序需重启。详见 [收藏继承记录](Docs/scene_favorites_execution_cn.md)。本轮未创建 Git 提交。
 
 本批 008 FK／IK、角度固定和恢复优化的代码、测试与文档已按用户后续要求以中文说明归档至本地 Git，提交记录见 `git log`。下文“本轮未创建 Git 提交”为实施完成时的历史状态。
 
@@ -408,17 +416,17 @@ Qt 面板已接入原生通道限位、Bend／Twist 代理、灰模预览、一�
 
 2026-09-25：新增默认关闭、与位置固定独立的“固定角度（IK）”，只固定角度时仍可拖动位置。最短旋转约束包含 Twist，完整 ERC 在提交前单独校准，避免预览与最终朝向不一致。优化独立碰撞查询、同次精确缓存和面采样点预计算，保留原顺序修正、迭代和采样点；IK 松手直接恢复完整分辨率。
 
-18 项回归及最终两组副屏 stage 27 全部通过，已部署 `out/DazFastViewer.exe`，SHA-256 为 `78addd7d44c53a024de827ab8a9c42b820cfe8d2833502032532a95a5f35f050`。高细分普通／角度固定恢复约 2.51／2.50 s，35,638 根发丝专项约 1.86／1.89 s；最终角度误差约 0.013／0.027°。正式证据是 `artifacts/008-refine/{subd-erc,hair-erc}`，早期 `hair-final` 失败已由 ERC 校准修复，不计为通过。完整口径和边界见 [追加执行记录](specs/008-fk-ik/refinement-report.md)。原始资产未修改，本轮未创建 Git 提交。
+18 项回归及最终两组副屏 stage 27 全部通过，已部署 历史验证的可执行文件，SHA-256 为 `78addd7d44c53a024de827ab8a9c42b820cfe8d2833502032532a95a5f35f050`。高细分普通／角度固定恢复约 2.51／2.50 s，35,638 根发丝专项约 1.86／1.89 s；最终角度误差约 0.013／0.027°。正式证据是 `artifacts/008-refine/{subd-erc,hair-erc}`，早期 `hair-final` 失败已由 ERC 校准修复，不计为通过。完整口径和边界见 [追加执行记录](specs/008-fk-ik/refinement-report.md)。原始资产未修改，本轮未创建 Git 提交。
 
 ## 最新：008 FK／IK 与复杂场景拖动
 
-已实现并部署 `out/DazFastViewer.exe`：部位属性按真实 DSF／DUF 通道编辑，保留锁定、限位和隐藏状态；仅鼠标按下前已单选本角色时允许左键 IK，多选或未选中拒绝。支持位置固定、Esc／失焦取消及版本隔离。拖动用最多 40,000 三角形的宿主灰模代理，不重复处理服装、发丝、碰撞、JCM、细分和 Cycles；松手完整恢复，不改变资产设置。
+已实现并部署 历史验证的可执行文件：部位属性按真实 DSF／DUF 通道编辑，保留锁定、限位和隐藏状态；仅鼠标按下前已单选本角色时允许左键 IK，多选或未选中拒绝。支持位置固定、Esc／失焦取消及版本隔离。拖动用最多 40,000 三角形的宿主灰模代理，不重复处理服装、发丝、碰撞、JCM、细分和 Cycles；松手完整恢复，不改变资产设置。
 
 18 项工程检查、G8／G8.1 各 1,291 项通道写入及 21 项可见 FK 几何检查、真实四肢／指节／头部 IK 与双脚固定通过。副屏 test7 宿主 SubD 3 的拖动呈现中位数约 20.54 ms，松手恢复 6.93 s；原 test.duf 提取角色 A 及全部挂接物的 SubD 2／35,638 根发丝专项约 20.88 ms／4.05 s。后者不代表原三角色全场景测试通过。正式程序哈希为 `754f359fed95af10d0084e3e28d0c94a811b365b018e38664dfc7b5435e02cf7`，详见 [008 执行记录](specs/008-fk-ik/execution-report.md)。原始资产未修改，本轮未创建 Git 提交。此前“008 未开始”均为历史记录。
 
 ## 最新：GeoGraft 接缝正式修复
 
-已将共同拓扑、统一细分、共享法线及共同 Cycles Object 接入生产路径，并部署到 `out/DazFastViewer.exe`。分别细分造成几何开口；仅共享几何但仍分成独立对象，还会使 Cycles 皮下散射在边界处中断。本次两层均修复，保留原 UV、贴图、Bump 和 SSS。角色与附件沿用独立编辑身份；组合使用宿主细分等级，附件显隐局部更新组合的面列表，Morph 复用模板，DAZ Instance 复用共同网格。
+已将共同拓扑、统一细分、共享法线及共同 Cycles Object 接入生产路径，并部署到 历史验证的可执行文件。分别细分造成几何开口；仅共享几何但仍分成独立对象，还会使 Cycles 皮下散射在边界处中断。本次两层均修复，保留原 UV、贴图、Bump 和 SSS。角色与附件沿用独立编辑身份；组合使用宿主细分等级，附件显隐局部更新组合的面列表，Morph 复用模板，DAZ Instance 复用共同网格。
 
 17 项工程测试、14 阶段 GeoGraft GPU 检查及 23 阶段原有 GPU 置换／场景同步检查通过。发布版 test7 的两个附件显隐、细分 0／1／2／3 反复切换与预算恢复、胸部大小／胸部缩放／体型参数修改恢复通过。曝光 13 的原材质胸部、臀部及纯白材质两区域截图均已核对：黑色开口闭合，原材质下的胸部散射细线消失。白模前后均为 4,096 samples、约 15 秒，不是延长采样带来的变化。
 
@@ -430,11 +438,11 @@ Qt 面板已接入原生通道限位、Bend／Twist 代理、灰模预览、一�
 
 按用户要求先将原有代码提交为 `83d0d0b`，再诊断 HD Nipples 与 Golden Palace 的接缝。已确认基础顶点映射正确、UV 导入逐角点与原始 DSF 相同；旧检查仅覆盖细分前的控制网格。实际分别细分后，Golden Palace／HD Nipples 边界最大采样间距约 3.51／3.16 毫米，统一到 2 级仍为 4.18／3.59 毫米。无贴图灰模同样开裂，按映射连接拓扑后统一细分的灰模在两个区域均无该裂缝。
 
-详见 [专项报告](Docs/graft_subdivision_seam_analysis_cn.md)。新增 CPU 诊断工具和默认关闭的边界追踪，不改变生产渲染路径；实验合并网格仅用于对照，正式共享拓扑修复尚未实现。`out` 保持原版本；新诊断代码与文档暂留工作区。原始 test7 未改动，曝光 13 使用副本，GUI 均在副屏。后续必须以细分后几何及图像验收，不能以 `graft_seams()` 的基础误差接近 0 宣称渲染无缝。
+详见 [专项报告](Docs/graft_subdivision_seam_analysis_cn.md)。新增 CPU 诊断工具和默认关闭的边界追踪，不改变生产渲染路径；实验合并网格仅用于对照，正式共享拓扑修复尚未实现。运行包 保持原版本；新诊断代码与文档暂留工作区。原始 test7 未改动，曝光 13 使用副本，GUI 均在副屏。后续必须以细分后几何及图像验收，不能以 `graft_seams()` 的基础误差接近 0 宣称渲染无缝。
 
 ## 最新：换装增量同步与单一细分等级
 
-已按用户授权完成优化并部署 `out/DazFastViewer.exe`。界面只保留“渲染细分等级”，同时作用于当前预览与最终渲染；0 为基础网格。细分使用轻量快照，不重建形变运行时；换装／删除复用 Cycles 会话和已有材质、贴图、绑定与碰撞结果。更新期间保留最后画面。加入拓扑／顶点数检查、400 万细分面预算拒绝、错误后降低等级恢复，并修复同源不同 UV／细分／遮盖网格身份冲突。
+已按用户授权完成优化并部署 历史验证的可执行文件。界面只保留“渲染细分等级”，同时作用于当前预览与最终渲染；0 为基础网格。细分使用轻量快照，不重建形变运行时；换装／删除复用 Cycles 会话和已有材质、贴图、绑定与碰撞结果。更新期间保留最后画面。加入拓扑／顶点数检查、400 万细分面预算拒绝、错误后降低等级恢复，并修复同源不同 UV／细分／遮盖网格身份冲突。
 
 最终同资源 `test7` 复测，按同为 731×836 的完整分辨率首帧：细分 2→1／1→2 从 11.19／11.33 秒降至 0.27／0.51 秒；添加两件 AH Nightwear 从 14.35 秒降至 4.36 秒，删除其中一件从 12.34 秒降至 1.06 秒。新版细分先给出低清预览，约 0.21／0.45 秒。全程一个会话、操作期间空画面 0；内存峰值仍与旧版同一量级。16 项工程检查、真实细分反复切换与机位保持、细分后 Morph／ERC、12 轮生命周期、23 阶段 GPU 置换／曲线同步、HD Nipples 接缝及真实曲线头发回归通过。完整口径与限制见[执行记录](Docs/scene_rebuild_optimization_execution_cn.md)，最终计时在 `artifacts/rebuild-optimization/test7-delivery/`，其他证据在同级目录。原始资源未修改，本轮未创建 Git 提交。
 
@@ -442,7 +450,7 @@ Qt 面板已接入原生通道限位、Bend／Twist 代理、灰模预览、一�
 
 根据用户最近会话，用 `test7.duf` 与 AH Nightwear 在副屏定量复测。视口细分 2→1→2 每步约 11.2～11.3 秒；只修改最终渲染细分、视口拓扑不变也等待约 11.3～11.4 秒。追加两件服装约 14.35 秒，删除其中一件约 12.34 秒；每步都新建一个完整 Cycles 会话，空画面约 3.9～4.1 秒。主要耗时是全场景碰撞重算（4.6～6.1 秒）和完整设备场景同步（4.0～4.2 秒），本次内存和显存余量充足。
 
-仅新增专项诊断入口 `--rebuild-test`、分阶段计时和 `tools/profile_rebuild.py`，尚未实施优化。诊断程序为 `out/DazFastViewer-profile.exe`，正式 `out/DazFastViewer.exe` 未替换。六项真实操作及 16 项工程测试通过；原始证据位于 `artifacts/rebuild-profile/`。下一步应区分最终渲染／视口细分、复用基础形变及碰撞、扩展局部拓扑／对象增删同步，并独立保留最后画面。详细口径、数据和实施优先级见[分析报告](Docs/scene_rebuild_latency_analysis_cn.md)。本轮没有创建 Git 提交。
+仅新增专项诊断入口 `--rebuild-test`、分阶段计时和 `tools/profile_rebuild.py`，尚未实施优化。诊断程序为 `out/vs2022/Release/DazFastViewer-profile.exe`，正式 `out/vs2022/Release/DazFastViewer.exe` 未替换。六项真实操作及 16 项工程测试通过；原始证据位于 `artifacts/rebuild-profile/`。下一步应区分最终渲染／视口细分、复用基础形变及碰撞、扩展局部拓扑／对象增删同步，并独立保留最后画面。详细口径、数据和实施优先级见[分析报告](Docs/scene_rebuild_latency_analysis_cn.md)。本轮没有创建 Git 提交。
 
 ## 最新：自动穿戴与角色附件挂接
 
@@ -450,27 +458,27 @@ Qt 面板已接入原生通道限位、Bend／Twist 代理、灰模预览、一�
 
 HD Nipples for G8F - 2.0 的指定 `.dse` 入口映射至产品自带基础 DUF，不执行脚本；纹理生成、配套碰撞优化、dForce、DAZ HD Morph 和跨代 AutoFit 未新增。完整使用方式和边界见[执行记录](Docs/attachment_import_execution_cn.md)。
 
-最终 16 项工程测试、五组真实资源的挂接／解除／重绑检查通过；最终发布程序在副屏完成 MK 上衣和 HD Nipples 产品入口验证，后者 116 对基础网格接缝最大误差为 0 米。程序已部署到 `out`；证据位于 `artifacts/attachment-final-build.log`、`artifacts/attachment-*.log` 及两个 `attachment-ui-*` 目录。原始资产未修改，本轮未创建 Git 提交。
+最终 16 项工程测试、五组真实资源的挂接／解除／重绑检查通过；最终发布程序在副屏完成 MK 上衣和 HD Nipples 产品入口验证，后者 116 对基础网格接缝最大误差为 0 米。程序已部署到 运行包；证据位于 `artifacts/attachment-final-build.log`、`artifacts/attachment-*.log` 及两个 `attachment-ui-*` 目录。原始资产未修改，本轮未创建 Git 提交。
 
 ## 最新：材质贴图、置换与 Instance 一级选取
 
 补齐 tiny_02 的 LIE 图像库引用、皮肤 SSS 模式／透光颜色贴图和凹凸尺度，接入 Iray／旧 DAZ 置换贴图及带符号的厘米高度范围。Cycles 使用真实置换与凹凸组合，材质和 Morph 编辑不会累加置换；尚未加入 DAZ 自适应细分。场景树仅展示 Instance 一级，点击、高亮、聚焦聚合全部零件，追加相同场景时保留独立身份。GeoGraft 可点击，Base_Circle 超远聚焦、Sun-sky Only UI 和年月日／时分秒控件已修复。
 
-14 项工程测试、9 阶段 OptiX 置换顶点验证、坦克整组选取、四插件选取及 F／侧键聚焦通过。用户已验收坦克和桌椅 instancing，并确认手动调整机位／曝光后渲染效果正常；不将这些调整视作故障或同机位性能对照。最终发布包和源码清单位于 `out`，原始记录在 `artifacts/material-picking-followup/`，详见[本轮报告](Docs/material_picking_focus_followup_cn.md)。资产只读，008 未开始。本批场景兼容性修复、测试与文档按用户要求以中文说明归档至本地 Git，记录见 `git log`。
+14 项工程测试、9 阶段 OptiX 置换顶点验证、坦克整组选取、四插件选取及 F／侧键聚焦通过。用户已验收坦克和桌椅 instancing，并确认手动调整机位／曝光后渲染效果正常；不将这些调整视作故障或同机位性能对照。最终发布包和源码清单位于 运行包，原始记录在 `artifacts/material-picking-followup/`，详见[本轮报告](Docs/material_picking_focus_followup_cn.md)。资产只读，008 未开始。本批场景兼容性修复、测试与文档按用户要求以中文说明归档至本地 Git，记录见 `git log`。
 
 ## 最新：接缝、Group 与新建后环境设置
 
-已补齐 GeoGraft `vertex_pairs` 的最终形变接缝对齐、场景树的 Group 标签和父子关系，以及空 Document 被误当已有场景追加、丢失源环境选项的问题。14 项 CTest 通过；发布包在副屏按 `test7 → 新建 → 内容库打开 14` 检查通过。Golden Palace 44 对接缝误差为 0，四插件共 228 对最大世界坐标误差约 6.664×10⁻⁸ 米；实际 Visible 切换／恢复无几何更新。程序已部署到 `out`，证据在 `artifacts/scene-followup/`，详见[执行记录](Docs/scene_followup_seams_groups_environment_cn.md)。Group 当前恢复层级展示，未新增组级变换／批量显隐。008 未开始，资产只读，本轮未创建 Git 提交。
+已补齐 GeoGraft `vertex_pairs` 的最终形变接缝对齐、场景树的 Group 标签和父子关系，以及空 Document 被误当已有场景追加、丢失源环境选项的问题。14 项 CTest 通过；发布包在副屏按 `test7 → 新建 → 内容库打开 14` 检查通过。Golden Palace 44 对接缝误差为 0，四插件共 228 对最大世界坐标误差约 6.664×10⁻⁸ 米；实际 Visible 切换／恢复无几何更新。程序已部署到 运行包，证据在 `artifacts/scene-followup/`，详见[执行记录](Docs/scene_followup_seams_groups_environment_cn.md)。Group 当前恢复层级展示，未新增组级变换／批量显隐。008 未开始，资产只读，本轮未创建 Git 提交。
 
 ## 最新：test5／test6／test7／14 场景兼容修复
 
 本轮修复加载、GPU 实例、GeoGraft 遮盖、父组可见性与材质通道遗漏，接入 Sun-sky Only 的 Cycles 近似。四个插件在实际 `test7` 中的关闭／恢复检查已通过，宿主隐藏面保持剔除；`14` 的暗图还追踪到保存为隐藏的走廊组被错误绘制，现已继承父组可见性。实例与阴影图像必须用最终形变后的编辑器核验，不能用仅加载基础笼的 inspect 代替。逐项实测、构建日志、待校准材质边界见[执行记录](Docs/scene_5_6_7_14_repair_cn.md)。用户资产未改动，测试均在副屏，008 未开始；本轮未创建 Git 提交。
 
-最终 `out` 已部署，14 项工程测试及同一发布包的四场景检查均通过。`test5` 连续导航提交约 24.81 帧/秒（189×209 预览、完整视口 758×836），约 37／55 毫秒首响应／恢复；不是物理 Visible FPS 证明。最终原始证据目录为 `artifacts/scene-repair/{test5-release,test6-release,test7-release,14-release}`，源码／二进制清单及命令、计数汇总也在该目录。Sun-sky 亮度和复杂材质仍未通过 Iray Golden，热切换时的缓冲忙日志见执行记录。
+最终 运行包 已部署，14 项工程测试及同一发布包的四场景检查均通过。`test5` 连续导航提交约 24.81 帧/秒（189×209 预览、完整视口 758×836），约 37／55 毫秒首响应／恢复；不是物理 Visible FPS 证明。最终原始证据目录为 `artifacts/scene-repair/{test5-release,test6-release,test7-release,14-release}`，源码／二进制清单及命令、计数汇总也在该目录。Sun-sky 亮度和复杂材质仍未通过 Iray Golden，热切换时的缓冲忙日志见执行记录。
 
 ## 最新：视口与角色移动性能优化
 
-最终验证与部署已完成：14 项工程检查、32 项导航、异步／手动 Morph、真实 `test3.duf` 性能及 11 条选取／高亮／附件可见性检查通过，`out/DazFastViewer.exe` 已更新。曝光等仅显示编辑继续保留累计采样。旧头部自测对保存姿势和眼镜遮挡的假设也已修正；见下方执行记录。性能数据只代表 `test3.duf`，此前 `6.duf` 的剩余渲染等待未继续复测。
+最终验证与部署已完成：14 项工程检查、32 项导航、异步／手动 Morph、真实 `test3.duf` 性能及 11 条选取／高亮／附件可见性检查通过，历史验证的可执行文件 已更新。曝光等仅显示编辑继续保留累计采样。旧头部自测对保存姿势和眼镜遮挡的假设也已修正；见下方执行记录。性能数据只代表 `test3.duf`，此前 `6.duf` 的剩余渲染等待未继续复测。
 
 按用户更正，正式测试改用 `H:/G1/Scenes/test3.duf`，仅在副屏操作。已实现尺寸变化复用 Cycles 会话／场景、角色编辑交互预览及最新输入合并、共同移动时碰撞结果复用、局部网格选取树与实例高亮更新。原版实测主要瓶颈分别为约 6.6 秒场景同步和单次最高约 10.4 秒碰撞处理；优化后 6 像素缩放约 99／262 毫秒，角色平移／旋转约 96–101／186–206 毫秒（首张新图／停止后完整分辨率）。真实场景全程一个会话，角色恢复后局部几何和所有实例矩阵精确一致；14 项工程回归通过。详见[执行记录](Docs/interaction_optimization_execution_cn.md)。关闭降噪，最终采样不变；完整分辨率首帧不代表噪点收敛。008 未开始，本轮按用户授权以中文说明提交到本地 Git，记录见 `git log`。
 
@@ -488,15 +496,15 @@ HD Nipples for G8F - 2.0 的指定 `.dse` 入口映射至产品自带基础 DUF�
 
 ## 此前：test.duf 环境采样、附件与数值编辑
 
-修复背景着色器缺少 Cycles BackgroundLight / MIS；离线 PNG 使用场景色调，曝光编辑保留累计采样。旧降噪 / 样本上限设置已由上述更正替代。Fit To 不再叠加穿戴前位移，补齐 Rigid Follow 参考表面、嵌套节点原点和附件碰撞顺序；对象绕资产自身轴心旋转。滑块采用无固定数值边界的相对拖动，文本输入不再被后台刷新覆盖，手动 Morph 保留不限幅状态。13 项工程检查和真实原生 DUF 的初始位置、整体移动、转头 / 腹部姿势、恢复与静止检查通过，已部署 `out`。拖鞋 RMS 从 11.318 降为 0.779 毫米；DBZ 只用于只读比较，产品不依赖它。范围、截图、性能口径和剩余近似见[本轮报告](Docs/test_scene_repair_execution_cn.md)。008 未开始，本批修复与后续原始采样优化一并按用户要求归档到本地 Git。
+修复背景着色器缺少 Cycles BackgroundLight / MIS；离线 PNG 使用场景色调，曝光编辑保留累计采样。旧降噪 / 样本上限设置已由上述更正替代。Fit To 不再叠加穿戴前位移，补齐 Rigid Follow 参考表面、嵌套节点原点和附件碰撞顺序；对象绕资产自身轴心旋转。滑块采用无固定数值边界的相对拖动，文本输入不再被后台刷新覆盖，手动 Morph 保留不限幅状态。13 项工程检查和真实原生 DUF 的初始位置、整体移动、转头 / 腹部姿势、恢复与静止检查通过，已部署 运行包。拖鞋 RMS 从 11.318 降为 0.779 毫米；DBZ 只用于只读比较，产品不依赖它。范围、截图、性能口径和剩余近似见[本轮报告](Docs/test_scene_repair_execution_cn.md)。008 未开始，本批修复与后续原始采样优化一并按用户要求归档到本地 Git。
 
 ## 最新复查：A 眼镜层级及穿脸已修复
 
-用户重新导出 `test3.dbz` 并在 Blender 确认位置正确。除 Head 场景树和镜腿定义覆盖外，最终根因是漏读场景通道下限：A 的 `Youth Morph=-0.2` 被资产下限 `0` 错误截断，影响头部网格和 Head 中心。现继承实例 min / max / clamped / step_size，并保持共享缓存隔离。A / B 眼镜对新 DBZ 的 RMS 均约 0.0005 毫米；A 头部约 0.093 毫米，B 人物和眼镜逐顶点不变。12 项回归及原始场景副屏检查通过，已目视确认 A 镜架下缘不再穿脸，并部署到 `out`。最终证据为 `artifacts/test3-glasses/channel-*`，详见[专项记录](Docs/test3_glasses_followup_cn.md)。完整全身 / 服装仍保留近似差异，008 未开始。本轮按用户要求，以中文提交说明将代码、测试与文档归档至本地 Git，提交记录见 `git log`。
+用户重新导出 `test3.dbz` 并在 Blender 确认位置正确。除 Head 场景树和镜腿定义覆盖外，最终根因是漏读场景通道下限：A 的 `Youth Morph=-0.2` 被资产下限 `0` 错误截断，影响头部网格和 Head 中心。现继承实例 min / max / clamped / step_size，并保持共享缓存隔离。A / B 眼镜对新 DBZ 的 RMS 均约 0.0005 毫米；A 头部约 0.093 毫米，B 人物和眼镜逐顶点不变。12 项回归及原始场景副屏检查通过，已目视确认 A 镜架下缘不再穿脸，并部署到 运行包。最终证据为 `artifacts/test3-glasses/channel-*`，详见[专项记录](Docs/test3_glasses_followup_cn.md)。完整全身 / 服装仍保留近似差异，008 未开始。本轮按用户要求，以中文提交说明将代码、测试与文档归档至本地 Git，提交记录见 `git log`。
 
 ## 最新：test3 渲染选项、参数面板及导航
 
-修复深色 Top Coat 导致 B 皮肤发黑、骨骼中心变化导致眼镜偏移及拖鞋生成位移过度平滑；接入 HDRI Environment Options、ToneMapper、独立设置保存 / 载入，改为左右分类参数面板，增加 F 与 WASDQE。12 项工程测试及原始 test3 的副屏选项 / 导航、异步 Morph 界面回归通过，已部署到 `out`。拖鞋局部接触与 Iray 色调 / 材质仍有近似差异，不能宣称完整 Golden；A 的最终定位以本页最新眼镜专项复查为准。详见[本轮执行报告](Docs/test3_scene_repair_execution_cn.md)。008 未开始；本轮与眼镜专项修复一并按用户要求归档至本地 Git。
+修复深色 Top Coat 导致 B 皮肤发黑、骨骼中心变化导致眼镜偏移及拖鞋生成位移过度平滑；接入 HDRI Environment Options、ToneMapper、独立设置保存 / 载入，改为左右分类参数面板，增加 F 与 WASDQE。12 项工程测试及原始 test3 的副屏选项 / 导航、异步 Morph 界面回归通过，已部署到 运行包。拖鞋局部接触与 Iray 色调 / 材质仍有近似差异，不能宣称完整 Golden；A 的最终定位以本页最新眼镜专项复查为准。详见[本轮执行报告](Docs/test3_scene_repair_execution_cn.md)。008 未开始；本轮与眼镜专项修复一并按用户要求归档至本地 Git。
 
 ## 最新：test.duf 可见性、发丝、材质与 A 上衣贴合
 
@@ -504,7 +512,7 @@ HD Nipples for G8F - 2.0 的指定 `.dse` 入口映射至产品自带基础 DUF�
 
 ## 最新：用户视觉复测后的脸型 / 服装修复
 
-后续实际视口复测又补齐了眼镜的骨骼挂接跟随，包含重复求值 / 恢复不漂移、子对象传播和追加场景身份隔离。眼镜对 DBZ 的 RMS 为 2.515 毫米，最大 4.654 毫米；人物几何结果未回退。最终 10 项工程回归通过，已部署到 `out`，详见下述报告。
+后续实际视口复测又补齐了眼镜的骨骼挂接跟随，包含重复求值 / 恢复不漂移、子对象传播和追加场景身份隔离。眼镜对 DBZ 的 RMS 为 2.515 毫米，最大 4.654 毫米；人物几何结果未回退。最终 10 项工程回归通过，已部署到 运行包，详见下述报告。
 
 用户确认以 Diffeomorphic DBZ File 导入的截图为准。原生路径修复负输入抵消值提前限幅、带朝向的非均匀缩放补偿、Figure 缩放基值、嵌套 Figure 姿势污染，以及基础 Morph 被 HD / 缺失附件公式整体禁用。服装生成位移改为拓扑连续场。两名角色头部对 DBZ RMS 约 0.0002 毫米，全身 0.070 / 0.125 毫米；服装仍有最高约 24 毫米的局部差异，未实现 DAZ 平滑 / 碰撞 / dForce，未通过完整服装 Golden。详见[本轮报告](Docs/scene_deformation_execution_cn.md)。`scene3-complete-ui` 是此前工程运行证据，已被用户指出视觉错误；新几何证据为 `artifacts/geometry-fixed3*`。008 未开始。本轮按用户要求以中文提交说明归档至本地 Git，提交记录见 `git log`。
 
@@ -518,7 +526,7 @@ HD Nipples for G8F - 2.0 的指定 `.dse` 入口映射至产品自带基础 DUF�
 
 用户已授权在 007 与 008 之间插入多对象场景、DUF 分派、两级射线选取 / 部位 Morph、悬停覆盖、停靠视口 / 动态分辨率和布局持久化。本轮已实现并部署，详见 [执行报告](Docs/scene_workflow_execution_cn.md)。主线阶段不重编号，008 FK / IK 尚未启动。
 
-最新修复：头部使用“人物 → 整个 Head → 眼球 / 嘴唇等细分”的三级选择。Head 聚合后代区域，头颈边界按明确的 DAZ 多边形组划分。带 `conform_target` 的穿戴物跳过视口射线，必须通过场景树选择；未绑定服装仍可点击，普通 parent 关系不算绑定。点击与悬停共用层级解析，选择消息携带对象、骨骼和文档世代。真实四角色 / 八件衣服的射线验证在 `artifacts/head-selection/final`，已部署到 `out`。
+最新修复：头部使用“人物 → 整个 Head → 眼球 / 嘴唇等细分”的三级选择。Head 聚合后代区域，头颈边界按明确的 DAZ 多边形组划分。带 `conform_target` 的穿戴物跳过视口射线，必须通过场景树选择；未绑定服装仍可点击，普通 parent 关系不算绑定。点击与悬停共用层级解析，选择消息携带对象、骨骼和文档世代。真实四角色 / 八件衣服的射线验证在 `artifacts/head-selection/final`，已部署到 运行包。
 
 之前的二级悬停、清空选择和视口布局证据保留在 `artifacts/hover-part`；当前头部与服装行为以最新报告为准，主线 008 仍未开始。
 
@@ -528,7 +536,7 @@ HD Nipples for G8F - 2.0 的指定 `.dse` 入口映射至产品自带基础 DUF�
 
 ## 前一阶段：007 两批参数兼容性修复
 
-原 007 已中文提交为 `da5d4f8`。用户随后要求修复一版，并追问 354 项之外的空间；已补充声明资产 URI 恢复，最终 G8 / G8.1 新增可编辑 476 / 614 项，本轮各追加 122 项，无原可编辑条目退化。本次按用户授权，将兼容性修复、验证证据和未生效参数清单以中文归档到本地 Git；提交号见 `git log`。已按用户明确授权关闭旧版窗口并覆盖部署 `out`，不要再次请求关闭许可。
+原 007 已中文提交为 `da5d4f8`。用户随后要求修复一版，并追问 354 项之外的空间；已补充声明资产 URI 恢复，最终 G8 / G8.1 新增可编辑 476 / 614 项，本轮各追加 122 项，无原可编辑条目退化。本次按用户授权，将兼容性修复、验证证据和未生效参数清单以中文归档到本地 Git；提交号见 `git log`。已按用户明确授权关闭旧版窗口并覆盖部署 运行包，不要再次请求关闭许可。
 
 最终证据只认 `artifacts/spec007-compatibility/final`，第一批 `validated` 为中间记录。8 项 CTest、两代各 40 姿势、新增条目取样 / 恢复、30 组数学对照、一次副屏六参数流程已通过，无需继续重复测试。参考脚本补齐多形态及默认控制器贡献，初次失败记录已保留；部分权重来自 Runtime，不是整图独立求值或 DAZ Studio Golden。G8 / G8.1 新增项中 71 / 63 个条件型条目在当前独立取样下无明显位移，未视为视觉验收通过。
 
@@ -570,7 +578,7 @@ G8 的 Arms Length、Chest Scale、Eyes Closed、HS Sanny Shy、Flex Quad Left �
 
 用户已授权进入 005，并补充长期 Explorer、菜单、加载角色、SceneHierarchy、Morph、FitTo 需求；最终 UI 采用 **Qt Widgets**，不再采用 Windows 原生控件作为应用框架。现有 WGL 视口嵌入 Qt，仍独立渲染与 GPU 互操作。Qt 套件为 `C:\Qt\6.10.3\msvc2022_64`；6.11.2 安装是 MinGW，不能与现有 MSVC Cycles 混链。
 
-新增 `out/DazFastViewer.exe` 和 `tools/edit_sample.ps1 -Sample Character|Prop`。中文菜单、内容浏览、选择对象、直接 Morph、变换 / 重置、后台场景切换可用。UI 不直接改网格，带文档世代号的快照交给工作线程求值。当前场景树仅包含可渲染对象，视口固定 960×720。
+新增 历史验证的可执行文件 和 `tools/edit_sample.ps1 -Sample Character|Prop`。中文菜单、内容浏览、选择对象、直接 Morph、变换 / 重置、后台场景切换可用。UI 不直接改网格，带文档世代号的快照交给工作线程求值。当前场景树仅包含可渲染对象，视口固定 960×720。
 
 Morph 发现位于 `src/daz/morphs.*`，纯 C++ 求值位于 `src/runtime/morph.*`；Render IR Delta 增加顶点和实例变换。G8.1 使用经过逐三角形编号验证的 G8 同性别兼容桥，空覆盖文件不会被忽略。当前角色发现 225 个稀疏 Morph，23 个可直接求值、16 个默认可见；其余 Formula / HD 项不可用。支持载入保存的直接 Morph 权重，目标 URI 不匹配不能仅凭顶点数套用。
 
@@ -611,7 +619,7 @@ Spec 004 中文提交基线为 `be0dbd1`。005 本次按用户新授权归档为
 
 启动入口 `tools/view_sample.ps1 -Sample Character|Prop`，默认副屏并生成新的输出目录。`--inspect` 无窗口 / 无 GPU；`--dump-shaders` 无窗口导出材质图与绑定；`--smoke --file` 可离线导出 Combined EXR / PNG 与 Diffuse Color PNG。`tools/build.ps1` 只自动运行轻量 CTest，不启动 demo 或性能回放。
 
-新增 nlohmann/json 3.12.0，MIT，来源及哈希位于 `third_party/nlohmann/SOURCE.md`，许可复制到 `out/licenses/nlohmann-json`。没有复用 Diffeomorphic / DAZ Studio 实现代码。
+新增 nlohmann/json 3.12.0，MIT，来源及哈希位于 `third_party/nlohmann/SOURCE.md`，许可复制到 `out/vs2022/Release/licenses/nlohmann`。没有复用 Diffeomorphic / DAZ Studio 实现代码。
 
 ## 事实边界与下一步
 
@@ -627,12 +635,12 @@ Spec 001 历史 CUDA 提交帧率 21.60–23.00、OptiX 27.42–28.70；严格 V
 
 ## 构建环境与保护事项
 
-- CMake / MSVC：VS 2022 Community，C++20；构建 `build`、程序 `out`。
+- CMake / MSVC：VS 2022 Community，C++20；构建 `build/vs2022`、程序 `out/vs2022/Release`。
 - Blender 原目录 `D:\Github\blender` 的 main / 5.3 alpha 与空 index（20638 staged deletions）是已有状态，**禁止 reset / clean**。
 - 独立工作树 `D:\Github\blender-5.2.2`，commit `d13f752e3b9c4f8c261cda552b1021f8bcc0382c`，分支 `dazfastviewer-blender-5.2.2`；跳过缺失的 LFS 笔刷二进制，不影响已使用源码。
 - 独立 Cycles `.research/cycles-v5.2.0`，commit `3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba`；Windows 库 `.research/windows-libs-metadata`，commit `60d6e96b917568278d400a4024c98da0fb777338`。
 - `tools/prepare_cycles.py` 生成 `.deps/cycles`，移植 35 个 Blender 5.2.2 文件（34 个补丁与 image_maketx），其余保留独立来源；保留 BSD sky / 独立 allocator，不链接 Blender GPL guardedalloc。不要直接修改生成树，应用项目补丁并记录来源。
 - CUDA 12.9.41；OptiX `D:\Github\optix-dev`，v9.1.0 / `f1f6dd803f3159992d248178f6e09421c6eb8b6d`；RTX 4070 Ti SUPER、驱动 591.86。
-- 已按用户要求初始化主工程 Git 仓库，默认分支 `main`，提交说明使用中文。构建、运行产物、研究源码和用户模型均不加入版本管理；`out/` 仍是开发暂存，整体发布许可与依赖审计未完成。
+- 已按用户要求初始化主工程 Git 仓库，默认分支 `main`，提交说明使用中文。构建、运行产物、研究源码和用户模型均不加入版本管理；运行包 仍是开发暂存，整体发布许可与依赖审计未完成。
 
 详细阶段状态见 [specs/STATUS.md](specs/STATUS.md)，本轮实测见 [Spec 003 执行报告](specs/003-minimal-daz-loader/execution-report.md)。

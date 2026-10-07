@@ -2,7 +2,7 @@
 
 ## 加载与解析
 
-[`loader.cpp`](../../src/daz/loader.cpp) 使用 nlohmann/json 3.12.0（MIT）和既有 zlib。新增依赖的来源、SHA256 和许可证在 [`third_party/nlohmann`](../../third_party/nlohmann/SOURCE.md)；暂存运行文件时复制许可到 `out/licenses/nlohmann-json`。
+[`loader.cpp`](../../src/daz/loader.cpp) 使用 nlohmann/json 3.12.0（MIT）和既有 zlib。新增依赖的来源、SHA256 和许可证在 [`third_party/nlohmann`](../../third_party/nlohmann/SOURCE.md)；暂存运行文件时复制许可到 `out/vs2022/Release/licenses/nlohmann`。
 
 Repository 缓存文档并记录实际读取的依赖。URI 分离路径与 fragment 后做 UTF-8 百分号解码；以 `/` 开头的路径相对内容库根目录。相对路径优先相对引用文档查找，再查内容库；不支持网络 URI。解析后的引用不得以 `..` 越过根目录。
 

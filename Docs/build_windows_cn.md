@@ -96,7 +96,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\build.ps1 -VisualStudi
 
 构建脚本会配置 CMake、构建默认目标、暂存 EXE / DLL / GPU 内核，再执行全部已注册 CTest。任何一步失败都会返回非零退出码。首次会编译 Jolt、Cycles 和 GPU 内核，耗时明显长于后续增量构建。
 
-所有操作默认局限于工程的 `.deps`、`build`、`out`，并在工程根目录生成 `DazFastViewer.sln`。依赖脚本可以重复执行；已准备的源码和归档可复用，下载中断可重试，不会删除用户已有的构建目录或自动切换版本不匹配的源码 checkout。
+VS 2022 Release 的依赖位于 `.deps`，构建位于 `build/vs2022`，运行包位于 `out/vs2022/Release`，工程根目录的 `DazFastViewer.sln` 引用该构建目录。依赖脚本可以重复执行；已准备的源码和归档可复用，下载中断可重试，不会删除用户已有的构建目录或自动切换版本不匹配的源码 checkout。
 
 ```text
 DazFastViewer.sln         根目录的 Visual Studio 主程序入口（自动生成）
@@ -116,7 +116,7 @@ out/vs2022/Release/       可启动的程序、DLL、lib/*.zst、构建清单
 out/vs2022/Debug/         Debug 开发运行目录
 ```
 
-不要将 `.deps`、`build`、`out`、生成的 `DazFastViewer.sln` 或 `CMakeUserPresets.json` 提交到仓库。不要把原机器的 CMakeCache、Python 虚拟环境复制到另一台机器继续使用；绝对路径和工具链可能已改变。新机器执行构建脚本会重新生成根目录解决方案。
+不要将 `.deps`、`build`、运行包、生成的 `DazFastViewer.sln` 或 `CMakeUserPresets.json` 提交到仓库。不要把原机器的 CMakeCache、Python 虚拟环境复制到另一台机器继续使用；绝对路径和工具链可能已改变。新机器执行构建脚本会重新生成根目录解决方案。
 
 ## 4. 常用构建选项
 
@@ -186,7 +186,9 @@ $cmake = "$PWD/.deps/python/Scripts/cmake.exe"
 & .\.deps\python\Scripts\python.exe tools\stage_runtime.py --build-dir build/vs2022 --configuration Release
 ```
 
-直接使用 preset 时默认构建全部上述 GPU 架构；可以在首次配置加 `-DCYCLES_CUDA_BINARIES_ARCH=sm_86` 等参数，或创建本地 `CMakeUserPresets.json`。不要在一个已有构建目录中切换 VS 生成器。IDE 启动依赖自动部署到编译目录；需要更新可分发的 `out` 目录时，再运行上面的 `stage_runtime.py` 或完整的 `build.ps1`。
+直接使用 preset 时默认构建全部上述 GPU 架构；可以在首次配置加 `-DCYCLES_CUDA_BINARIES_ARCH=sm_86` 等参数，或创建本地 `CMakeUserPresets.json`。不要在一个已有构建目录中切换 VS 生成器。IDE 启动依赖自动部署到编译目录；需要更新 `out/vs2022/Release` 时，再运行上面的 `stage_runtime.py` 或完整的 `build.ps1`。部署脚本默认读取 CMake 配置的安装路径；Debug 等配置使用各自的目录。
+
+有意将同配置的运行包迁移到新的构建目录时，可在 `stage_runtime.py` 命令中加 `--replace-build`，更新运行包归属和部署清单。该选项仍拒绝混用不同配置的运行包。
 
 调试时在同一个根目录 SLN 中切换至 **Debug / x64** 即可，构建与启动目录会同步切换。Debug 用于开发，不用于衡量 Release 性能，不作为可分发包；目标机器必须有相应的调试 CRT。默认启动项目由 [CMake VS_STARTUP_PROJECT](https://cmake.org/cmake/help/v4.2/prop_dir/VS_STARTUP_PROJECT.html) 设置。
 

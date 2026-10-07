@@ -22,6 +22,29 @@ stage = load('stage_runtime')
 
 
 class BuildToolsTest(unittest.TestCase):
+    def test_staging_uses_configured_runtime_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            build = Path(temp) / 'build/vs2022'
+            runtime = Path(temp) / 'out/vs2022/Release'
+            cache = {'CMAKE_INSTALL_PREFIX': str(runtime)}
+            self.assertEqual(stage.runtime_output(build, 'Release', cache), runtime.resolve())
+            self.assertEqual(stage.runtime_output(build, 'Debug', cache), runtime.with_name('Debug').resolve())
+            custom = Path(temp) / 'custom package'
+            self.assertEqual(stage.runtime_output(build, 'Release', cache, custom), custom.resolve())
+            self.assertEqual(stage.runtime_output(build, 'Release', {'CMAKE_INSTALL_PREFIX': str(custom)}), custom.resolve())
+
+    def test_staging_without_install_prefix_uses_generator(self):
+        build = ROOT / 'build/vs2022'
+        for year, generator in (('2022', 'Visual Studio 17 2022'), ('2026', 'Visual Studio 18 2026')):
+            cache = {'CMAKE_GENERATOR': generator}
+            self.assertEqual(stage.runtime_output(build, 'Release', cache), (ROOT / 'out' / ('vs' + year) / 'Release').resolve())
+
+    def test_staging_requires_configuration_directory(self):
+        build = ROOT / 'build/vs2022'
+        for explicit in (None, ROOT / 'out'):
+            with self.assertRaisesRegex(RuntimeError, 'configuration directory'):
+                stage.runtime_output(build, 'Release', {'CMAKE_INSTALL_PREFIX': str(ROOT / 'out')}, explicit)
+
     def test_manifest_does_not_open_unrelated_linker_outputs(self):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp)

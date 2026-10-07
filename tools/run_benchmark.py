@@ -14,7 +14,7 @@ def run(backend, index, seconds, warmup, refine):
     if directory.exists():
         raise RuntimeError(f"保留已有证据，不覆盖: {directory}")
     directory.mkdir(parents=True)
-    command = [str(ROOT/"out/CyclesViewportBench.exe"), "--benchmark", "--device", backend,
+    command = [str(ROOT/"out/vs2022/Release/CyclesViewportBench.exe"), "--benchmark", "--device", backend,
                "--seconds", str(seconds), "--warmup", str(warmup), "--refine", str(refine), "--output", str(directory)]
     (directory/"command.json").write_text(json.dumps(command, indent=2), encoding="utf-8")
     with (directory/"console.log").open("w", encoding="utf-8") as log, (directory/"gpu.csv").open("w") as gpu:

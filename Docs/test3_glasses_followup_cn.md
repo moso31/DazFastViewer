@@ -25,11 +25,11 @@ A 头部基础网格区域（基础坐标高度大于 1.6 米）的 RMS 为 0.09
 
 ## 验证与证据
 
-- `artifacts/test3-glasses/channel-full-build.log`：重新构建全部目标，12 项 CTest 全部通过并部署到 `out`。外层 PowerShell 因 CMake 开发警告显示非零返回；日志中的编译、CTest 和部署步骤均已完成。
+- `artifacts/test3-glasses/channel-full-build.log`：重新构建全部目标，12 项 CTest 全部通过并部署到 运行包。外层 PowerShell 因 CMake 开发警告显示非零返回；日志中的编译、CTest 和部署步骤均已完成。
 - `scene_workflow` 新增端到端通道覆盖用例，覆盖负下限、上限、关闭限幅、默认字段继承、网格形变和 Head 中心 ERC；四实例按正反顺序发现，并分别执行同步 / 延迟目录路径，验证缓存隔离。已有铰链、骨骼附件与恢复测试继续通过。
 - `channel-after.json`：原生 DUF 求值顶点；`channel-dbzdiff.json`：新 DBZ 逐顶点对照；`channel-head-diff.json`：头部区域、中心和参数值对照。
 - `channel-ui/editor-check.json`：原始完整场景在副屏检查通过，两副眼镜的树父项均验证为所属人物的 Head。`A-head-attachment.png` 与 `B-head-attachment.png` 已目视复核；A 镜架下缘完整可见，先前穿入脸颊的现象消失。渲染报告无错误。
 
-部署文件：`out/DazFastViewer.exe`；SHA-256：`6b52f2538224cc17e2a943cad997ad1ffbae3d820ee75f6eefb80a72bdaa8344`。重新启动该程序并载入原始 `test3.duf` 即可使用，无需先导入 DBZ。
+部署文件：历史验证的可执行文件；SHA-256：`6b52f2538224cc17e2a943cad997ad1ffbae3d820ee75f6eefb80a72bdaa8344`。重新启动该程序并载入原始 `test3.duf` 即可使用，无需先导入 DBZ。
 
 本专项验证两副眼镜及头部对齐，不代表完整 Iray / 全场景 Golden。A 全身基础网格对 DBZ 仍有 20.641 毫米 RMS，B 为 0.893 毫米；这些数据保留在对照报告中，不能将眼镜误差数字扩展到全身或全部服装。008 未开始。本轮按用户要求，以中文提交说明将代码、测试和文档归档至本地 Git；提交记录见 `git log`。

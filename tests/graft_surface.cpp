@@ -5,10 +5,13 @@
 #include <set>
 #include <cmath>
 #include <stdexcept>
+#include <fstream>
 using namespace dfv;
 static void require(bool v,const char *message) {if(!v) throw std::runtime_error(message);}
 static bool close(ir::Vec3 a,ir::Vec3 b) {return std::hypot(a.x-b.x,a.y-b.y,a.z-b.z)<2e-6;}
-int main() {try {
+#include "graft_activation.inl"
+int main(int argc,char **argv) {try {
+  if(argc==5&&std::string(argv[1])=="--actual") {actual_graft_activation(argv[2],argv[3],argv[4]);return 0;}
   auto scene=bench::graft_fixture();scene.validate();auto groups=runtime::graft_groups(scene);require(groups==std::vector<std::vector<uint32_t>>{{0,1}},"附件分组错误");
   runtime::GraftSurface surface(scene,groups[0],false);
   // 手工建立完整曲面的参考拓扑，不经过 GeoGraft 分组或索引拼接实现。
@@ -43,5 +46,6 @@ int main() {try {
   changed=scene;auto nested=changed.meshes[1];nested.id="nested";nested.graft_target_vertices=5;nested.graft_target_polygons=4;nested.graft_vertex_pairs={{0,0},{1,1},{2,4}};nested.graft_hidden_polygons={0};nested.positions={nested.positions[0],nested.positions[1],nested.positions[4]};nested.polygons.resize(1);nested.polygons[0].vertices={0,1,2};nested.triangles.resize(1);nested.triangles[0].vertices={0,1,2};nested.source_polygon_count=1;changed.meshes[1].hidden_polygons={0};changed.meshes.push_back(nested);
   auto nested_instance=changed.instances[1];nested_instance.id="nested";nested_instance.mesh=2;nested_instance.graft_source=1;changed.instances.push_back(nested_instance);auto nested_groups=runtime::graft_groups(changed);require(nested_groups==std::vector<std::vector<uint32_t>>{{0,1,2}},"嵌套次序错误");runtime::GraftSurface nested_surface(changed,nested_groups[0],false);
   require(nested_surface.positions().size()==surface.positions().size(),"嵌套替换引入重复顶点");for(auto p:nested_surface.positions()) require(std::any_of(surface.positions().begin(),surface.positions().end(),[&](auto q){return close(p,q);}),"嵌套替换改变相同几何");
-  std::cout<<"GeoGraft shared topology / normals / UV / morph / instances / subdivision: PASS\n";return 0;
+  graft_activation_checks();
+  std::cout<<"GeoGraft shared topology / normals / UV / morph / instances / subdivision / activation: PASS\n";return 0;
 }catch(const std::exception &e) {std::cerr<<e.what()<<'\n';return 1;}}

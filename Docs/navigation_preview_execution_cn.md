@@ -24,8 +24,8 @@ OpenGL 显示缓冲仍按完整视口分配，按每个帧槽实际尺寸上传�
 
 ## 验证
 
-- Release 编辑器、基准程序及相机测试编译通过，部署到 `out`。
-- 13 项工程测试通过。直接枚举全部 CTest 时，额外的上游 `cycles_version` 因缺少 `out/cycles.exe` 未运行；它不在项目 `tools/build.ps1` 的 13 项检查集合中。
+- Release 编辑器、基准程序及相机测试编译通过，部署到 运行包。
+- 13 项工程测试通过。直接枚举全部 CTest 时，额外的上游 `cycles_version` 因缺少 上游独立程序 `cycles.exe` 未运行；它不在项目 `tools/build.ps1` 的 13 项检查集合中。
 - 相机测试覆盖持续导航不超时、即时输入静止恢复、延迟输入仍先预览、第一人称位置固定、俯仰限幅及转头后的键盘位移。
 - 副屏小场景交互检查通过：W/A/S/D/Q/E、右键环绕、第一人称转头、右键释放后仍按 W、滚轮、聚焦、捕获丢失和窗口失焦，共 13 项。实际输出从 175×223 / 最多 2 样本恢复到 700×894 并继续累计；几何更新、Morph / Skinning 重算及 GPU 回读均为 0。
 - 原生 `H:\g1\Scenes\test.duf` 副屏复测同样通过全部 13 项切换检查，场景包含 32 个网格和 35638 条曲线；导航没有新增几何更新、Morph 或蒙皮求值，GPU 回读为 0。记录见 `artifacts/navigation-preview/test-scene/`。该轮聚焦调用渲染器接口，最终小场景测试进一步使用实际 F 键消息验证入口。
@@ -36,7 +36,7 @@ OpenGL 显示缓冲仍按完整视口分配，按每个帧槽实际尺寸上传�
 
 ```powershell
 python tools/make_lazy_fixture.py artifacts/navigation-preview/fixture
-./out/DazFastViewer.exe --file artifacts/navigation-preview/fixture/scene.duf --project artifacts/navigation-preview/fixture/project.json --output artifacts/navigation-preview/ui-final --navigation-test
+./out/vs2022/Release/DazFastViewer.exe --file artifacts/navigation-preview/fixture/scene.duf --project artifacts/navigation-preview/fixture/project.json --output artifacts/navigation-preview/ui-final --navigation-test
 ```
 
 本轮验证渲染切换与输入语义；复杂材质在预览中仍有着色成本，未据此宣称所有视角达到固定 FPS，也不改变静止画面收敛质量的既有验收状态。

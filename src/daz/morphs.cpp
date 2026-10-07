@@ -167,7 +167,9 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
       out.report["targets"].push_back({{"id",target.id},{"label",target.label},{"morphs",J::array()},{"geometry_shell",true}});
       out.targets.push_back(std::move(target));out.formulas.emplace_back();continue;
     }
-    const auto target_key=key(object.geometry_file)+"#"+object.geometry_id;
+    auto target_key=key(object.geometry_file)+"#"+object.geometry_id;
+    // 来源节点证明属于本次实例；同几何的其他实例不能复用未经确认的节点 Morph。
+    for(const auto &source:object.geometry_sources) if(!source.node.empty()) target_key+='\n'+key(source.file)+"#"+source.id+"?node="+source.node;
     auto apply_override=[&](runtime::Morph &m) {
       for(const auto &owner:{std::string{},"#"+object.id,"#"+object.geometry_instance_id}) if(auto it=overrides.find({owner,m.id});it!=overrides.end()) {
         const auto &channel=it->second;
@@ -198,7 +200,11 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
     {
     diagnostics::Scope assets_scope("asset_metadata");
     allowed.push_back(asset(object.geometry_file,object.geometry_id));
-    for(const auto &source:object.geometry_sources) allowed.insert(allowed.begin(),asset(source.file,source.id));
+    for(const auto &source:object.geometry_sources) {
+      auto inherited=asset(source.file,source.id);
+      if(!source.node.empty()&&inherited.nodes.contains(source.node)) inherited.geometry_nodes.insert(source.node);
+      allowed.insert(allowed.begin(),std::move(inherited));
+    }
     const auto family_file=object.geometry_sources.empty()?object.geometry_file:object.geometry_sources.back().file;
     const auto family=lower(family_file.parent_path().filename().string());
     if(family=="female 8_1" || family=="male 8_1") {

@@ -22,7 +22,7 @@ G8.1 使用 `-Sample Character`，闭眼搜索 **Eye Blink**。旧 Eyes Closed /
 `tools/build.ps1` 编译、部署并运行七项轻量 CTest，不启动 demo。`FormulaRuntimeTest` 无参数执行合成单元检查，提供资产参数时执行参数、Alias、JCM 开关、姿势与恢复检查：
 
 ```cmd
-build\Release\FormulaRuntimeTest.exe ^
+build\vs2022\bin\Release\FormulaRuntimeTest.exe ^
  "C:\Users\Public\Documents\My DAZ 3D Library\People\Genesis 8 Female\Genesis 8 Basic Female.duf" ^
  "artifacts\spec007\manual-check\g8" ^
  "H:\G1\People\Genesis 8 Female\Poses\Bed Hogs II for Genesis 8 Female" ^
@@ -37,4 +37,4 @@ build\Release\FormulaRuntimeTest.exe ^
 
 参考报告为 `artifacts/spec007/validated/reference-report.json`；执行时不打开 Blender 窗口、不保存用户偏好。该数学对照不替代 DAZ Studio Golden。
 
-副屏端到端检查入口为 `out\DazFastViewer.exe --file "角色.duf" --project DazFastViewer.project.json --formula-test --output "新目录"`，当前专项入口使用 G8；最终已通过的五参数截图和 JSON 在 `artifacts/spec007/validated/editor`。已有证据可直接查看，不必为查看结果重复扫描和渲染。
+副屏端到端检查入口为 `out\vs2022\Release\DazFastViewer.exe --file "角色.duf" --project DazFastViewer.project.json --formula-test --output "新目录"`，当前专项入口使用 G8；最终已通过的五参数截图和 JSON 在 `artifacts/spec007/validated/editor`。已有证据可直接查看，不必为查看结果重复扫描和渲染。

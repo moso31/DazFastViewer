@@ -4,6 +4,7 @@
 #include "editor/content_catalog.h"
 #include <QAbstractListModel>
 #include <QApplication>
+#include <QClipboard>
 #include <QCache>
 #include <QComboBox>
 #include <QDateTime>
@@ -216,14 +217,11 @@ struct ContentBrowser::Impl {
     QObject::connect(view->verticalScrollBar(),&QScrollBar::valueChanged,o,[this]{hide_preview();});
     QObject::connect(view,&QWidget::customContextMenuRequested,o,[this](const QPoint &point){
       const auto i=view->indexAt(point);if(!i.isValid())return;const auto item=model->items[size_t(i.row())];hide_preview();
-      QMenu menu(owner);auto *open=menu.addAction(item.directory?QStringLiteral("打开目录"):QStringLiteral("添加 / 应用 DUF"));
-      auto *locate=menu.addAction(QStringLiteral("在内容库中定位"));auto *system=menu.addAction(QStringLiteral("在资源管理器中打开所在目录"));
-      QAction *remove=nullptr;if(recent()){menu.addSeparator();remove=menu.addAction(QStringLiteral("从近期使用中移除"));remove->setObjectName("RemoveRecentContent");}
-      const auto *selected=menu.exec(view->viewport()->mapToGlobal(point));
-      if(selected==open)activate_item(i);
-      else if(selected==locate)owner->locate(item.path);
-      else if(selected==system)QDesktopServices::openUrl(QUrl::fromLocalFile(item.directory?item.path:QFileInfo(item.path).path()));
-      else if(remove&&selected==remove){history.remove(item.path);show_items();}
+      context_menu(item,view->viewport()->mapToGlobal(point),recent());
+    });
+    tree->setContextMenuPolicy(Qt::CustomContextMenu);
+    QObject::connect(tree,&QWidget::customContextMenuRequested,o,[this](const QPoint &point){
+      const auto i=tree->indexAt(point);if(!i.isValid())return;hide_preview();context_menu({files->filePath(i),{},files->isDir(i)},tree->viewport()->mapToGlobal(point),false);
     });
     QObject::connect(up,&QAction::triggered,o,[this]{if(recent()) return;const auto root=libraries->currentText();if(directory.compare(root,Qt::CaseInsensitive)!=0){resume_search();navigate(QFileInfo(directory).path());}});
     QObject::connect(refresh,&QAction::triggered,o,[this]{thumbnails.clear();show_items();index.refresh(roots);});
@@ -260,6 +258,28 @@ struct ContentBrowser::Impl {
     });
   }
   void hide_preview() {hovered.clear();hover_row=-1;preview->hide();}
+  void context_menu(const Item &item,const QPoint &position,bool history_menu) {
+    QMenu menu(owner);auto *open=menu.addAction(item.directory?QStringLiteral("打开目录"):QStringLiteral("添加 / 应用 DUF"));
+    auto *locate=menu.addAction(QStringLiteral("在内容库中定位"));auto *system=menu.addAction(QStringLiteral("在资源管理器中打开所在目录"));
+    auto *copy=menu.addAction(QStringLiteral("拷贝实际路径"));copy->setObjectName("CopyActualContentPath");
+    QAction *remove=nullptr;if(history_menu){menu.addSeparator();remove=menu.addAction(QStringLiteral("从近期使用中移除"));remove->setObjectName("RemoveRecentContent");}
+    const auto *selected=menu.exec(position);
+    if(selected==open){if(item.directory){resume_search();navigate(item.path);}else activate(item.path);}
+    else if(selected==locate)owner->locate(item.path);
+    else if(selected==system)QDesktopServices::openUrl(QUrl::fromLocalFile(item.directory?item.path:QFileInfo(item.path).path()));
+    else if(selected==copy) {
+      try {
+        auto actual=std::filesystem::path(item.path.toStdWString());
+        if(!item.directory&&daz::supported_content_entry(actual)) {
+          std::vector<std::filesystem::path> libraries;for(const auto &root:roots)libraries.emplace_back(root.toStdWString());actual=daz::content_asset(actual,libraries);
+        }
+        const auto path=QFileInfo(QString::fromStdWString(actual.wstring())).canonicalFilePath();
+        if(path.isEmpty())throw std::runtime_error("对应资源已不存在");
+        QApplication::clipboard()->setText(QDir::toNativeSeparators(path));
+      }catch(const std::exception &e){notice->setText(QStringLiteral("无法拷贝实际路径：")+QString::fromUtf8(e.what()));notice->show();}
+    }
+    else if(remove&&selected==remove){history.remove(item.path);show_items();}
+  }
   void show_preview(const QString &path) {
     if(hover_row<0||size_t(hover_row)>=model->items.size()||model->items[size_t(hover_row)].path!=path) {hide_preview();return;}
     const auto image=thumbnails.get(path,true);preview_image->setVisible(!image.isNull());if(!image.isNull()) preview_image->setPixmap(image.scaled(384,384,Qt::KeepAspectRatio,Qt::SmoothTransformation));

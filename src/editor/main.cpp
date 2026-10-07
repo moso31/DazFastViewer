@@ -13,6 +13,7 @@
 #include "editor/extension_panel.h"
 #include "editor/physics_panel.h"
 #include "editor/ground_panel.h"
+#include "editor/geograft_panel.h"
 #include "editor/ground_selection.h"
 #include "editor/object_hierarchy.h"
 #include "editor/group_transforms.h"
@@ -119,6 +120,13 @@ class Editor final:public EditorWindow {
   #include "city/editor_test.inl"
   QWidget *host_=nullptr;
   ParameterPanel *parameters_=nullptr;
+  GeograftPanel *geograft_panel_=nullptr;
+  void bind_geograft() {
+    if(!geograft_panel_)return;std::vector<GeograftItem> items;
+    if(!loading_&&document_&&selected_>=0&&selected_joint_<0&&selected_light_<0&&hierarchy_->selectedItems().size()==1)
+      for(auto t:geograft_targets(*document_,size_t(selected_)))items.push_back({t,text(document_->catalog.targets[t].label),snapshot_.values[t].graft_enabled});
+    geograft_panel_->bind(items);
+  }
   ContentBrowser *browser_=nullptr;
   QTreeWidget *hierarchy_=nullptr;
   QCheckBox *physics_only_=nullptr;
@@ -900,7 +908,7 @@ class Editor final:public EditorWindow {
     parameters_->setVisible(!selected_water()&&!selected_cloud());
     for(auto *control:std::initializer_list<QWidget *>{refresh_parameters_,retry_parameters_,manual_morph_,apply_parameters_})if(control)control->setVisible(!selected_water()&&!selected_cloud());
     if(materials_){auto *item=active_selection(hierarchy_);materials_->bind(document_,&snapshot_,index,index==-4&&item?item->data(0,Qt::UserRole+3).toString().toStdString():std::string{});}
-    bind_extension();bind_physics();
+    bind_extension();bind_physics();bind_geograft();
     pose_status_->setVisible(!selected_water()&&!selected_cloud());
     if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1);if(ground_panel_)ground_panel_->bind(target!=-1,ground_ratio(target),ground_offset(target),ground_body_only(target),target==-4,selected_water()&&target>=0);}
     if(delete_) delete_->setEnabled(!loading_&&document_&&(index>=0||light>=0));
@@ -966,7 +974,7 @@ class Editor final:public EditorWindow {
     if(!selected_group_.empty()){set_group_value(selected_group_,{});bind_group();return;}
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};value.unlimited_morphs.clear();
-    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};
+    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};value.graft_enabled=true;
     const auto &target=document_->catalog.targets[size_t(selected_)];
     std::erase_if(pending_parameters_,[&](const auto &p){return p.first.first==target.id;});apply_parameters_->setEnabled(!pending_parameters_.empty());
     for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].evaluable||target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
@@ -1929,6 +1937,10 @@ public:
     physics_panel_->simulate=[this](bool reset){simulate_physics(reset);};physics_panel_->hovered=[this](int slot){std::vector<MaterialSurface> surfaces;if(document_&&selected_>=0&&slot>=0)surfaces.push_back({document_->catalog.targets[size_t(selected_)].instance,size_t(slot)});if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
     ground_panel_=new GroundPanel;properties->addWidget(ground_panel_);ground_panel_->align=[this]{request_ground();};
     ground_panel_->changed=[this](double ratio,double offset,bool body_only){const int target=ground_target();if(target==-1||target==-4)return;auto edit=history_edit(QStringLiteral("修改地面对齐设置"));if(target>=0){auto &v=snapshot_.values[target];v.ground_alignment_ratio=ratio;v.ground_alignment_offset_cm=offset;v.ground_alignment_body_only=body_only;}else{auto &v=snapshot_.instance_ground[ground_id(target)];v.ratio=ratio;v.offset_cm=offset;v.body_only=body_only;}};
+    geograft_panel_=new GeograftPanel;properties->addWidget(geograft_panel_);geograft_panel_->changed=[this](size_t target,bool enabled){
+      if(loading_||!document_||target>=snapshot_.values.size())return;auto &value=snapshot_.values[target];if(value.graft_enabled==enabled)return;
+      auto edit=history_edit(enabled?QStringLiteral("启用 Geograft"):QStringLiteral("停用 Geograft"));value.graft_enabled=enabled;send();
+    };
     auto *morph_header=new QToolButton;morph_header->setObjectName("MorphCollapse");morph_header->setText(QStringLiteral("参数"));morph_header->setCheckable(true);morph_header->setChecked(true);morph_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);morph_header->setArrowType(Qt::DownArrow);properties->addWidget(morph_header);
     auto *morph_body=new QWidget;auto *morph_layout=new QVBoxLayout(morph_body);morph_layout->setContentsMargins(0,0,0,0);properties->addWidget(morph_body);
     parameters_=new ParameterPanel;parameters_->shared_scroll(property_scroll);parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};morph_layout->addWidget(parameters_);

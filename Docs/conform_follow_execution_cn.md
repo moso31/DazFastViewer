@@ -43,7 +43,7 @@
 ## 手动启动
 
 ```cmd
-"D:\Github\DazFastViewer\out\DazFastViewer.exe" --file "H:\G1\Scenes\test2.duf"
+"D:\Github\DazFastViewer\out\vs2022\Release\DazFastViewer.exe" --file "H:\G1\Scenes\test2.duf"
 ```
 
 在层次树选择其中一个人物，调整 Bodybuilder Size 或 Breasts Size，观察其衣服同步变化及其他人物保持原状；重置选中对象可恢复初始状态。

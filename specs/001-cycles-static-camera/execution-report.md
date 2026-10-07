@@ -4,7 +4,7 @@
 
 ## 可用产物
 
-- 程序：`out/CyclesViewportBench.exe`，默认 OptiX。
+- 程序：历史验证的可执行文件，默认 OptiX。
 - 构建：`tools/build.ps1`；固定来源生成器：`tools/prepare_cycles.py`。
 - 离线输出：`artifacts/smoke-optix/smoke.png`、`smoke.exr`；早期 CUDA smoke 位于 `artifacts/smoke-cuda/`。
 - 交互：右键旋转、Shift + 右键平移、滚轮缩放、Esc 关闭。
@@ -45,7 +45,7 @@ RTX 4070 Ti SUPER，驱动 591.86。2560×1440 原生渲染，pixel_size=1，关
 
 1. 严格显示事件关联：PresentMon 2.5.1 启动 ETW 返回 `access denied`。当前账户没有所需权限，未修改账户组或提升权限。原始错误为 `artifacts/presentmon-probe.log`。其 [官方命令行文档](https://github.com/GameTechDev/PresentMon/blob/v2.5.1/README-ConsoleApplication.md) 说明了显示跟踪选项；当前结果保持 `visible_fps_verified=false`。
 2. GPU kernel 独立计时、静态资源实际上传/重建计数、与同版本 Blender Reference 的图像误差对照。
-3. 最终发布制品的完整静态传递依赖 LICENSE / NOTICE 审计。当前 `out/` 为本机开发暂存，不作为完成审计的发行包。
+3. 最终发布制品的完整静态传递依赖 LICENSE / NOTICE 审计。当前 运行包 为本机开发暂存，不作为完成审计的发行包。
 4. DAZ 加载、Render IR、Morph / Pose 等后续 Spec。本阶段只证明独立渲染链路可运行，不证明真实 DAZ 资产兼容性已实现。
 
 已有证据足以推进后续问题分析；不因尚缺严格验收证明而反复运行同一性能用例。

@@ -80,6 +80,7 @@ bool MorphRuntime::set_transform(size_t target,const TransformValues &v) {
   old=v;dirty_transform(target);return true;
 }
 void MorphRuntime::set_visible(size_t target,bool visible) {values_.at(target).visible=visible;}
+void MorphRuntime::set_graft_enabled(size_t target,bool enabled) {values_.at(target).graft_enabled=enabled;}
 void MorphRuntime::dirty_transform(size_t target) {
   dirty_transforms_.insert(target);
   for(size_t i=0;i<parents_.size();++i) for(int p=parents_[i];p>=0;p=parents_[size_t(p)]) if(size_t(p)==target) {dirty_transforms_.insert(i);break;}

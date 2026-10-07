@@ -18,7 +18,7 @@
 
 额外 GPU 测试 PID 5340 达到 480 秒超时仍停在初次 `Sample 0/4096`，未取得可计量样本。先请求关闭测试窗口；退出未完成后，只终止这个已核对命令行的诊断进程，未关闭用户 PID 32948 或其他原有程序。**本轮没有完成真实 GPU 的修复前后对照，也没有验证完整 test9 的最终收敛速度。** 首轮 114 ms 不可据此恢复为验收结论。
 
-修正已部署 `out/DazFastViewer.exe`，SHA-256 为 `2351b37101539abfd7e820c6d49e8584d54e96c07f46f7bb7ec3ca51cef0628f`，清单中 203 个源码哈希一致。已运行的窗口仍使用旧映像，用户自行重启后才加载新版。验证摘要为 `live-followup/validation.json`；完整构建日志为 `live-followup/build-final-verified.log`。
+修正已部署 历史验证的可执行文件，SHA-256 为 `2351b37101539abfd7e820c6d49e8584d54e96c07f46f7bb7ec3ca51cef0628f`，清单中 203 个源码哈希一致。已运行的窗口仍使用旧映像，用户自行重启后才加载新版。验证摘要为 `live-followup/validation.json`；完整构建日志为 `live-followup/build-final-verified.log`。
 
 ## 测量方法
 
@@ -97,7 +97,7 @@ Cycles 的 CUDA / OptiX 显存不足时会使用系统内存，这会影响性�
 实验计划是 JSON 数组，每项包含 `target`，可选 `seconds`、`samples`、`disable_sss`、`disable_bump`、`hide`（对象标签数组）、`isolate`、`transparent_bounces`。所有消融只作用于诊断进程中的 Cycles 场景，不保存到 DUF / DUFEX。
 
 ```powershell
-& .\out\DazFastViewer.exe --file 'H:\g1\Scenes\test9.duf' --render-profile configs/render-profile.example.json --sampling-settings configs/render-profile-sampling.example.json --output artifacts/render-performance/reproduce
+& .\out\vs2022\Release\DazFastViewer.exe --file 'H:\g1\Scenes\test9.duf' --render-profile configs/render-profile.example.json --sampling-settings configs/render-profile-sampling.example.json --output artifacts/render-performance/reproduce
 python tools/analyze_render_profile.py artifacts/render-performance/reproduce
 ```
 
@@ -111,6 +111,6 @@ python tools/analyze_render_profile.py artifacts/render-performance/reproduce
 - 新增普通对象隐藏／恢复并同时修改 Morph、完全隐藏原型但保留可见实例等检查。原策略和资源裁剪各跑 17 阶段 OptiX GeoGraft 回归，全部通过；17 对 PNG 逐像素相同。证据为 `graft-{baseline,pruned}/` 和 `graft-image-comparison.json`。
 - 从 test9 只读提取 big_01 及挂接物，正式发布程序实际执行 `FE Low Ponytail Base Hair` 显示／隐藏往返，检查通过：保持一个 Session，仅一次几何恢复，最终曲线数回到 0；默认自适应 0.01、原始纹理、SSS 保留、降噪关闭。证据为 `visibility-release/`。提取前后原始 test9 的 SHA-256 相同。
 - GPU 实验串行执行。工程编译／CPU 检查部分与首轮实验同时进行，因此没有把本次数字描述为隔离机器、多轮统计的专业 GPU 基准。
-- 新版部署至 `out/DazFastViewer.exe`，SHA-256：`c55d10a1c2ee0a151b00b1dd86381edac2c8d69a0e679fb5ffe89dccd0799eb2`。部署清单中的 202 个源码文件全部一致。原始 DUF 未写入，未创建 Git 提交。
+- 新版部署至 历史验证的可执行文件，SHA-256：`c55d10a1c2ee0a151b00b1dd86381edac2c8d69a0e679fb5ffe89dccd0799eb2`。部署清单中的 202 个源码文件全部一致。原始 DUF 未写入，未创建 Git 提交。
 
 初次宽泛运行全部 CTest 时，上游 `cycles_version` 因没有构建独立 `cycles.exe` 被标记为 Not Run；随后按项目 `tools/build.ps1` 规定的 24 项测试完整通过。没有将未运行项宣称为通过。

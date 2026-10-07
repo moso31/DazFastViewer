@@ -1,6 +1,6 @@
 # 006 执行报告
 
-日期：2026-09-21。006 的基础骨架、蒙皮与单帧姿势 DUF 实施范围已完成，Release 已部署到 `out/DazFastViewer.exe`；等待用户手动验收。此状态不代表整个 Phase 5 或 DAZ Studio Golden 已完成。
+日期：2026-09-21。006 的基础骨架、蒙皮与单帧姿势 DUF 实施范围已完成，Release 已部署到 历史验证的可执行文件；等待用户手动验收。此状态不代表整个 Phase 5 或 DAZ Studio Golden 已完成。
 
 编辑器新增“姿势 → 应用姿势 DUF / 恢复载入姿势”、应用详情、骨骼层级及框选当前对象。Explorer 双击姿势会应用到选中角色。Morph 在蒙皮前计算，恢复姿势保留 Morph，重置对象同时恢复形态与姿势。命令见 [手动预览](tests.md)。
 
@@ -22,7 +22,7 @@
 
 独立对照使用本机 Blender 5.2.2 的 mathutils 与 NumPy，重新读取原始 DSF 顶点 / 骨架 / 权重和姿势。没有使用 Diffeomorphic 求值或 DAZ Studio 导出，因此这是基础蒙皮的独立数学检查，不是 DAZ 最终形态 Golden。
 
-第一轮副屏联调暴露 Figure 控制器和子骨骼 Alias 同名误判，已按所属节点与 name / id 修复，并增加回归用例；修复后只重跑该副屏流程。首次 CTest 未限定工程范围时，Cycles 自带 `cycles_version` 因未部署通用 `out/cycles.exe` 而未运行；最终使用工程构建脚本规定的六项测试范围，全部通过。没有进行性能回放或重复运行完整内容库基准。
+第一轮副屏联调暴露 Figure 控制器和子骨骼 Alias 同名误判，已按所属节点与 name / id 修复，并增加回归用例；修复后只重跑该副屏流程。首次 CTest 未限定工程范围时，Cycles 自带 `cycles_version` 因未部署通用 上游独立程序 `cycles.exe` 而未运行；最终使用工程构建脚本规定的六项测试范围，全部通过。没有进行性能回放或重复运行完整内容库基准。
 
 ## 当前边界
 

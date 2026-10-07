@@ -59,7 +59,7 @@ CPU 诊断包含几何 / 材质、参数发现、骨架、公式编译、报告�
 - 在同一真实场景上运行完整差值路径和按需路径，**37 个网格的顶点缓冲区字节哈希、全部有效权重数组哈希、非零权重数、差值访问数和 Fit To 绑定数一致**，见[核对结果](../artifacts/load-profile/equivalence.json)。这不是以截图相似替代数值核对，也不扩大此前视觉 Golden 的结论。
 - Morph、骨架、公式三份报告与优化前完全相同；几何报告仅 `parsed_documents` 改变，因为大部分 Modifier 改走元数据视图，见[报告比较](../artifacts/load-profile/report-equivalence.json)。原有两份 `eJCMNekoEyesClosed` 的差值数量错误仍被报告，没有被缓存或按需加载掩盖。
 - 最终发布版本在第二屏通过了首用补载、连续输入、手动暂存 / 应用、刷新时保留暂存值、不重建网格以及重置的界面验证，见[界面报告](../artifacts/load-profile/lazy-ui-release/editor-check.json)。
-- 已更新 `out/DazFastViewer.exe` 与 `CyclesViewportBench.exe`，核对发布文件、构建文件和 `out/build-manifest.json` 的哈希一致。测试生成的有效元数据索引已复制到默认缓存位置，下次打开该场景可以使用；记录见[缓存交付](../artifacts/load-profile/cache-deployment.json)。
+- 已更新 历史验证的可执行文件 与 `CyclesViewportBench.exe`，核对发布文件、构建文件和 历史部署清单 的哈希一致。测试生成的有效元数据索引已复制到默认缓存位置，下次打开该场景可以使用；记录见[缓存交付](../artifacts/load-profile/cache-deployment.json)。
 
 ## 当前边界
 
@@ -74,12 +74,12 @@ CPU 诊断包含几何 / 材质、参数发现、骨架、公式编译、报告�
 
 ```powershell
 $env:DFV_ASSET_CACHE = 'D:/Github/DazFastViewer/artifacts/my-load-cache'
-./build/Release/SceneLoadProfile.exe 'H:/G1/Scenes/3.duf' './DazFastViewer.project.json' './artifacts/my-load-profile'
+./build/vs2022/bin/Release/SceneLoadProfile.exe 'H:/G1/Scenes/3.duf' './DazFastViewer.project.json' './artifacts/my-load-profile'
 # 相同命令换输出目录再次执行，测本程序元数据缓存命中。
 # 末尾加 --eager 可核对完整差值路径。
 
 python tools/make_lazy_fixture.py artifacts/lazy-fixture
-./out/DazFastViewer.exe --file artifacts/lazy-fixture/scene.duf --project artifacts/lazy-fixture/project.json --lazy-test --output artifacts/lazy-ui
+./out/vs2022/Release/DazFastViewer.exe --file artifacts/lazy-fixture/scene.duf --project artifacts/lazy-fixture/project.json --lazy-test --output artifacts/lazy-ui
 ```
 
 界面自动验证始终运行在第二屏。测试夹具独立生成，不写入用户内容库。

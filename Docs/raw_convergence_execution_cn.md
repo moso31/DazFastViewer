@@ -2,7 +2,7 @@
 
 日期：2026-09-22。007 后修复，008 未开始。本批修复按用户要求以中文说明归档到本地 Git，提交记录见 `git log`。
 
-用户的验收目标是：不启用降噪，相机稳定后 15 秒内肉眼几乎无噪点，仅个别区域残留可接受。此前擅自开启 OptiX 降噪偏离了要求；历史报告中的 3.43 秒降噪画面不能作为原始采样收敛证据。本轮已关闭视口与离线渲染的降噪，并部署到 `out`。当前蓝噪声采样有改善，但尚未通过用户描述的 15 秒质量目标。
+用户的验收目标是：不启用降噪，相机稳定后 15 秒内肉眼几乎无噪点，仅个别区域残留可接受。此前擅自开启 OptiX 降噪偏离了要求；历史报告中的 3.43 秒降噪画面不能作为原始采样收敛证据。本轮已关闭视口与离线渲染的降噪，并部署到 运行包。当前蓝噪声采样有改善，但尚未通过用户描述的 15 秒质量目标。
 
 ## 已实施
 
@@ -46,10 +46,10 @@
 
 最终部署程序不带采样覆盖配置再次运行真实场景，15.000 秒实际呈现 1232 样本，31.812 秒达到 4096。运行时确认降噪关闭、Blue Noise First、自适应阈值 0.01、HDRI MIS 开启、几何 / 实例更新均为 0。最终原始图见 [15 秒画面](../artifacts/raw-convergence/final-default-15s/timed.png)和[继续采样画面](../artifacts/raw-convergence/final-default-15s/reference.png)；流程检查 PASS 不代表视觉收敛达标。两次相同蓝噪声设置存在运行时间波动，进一步说明不能把单次样本索引比值作为稳定提速倍率。
 
-`out` 与 `build/bin/Release` 两个可执行文件的 SHA-256 已核对一致，记录于 `artifacts/raw-convergence/final-evidence.json`。测试进程均已退出。
+运行包 与 `build/vs2022/bin/Release` 两个可执行文件的 SHA-256 已核对一致，记录于 `artifacts/raw-convergence/final-evidence.json`。测试进程均已退出。
 
 ```powershell
-& .\out\DazFastViewer.exe --file 'H:\g1\Scenes\test.duf' --capture-test --capture-target A --capture-target B --capture-target C --capture-front --capture-seconds 15 --capture-samples 4096 --output artifacts/raw-convergence/final-default-15s
+& .\out\vs2022\Release\DazFastViewer.exe --file 'H:\g1\Scenes\test.duf' --capture-test --capture-target A --capture-target B --capture-target C --capture-front --capture-seconds 15 --capture-samples 4096 --output artifacts/raw-convergence/final-default-15s
 ```
 
 对照时追加 `--sampling-settings artifacts/raw-convergence/baseline.json` 或 `blue-noise.json` / `tight-adaptive.json`。日志在 `artifacts/raw-convergence/build-final.log`、`ctest-final.log` 和 `stage-final.log`。

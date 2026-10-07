@@ -50,11 +50,11 @@
 
 依据为 [DAZ 置换说明](https://docs.daz3d.com/public/software/dazstudio/4/userguide/chapters/textures_surfaces_and_materials/start)、[Cycles 置换方法](https://docs.blender.org/manual/en/latest/render/materials/components/displacement.html)和[置换节点坐标空间](https://docs.blender.org/manual/en/latest/render/shader_nodes/displacement/displacement.html)。本轮没有加入 DAZ SubD Displacement Level 对应的细分／自适应细分，因此基础网格不足以表达的高频轮廓仍有差异；CPU 选取与悬停覆盖仍使用形变后的基础网格。不能将这次接入声明为 Iray 微置换完全等价。
 
-真实设备验证入口为 `out/CyclesViewportBench.exe --displacement-check --output <目录>`。验证生成自有 DUF / EXR 夹具，检查黑、灰、白、反向范围、关闭和无贴图，并在同一 Session 检查材质编辑、关闭／恢复、Morph／恢复、相机与对象变换。检查对象是 GPU 求值后读回的网格位置，而非只比较表面亮度；该离线诊断与视口 interop 零读回指标分开。
+真实设备验证入口为 `out/vs2022/Release/CyclesViewportBench.exe --displacement-check --output <目录>`。验证生成自有 DUF / EXR 夹具，检查黑、灰、白、反向范围、关闭和无贴图，并在同一 Session 检查材质编辑、关闭／恢复、Morph／恢复、相机与对象变换。检查对象是 GPU 求值后读回的网格位置，而非只比较表面亮度；该离线诊断与视口 interop 零读回指标分开。
 
 ## 最终发布
 
-2026-09-24 已更新 `out/DazFastViewer.exe` 与运行依赖，源码哈希、构建产物与发布产物逐项一致。GUI 截图取自本轮首次置换发布包；其后只补充追加场景的 Instance 身份隔离并移除临时的界面禁用开关。追加修复后的 14 项 CTest 通过，最终包的 `displacement-gpu-final` 也通过全部 9 个阶段。
+2026-09-24 已更新 历史验证的可执行文件 与运行依赖，源码哈希、构建产物与发布产物逐项一致。GUI 截图取自本轮首次置换发布包；其后只补充追加场景的 Instance 身份隔离并移除临时的界面禁用开关。追加修复后的 14 项 CTest 通过，最终包的 `displacement-gpu-final` 也通过全部 9 个阶段。
 
 - 编辑器 SHA-256：`11e43a85c693df6cd8c742131014cd83f06302451bc28473347ac2b65b124da8`。
 - 基准程序 SHA-256：`1a9bd100d028fed61036258e9e852a029fbc81068f49b9bf227461b234ce7c1c`。

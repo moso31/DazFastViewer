@@ -18,7 +18,6 @@ add_executable(RenderSchedulerTest "${DFV_ROOT}/tests/render_scheduler.cpp")
 target_link_libraries(RenderSchedulerTest PRIVATE ${LIB})
 target_compile_options(RenderSchedulerTest PRIVATE /utf-8)
 add_test(NAME render_scheduler COMMAND RenderSchedulerTest)
-set_tests_properties(render_scheduler PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_ROOT}/out")
 add_executable(CyclesViewportBench "${DFV_ROOT}/src/bench/main.cpp"
   "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/cycles/adapter.cpp"

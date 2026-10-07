@@ -17,7 +17,7 @@
 
 基线源码为 `18be98d`，本轮仅加入诊断计时，没有实施优化。无窗口测试结果为 PASS，数据位于 [profile.json](../artifacts/load-profile/scene3-baseline/profile.json)，过程日志位于 [load-profile-baseline.log](../artifacts/load-profile-baseline.log)。
 
-**正常编辑器另一次副屏验证的首次提交显示为 368.52 秒，约 6 分 9 秒。** 使用现有 `out/DazFastViewer.exe --capture-test --capture-samples 1`，没有替换已部署程序；窗口矩形 `(2722,4)-(4318,1042)` 位于副屏。截图验证 PASS，进程正常退出。
+**正常编辑器另一次副屏验证的首次提交显示为 368.52 秒，约 6 分 9 秒。** 使用现有 `out/vs2022/Release/DazFastViewer.exe --capture-test --capture-samples 1`，没有替换已部署程序；窗口矩形 `(2722,4)-(4318,1042)` 位于副屏。截图验证 PASS，进程正常退出。
 
 该次编辑器的时间线来自 [events.csv](../artifacts/load-profile/scene3-ui/events.csv)：
 
@@ -131,7 +131,7 @@ Morph 发现已有 `cached_targets`，路径解析也已有缓存；同资产的
 
 在完成优化后的同条件测量前，不把设计目标写成已实现的倍数或秒数。
 
-本轮诊断构建成功，10 项既有工程 CTest 全部通过；日志为 [load-profile-ctest.log](../artifacts/load-profile-ctest.log)。已部署的 `out/DazFastViewer.exe` 保持原版本。没有把这份性能报告当成视觉 Golden 或后续阶段验收。
+本轮诊断构建成功，10 项既有工程 CTest 全部通过；日志为 [load-profile-ctest.log](../artifacts/load-profile-ctest.log)。已部署的 历史验证的可执行文件 保持原版本。没有把这份性能报告当成视觉 Golden 或后续阶段验收。
 
 ## 补充：未在 DUF 中使用的 Morph 如何交互加载（2026-09-22）
 
@@ -176,7 +176,7 @@ Morph 发现已有 `cached_targets`，路径解析也已有缓存；同资产的
 $cmake = 'C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/cmake.exe'
 & $cmake -S . -B build -G 'Visual Studio 17 2022' -A x64
 & $cmake --build build --config Release --target SceneLoadProfile --parallel 6
-& ./build/Release/SceneLoadProfile.exe 'H:/G1/Scenes/3.duf' './DazFastViewer.project.json' './artifacts/load-profile/scene3'
+& ./build/vs2022/bin/Release/SceneLoadProfile.exe 'H:/G1/Scenes/3.duf' './DazFastViewer.project.json' './artifacts/load-profile/scene3'
 ```
 
 输出 `profile.json` 包含各阶段耗时/内存、嵌套计时、逐文件调用次数/字节数/解析总耗时、对象数据规模和形变统计，并保留四份标准加载报告。`diagnostics::active` 默认为空，正常编辑器不收集这些诊断数据。

@@ -36,6 +36,6 @@
 
 ## 构建与部署
 
-26 项工程测试通过，`out/DazFastViewer.exe` 已更新。构建、部署清单及实际 EXE 哈希一致，226 个源码文件与清单一致。构建记录：`artifacts/content-followup-full-build.log`；部署核验：`artifacts/content-followup/validation.json`。构建包装脚本仍将 CMake 开发者警告报告为 PowerShell `NativeCommandError`，日志中的编译、26 项测试与部署均已完成。
+26 项工程测试通过，历史验证的可执行文件 已更新。构建、部署清单及实际 EXE 哈希一致，226 个源码文件与清单一致。构建记录：`artifacts/content-followup-full-build.log`；部署核验：`artifacts/content-followup/validation.json`。构建包装脚本仍将 CMake 开发者警告报告为 PowerShell `NativeCommandError`，日志中的编译、26 项测试与部署均已完成。
 
 用户内容库保持只读，本轮未创建 Git 提交。

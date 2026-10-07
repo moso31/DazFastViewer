@@ -83,4 +83,4 @@ python tools/audit_material_library.py H:/g1 H:/g3 --output artifacts/materials/
 
 修订后的真实样本检查覆盖 25 个普通／层级／Shader、妆容、眼睛、指甲、毛发和道具预设，验证导入及材质替换，未发现贴图或 Shader 依赖缺失警告。合成网格样本不验证产品的真实 UV 拓扑；UV 接缝、共享网格隔离及层级同名表面使用独立夹具检查。
 
-修订的实际 Renderer／OptiX 检查共 11 个阶段，包含材质悬浮与清除，全程保持一个会话。部署程序为 `out/DazFastViewer.exe`，本轮测试和源码／二进制核对见 `artifacts/materials/feedback-validation.json`。
+修订的实际 Renderer／OptiX 检查共 11 个阶段，包含材质悬浮与清除，全程保持一个会话。部署程序为 历史验证的可执行文件，本轮测试和源码／二进制核对见 `artifacts/materials/feedback-validation.json`。

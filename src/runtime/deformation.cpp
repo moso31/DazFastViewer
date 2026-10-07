@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <functional>
 
 namespace dfv::runtime {
 namespace {
@@ -63,6 +64,7 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
     grafts_.push_back({follower,source});
     scene.instances[follower].graft_source=int(source);
   }
+  bind_graft_masks();
   for(size_t t=0;t<targets.size();++t) if(!targets[t].rigid_follow.target.empty()) {
     const auto &follow=targets[t].rigid_follow;size_t source=0;
     while(source<targets.size()&&follow.target!="#"+targets[source].id.substr(0,targets[source].id.rfind('/'))) ++source;
@@ -151,8 +153,8 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     diagnostics::Scope scope("transform_only");
     // 实例编辑不参与骨骼 / ERC 输入；沿已有依赖树传播矩阵即可。
     for(const auto &p:values) validate_transform(p.transform);
-    for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);}
-    auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(morph_.evaluate())),effective_poses_)));previous_=values;return delta;
+    for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);morph_.set_graft_enabled(t,values[t].graft_enabled);}
+    auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(activate_grafts(values,morph_.evaluate()))),effective_poses_)));previous_=values;return delta;
   }
   std::vector<std::vector<float>> weights;auto resolved=poses;
   try {
@@ -169,6 +171,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     for(size_t m=0;m<weights[t].size();++m) if(targets_[t].morphs[m].evaluable||targets_[t].morphs[m].unsupported.empty()) morph_.set_morph(t,m,weights[t][m],false);
     morph_.set_transform(t,values[t].transform);
     morph_.set_visible(t,values[t].visible);
+    morph_.set_graft_enabled(t,values[t].graft_enabled);
   }
   for(size_t s=0;s<resolved.size();++s) skin_.set_pose(s,resolved[s]);
   std::vector<std::vector<ir::Transform>> joints(skins_.size());
@@ -182,11 +185,88 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
   conform_.project(weights,morph_);
   // 碰撞必须看当前姿势的 GeoGraft 接缝，不能读取上一帧在末尾焊接的边界。
   // 最后的焊接仍保留，用于刚性跟随或插件自身碰撞之后的边界一致性。
-  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(skin_.evaluate(morph_.evaluate()))),resolved)),!evaluated_);
+  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(activate_grafts(values,skin_.evaluate(morph_.evaluate())))),resolved)),!evaluated_);
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;evaluated_=true;return delta;
+}
+void DeformationRuntime::bind_graft_masks() {
+  std::vector<std::set<uint32_t>> known(scene_.instances.size());
+  for(size_t t:conform_.order()) {
+    const auto follower=targets_[t].instance;const auto &instance=scene_.instances[follower];
+    const auto &mesh=scene_.meshes[instance.mesh];const auto *link=conform_.link(t);
+    if(instance.shell_source>=0||!mesh.graft_target_vertices||!link)continue;
+    const auto source=targets_[link->source].instance;
+    graft_masks_.push_back({follower,source,!mesh.graft_vertex_pairs.empty()});
+    known[source].insert(mesh.graft_hidden_polygons.begin(),mesh.graft_hidden_polygons.end());
+  }
+  std::vector<uint8_t> visited(scene_.instances.size());
+  std::function<void(uint32_t)> shell_mask=[&](uint32_t i) {
+    if(visited[i]==2)return;if(visited[i]==1)throw std::runtime_error("Geometry Shell 遮罩存在循环");visited[i]=1;
+    const auto &instance=scene_.instances[i];
+    if(instance.shell_source>=0) {
+      const auto source=uint32_t(instance.shell_source);shell_mask(source);
+      known[i].insert(known[source].begin(),known[source].end());
+      const auto &own=scene_.meshes[instance.mesh].shell_hidden_polygons;known[i].insert(own.begin(),own.end());
+    }
+    visited[i]=2;
+  };
+  mask_bases_.resize(scene_.meshes.size());
+  for(size_t m=0;m<scene_.meshes.size();++m)mask_bases_[m].insert(scene_.meshes[m].hidden_polygons.begin(),scene_.meshes[m].hidden_polygons.end());
+  // 只移除可以重新求出的遮罩，保留其他隐藏面；无接缝服装的遮罩仍独立贡献。
+  for(uint32_t i=0;i<scene_.instances.size();++i)if(scene_.instances[i].prototype<0) {
+    shell_mask(i);auto &base=mask_bases_[scene_.instances[i].mesh];for(auto p:known[i])base.erase(p);
+  }
+}
+ir::Delta DeformationRuntime::activate_grafts(const std::vector<Properties> &values,ir::Delta delta) {
+  if(evaluated_&&std::equal(values.begin(),values.end(),previous_.begin(),[](const auto &a,const auto &b){return a.graft_enabled==b.graft_enabled;}))return delta;
+  std::vector<bool> enabled(scene_.instances.size(),true);std::set<uint32_t> editable;
+  for(size_t t=0;t<targets_.size();++t) {
+    const auto i=targets_[t].instance;editable.insert(i);
+    const auto &instance=scene_.instances[i];
+    if(instance.graft_source>=0&&instance.shell_source<0)enabled[i]=values[t].graft_enabled;
+  }
+  std::vector<uint8_t> visited(scene_.instances.size());
+  std::function<void(uint32_t)> inherit=[&](uint32_t i) {
+    if(visited[i]==2)return;if(visited[i]==1)throw std::runtime_error("GeoGraft 启用关系存在循环");visited[i]=1;
+    const auto &instance=scene_.instances[i];
+    for(auto source:{instance.graft_source,instance.shell_source,instance.prototype})if(source>=0) {inherit(uint32_t(source));enabled[i]=enabled[i]&&enabled[size_t(source)];}
+    visited[i]=2;
+  };
+  for(uint32_t i=0;i<scene_.instances.size();++i) {
+    inherit(i);auto &instance=scene_.instances[i];if(instance.graft_enabled==enabled[i])continue;
+    instance.graft_enabled=enabled[i];delta.grafts.push_back({i,enabled[i]});
+    // Shell 零件和 DAZ Instance 没有独立属性快照，停用时记住它们原来的显隐。
+    if(!editable.contains(i)) {
+      if(!enabled[i]) {graft_visibility_[i]=instance.visible;instance.visible=false;}
+      else if(auto found=graft_visibility_.find(i);found!=graft_visibility_.end()) {instance.visible=found->second;graft_visibility_.erase(found);}
+      delta.visibility.push_back({i,instance.visible});
+    }
+  }
+  auto masks=mask_bases_;
+  for(const auto &binding:graft_masks_)if(!binding.switchable||enabled[binding.follower]) {
+    const auto &mesh=scene_.meshes[scene_.instances[binding.follower].mesh];auto &mask=masks[scene_.instances[binding.source].mesh];
+    mask.insert(mesh.graft_hidden_polygons.begin(),mesh.graft_hidden_polygons.end());
+  }
+  std::fill(visited.begin(),visited.end(),0);
+  std::function<void(uint32_t)> shell_mask=[&](uint32_t i) {
+    if(visited[i]==2)return;if(visited[i]==1)throw std::runtime_error("Geometry Shell 遮罩存在循环");visited[i]=1;
+    const auto &instance=scene_.instances[i];
+    if(instance.shell_source>=0) {
+      const auto source=uint32_t(instance.shell_source);shell_mask(source);
+      const auto &inherited=masks[scene_.instances[source].mesh];auto &mask=masks[instance.mesh];mask.insert(inherited.begin(),inherited.end());
+      const auto &own=scene_.meshes[instance.mesh].shell_hidden_polygons;mask.insert(own.begin(),own.end());
+    }
+    visited[i]=2;
+  };
+  for(uint32_t i=0;i<scene_.instances.size();++i)if(scene_.instances[i].prototype<0)shell_mask(i);
+  for(uint32_t m=0;m<masks.size();++m) {
+    std::vector<uint32_t> hidden(masks[m].begin(),masks[m].end());auto &mesh=scene_.meshes[m];
+    if(mesh.hidden_polygons!=hidden) {mesh.hidden_polygons=hidden;delta.masks.push_back({m,std::move(hidden)});}
+  }
+  return delta;
 }
 ir::Delta DeformationRuntime::weld_grafts(ir::Delta delta) {
   for(auto &g:grafts_) {
+    if(!scene_.instances[g.follower].graft_enabled) {g.initialized=false;continue;}
     const auto mesh_index=scene_.instances[g.follower].mesh,host_index=scene_.instances[g.source].mesh;
     // 消去共同祖先变换，整体移动角色时不重复修改几何或引入舍入漂移。
     const auto relative=morph_.relative_transform(g.follower,g.source);
@@ -232,6 +312,7 @@ ir::Delta DeformationRuntime::follow_surfaces(ir::Delta delta,const std::vector<
 std::vector<GraftSeam> DeformationRuntime::graft_seams() const {
   std::vector<GraftSeam> result;
   for(const auto &g:grafts_) {
+    if(!scene_.instances[g.follower].graft_enabled)continue;
     const auto &follower=scene_.instances[g.follower],&source=scene_.instances[g.source];
     const auto &mesh=scene_.meshes[follower.mesh],&host=scene_.meshes[source.mesh];GraftSeam seam{g.follower,g.source,mesh.graft_vertex_pairs.size()};
     for(const auto &pair:mesh.graft_vertex_pairs) {
