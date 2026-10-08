@@ -94,13 +94,18 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   std::map<std::filesystem::path,std::pair<int,int>> image_dimensions;
   auto prepare_bump_areas=[&] {
     if(!bump_areas.empty())return;bump_areas.resize(source.materials.size());
-    for(const auto &instance:source.instances)if(instance.prototype<0)for(const auto &t:source.meshes[instance.mesh].triangles) {
+    for(size_t i=0;i<source.instances.size();++i) {const auto &instance=source.instances[i];if(instance.prototype>=0)continue;
+      // GeoGraft 合并后用宿主的对象坐标；普通网格直接使用本地坐标。
+      const auto group=graft_bindings[i].group;
+      const auto root=group>=0?grafts[size_t(group)].members()[0]:i;
+      const auto local=root!=i?ir::inverse(source.instances[root].transform)*instance.transform:ir::Transform{};
+      for(const auto &t:source.meshes[instance.mesh].triangles) {
       const auto m=instance.materials[t.material_slot];const auto &material=source.materials[m];if(!material.bump_from_texel_density||material.bump_texture<0||material.bump_strength<=0)continue;
-      auto &[world,uv]=bump_areas[m];const auto &p=source.meshes[instance.mesh].positions;const auto a=instance.transform.point(p[t.vertices[0]]),b=instance.transform.point(p[t.vertices[1]]),c=instance.transform.point(p[t.vertices[2]]);
+      auto &[area,uv]=bump_areas[m];const auto &p=source.meshes[instance.mesh].positions;const auto a=local.point(p[t.vertices[0]]),b=local.point(p[t.vertices[1]]),c=local.point(p[t.vertices[2]]);
       const double x1=b.x-a.x,y1=b.y-a.y,z1=b.z-a.z,x2=c.x-a.x,y2=c.y-a.y,z2=c.z-a.z;
-      world+=std::hypot(y1*z2-z1*y2,z1*x2-x1*z2,x1*y2-y1*x2);
+      area+=std::hypot(y1*z2-z1*y2,z1*x2-x1*z2,x1*y2-y1*x2);
       uv+=std::abs(((t.uv[1].x-t.uv[0].x)*(t.uv[2].y-t.uv[0].y)-(t.uv[1].y-t.uv[0].y)*(t.uv[2].x-t.uv[0].x))*material.uv_scale.x*material.uv_scale.y);
-    }
+    }}
   };
   std::set<Shader *> used_shaders,modified_shaders;
   for(auto value:source.materials) {
@@ -113,9 +118,9 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     float bump=previous>=0?bump_distances_[size_t(previous)]:0;
     const bool modified=previous<0||canonical_materials_[size_t(previous)]!=value||emission_strengths_[size_t(previous)]!=emission[canonical.size()];
     if(modified&&value.bump_from_texel_density&&value.bump_texture>=0&&value.bump_strength>0) {
-      prepare_bump_areas();const auto [world,uv]=bump_areas[canonical.size()];const auto &path=textures_[size_t(value.bump_texture)].file;
+      prepare_bump_areas();const auto [area,uv]=bump_areas[canonical.size()];const auto &path=textures_[size_t(value.bump_texture)].file;
       auto [dimensions,inserted]=image_dimensions.try_emplace(path);if(inserted){const auto p=path.u8string();auto image=OIIO::ImageInput::open(std::string(p.begin(),p.end()));if(image)dimensions->second={image->spec().width,image->spec().height};}
-      const auto [width,height]=dimensions->second;if(width>0&&height>0&&world>0&&uv>0)bump=float(2*std::sqrt(world/(uv*double(width)*height)));
+      const auto [width,height]=dimensions->second;if(width>0&&height>0&&area>0&&uv>0)bump=float(2*std::sqrt(area/(uv*double(width)*height)));
     }
     if(!shader) {if(retired_shaders_.empty()) shader=scene_.create_node<Shader>();else {shader=retired_shaders_.back();retired_shaders_.pop_back();}}
     if(modified) {material(*shader,value,bump,emission[canonical.size()]);modified_shaders.insert(shader);if(loaded_) ++stats_.material_updates;changed=true;}

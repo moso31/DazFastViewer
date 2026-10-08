@@ -3,6 +3,7 @@
 #include "bench/fixtures.h"
 #include "bench/scene_export.h"
 #include "bench/displacement_check.h"
+#include "bench/bump_scale_check.h"
 #include "bench/graft_check.h"
 #include "bench/graft_scale_check.h"
 #include "cycles/adapter.h"
@@ -31,7 +32,7 @@
 namespace {
 struct Options {
   bool prune_hidden=false;
-  bool displacement_check=false,graft_check=false,graft_scale_check=false,render_subdivision=false,emission_check=false;
+  bool displacement_check=false,bump_scale_check=false,graft_check=false,graft_scale_check=false,render_subdivision=false,emission_check=false;
   bool raw_sampling=false,devices=false,smoke=false,benchmark=false,medium=true,readback=false,inspect=false,strict=false,fullscreen=false,help=false,dump_shaders=false,export_scene=false,material_delta_check=false;
   int width=1600,height=900,samples=256,render_delay_ms=0,monitor=2;
   double seconds=60,warmup=10,refine=10,preview_seconds=0;
@@ -57,6 +58,7 @@ Options parse(int argc,char **argv) {
     else if(arg=="--material-delta-check") o.material_delta_check=true;
     else if(arg=="--emission-check") {o.emission_check=true;o.material_delta_check=true;}
     else if(arg=="--displacement-check") o.displacement_check=true;
+    else if(arg=="--bump-scale-check") o.bump_scale_check=true;
     else if(arg=="--graft-check") o.graft_check=true;
     else if(arg=="--graft-scale-check") o.graft_scale_check=true;
     else if(arg=="--dump-shaders") o.dump_shaders=true;
@@ -457,6 +459,7 @@ int wmain(int argc,wchar_t **wide_argv) {
       return 0;
     }
     if(options.displacement_check) return dfv::displacement_check(select_device(options.backend),std::filesystem::absolute(options.output));
+    if(options.bump_scale_check) return dfv::bump_scale_check(select_device(options.backend),std::filesystem::absolute(options.output));
     if(options.graft_check) return dfv::graft_check(select_device(options.backend),std::filesystem::absolute(options.output),options.prune_hidden);
     if(options.graft_scale_check) return dfv::graft_scale_check(select_device(options.backend),options.file,options.content_roots,std::filesystem::absolute(options.output));
     return run(options,select_device(options.backend));

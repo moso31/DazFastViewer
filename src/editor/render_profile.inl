@@ -1,6 +1,8 @@
 // 一次加载内依次复现头部特写和材质消融，原始场景与用户设置保持只读。
 nlohmann::json render_plan_,render_records_=nlohmann::json::array();
 size_t render_case_=0;
+size_t render_scale_case_=SIZE_MAX;
+std::map<int,double> render_base_scales_;
 int render_phase_=0;
 uint64_t render_case_epoch_=0;
 double render_case_start_=0,render_case_request_=0;
@@ -34,6 +36,16 @@ void render_profile_tick(const RenderStatus &state) {
       if(target>=0) {finish_test(false,"性能实验目标名称重复");return;}target=int(t);
     }
     if(target<0||state.head_bounds[target].empty) {finish_test(false,"性能实验未找到角色头部："+label);return;}
+    if(entry.contains("scale_factor")) {
+      if(render_scale_case_!=render_case_) {
+        const double factor=entry.at("scale_factor").get<double>();
+        if(!std::isfinite(factor)||factor<=0) {finish_test(false,"缩放实验倍率无效");return;}
+        auto &transform=snapshot_.values[size_t(target)].transform;
+        const auto [base,inserted]=render_base_scales_.try_emplace(target,transform.general_scale);
+        transform.general_scale=base->second*factor;render_scale_case_=render_case_;send();return;
+      }
+      if(state.applied_revision!=snapshot_.revision||state.presented_revision!=snapshot_.revision)return;
+    }
     RenderProbe probe;probe.serial=render_case_+1;
     probe.disable_sss=entry.value("disable_sss",false);probe.disable_bump=entry.value("disable_bump",false);
     probe.transparent_bounces=entry.value("transparent_bounces",32);

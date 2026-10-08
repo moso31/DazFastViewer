@@ -406,7 +406,7 @@ ir::Material convert_material(const Json &instance,Channels channels,const fs::p
       material.roughness_from_glossiness=false;
     }
     if(material.bump_texture>=0 && !explicit_bump_range)
-      warn("bump_distance_approximation",material.id,"资产未提供凹凸高度范围；后端按材质世界面积、UV 面积和纹理分辨率计算两个纹素的高度范围；无法读取尺寸时回退 1 毫米");
+      warn("bump_distance_approximation",material.id,"资产未提供凹凸高度范围；后端按材质对象空间面积、UV 面积和纹理分辨率计算两个纹素的高度范围，并随实例缩放；无法读取尺寸时回退 1 毫米");
     const std::set<std::string> supported={"diffuse","Glossy Roughness","Metallic Weight","Cutout Opacity","Refraction Weight","Refraction Index","Normal Map","Bump Strength","Bump Minimum","Bump Maximum",
       "Emission Color","Emission Temperature","Two Sided Light","Luminance","Luminance Units","Luminous Efficacy","Emission Profile",
       "Displacement Strength","Displacement Active","Minimum Displacement","Maximum Displacement",

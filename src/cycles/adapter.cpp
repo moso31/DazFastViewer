@@ -135,6 +135,8 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
   }
   if(m.bump_texture>=0&&m.bump_strength>0&&m.bump_distance>0) {
     auto *bump=graph->create_node<BumpNode>();bump->set_strength(std::min(1.f,m.bump_strength));
+    // 高度与网格同属对象坐标，随每个实例变换；不能锁定在加载时的世界尺寸。
+    bump->set_use_object_space(true);
     // Cycles Strength 是法线插值权重（上限 1），DAZ 的 >1 强度应放大高度。
     const float distance=m.bump_from_texel_density&&texel_distance>0?texel_distance:m.bump_distance;
     bump->set_distance(distance*std::max(1.f,m.bump_strength));

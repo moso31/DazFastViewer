@@ -20,7 +20,8 @@ public:
   }
 protected:
   QString textFromValue(double value) const override {
-    auto text=locale().toString(float_backed_?decimal_float(value):value,'f',decimals());
+    auto format=locale();format.setNumberOptions(format.numberOptions()|QLocale::OmitGroupSeparator);
+    auto text=format.toString(float_backed_?decimal_float(value):value,'f',decimals());
     const auto dot=locale().decimalPoint();
     if(text.contains(dot)) {while(text.endsWith('0')) text.chop(1);if(text.endsWith(dot)) text.chop(dot.size());}
     return text;

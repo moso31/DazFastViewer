@@ -1,5 +1,6 @@
 #include "cloud/panel.h"
 #include "editor/ground_panel.h"
+#include "editor/ui_scale.h"
 #include <QApplication>
 #include <QFontDatabase>
 #include <QFontInfo>
@@ -53,6 +54,34 @@ int main(int argc,char **argv){QApplication app(argc,argv);QFontDatabase::addApp
   v.config=submitted;const auto restored=cloud::from_json(cloud::json(v));panel->bind(restored.get(),{});noise_fields(true);check(noise->isChecked()&&distribution->currentIndex()==1&&threshold->value()==.63,"bind did not restore shape/noise/threshold");
   if(argc>1){QApplication::processEvents();outer.ensureWidgetVisible(panel->findChild<QDoubleSpinBox *>("distribution_detail"));QApplication::processEvents();outer.grab().save(QString::fromLocal8Bit(argv[1])+"-noise.png");}
   v.config.distribution_noise=false;panel->bind(&v,{});noise_fields(false);
+  // 使用实际应用的缩放器，并检查内部编辑器和点击高亮后的实际字体。
+  editor::UiScale ui_scale(false);ui_scale.set_percent(150);QApplication::processEvents();
+  auto fonts=[&]{const int expected=QFontInfo(app.font()).pixelSize();for(auto *w:panel->findChildren<QWidget *>())if(qobject_cast<QLabel *>(w)||qobject_cast<QDoubleSpinBox *>(w)||qobject_cast<QLineEdit *>(w)){
+    if(QFontInfo(w->font()).pixelSize()!=expected)std::cerr<<"font mismatch: "<<w->metaObject()->className()<<" "<<w->objectName().toStdString()<<" actual="<<QFontInfo(w->font()).pixelSize()<<" expected="<<expected<<'\n';
+    check(QFontInfo(w->font()).pixelSize()==expected,"scaled cloud font mismatch");}};
+  fonts();panel->bind(&v,{});fonts();outer.ensureWidgetVisible(x);QApplication::processEvents();QTest::mouseClick(x->findChild<QLineEdit *>(),Qt::LeftButton);fonts();QTest::mouseClick(y->findChild<QLineEdit *>(),Qt::LeftButton);fonts();
+  // 渲染器更新候选对象时不能覆盖尚未提交的键盘草稿。
+  outer.activateWindow();QTest::qWait(50);QApplication::setActiveWindow(&outer);x->setFocus();x->selectAll();check(QApplication::focusWidget(),"cloud editor did not get focus");QTest::keyClicks(QApplication::focusWidget(),"12345.");const auto draft=x->text();panel->bind(&v,{});check(x->text()==draft,"cloud refresh overwrote keyboard draft");
+  QTest::keyClicks(QApplication::focusWidget(),"678");QTest::keyClick(QApplication::focusWidget(),Qt::Key_Return);check(submitted.x==12345.678,"cloud keyboard edit failed after refresh");
+  for(const auto &locale:{QLocale(QLocale::English,QLocale::UnitedStates),QLocale(QLocale::German),QLocale(QLocale::Chinese)}){
+    x->setLocale(locale);x->setValue(12345.678);check(!x->text().contains(locale.groupSeparator()),"numeric text contains grouping separator");
+  }
+  x->setLocale(QLocale::c());
+  for(int percent:{80,200,100,150}){ui_scale.set_percent(percent);QApplication::processEvents();fonts();panel->bind(&v,{});fonts();}
+  outer.ensureWidgetVisible(x);outer.activateWindow();QTest::qWait(50);QApplication::setActiveWindow(&outer);x->setFocus();QApplication::processEvents();
+  check(QApplication::activeWindow()==&outer&&x->hasFocus(),"cloud editor was not focused before hover");
+  auto *precision=x->parentWidget()->findChild<QToolButton *>("precisionButton");
+  QTest::mouseMove(precision,precision->rect().center());QCursor::setPos(precision->mapToGlobal(precision->rect().center()));QEnterEvent enter(precision->rect().center(),precision->rect().center(),precision->mapToGlobal(precision->rect().center()));QApplication::sendEvent(precision,&enter);QTest::qWait(350);
+  auto *popup=panel->findChild<QWidget *>("ParameterSettingsPopup");check(popup&&popup->isVisible(),"hover settings popup did not open");
+  // offscreen 插件忽略 WA_ShowWithoutActivating；原生伴随测试验证窗口激活和键盘路由。
+  if(QGuiApplication::platformName()=="windows"){
+    check(QApplication::activeWindow()==&outer&&x->hasFocus(),"hover settings popup stole keyboard focus");
+    x->selectAll();QTest::keyClicks(QApplication::focusWidget(),"123.45");check(x->text()=="123.45","hover popup intercepted keyboard input");
+    // 用户点击工具窗口后仍可输入，不能以禁止窗口获得焦点来规避抢焦点。
+    popup->activateWindow();QTest::qWait(50);auto *step=popup->findChild<QDoubleSpinBox *>("precisionStep");QTest::mouseClick(step->findChild<QLineEdit *>(),Qt::LeftButton);step->selectAll();
+    check(QApplication::focusWidget()&&(step->hasFocus()||step->isAncestorOf(QApplication::focusWidget())),"settings popup cannot receive keyboard focus after click");
+    QTest::keyClicks(QApplication::focusWidget(),"0.25");QTest::mouseClick(popup->findChild<QPushButton *>("ParameterSettingsOK"),Qt::LeftButton);QApplication::processEvents();check(x->singleStep()==.25,"hover popup keyboard draft did not commit with OK");
+  }
   if(argc>1){QApplication::processEvents();outer.ensureWidgetVisible(panel->findChild<QDoubleSpinBox *>("distribution_detail"));QApplication::processEvents();outer.grab().save(QString::fromLocal8Bit(argv[1])+"-disabled.png");}
   std::cout<<"PASS: real Qt click/wheel, internal editor, outside/hide/switch, native arrows, 80-row expansion, collision budget, shape/noise controls and restored threshold\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -148,7 +148,12 @@ void UiScale::set_percent(int value) {
   }
   for(auto *w:QApplication::allWidgets())impl_->capture(w,this);
   impl_->value=value;qApp->setProperty("dfvUiScale",value/100.);QApplication::setFont(scaled_font(impl_->base_font,value/100.));
-  for(auto *w:QApplication::allWidgets())impl_->apply(w);
+  // 父控件的 FontChange / StyleChange 会更新内部编辑器；先应用父级，
+  // 再应用子级，避免 allWidgets 的无序遍历将某些输入框恢复成旧字号。
+  auto widgets=QApplication::allWidgets();
+  auto depth=[](QWidget *w){int n=0;for(;w;w=w->parentWidget())++n;return n;};
+  std::stable_sort(widgets.begin(),widgets.end(),[&](auto *a,auto *b){return depth(a)<depth(b);});
+  for(auto *w:widgets)impl_->apply(w);
   if(impl_->menu)impl_->menu->setTitle(QStringLiteral("界面缩放（%1%）").arg(value));
   if(impl_->percent){QSignalBlocker block(impl_->percent);impl_->percent->setValue(value);}
   if(impl_->settings){impl_->settings->setValue("ui/scalePercent",value);impl_->settings->sync();}impl_->applying=false;

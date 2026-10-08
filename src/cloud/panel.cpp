@@ -94,11 +94,14 @@ void Panel::submit(const std::string &field){
   message_->setText(QStringLiteral("静态帧已更新 · 碰撞跟随参与对象的可见性、形变和位置。"));if(changed&&config_!=previous)changed(config_);
 }
 void Panel::bind(const Cloud *v,const std::vector<Candidate> &objects){
+  const bool switched=!v||v->id!=bound_id_;const auto previous=config_;
   std::map<std::string,int> order;if(v&&v->id==bound_id_&&have_bounds_)for(int row=0;row<sources_->topLevelItemCount();++row)order.emplace(sources_->topLevelItem(row)->data(0,Qt::UserRole).toString().toStdString(),row);
   const bool ready=std::any_of(objects.begin(),objects.end(),[](const auto &o){return o.volume>=0;});
   have_bounds_=(v&&v->id==bound_id_&&have_bounds_)||ready;sort_->setEnabled(ready);
   if(!v||v->id!=bound_id_)select({});bound_id_=v?v->id:std::string{};setVisible(v!=nullptr);if(!v)return;binding_=true;editor::parameter_widgets::context(this)->bind(v->id+"/volume");config_=v->config;
-#define FIELD(n) fields_.at(#n)->setValue(config_.n)
+  // 候选对象／渲染结果刷新时保留键盘草稿、光标及选区；外部值真正
+  // 改变（包括撤销）或切换对象时才写回编辑器。
+#define FIELD(n) if(switched||previous.n!=config_.n) fields_.at(#n)->setValue(config_.n)
   FIELD(x);FIELD(y);FIELD(height);FIELD(thickness);FIELD(width);FIELD(length);FIELD(density);FIELD(coverage);FIELD(scale);FIELD(detail);FIELD(edge_fade);FIELD(distribution_threshold);FIELD(distribution_scale);FIELD(distribution_detail);FIELD(warp);FIELD(erosion);FIELD(wind_speed);FIELD(direction);FIELD(time);FIELD(padding);FIELD(softness);FIELD(velocity_x);FIELD(velocity_y);FIELD(velocity_z);FIELD(trail);FIELD(recovery);FIELD(steps);FIELD(seed);
 #undef FIELD
   distribution_->setCurrentIndex(config_.distribution);distribution_noise_->setChecked(config_.distribution_noise);update_distribution_fields();collisions_->setChecked(config_.collisions);auto available=objects;for(const auto &id:config_.sources)if(std::none_of(available.begin(),available.end(),[&](const auto &o){return o.id==id;}))available.push_back({id,"[已移除] "+id});

@@ -101,9 +101,11 @@ class SettingsButtons final:public QWidget {
   bool popup_entered_=false,ready_=false;
   void cancel(){auto popup=popup_;popup_.clear();anchor_.clear();if(popup){popup->setObjectName({});popup->hide();popup->deleteLater();}}
   void leave_later(){QTimer::singleShot(100,this,[this]{if(!popup_)return;const auto p=QCursor::pos();if(popup_->frameGeometry().contains(p))return;if(!popup_entered_&&anchor_&&QRect(anchor_->mapToGlobal(QPoint()),anchor_->size()).adjusted(-2,-2,2,2).contains(p))return;cancel();});}
-  void show_editor(QToolButton *button){
+  void show_editor(QToolButton *button,bool activate=true){
     if(popup_&&anchor_==button)return;cancel();anchor_=button;popup_entered_=false;
     auto *popup=new QFrame(this,Qt::Tool|Qt::FramelessWindowHint);popup->setFrameShape(QFrame::StyledPanel);popup_=popup;popup->setObjectName("ParameterSettingsPopup");popup->setProperty("parameterSettingsPopup",true);popup->setAttribute(Qt::WA_DeleteOnClose);popup->setAutoFillBackground(true);
+    // 悬停只展示草稿，不能激活工具窗口并抢走正在输入的参数焦点。
+    popup->setAttribute(Qt::WA_ShowWithoutActivating,!activate);
     auto *layout=new QVBoxLayout(popup);layout->setContentsMargins(10,8,10,8);auto *form=new QFormLayout;layout->addLayout(form);
     auto *first=number(button==range_?"rangeMinimum":"precisionStep");auto *second=button==range_?number("rangeMaximum"):nullptr;
     first->setMinimumWidth(145);first->setValue(button==range_?settings_.minimum:settings_.step);if(button==precision_)first->setRange(1e-9,1e12);
@@ -123,7 +125,7 @@ class SettingsButtons final:public QWidget {
 protected:
   bool eventFilter(QObject *object,QEvent *event) override {
     if(object==range_||object==precision_){
-      if(event->type()==QEvent::Enter){auto *button=static_cast<QToolButton *>(object);QTimer::singleShot(260,this,[this,button]{if(button->underMouse()&&button->isEnabled())show_editor(button);});}
+      if(event->type()==QEvent::Enter){auto *button=static_cast<QToolButton *>(object);QTimer::singleShot(260,this,[this,button]{if(button->underMouse()&&button->isEnabled())show_editor(button,false);});}
       if(event->type()==QEvent::Leave)leave_later();
     }
     if(object==popup_){if(event->type()==QEvent::Enter)popup_entered_=true;if(event->type()==QEvent::Leave)leave_later();if(event->type()==QEvent::WindowDeactivate)cancel();}
