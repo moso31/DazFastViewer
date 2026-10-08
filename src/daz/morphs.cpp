@@ -129,7 +129,7 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
     auto &instance=loaded.scene.instances.at(object.instance);
     const auto &mesh=loaded.scene.meshes.at(instance.mesh);
     runtime::Target target;target.id=instance.id;target.label=object.label;target.parent=object.parent;target.instance=object.instance;target.conform_target=object.conform_target;target.smoothing=object.smoothing;
-    for(const auto &node:loaded.nodes)if(node.id==object.id){target.initial_visible=node.visible;break;}
+    for(const auto &node:loaded.nodes)if(node.id==object.id){target.initial_visible=node.visible;target.initial_selectable=node.selectable;break;}
     target.character=object.figure&&!object.auto_fit_base.empty();
     target.favorite_scope=scene_file.empty()?std::string{}:key(scene_file);
     import_native_extension(target,object,native,out.report["diagnostics"]);
@@ -160,7 +160,7 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
     for(auto parent=object.parent;!parent.empty();) {
       if(std::find(target.ancestors.begin(),target.ancestors.end(),parent)!=target.ancestors.end()) throw std::runtime_error("附件父节点链形成循环");
       target.ancestors.push_back(parent);auto found=std::find_if(loaded.nodes.begin(),loaded.nodes.end(),[&](const auto &node){return "#"+node.id==parent;});
-      if(found!=loaded.nodes.end()&&!found->visible&&std::none_of(loaded.objects.begin(),loaded.objects.end(),[&](const auto &o){return o.id==found->id;}))target.ancestors_visible=false;
+      if(found!=loaded.nodes.end()&&!found->group&&!found->visible&&std::none_of(loaded.objects.begin(),loaded.objects.end(),[&](const auto &o){return o.id==found->id;}))target.ancestors_visible=false;
       parent=found==loaded.nodes.end()?std::string{}:found->parent;
     }
     if(instance.shell_source>=0) {

@@ -7,6 +7,21 @@
 
 namespace dfv::editor {
 using Selection = std::array<int,3>; // 对象、骨骼、灯光。
+struct DeletionSelection {
+  std::vector<size_t> targets,lights;
+  std::vector<std::string> nodes;
+  bool empty() const {return targets.empty()&&lights.empty()&&nodes.empty();}
+};
+inline DeletionSelection tree_deletion_selection(QTreeWidget *tree) {
+  DeletionSelection result;
+  for(auto *item:tree->selectedItems()){
+    const auto target=item->data(0,Qt::UserRole).toInt(),light=item->data(0,Qt::UserRole+2).toInt();
+    if(light>=0)result.lights.push_back(size_t(light));
+    else if(target>=0)result.targets.push_back(size_t(target));
+    else if(target<=-4){const auto id=item->data(0,Qt::UserRole+3).toString().toStdString();if(!id.empty())result.nodes.push_back(id);}
+  }
+  auto unique=[](auto &values){std::sort(values.begin(),values.end());values.erase(std::unique(values.begin(),values.end()),values.end());};unique(result.targets);unique(result.nodes);unique(result.lights);return result;
+}
 inline std::vector<Selection> tree_selection(QTreeWidget *tree) {
   std::vector<Selection> result;
   auto append=[&](auto &&self,QTreeWidgetItem *item)->void {

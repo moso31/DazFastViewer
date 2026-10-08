@@ -652,6 +652,9 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     }
     out.nodes.push_back({id,decode(node.value("parent","")),node.value("label",node.value("name",id)),group});
     out.nodes.back().visible=node_visible(node);
+    for(const auto &extra:array_member(node,"extra"))for(const auto &entry:array_member(extra,"channels")){
+      const auto &c=entry.at("channel");if(c.value("id","")=="Selectable")out.nodes.back().selectable=number(c,1)!=0;
+    }
   }
   std::map<std::string,runtime::RigidFollow> rigid_groups;
   for(const auto &[id,node]:nodes) for(const auto &e:array_member(node,"extra")) if(e.value("type","")=="studio/node/rigid_follow"&&e.contains("rigidity_group")) {

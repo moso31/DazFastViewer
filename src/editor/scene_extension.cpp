@@ -3,6 +3,7 @@
 #include "water/document.h"
 #include "cloud/document.h"
 #include "editor/group_transforms.h"
+#include "editor/node_properties.h"
 #include "render_ir/options_json.h"
 #include "runtime/physics_json.h"
 #include "daz/documents.h"
@@ -46,6 +47,7 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
     else if(kind=="cloud")cloud::install(d,cloud::from_json(op.at("cloud")),false);
     else if(kind=="studio")ir::add_studio(d.loaded.scene);
     else if(kind=="remove"){auto v=initial_snapshot(d);remove_target(d,v,target_index(d,op.at("target")));}
+    else if(kind=="remove_nodes"){auto v=initial_snapshot(d);remove_selection(d,v,{},op.at("nodes").get<std::vector<std::string>>());}
     else if(kind=="remove_light"){auto v=initial_snapshot(d);const auto id=op.at("id").get<std::string>();const auto found=std::find_if(v.lights.begin(),v.lights.end(),[&](const auto &l){return l.id==id;});if(found!=v.lights.end())remove_light(d,v,size_t(found-v.lights.begin()));}
     else if(kind=="attach")attach_import(d,target_index(d,op.at("first")),target_index(d,op.at("host")));
     else if(kind=="fit")fit_attachment(d,target_index(d,op.at("target")),op.at("host").get<std::string>().empty()?-1:int(target_index(d,op.at("host"))));
@@ -76,13 +78,14 @@ J snapshot_json(const Document &d,const Snapshot &s,bool water_state){
   if(s.view){for(float v:*s.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*s.view)[3]<=0)throw std::runtime_error("观察相机距离无效");j["view"]=*s.view;}
   for(size_t t=0;t<s.values.size();++t){const auto &v=s.values[t];const auto &target=d.catalog.targets[t];runtime::validate_transform(v.transform);J m=J::object();
     for(size_t i=0;i<target.morphs.size();++i){const auto &p=target.morphs[i];if(p.alias_morph>=0||runtime::legacy_extension_channel(p.label)||(!p.evaluable&&!p.unsupported.empty()))continue;const auto value=v.morphs.at(i);if(!std::isfinite(value))throw std::runtime_error("Morph 值无效");if(value!=p.initial)m[p.id]=value;}
-    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"graft_enabled",v.graft_enabled},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"ground_offset_cm",v.ground_alignment_offset_cm},{"ground_body_only",v.ground_alignment_body_only},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
+    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"selectable",v.selectable},{"graft_enabled",v.graft_enabled},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"ground_offset_cm",v.ground_alignment_offset_cm},{"ground_body_only",v.ground_alignment_body_only},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
   }
   for(size_t i=0;i<s.poses.size();++i){const auto &skin=d.skeletons.skins[i];runtime::validate_pose(skin,s.poses[i]);J poses=J::object();for(size_t b=0;b<skin.joints.size();++b){const auto &p=s.poses[i][b];auto v=transform(p);v["center_offset_cm"]=vec(p.center_offset_cm);v["end_offset_cm"]=vec(p.end_offset_cm);v["orientation_offset_degrees"]=vec(p.orientation_offset_degrees);poses[skin.joints[b].id]=v;}j["poses"][skin.id]=poses;}
   for(const auto &l:s.lights)j["lights"].push_back({{"id",l.id},{"transform",l.transform.value},{"power",vec(l.power)},{"width",l.width},{"height",l.height},{"kind",int(l.kind)},{"angle",l.angle}});
   j["pins"]=J::array();for(const auto &p:s.pose_pins){const auto &skin=d.skeletons.skins.at(size_t(p.skin));j["pins"].push_back({{"skin",skin.id},{"joint",skin.joints.at(size_t(p.joint)).id},{"world",vec(p.world)},{"position",p.position},{"angle",p.angle},{"orientation",p.world_orientation.value}});}
   validate_material_overrides(d.loaded.scene,s.material_overrides);j["materials"]=s.material_overrides;
   validate_group_transforms(d,s.group_transforms);j["groups"]=J::object();for(const auto &[id,v]:s.group_transforms)j["groups"][id]=transform(v);
+  validate_node_properties(d,s.node_properties);j["node_properties"]=J::object();for(const auto &[id,v]:s.node_properties)j["node_properties"][id]={{"visible",v.visible},{"selectable",v.selectable}};
   validate_instance_ground(d.loaded.scene,s.instance_ground);j["instance_ground"]=J::object();for(const auto &[id,v]:s.instance_ground)j["instance_ground"][id]={{"offset_m",v.offset_m},{"ratio",v.ratio},{"offset_cm",v.offset_cm},{"body_only",v.body_only}};
   if(water_state){j["waters"]=J::array();for(const auto &w:s.water_overrides)j["waters"].push_back(water::json(*w));}
   if(water_state){j["clouds"]=J::array();for(const auto &v:s.cloud_overrides)j["clouds"].push_back(cloud::json(*v));}
@@ -94,9 +97,11 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   auto next=s;next.city_views=city::views_from_json(j.value("cities",J::object()));for(const auto &[id,v]:next.city_views)if(std::none_of(d.cities.begin(),d.cities.end(),[&](const auto &c){return c->id==id;}))throw std::runtime_error("城市视图引用无效");
   next.view.reset();if(j.contains("view")){next.view=j.at("view").get<std::array<float,6>>();for(float v:*next.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*next.view)[3]<=0)throw std::runtime_error("观察相机距离无效");}
   next.group_transforms.clear();const auto groups=j.value("groups",J::object());for(const auto &[id,value]:groups.items())read_transform(next.group_transforms[id],value);validate_group_transforms(d,next.group_transforms);
+  next.node_properties.clear();const auto node_states=j.value("node_properties",J::object());for(const auto &[id,v]:node_states.items())next.node_properties[id]={v.value("visible",true),v.value("selectable",true)};validate_node_properties(d,next.node_properties);
   for(const auto &[id,o]:j.at("objects").items()){const auto t=target_index(d,id);auto &v=next.values.at(t);const auto &target=d.catalog.targets[t];read_transform(v.transform,o.at("transform"));runtime::validate_transform(v.transform);v.visible=o.at("visible");v.extension=read_extension(o.at("extension"));v.ground_alignment_ratio=o.at("ground_ratio");if(!std::isfinite(v.ground_alignment_ratio))throw std::runtime_error("地面对齐比例无效");
     v.ground_alignment_offset_cm=o.value("ground_offset_cm",0.);v.ground_alignment_body_only=o.value("ground_body_only",false);if(!std::isfinite(v.ground_alignment_offset_cm))throw std::runtime_error("地面对齐偏移无效");
     v.graft_enabled=o.value("graft_enabled",true);
+    v.selectable=o.value("selectable",true);
     v.physics=runtime::physics_object_from_json(o.value("physics",J{}));
     v.favorites=read_favorites(o.value("favorites",J{}));v.unlimited_morphs=o.at("unlimited").get<std::set<std::string>>();
     for(const auto &[mid,value]:o.at("morphs").items()){auto m=std::find_if(target.morphs.begin(),target.morphs.end(),[&](const auto &m){return m.id==mid;});if(m==target.morphs.end())throw std::runtime_error("DUFEX 参数不存在："+mid);if(runtime::legacy_extension_channel(m->label))continue;const float x=value.get<float>();if(!std::isfinite(x))throw std::runtime_error("DUFEX Morph 数值无效");v.morphs[size_t(m-target.morphs.begin())]=x;}runtime::sync_aliases(target,v);

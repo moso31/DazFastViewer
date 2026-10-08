@@ -22,6 +22,7 @@ class PickingScene {
   void instance(const ir::Scene &scene,uint32_t index);
 public:
   void update(const ir::Scene &scene,const std::vector<uint8_t> &pickable={});
+  void set_pickable(const ir::Scene &scene,const std::vector<uint8_t> &pickable);
   void apply(const ir::Scene &scene,const ir::Delta &delta);
   void prepare_delta(const ir::Scene &scene,const ir::Delta &delta,const std::vector<uint8_t> &pickable);
   void swap_delta(PickingScene &prepared,const ir::Scene &scene,const ir::Delta &delta);

@@ -47,7 +47,7 @@ struct AssetNode {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
   float general_scale=1;
   std::string rotation_order="XYZ";
-  bool visible=true;
+  bool visible=true,selectable=true;
 };
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;std::vector<std::shared_ptr<const nlohmann::json>> source_documents;std::shared_ptr<SourceArchive> archive;};
 inline std::shared_ptr<SourceArchive> instance_archive(const LoadedScene &loaded,size_t instance){

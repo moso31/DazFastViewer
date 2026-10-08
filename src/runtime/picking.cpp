@@ -44,6 +44,13 @@ void PickingScene::mesh(const ir::Scene &scene,uint32_t index) {
   for(size_t t=0;t<mesh.triangles.size();++t) {if(!mesh.draws(mesh.triangles[t])) continue;const auto &v=mesh.triangles[t].vertices;tree.faces.push_back({mesh.positions[v[0]],mesh.positions[v[1]],mesh.positions[v[2]],-1,int(t)});}
   if(!tree.faces.empty()) build(tree,0,int(tree.faces.size()));++stats_.mesh_builds;
 }
+void PickingScene::set_pickable(const ir::Scene &scene,const std::vector<uint8_t> &pickable) {
+  if(pickable.size()!=instances_.size())throw std::runtime_error("射线对象掩码数量不一致");
+  for(uint32_t i=0;i<instances_.size();++i){const auto &source=scene.instances.at(i);const bool volume=std::any_of(source.materials.begin(),source.materials.end(),[&](auto m){return scene.materials.at(m).cloud.has_value();});
+    const bool enabled=pickable[i]&&!volume;auto &item=instances_[i];if(item.pickable==enabled)continue;item.pickable=enabled;
+    if(enabled&&!used_meshes_.at(source.mesh)){used_meshes_[source.mesh]=1;mesh(scene,source.mesh);}instance(scene,i);
+  }
+}
 void PickingScene::instance(const ir::Scene &scene,uint32_t index) {
   const auto &source=scene.instances.at(index);auto &out=instances_.at(index);out.mesh=source.mesh;out.visible=source.visible;out.bounds={};
   if(!out.pickable) return;

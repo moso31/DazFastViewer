@@ -37,6 +37,10 @@ struct Document {
   water::Waters waters;
   cloud::Clouds clouds;
 };
+struct NodeProperties {
+  bool visible=true,selectable=true;
+  bool operator==(const NodeProperties &) const = default;
+};
 struct Snapshot {
   std::optional<std::array<float,6>> view;
   city::Views city_views;
@@ -44,6 +48,7 @@ struct Snapshot {
   water::Waters water_overrides;
   cloud::Clouds cloud_overrides;
   std::map<std::string,runtime::TransformValues> group_transforms;
+  std::map<std::string,NodeProperties> node_properties;
   InstanceGrounds instance_ground;
   MaterialOverrides material_overrides;
   std::optional<runtime::FavoriteState> control_favorites;
@@ -84,4 +89,5 @@ void collect_resources(Document &document);
 void release_load_data(Document &document);
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target);
 size_t remove_light(Document &document,Snapshot &snapshot,size_t light);
+size_t remove_selection(Document &document,Snapshot &snapshot,const std::vector<size_t> &targets,const std::vector<std::string> &nodes,const std::vector<size_t> &lights={});
 }

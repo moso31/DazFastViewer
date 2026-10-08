@@ -170,6 +170,7 @@ public:
   void retry_resources();
   void history_requests(std::function<void(bool)> callback) {window_->history_requested=std::move(callback);}
   void delete_requests(std::function<void()> callback) {window_->delete_requested=std::move(callback);}
+  void save_requests(std::function<void()> callback) {window_->save_requested=std::move(callback);}
   void cancel_edit() {window_->cancel_edit();std::lock_guard lock(mutex_);powerpose_input_.cancelled=true;edit_active_=false;}
   void restart_render() {++render_restarts_;}
 #ifdef DFV_GL_RECOVERY_TEST

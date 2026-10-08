@@ -1,4 +1,5 @@
 #include "editor/physics_service.h"
+#include "editor/node_properties.h"
 #include "editor/physics_runner.h"
 #include "editor/object_extension.h"
 #include "runtime/geometry_shell.h"
@@ -32,7 +33,7 @@ runtime::PhysicsKind physics_kind(const Document &d,size_t t) {
   return follower?runtime::PhysicsKind::cloth:runtime::PhysicsKind::rigid;
 }
 bool same_physics_geometry(const Snapshot &a,const Snapshot &b) {
-  if(a.generation!=b.generation||a.poses!=b.poses||a.instance_ground!=b.instance_ground||a.group_transforms!=b.group_transforms||a.values.size()!=b.values.size())return false;
+  if(a.generation!=b.generation||a.poses!=b.poses||a.instance_ground!=b.instance_ground||a.group_transforms!=b.group_transforms||a.node_properties!=b.node_properties||a.values.size()!=b.values.size())return false;
   for(size_t i=0;i<a.values.size();++i){const auto &x=a.values[i],&y=b.values[i];if(x.transform!=y.transform||x.visible!=y.visible||x.morphs!=y.morphs||x.unlimited_morphs!=y.unlimited_morphs||x.extension!=y.extension||x.ground_alignment_ratio!=y.ground_alignment_ratio)return false;}
   return true;
 }
@@ -85,7 +86,7 @@ PhysicsService::PhysicsService():worker_([this](std::stop_token stop){
         if(!base||!same_physics_geometry(active.snapshot,q.snapshot)){
           applied_meshes.clear();applied_instances.clear();base_hashes.clear();
           while(!cancelled()){const auto prepared=deformation->prepare(q.snapshot.values,q.snapshot.poses);if(!prepared.error.empty())throw std::runtime_error(prepared.error);if(!prepared.pending)break;std::unique_lock lock(mutex_);ready_.wait_for(lock,std::chrono::milliseconds(5),[&]{return cancelled();});}
-          if(cancelled())continue;deformation->evaluate(q.snapshot.values,q.snapshot.poses);
+          if(cancelled())continue;deformation->evaluate(scene_properties(*q.document,q.snapshot),q.snapshot.poses);apply_instance_node_visibility(*q.document,q.snapshot,*deformation_scene);
           auto next=std::make_shared<ir::Scene>(*deformation_scene);apply_instance_ground(*next,q.document->loaded.scene,q.snapshot.instance_ground);base=std::move(next);
         }
         std::map<int,std::vector<runtime::PhysicsTarget>> wanted;std::vector<uint32_t> environment;std::set<uint32_t> all_simulated;

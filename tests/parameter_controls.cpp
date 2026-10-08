@@ -59,6 +59,7 @@ int main(int argc,char **argv) {
     auto *first=item(0),*second=item(1);hierarchy.show();app.processEvents();
     auto click=[&](QTreeWidgetItem *i,Qt::KeyboardModifiers modifiers) {QTest::mouseClick(hierarchy.viewport(),Qt::LeftButton,modifiers,hierarchy.visualItemRect(i).center());};
     click(first,Qt::NoModifier);click(second,Qt::ControlModifier);require(dfv::editor::tree_selection(&hierarchy).size()==2,"树 Ctrl 左键未增选");
+    require(dfv::editor::tree_deletion_selection(&hierarchy).targets==std::vector<size_t>{0,1},"多选删除没有收集所有对象");
     click(second,Qt::ControlModifier);require(dfv::editor::tree_selection(&hierarchy).size()==1&&dfv::editor::active_selection(&hierarchy)==first,"取消当前项后主选项失效");
     dfv::editor::choose_item(&hierarchy,second,true);require(dfv::editor::tree_selection(&hierarchy).size()==2,"视口增选没有同步树");
     dfv::editor::choose_item(&hierarchy,nullptr,true);require(dfv::editor::tree_selection(&hierarchy).size()==2,"Ctrl 空白误清除多选");
@@ -66,6 +67,8 @@ int main(int argc,char **argv) {
     auto *group=item(-4);auto *child=item(-7);hierarchy.takeTopLevelItem(hierarchy.indexOfTopLevelItem(child));group->addChild(child);
     dfv::editor::choose_item(&hierarchy,group);dfv::editor::choose_item(&hierarchy,first,true);
     const auto keys=dfv::editor::tree_selection(&hierarchy);require(keys.size()==2&&keys[0][0]==-7&&keys[1][0]==0,"组和实例混选丢失聚焦目标");
+    group->setData(0,Qt::UserRole+3,"outer");child->setData(0,Qt::UserRole+3,"instance");child->setSelected(true);
+    const auto deletion=dfv::editor::tree_deletion_selection(&hierarchy);require(deletion.targets==std::vector<size_t>{0}&&deletion.nodes==std::vector<std::string>{"instance","outer"},"父组和实例混选删除身份错误");
     auto bone=[&](int joint) {auto *i=new QTreeWidgetItem(first,{QString::number(joint)});i->setData(0,Qt::UserRole,0);i->setData(0,Qt::UserRole+1,joint);i->setData(0,Qt::UserRole+2,-1);return i;};
     auto *left=bone(1),*right=bone(2);first->setExpanded(true);app.processEvents();
     click(left,Qt::NoModifier);click(right,Qt::ControlModifier);

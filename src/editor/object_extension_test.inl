@@ -3,6 +3,7 @@
   nlohmann::json dufex_expected_;
   std::filesystem::path dufex_native_;
   runtime::TransformValues dufex_original_transform_;
+  unsigned dufex_save_triggers_=0;
   void dufex_tick(const RenderStatus &state){
     if(QDateTime::currentMSecsSinceEpoch()-test_started_>180000){finish_test(false,"DUFEX 界面验证超时");return;}
     if(!state.error.empty()||!state.edit_error.empty()||!state.resource_error.empty()){finish_test(false,state.error+state.edit_error+state.resource_error);return;}
@@ -14,17 +15,32 @@
         send();auto c=renderer_->input_camera();renderer_->camera_view({c.target.x,c.target.y,c.target.z,c.distance*.9f,c.yaw+.2f,c.pitch+.1f});++test_stage_;return;
       }
       if(test_stage_==1){
-        extension_file_=extension_path(dufex_native_);save_extension();dufex_expected_=snapshot_json(*document_,snapshot_);
+        extension_file_=extension_path(dufex_native_);auto *save=findChild<QAction *>("SaveScene");if(!save)throw std::runtime_error("缺少场景保存动作");
+        connect(save,&QAction::triggered,this,[this]{++dufex_save_triggers_;});
+        const auto viewport=FindWindowExW(HWND(host_->winId()),nullptr,L"DfvCyclesBench",nullptr);SetFocus(viewport);
+        PostMessageW(viewport,WM_KEYDOWN,VK_CONTROL,1);PostMessageW(viewport,WM_KEYDOWN,'S',1);PostMessageW(viewport,WM_KEYDOWN,'S',1LL<<30);PostMessageW(viewport,WM_KEYUP,'S',1LL<<31);PostMessageW(viewport,WM_KEYUP,VK_CONTROL,1LL<<31);++test_stage_;return;
+      }
+      if(test_stage_==2){
+        if(!dufex_save_triggers_)return;if(dufex_save_triggers_!=1)throw std::runtime_error("原生 Ctrl+S 重复触发保存");dufex_expected_=snapshot_json(*document_,snapshot_);
         const QImage png(QString::fromStdWString(extension_file_.wstring())+".png");if(png.size()!=QSize(256,256))throw std::runtime_error("保存未生成 256 平方缩略图");
         auto min=255,max=0;for(int y=0;y<png.height();++y)for(int x=0;x<png.width();++x){const auto v=qGray(png.pixel(x,y));min=std::min(min,v);max=std::max(max,v);}if(max-min<10)throw std::runtime_error("缩略图为空白");
         ++test_stage_;open_asset(extension_file_);return;
       }
-      if(test_stage_==2){
+      if(test_stage_==3){
         if(snapshot_json(*document_,snapshot_)!=dufex_expected_)throw std::runtime_error("界面保存重开参数不一致");
         const auto c=renderer_->input_camera();const std::array<float,6> view={c.target.x,c.target.y,c.target.z,c.distance,c.yaw,c.pitch};if(!snapshot_.view||view!=*snapshot_.view)throw std::runtime_error("观察相机未恢复");
-        ++test_stage_;load(dufex_native_);return;
+        snapshot_.values[0].transform.translation_cm.y+=7;send();++test_stage_;return;
       }
-      if(snapshot_.values[0].transform!=dufex_original_transform_||snapshot_.view)throw std::runtime_error("打开原 DUF 错误套用了同名 DUFEX");finish_test(true);
+      if(test_stage_==4){
+        QApplication::setActiveWindow(this);hierarchy_->setFocus(Qt::OtherFocusReason);
+        QApplication::postEvent(hierarchy_,new QKeyEvent(QEvent::KeyPress,Qt::Key_S,Qt::ControlModifier));QApplication::postEvent(hierarchy_,new QKeyEvent(QEvent::KeyRelease,Qt::Key_S,Qt::ControlModifier));++test_stage_;return;
+      }
+      if(test_stage_==5){
+        if(dufex_save_triggers_<2)return;if(dufex_save_triggers_!=2)throw std::runtime_error("Qt 面板 Ctrl+S 重复触发保存");dufex_expected_=snapshot_json(*document_,snapshot_);++test_stage_;open_asset(extension_file_);return;
+      }
+      if(test_stage_==6){if(snapshot_json(*document_,snapshot_)!=dufex_expected_)throw std::runtime_error("Qt 面板快捷键保存没有写入最新修改");++test_stage_;load(dufex_native_);return;}
+      if(snapshot_.values[0].transform!=dufex_original_transform_||snapshot_.view)throw std::runtime_error("打开原 DUF 错误套用了同名 DUFEX");
+      std::ofstream(output_/"save-shortcut-check.json")<<nlohmann::json{{"native_ctrl_s",true},{"qt_panel_ctrl_s",true},{"save_triggers",dufex_save_triggers_},{"thumbnail",true},{"reopen_latest_changes",true},{"original_duf_unchanged",true}}.dump(2);finish_test(true);
     }catch(const std::exception &e){finish_test(false,e.what());}
   }
   bool empty_test_=false;

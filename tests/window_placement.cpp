@@ -5,6 +5,7 @@
 #include <QScreen>
 #include <QWidget>
 #include <QTemporaryDir>
+#include <array>
 #include <iostream>
 #include <stdexcept>
 #include <GL/gl.h>
@@ -34,6 +35,18 @@ int main(int argc,char **argv) {
       host.move(app.primaryScreen()->availableGeometry().topLeft()+QPoint(50,50));host.show();app.processEvents();
       const auto parent=reinterpret_cast<HWND>(host.winId());
       dfv::Window viewport(320,240,false,nullptr,0,parent);
+      SetFocus(viewport.hwnd);
+      auto key=[&](UINT message,WPARAM value){SendMessageW(viewport.hwnd,message,value,0);};
+      auto tick=[&]{Sleep(20);SendMessageW(viewport.hwnd,WM_TIMER,1,0);};
+      for(char movement:std::string("WASDQE")){const auto before=viewport.camera.matrix();key(WM_KEYDOWN,VK_CONTROL);key(WM_KEYDOWN,movement);tick();check(viewport.camera.matrix()==before,"Ctrl + WASDQE 移动了镜头");key(WM_KEYUP,movement);key(WM_KEYUP,VK_CONTROL);tick();check(viewport.camera.matrix()==before,"释放 Ctrl 后残留组合键移动");}
+      key(WM_KEYDOWN,'W');tick();check(viewport.camera.navigating,"普通 W 没有进入镜头移动");const auto moved=viewport.camera.matrix();key(WM_KEYDOWN,VK_CONTROL);tick();check(viewport.camera.matrix()==moved&&!viewport.camera.navigating,"移动中按 Ctrl 没有停止镜头");key(WM_KEYUP,VK_CONTROL);key(WM_KEYUP,'W');
+      int saves=0;viewport.save_requested=[&]{++saves;};const auto before_save=viewport.camera.matrix();
+      key(WM_KEYDOWN,VK_CONTROL);key(WM_KEYDOWN,'S');SendMessageW(viewport.hwnd,WM_KEYDOWN,'S',1LL<<30);key(WM_KEYUP,'S');key(WM_KEYUP,VK_CONTROL);tick();
+      check(saves==1&&viewport.camera.matrix()==before_save,"原生 Ctrl+S 没有触发一次保存，或移动了镜头");
+      key(WM_KEYDOWN,'S');key(WM_KEYUP,'S');check(saves==1,"普通 S 错误触发保存");
+      std::array<BYTE,256> original{},modifiers{};GetKeyboardState(original.data());modifiers=original;modifiers[VK_CONTROL]=0x80;modifiers[VK_SHIFT]=modifiers[VK_MENU]=0;SetKeyboardState(modifiers.data());key(WM_KEYDOWN,'S');key(WM_KEYUP,'S');SetKeyboardState(original.data());check(saves==2,"Ctrl 在视口获得焦点前按下时无法保存");
+      for(auto modifier:{VK_SHIFT,VK_MENU}){modifiers[modifier]=0x80;SetKeyboardState(modifiers.data());key(WM_KEYDOWN,'S');key(WM_KEYUP,'S');SetKeyboardState(original.data());modifiers[modifier]=0;check(saves==2,"Ctrl+Shift/Alt+S 错误触发普通保存");}
+      std::cout<<"Native Ctrl+S save / autorepeat / modifiers / camera: PASS\n";
       check(GetParent(viewport.hwnd)==parent,"Viewport is not embedded");
       check(MonitorFromWindow(viewport.hwnd,MONITOR_DEFAULTTONEAREST)==MonitorFromWindow(parent,MONITOR_DEFAULTTONEAREST),"Viewport does not follow its host monitor");
       {

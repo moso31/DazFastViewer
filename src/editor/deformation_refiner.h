@@ -1,5 +1,6 @@
 #pragma once
 #include "editor/document.h"
+#include "editor/node_properties.h"
 #include "diagnostics/load_profile.h"
 #include <condition_variable>
 #include <thread>
@@ -69,7 +70,7 @@ private:
 public:
   uint64_t request(std::shared_ptr<const Document> document,const Snapshot &snapshot,const std::vector<ir::Transform> &frames) {
     std::lock_guard lock(mutex_);const auto ticket=++ticket_;
-    pending_=Request{ticket,std::move(document),snapshot.values,snapshot.poses,frames};result_.reset();
+    const auto values=scene_properties(*document,snapshot);pending_=Request{ticket,std::move(document),values,snapshot.poses,frames};result_.reset();
     if(!worker_.joinable())worker_=std::jthread([this](std::stop_token stop){run(stop);});
     wake_.notify_one();return ticket;
   }

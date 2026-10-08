@@ -41,7 +41,7 @@ void rebuild_ancestors(Document &d) {
   std::map<std::string,std::string> parents;
   std::set<std::string> hidden;
   for(const auto &n:d.loaded.nodes) parents["#"+n.id]=n.parent;
-  for(const auto &n:d.loaded.nodes)if(!n.visible&&std::none_of(d.loaded.objects.begin(),d.loaded.objects.end(),[&](const auto &o){return o.id==n.id;}))hidden.insert("#"+n.id);
+  for(const auto &n:d.loaded.nodes)if(!n.group&&!n.visible&&std::none_of(d.loaded.objects.begin(),d.loaded.objects.end(),[&](const auto &o){return o.id==n.id;}))hidden.insert("#"+n.id);
   for(auto &t:d.catalog.targets) {
     t.ancestors.clear();t.ancestors_visible=true;std::set<std::string> seen;
     for(auto p=t.parent;!p.empty();) {

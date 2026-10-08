@@ -98,7 +98,7 @@ std::shared_ptr<Document> refresh_parameters(const Document &document,size_t sel
   for(size_t t=0;t<catalog.targets.size();++t) {
     const auto found=std::find_if(result->catalog.targets.begin(),result->catalog.targets.end(),[&](const auto &old){return old.id==catalog.targets[t].id;});
     if(found==result->catalog.targets.end()) throw std::runtime_error("刷新时对象身份已变化");
-    catalog.targets[t].initial_visible=found->initial_visible;catalog.targets[t].ancestors_visible=found->ancestors_visible;
+    catalog.targets[t].initial_visible=found->initial_visible;catalog.targets[t].initial_selectable=found->initial_selectable;catalog.targets[t].ancestors_visible=found->ancestors_visible;
     const size_t index=size_t(found-result->catalog.targets.begin());*found=std::move(catalog.targets[t]);result->formulas.graphs[index]=std::move(formulas.graphs[t]);
   }
   }
@@ -149,21 +149,27 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
     changed=removed.size()!=count;
   }
   std::vector<bool> instances(scene.instances.size(),true);
+  for(size_t i=0;i<scene.instances.size();++i){const auto &v=scene.instances[i];if(removed.contains(v.id)||removed.contains(v.instance_node)||removed.contains(v.instance_group))instances[i]=false;for(const auto &city:document.cities)if(removed.contains(city->id)&&(v.id==city->id||v.id.starts_with(city->id+"/")))instances[i]=false;}
   for(const auto &object:document.loaded.objects) if(removed.contains(object.id)) instances.at(object.instance)=false;
   for(const auto &t:document.catalog.targets) if(removed.contains(node_id(t))) instances.at(t.instance)=false;
-  for(size_t i=0;i<scene.instances.size();++i) {const auto &v=scene.instances[i];if((v.shell_source>=0&&!instances.at(size_t(v.shell_source)))||(v.prototype>=0&&(!instances.at(size_t(v.prototype))||removed.contains(v.instance_node)))) instances[i]=false;}
+  changed=true;while(changed){changed=false;for(size_t i=0;i<scene.instances.size();++i)if(instances[i]){const auto &v=scene.instances[i];if((v.shell_source>=0&&!instances.at(size_t(v.shell_source)))||(v.prototype>=0&&(!instances.at(size_t(v.prototype))||removed.contains(v.instance_node)||removed.contains(v.instance_group)))){instances[i]=false;changed=true;}}}
   std::vector<bool> targets,skins;
   for(const auto &t:document.catalog.targets) targets.push_back(instances.at(t.instance));
   for(const auto &s:document.skeletons.skins) skins.push_back(instances.at(s.instance));
   const auto instance_map=retain(scene.instances,instances),skin_map=retain(document.skeletons.skins,skins);
   for(auto &i:scene.instances) {if(i.prototype>=0) i.prototype=instance_map.at(size_t(i.prototype));if(i.graft_source>=0) i.graft_source=instance_map.at(size_t(i.graft_source));if(i.shell_source>=0)i.shell_source=instance_map.at(size_t(i.shell_source));if(i.shell_root>=0)i.shell_root=instance_map.at(size_t(i.shell_root));}
   retain(snapshot.poses,skins);retain(document.catalog.targets,targets);retain(snapshot.values,targets);retain(document.formulas.graphs,targets);
+  std::erase_if(snapshot.pose_pins,[&](const auto &pin){return pin.skin<0||size_t(pin.skin)>=skin_map.size()||skin_map[size_t(pin.skin)]<0;});
+  for(auto &pin:snapshot.pose_pins)pin.skin=skin_map.at(size_t(pin.skin));
   for(auto &t:document.catalog.targets) {t.instance=uint32_t(instance_map.at(t.instance));if(refers_to(t.smoothing.collision_target,removed)) t.smoothing.collision_target.clear();}
   for(auto &s:document.skeletons.skins) s.instance=uint32_t(instance_map.at(s.instance));
   for(auto &g:document.formulas.graphs) if(g.skin>=0) g.skin=skin_map.at(size_t(g.skin));
   std::erase_if(document.loaded.objects,[&](const auto &o) {return removed.contains(o.id)||instance_map.at(o.instance)<0;});
   for(auto &o:document.loaded.objects) {o.instance=uint32_t(instance_map.at(o.instance));if(refers_to(o.smoothing.collision_target,removed)) o.smoothing.collision_target.clear();}
   std::erase_if(document.loaded.nodes,[&](const auto &n) {return removed.contains(n.id);});
+  std::erase_if(snapshot.node_properties,[&](const auto &p){return removed.contains(p.first);});
+  std::erase_if(document.cities,[&](const auto &c){return removed.contains(c->id);});
+  std::erase_if(snapshot.city_views,[&](const auto &p){return removed.contains(p.first);});
   std::erase_if(document.waters,[&](const auto &w){return removed.contains(w->id);});
   std::erase_if(snapshot.water_overrides,[&](const auto &w){return removed.contains(w->id);});
   std::erase_if(document.clouds,[&](const auto &v){return removed.contains(v->id);});
@@ -175,7 +181,15 @@ static size_t remove_nodes(Document &document,Snapshot &snapshot,std::set<std::s
   std::erase_if(document.attachments,[](const auto &b){return b.items.empty();});
   std::erase_if(snapshot.lights,[&](const auto &l) {return removed.contains(l.id);});scene.lights=snapshot.lights;
   daz::apply_graft_masks(document.loaded);collect_resources(document);prune_material_overrides(scene,snapshot.material_overrides);prune_instance_ground(scene,snapshot.instance_ground);prune_group_transforms(document,snapshot.group_transforms);release_load_data(document);++snapshot.revision;
-  return std::count(targets.begin(),targets.end(),false);
+  return std::count(instances.begin(),instances.end(),false);
+}
+size_t remove_selection(Document &d,Snapshot &s,const std::vector<size_t> &targets,const std::vector<std::string> &nodes,const std::vector<size_t> &lights) {
+  std::set<std::string> removed(nodes.begin(),nodes.end());
+  for(auto target:targets){const auto &t=d.catalog.targets.at(target);removed.insert(node_id(t));for(const auto &o:d.loaded.objects)if(o.instance==t.instance)removed.insert(o.id);}
+  for(auto light:lights)removed.insert(s.lights.at(light).id);
+  if(removed.empty())return 0;
+  const auto identities=removed;const auto count=remove_nodes(d,s,std::move(removed));
+  d.operations.push_back({{"op","remove_nodes"},{"nodes",identities}});return count;
 }
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target) {
   const auto &selected=document.catalog.targets.at(target);const auto id=selected.id;std::set<std::string> removed{node_id(selected)};
@@ -220,6 +234,16 @@ size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &
   for(size_t t=0;t<document.catalog.targets.size();++t){const auto &candidate=document.catalog.targets[t];bool include=t==target;
     if(hierarchical&&!include){try{include=attachment_host(document,t)==target;}catch(const std::exception &){}include|=std::find(candidate.ancestors.begin(),candidate.ancestors.end(),"#"+selected)!=candidate.ancestors.end();}
     if(include)for(size_t slot=0;slot<scene.instances.at(candidate.instance).materials.size();++slot)surfaces.push_back({candidate.instance,slot});
+  }
+  auto matches=[&](MaterialSurface surface){const auto &i=scene.instances.at(surface.instance);const auto &slot=scene.meshes.at(i.mesh).material_slots.at(surface.slot);
+    for(size_t m=0;m<preset.scene.materials.size();++m)if(material_owner_matches(document,preset.scene.materials[m],surface.instance))for(const auto &group:preset.report.at("materials").at(m).at("groups"))if(material_group_matches(document,preset,surface.instance,slot,group.get<std::string>()))return true;return false;};
+  // 普通服装材质在角色本体没有匹配表面时，允许匹配其穿戴物和层级子对象。
+  if(!hierarchical&&std::none_of(surfaces.begin(),surfaces.end(),matches)){
+    const ObjectHierarchy hierarchy(document);
+    for(size_t t=0;t<document.catalog.targets.size();++t)if(t!=target){const auto &candidate=document.catalog.targets[t];bool include=hierarchy.contains(hierarchy.targets[target],hierarchy.targets[t]);
+      if(!include&&document.catalog.targets[target].character)try{include=attachment_host(document,t)==target;}catch(const std::exception &){}
+      if(include)for(size_t slot=0;slot<scene.instances.at(candidate.instance).materials.size();++slot){MaterialSurface surface{candidate.instance,slot};if(matches(surface))surfaces.push_back(surface);}
+    }
   }
   auto scratch=Snapshot{};return apply_surface_materials(document,snapshot?*snapshot:scratch,preset,surfaces);
 }
@@ -287,6 +311,7 @@ Snapshot initial_snapshot(const Document &document) {
   for(const auto &target:document.catalog.targets) {
     runtime::Properties p;p.extension=target.native_extension;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);
     p.visible=target.initial_visible.value_or(document.loaded.scene.instances.at(target.instance).visible);
+    p.selectable=target.initial_selectable;
     runtime::sync_aliases(target,p);result.values.push_back(std::move(p));
   }
   result.lights=document.loaded.scene.lights;return result;

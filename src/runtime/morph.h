@@ -35,7 +35,8 @@ struct Target {
   std::string id,label,parent;
   // Keep the authored node switch separate from inherited render visibility.
   std::optional<bool> initial_visible;
-  bool ancestors_visible=true; // Fixed visibility of non-editable bone/group ancestors.
+  bool initial_selectable=true;
+  bool ancestors_visible=true; // Fixed visibility of non-editable bone ancestors.
   bool character=false;
   // DUF 节点收藏：空键为对象本身，其他键为骨骼资产 ID；空集合也代表已保存的列表。
   std::string favorite_scope;
@@ -63,7 +64,7 @@ struct Properties {
   PhysicsObjectSettings physics;
   std::optional<FavoriteState> favorites;
   ObjectExtension extension;
-  std::vector<float> morphs;TransformValues transform;bool visible=true;std::set<std::string> unlimited_morphs;
+  std::vector<float> morphs;TransformValues transform;bool visible=true,selectable=true;std::set<std::string> unlimited_morphs;
   double ground_alignment_ratio=0; // 每个对象独立的操作设置，修改比例本身不触发几何求值。
   double ground_alignment_offset_cm=0;
   bool ground_alignment_body_only=false;

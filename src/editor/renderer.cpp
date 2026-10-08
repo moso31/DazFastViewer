@@ -1,5 +1,6 @@
 #include "editor/renderer.h"
 #include "editor/group_transforms.h"
+#include "editor/node_properties.h"
 #include "water/document.h"
 #include "cloud/document.h"
 #include "editor/pose_drag.h"
@@ -90,7 +91,7 @@ void Renderer::run(std::stop_token stop) {
   nlohmann::json sampling_report;
   std::atomic<size_t> gpu_device_bytes{0},gpu_host_bytes{0};
   std::ofstream progress_log(output_/"cycles-progress.log");std::string last_progress;
-  HoverOverlay overlay;runtime::PickingScene picking;std::vector<runtime::JointRegions> regions;std::vector<uint8_t> pickable;bool geometry_dirty=true;uint64_t clicks=0;
+  HoverOverlay overlay;runtime::PickingScene picking;std::vector<runtime::JointRegions> regions;std::vector<uint8_t> pickable;bool geometry_dirty=true;uint64_t clicks=0,pick_revision=0;
   std::optional<runtime::InstanceGroups> instance_groups;
   PhysicsService physics_service;
   std::future<std::shared_ptr<PreparedPhysics>> physics_prepare;
@@ -307,7 +308,8 @@ void Renderer::run(std::stop_token stop) {
         const auto resources=pending_runtime->prepare(desired.values,desired.poses,retry_payloads);retried=retry;
         state.pending_payloads=resources.pending;state.resource_error=resources.error;
         if(resources.pending||!resources.error.empty()) {publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
-        {diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(desired.values,desired.poses);}
+        {diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(scene_properties(*document,desired),desired.poses);}
+        apply_instance_node_visibility(*document,desired,*pending_scene);
         pending_scene->lights=group_lights(*group_source,*pending_scene,group_frames->hierarchy,desired.lights,pending_runtime->effective_poses(),&*group_frames);pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
         apply_material_overrides(*pending_scene,document->loaded.scene,desired.material_overrides);
         if(!desired.instance_ground.empty()||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,*pending_scene,group_frames->hierarchy,pending_runtime->effective_poses(),&*group_frames);apply_instance_ground(*pending_scene,document->loaded.scene,desired.instance_ground,nullptr,&bases);}
@@ -356,7 +358,7 @@ void Renderer::run(std::stop_token stop) {
         refiner.cancel();refine_pending=false;refine_frames.clear();refined_collision=runtime->collision_stats();
         refine_enabled=refined_collision.evaluations||refined_collision.cache_hits;if(refine_enabled)runtime->defer_collision();
         runtime_document=document;runtime_source=group_source;runtime_frames=group_frames;
-        regions.clear();regions.resize(render_scene_ptr->instances.size());pickable=runtime::viewport_pick_mask(*render_scene_ptr,current->catalog.targets);
+        regions.clear();regions.resize(render_scene_ptr->instances.size());pickable=scene_pick_mask(*current,desired,*render_scene_ptr);pick_revision=desired.revision;
         for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene_ptr->meshes.at(render_scene_ptr->instances.at(skin.instance).mesh),skin);
         geometry_dirty=true;edit_affects_render=false;previous_positions.clear();
         applied_revision=attempted_revision=desired.revision;
@@ -614,7 +616,7 @@ void Renderer::run(std::stop_token stop) {
             for(const auto &mesh:render_scene.meshes) previous_subdivision.push_back(mesh.subdivision);
             subdivision_edit=apply_subdivision_levels(render_scene,desired.subdivision_levels);
             diagnostics::LoadProfile profile;diagnostics::active=&profile;
-            try {delta=runtime->evaluate(desired.values,desired.poses);} catch(...) {diagnostics::active=nullptr;throw;}
+            try {delta=runtime->evaluate(scene_properties(*current,desired),desired.poses);apply_instance_node_visibility(*current,desired,render_scene,&delta);} catch(...) {diagnostics::active=nullptr;throw;}
             diagnostics::active=nullptr;timing("edit_evaluate",evaluate_begin,desired.revision);
             if(refine_enabled&&(refine_pending||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.grafts.empty()||!delta.masks.empty())) {
               refine_ticket=refiner.request(runtime_document,desired,refine_frames);refine_revision=desired.revision;refine_pending=true;
@@ -750,8 +752,10 @@ void Renderer::run(std::stop_token stop) {
       display->set_reconstruction(quality.reconstruction);
       display->set_sharpen(quality.sharpen);
       const bool bounds_dirty=geometry_dirty||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.masks.empty();
+      bool picking_changed=false;if(pick_revision!=desired.revision){auto next_pickable=scene_pick_mask(*current,desired,render_scene);picking_changed=next_pickable!=pickable;pickable=std::move(next_pickable);pick_revision=desired.revision;}
       if(geometry_dirty) {instance_groups.emplace(render_scene);auto begin=now();overlay.update(render_scene,regions);timing("overlay_update",begin,applied_revision);begin=now();picking.update(render_scene,pickable);timing("picking_update",begin,applied_revision);geometry_dirty=false;}
       else if(bounds_dirty||refinement_finished) {auto begin=now();overlay.apply(render_scene,regions,delta,refine_pending);timing("overlay_update",begin,applied_revision);begin=now();picking.apply(render_scene,delta);timing("picking_update",begin,applied_revision);}
+      if(picking_changed)picking.set_pickable(render_scene,pickable);
       if(sampling_.interaction_probe&&bounds_dirty) {
         const bool all=state.mesh_hashes.size()!=render_scene.meshes.size();state.mesh_hashes.resize(render_scene.meshes.size());
         for(size_t m=0;m<render_scene.meshes.size();++m) if(all||std::any_of(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e){return e.index==m;})) {

@@ -206,6 +206,9 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
     case WM_MOUSELEAVE:if(!self->automated_pointer) {self->back_click_=false;self->pointer_x=-1;self->pointer_y=-1;}return 0;
     case WM_CLOSE:self->close=true;return 0;
     case WM_KEYDOWN:
+      if(w=='S'&&(self->pointer_toggle||(GetKeyState(VK_CONTROL)&0x8000))&&!(GetKeyState(VK_SHIFT)&0x8000)&&!(GetKeyState(VK_MENU)&0x8000)) {
+        self->cancel_pose();self->keys_[2]=false;self->update_navigation();if(!(l&(1LL<<30))&&self->save_requested)self->save_requested();return 0;
+      }
       if(w==VK_DELETE&&!(GetKeyState(VK_CONTROL)&0x8000)&&!(GetKeyState(VK_SHIFT)&0x8000)&&!(GetKeyState(VK_MENU)&0x8000)) {
         self->cancel_pose();if(!(l&(1LL<<30))&&self->delete_requested)self->delete_requested();return 0;
       }
@@ -218,10 +221,10 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
       if(w==VK_ESCAPE) self->cancel_pose();
       if(w==VK_CONTROL||w==VK_SHIFT||w==VK_MENU) self->cancel_pose();
       self->back_click_=false;
-      if(w==VK_CONTROL) self->pointer_toggle=true;
+      if(w==VK_CONTROL) {self->pointer_toggle=true;std::fill(std::begin(self->keys_),std::end(self->keys_),false);}
       if(w==VK_ESCAPE&&!self->embedded) self->close=true;
       if(w=='F'&&!self->back_pressed_&&!(l&(1LL<<30))) ++self->focus_requests;
-      for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=true;
+      for(int i=0;i<6;++i) if(w=="WASDQE"[i]) self->keys_[i]=!self->pointer_toggle&&!(GetKeyState(VK_CONTROL)&0x8000);
       self->update_navigation();return 0;
     case WM_KEYUP:
       if(w==VK_CONTROL) self->pointer_toggle=false;
@@ -246,7 +249,7 @@ LRESULT CALLBACK Window::procedure(HWND hwnd,UINT msg,WPARAM w,LPARAM l) {
       self->update_navigation();return 0;
     case WM_TIMER: {
       const auto now=GetTickCount64();const float seconds=std::min(float(now-self->moved_)*.001f,.1f);self->moved_=now;
-      if(GetFocus()==hwnd&&std::any_of(std::begin(self->keys_),std::end(self->keys_),[](bool k){return k;})) {
+      if(GetFocus()==hwnd&&!self->pointer_toggle&&!(GetKeyState(VK_CONTROL)&0x8000)&&std::any_of(std::begin(self->keys_),std::end(self->keys_),[](bool k){return k;})) {
         self->camera.move(float(self->keys_[0])-self->keys_[2],float(self->keys_[3])-self->keys_[1],float(self->keys_[5])-self->keys_[4],seconds,(GetKeyState(VK_SHIFT)&0x8000)!=0);self->publish();
       }return 0;
     }

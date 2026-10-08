@@ -29,6 +29,7 @@ MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):
     bases_.push_back(mesh.positions);transforms_.push_back(instance.transform);active_.emplace_back();
     Properties property;
     property.visible=target.initial_visible.value_or(instance.visible);
+    property.selectable=target.initial_selectable;
     for(const auto &m:target.morphs) {
       if(!std::isfinite(m.minimum)||!std::isfinite(m.maximum)||!std::isfinite(m.initial)||m.minimum>m.maximum)
         throw std::runtime_error("Morph 范围无效");
