@@ -1960,7 +1960,7 @@ public:
   void group_motion_test(const std::string &label) {group_transform_test();gt_motion_label_=label;}
   void collective_ground_test(const std::string &label) {cg_label_=label;self_test_=true;renderer_->automated_pointer();}
   void ground_test() {ground_test_=self_test_=true;renderer_->automated_pointer();}
-  void joint_selection_test() {joint_selection_test_=self_test_=true;GetCursorPos(&workflow_cursor_);}
+  void joint_selection_test() {joint_selection_test_=self_test_=true;renderer_->automated_pointer();GetCursorPos(&workflow_cursor_);}
   void workflow_test() {workflow_test_=true;self_test_=true;GetCursorPos(&workflow_cursor_);}
   void head_selection_test() {workflow_test();head_selection_test_=true;}
   void capture_test(QStringList targets={},bool front=false,bool head=false,int samples=16,double seconds=0) {capture_test_=true;self_test_=true;capture_targets_=std::move(targets);capture_front_=front;capture_head_=head;capture_samples_=std::clamp(samples,1,1<<20);capture_seconds_=seconds;}

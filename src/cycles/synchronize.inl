@@ -75,6 +75,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   }
   std::vector<std::vector<ir::Vec3>> refined(source.meshes.size());
   Concurrency::parallel_for(size_t(0),source.meshes.size(),[&](size_t i) {if(subdivisions[i].active()&&(topology_changed[i]||source.meshes[i].positions!=source_.meshes[size_t(previous_mesh[i])].positions)) refined[i]=subdivisions[i].evaluate(source.meshes[i].positions);});
+  const bool origin_changed=set_render_origin(source.camera);
   bool changed=!loaded_;
   std::vector<int> texture_map;
   for(auto texture:source.textures) {
@@ -198,7 +199,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     for(Geometry *g:std::array<Geometry *,2>{geometry.mesh,geometry.hair}) if(g) {
       Object *object=nullptr;if(auto old=old_objects.find(instance.id);old!=old_objects.end()) for(auto *o:old->second) if(o->get_geometry()==g&&retired_objects.contains(o)) {object=o;break;}
       if(!object) {object=scene_.create_node<Object>();object->name=ustring(instance.id);object->set_geometry(g);changed=true;}
-      const auto matrix=transform(instance.transform);const auto visibility=instance.visible?PATH_RAY_VISIBILITY_ALL:0;
+      const auto matrix=transform(instance.transform,render_origin_);const auto visibility=instance.visible?PATH_RAY_VISIBILITY_ALL:0;
       if(object->get_tfm()!=matrix||object->get_visibility()!=visibility) {object->set_tfm(matrix);object->set_visibility(visibility);object->tag_update(&scene_);if(loaded_) ++stats_.instance_updates;changed=true;}
       objects.back().push_back(object);retired_objects.erase(object);
     }
@@ -232,7 +233,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     auto old=std::find_if(graft_renders_.begin(),graft_renders_.end(),[&](const auto &r){return r.id==id;});
     render.object=old==graft_renders_.end()?scene_.create_node<Object>():old->object;
     if(old==graft_renders_.end()||render.object->get_geometry()!=render.mesh) {render.object->name=ustring(id);render.object->set_geometry(render.mesh);changed=true;}
-    const auto matrix=transform(graft_transform(surface,source,render.parts));const auto visible=std::any_of(render.visible.begin(),render.visible.end(),[](bool v){return v;})?PATH_RAY_VISIBILITY_ALL:0;
+    const auto matrix=transform(graft_transform(surface,source,render.parts),render_origin_);const auto visible=std::any_of(render.visible.begin(),render.visible.end(),[](bool v){return v;})?PATH_RAY_VISIBILITY_ALL:0;
     if(render.object->get_tfm()!=matrix||render.object->get_visibility()!=visible) {render.object->set_tfm(matrix);render.object->set_visibility(visible);render.object->tag_update(&scene_);if(loaded_) ++stats_.instance_updates;changed=true;}
     retired_objects.erase(render.object);stats_.triangles+=render.mesh->num_triangles();graft_renders.push_back(std::move(render));
   }
@@ -241,7 +242,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
   changed|=!retired_objects.empty()||!retired_geometry.empty();
   for(auto *shader:shaders_) if(!used_shaders.contains(shader)) {shader->set_graph(make_unique<ShaderGraph>());shader->tag_update(&scene_);scene_.delete_node(shader);retired_shaders_.push_back(shader);changed=true;}
   if(!loaded_) {auto graph=make_unique<ShaderGraph>();auto *emission=graph->create_node<EmissionNode>();emission->set_color(one_float3());emission->set_strength(1);graph->connect(emission->output("Emission"),graph->output()->input("Surface"));scene_.default_light->set_graph(std::move(graph));scene_.default_light->tag_update(&scene_);}
-  if(source.lights!=source_.lights||!loaded_) {
+  if(source.lights!=source_.lights||!loaded_||origin_changed) {
     for(auto *o:light_objects_) scene_.delete_node(o);for(auto *l:lights_) scene_.delete_node(l);lights_.clear();light_objects_.clear();light_power_.clear();
     for(const auto &data:source.lights) {Light *light=nullptr;
       if(data.kind==ir::LightKind::point) light=scene_.create_node<PointLight>();
@@ -249,10 +250,10 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
       else if(data.kind==ir::LightKind::distant) light=scene_.create_node<SunLight>();
       else {auto *area=scene_.create_node<AreaLight>();area->set_sizeu(data.width);area->set_sizev(data.height);light=area;}
       light_power_.push_back(data.power);light->set_strength(ir::scene_lights(source.options)?vector(data.power):zero_float3());light->set_use_mis(true);lights_.push_back(light);
-      auto *object=scene_.create_node<Object>();object->set_geometry(light);object->set_tfm(transform(data.transform));light_objects_.push_back(object);
+      auto *object=scene_.create_node<Object>();object->set_geometry(light);object->set_tfm(transform(data.transform,render_origin_));light_objects_.push_back(object);
     }changed=true;
   }
-  if(!loaded_||environment_!=source.environment||options_!=source.options) {environment_=source.environment;environment(source.options);changed=true;}
+  if(!loaded_||environment_!=source.environment||options_!=source.options||origin_changed) {environment_=source.environment;environment(source.options);changed=true;}
   const bool camera_changed=!loaded_||source_.camera.transform!=source.camera.transform||source_.camera.width!=source.camera.width||source_.camera.height!=source.camera.height||source_.camera.fov!=source.camera.fov;
   texture_map_=std::move(texture_map);shaders_=std::move(shaders);canonical_materials_=std::move(canonical);bump_distances_=std::move(bumps);emission_strengths_=emission;subdivisions_=std::move(subdivisions);meshes_=std::move(meshes);hairs_=std::move(hairs);objects_=std::move(objects);vertex_counts_=std::move(counts);source_=std::move(saved);loaded_=true;
   grafts_=std::move(grafts);graft_bindings_=std::move(graft_bindings);graft_renders_=std::move(graft_renders);

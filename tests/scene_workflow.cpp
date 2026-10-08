@@ -7,6 +7,7 @@
 
 using namespace dfv;
 static void require(bool v,const char *message) {if(!v) throw std::runtime_error(message);}
+#include "joint_region_selection.inl"
 static void embedded_geometry() {
   using J=nlohmann::json;namespace fs=std::filesystem;
   const auto folder=fs::temp_directory_path()/("dfv-derived-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder/"data/Test/Morphs");
@@ -173,6 +174,7 @@ static void graft_seams() {
   for(int repeat=0;repeat<8;++repeat) {delta=runtime.evaluate(snapshot.values,snapshot.poses);check();require(delta.meshes.empty(),"静止接缝反复求值或累积漂移");}
 }
 static void unit() {
+  joint_region_selection();
   graft_seams();
   {
     ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,1,0}};ir::Triangle face;face.vertices={0,1,2};mesh.triangles={face};scene.meshes={mesh};scene.instances.resize(2);
@@ -306,6 +308,7 @@ int wmain(int argc,wchar_t **argv) {
     if(argc>1&&std::wstring(argv[1])==L"--content-feedback"){content_feedback(argc,argv);return 0;}
     if(argc==1) {unit();return 0;}
     if(argc==4&&std::wstring(argv[1])==L"--selection") {actual_selection(argv[2],argv[3]);return 0;}
+    if(argc==4&&std::wstring(argv[1])==L"--joint-regions") {actual_joint_regions(argv[2],argv[3]);return 0;}
     std::vector<std::filesystem::path> roots={L"H:/G1",L"H:/G3",L"C:/Users/Public/Documents/My DAZ 3D Library",L"C:/Users/xatia/Documents/DAZ 3D/Studio/My Library"};
     if(argc==4&&std::wstring(argv[1])==L"--fidelity") {
       using J=nlohmann::json;editor::Document doc;doc.loaded=daz::load(argv[2],{roots,false});

@@ -821,11 +821,8 @@ void Renderer::run(std::stop_token stop) {
         if(selected_joint<0) member_bounds=instance_groups->bounds(render_scene,uint32_t(selected_instance));
         else {
           const auto &r=regions.at(size_t(selected_instance));
-          for(size_t f=0;f<mesh.triangles.size();++f) {
-            int j=f<r.detail.size()?r.detail[f]:-1;bool selected=j==selected_joint;
-            for(int depth=0;j>=0&&size_t(j)<r.parents.size()&&depth<256;++depth) {selected|=j==selected_joint;j=r.parents[size_t(j)];}
-            if(selected&&mesh.draws(mesh.triangles[f])) for(auto v:mesh.triangles[f].vertices) member_bounds.add(instance.transform.point(mesh.positions[v]));
-          }
+          const runtime::Skin *skin=nullptr;for(const auto &s:current->skeletons.skins) if(s.instance==uint32_t(selected_instance)) {skin=&s;break;}
+          member_bounds=runtime::joint_region_bounds(mesh,instance.transform,r,selected_joint,skin);
         }
         if(member_bounds.empty&&selected_joint>=0) for(size_t s=0;s<current->skeletons.skins.size();++s) {
           const auto &skin=current->skeletons.skins[s];if(skin.instance!=uint32_t(selected_instance)||size_t(selected_joint)>=skin.joints.size()) continue;

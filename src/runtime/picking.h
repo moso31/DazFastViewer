@@ -34,9 +34,11 @@ int hit_joint(const ir::Mesh &mesh,int triangle,const Skin &skin);
 struct JointRegions {
   std::vector<int> detail,body,parents;
   int head=-1;
+  bool within(int joint,int ancestor) const;
   bool within_head(int joint) const;
 };
 JointRegions joint_regions(const ir::Mesh &mesh,const Skin &skin);
+ir::Bounds joint_region_bounds(const ir::Mesh &mesh,const ir::Transform &world,const JointRegions &regions,int joint,const Skin *skin=nullptr);
 std::vector<uint8_t> viewport_pick_mask(const ir::Scene &scene,const std::vector<Target> &targets);
 // 场景树中实例使用独立选择键，不进入需要独立网格的 Morph 目录。
 inline int instance_selection(uint32_t instance) {return -5-int(instance);}

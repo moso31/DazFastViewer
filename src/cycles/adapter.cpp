@@ -29,9 +29,16 @@
 
 namespace dfv {
 static ccl::float3 vector(ir::Vec3 v) {return ccl::make_float3(v.x,v.y,v.z);}
-static ccl::Transform transform(const ir::Transform &t) {
+static ccl::Transform transform(const ir::Transform &t,ir::Vec3 origin) {
   ccl::Transform out;const auto &v=t.value;
-  out.x=ccl::make_float4(v[0],v[1],v[2],v[3]);out.y=ccl::make_float4(v[4],v[5],v[6],v[7]);out.z=ccl::make_float4(v[8],v[9],v[10],v[11]);return out;
+  out.x=ccl::make_float4(v[0],v[1],v[2],v[3]-origin.x);out.y=ccl::make_float4(v[4],v[5],v[6],v[7]-origin.y);out.z=ccl::make_float4(v[8],v[9],v[10],v[11]-origin.z);return out;
+}
+bool CyclesAdapter::set_render_origin(const ir::Camera &camera) {
+  // Metre cells keep the camera within half a metre of zero without refitting
+  // every object for each mouse event. At hundreds of metres, float ray-hit
+  // reconstruction and its ULP-based offset otherwise exceed eye-layer gaps.
+  const auto &v=camera.transform.value;const ir::Vec3 origin{std::round(v[3]),std::round(v[7]),std::round(v[11])};
+  if(origin==render_origin_)return false;render_origin_=origin;return true;
 }
 #include "water/shader.inl"
 #include "cloud/shader.inl"
@@ -285,7 +292,7 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
   scene_.background->set_dfv_fog_relative(fog.relative);
   // Textured/sky worlds replace this fallback with their illumination-map average.
   scene_.background->set_dfv_fog_environment(average(bg->get_color())*bg->get_strength());
-  scene_.background->set_dfv_fog_distances(make_float3(fog.start,fog.base_height,fog.scale_height));
+  scene_.background->set_dfv_fog_distances(make_float3(fog.start,fog.base_height-render_origin_.z,fog.scale_height));
   scene_.background->tag_update(&scene_);
   ShaderOutput *surface=bg->output("Background");
   if(!n.id.empty()&&!ir::number(n,"Draw Dome",0)) {
@@ -304,6 +311,13 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
 }
 #include "cycles/graft_geometry.inl"
 #include "cycles/synchronize.inl"
+void CyclesAdapter::rebase(const ir::Camera &camera) {
+  if(!set_render_origin(camera))return;
+  for(size_t i=0;i<objects_.size();++i)for(auto *object:objects_[i]){object->set_tfm(transform(source_.instances[i].transform,render_origin_));object->tag_update(&scene_);}
+  for(auto &render:graft_renders_){render.object->set_tfm(transform(graft_transform(grafts_[render.group],source_,render.parts),render_origin_));render.object->tag_update(&scene_);}
+  for(size_t i=0;i<light_objects_.size();++i){light_objects_[i]->set_tfm(transform(source_.lights[i].transform,render_origin_));light_objects_[i]->tag_update(&scene_);}
+  const auto fog=ir::matte_fog(options_);scene_.background->set_dfv_fog_distances(ccl::make_float3(fog.start,fog.base_height-render_origin_.z,fog.scale_height));scene_.background->tag_update(&scene_);
+}
 void CyclesAdapter::apply(const ir::Delta &delta) {
   if(!loaded_) throw std::runtime_error("CyclesAdapter 尚未加载场景");
   // 先校验整个变更，避免索引错误导致只应用一部分。
@@ -348,8 +362,9 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
   if(delta.options) {environment(*delta.options);source_.options=*delta.options;}
   if(delta.camera) {
     const auto &c=*delta.camera;auto &camera=*scene_.camera;
+    rebase(c);
     camera.set_camera_type(ccl::CAMERA_PERSPECTIVE);camera.set_full_width(c.width);camera.set_full_height(c.height);
-    camera.set_fov(c.fov);camera.set_matrix(transform(c.transform));camera.compute_auto_viewplane();
+    camera.set_fov(c.fov);camera.set_matrix(transform(c.transform,render_origin_));camera.compute_auto_viewplane();
     // Cycles 的 FLT_MAX 表示无限远裁剪；大地形聚焦后可远超默认 100 千米。
     camera.set_farclip(FLT_MAX);
     camera.need_device_update=true;camera.need_flags_update=true;++stats_.camera_updates;
@@ -374,7 +389,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
   }
   for(const auto &edit:delta.lights) {
     light_power_[edit.index]=edit.value.power;lights_[edit.index]->set_strength(ir::scene_lights(options_)?vector(edit.value.power):ccl::zero_float3());lights_[edit.index]->tag_update(&scene_);
-    auto *object=light_objects_[edit.index];object->set_tfm(transform(edit.value.transform));object->tag_update(&scene_);
+    auto *object=light_objects_[edit.index];object->set_tfm(transform(edit.value.transform,render_origin_));object->tag_update(&scene_);
     source_.lights[edit.index]=edit.value;
   }
   for(const auto &edit:delta.meshes) {
@@ -397,7 +412,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     source_.meshes[edit.index].positions=edit.positions;
   }
   for(const auto &edit:delta.instances) {
-    for(auto *object:objects_[edit.index]) {object->set_tfm(transform(edit.transform));object->tag_update(&scene_);}source_.instances[edit.index].transform=edit.transform;++stats_.instance_updates;
+    for(auto *object:objects_[edit.index]) {object->set_tfm(transform(edit.transform,render_origin_));object->tag_update(&scene_);}source_.instances[edit.index].transform=edit.transform;++stats_.instance_updates;
   }
   for(const auto &edit:delta.visibility) {for(auto *object:objects_[edit.index]) {object->set_visibility(edit.visible?ccl::PATH_RAY_VISIBILITY_ALL:0);object->tag_update(&scene_);}source_.instances[edit.index].visible=edit.visible;}
   // 所有对象 Delta 已进入控制网格，再更新共同曲面。显隐只重建所属组合的面列表。
@@ -424,7 +439,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
       if(render.mesh->transform_applied) throw std::runtime_error("GeoGraft 动态更新要求未烘焙网格");
       graft_mesh(scene_,*render.mesh,grafts_[render.group],source_,render.parts,render.shaders,false);++stats_.geometry_updates;
     }
-    if(!delta.instances.empty()) {const auto matrix=transform(graft_transform(grafts_[render.group],source_,render.parts));if(render.object->get_tfm()!=matrix) {render.object->set_tfm(matrix);render.object->tag_update(&scene_);}}
+    if(!delta.instances.empty()) {const auto matrix=transform(graft_transform(grafts_[render.group],source_,render.parts),render_origin_);if(render.object->get_tfm()!=matrix) {render.object->set_tfm(matrix);render.object->tag_update(&scene_);}}
   }
 }
 }

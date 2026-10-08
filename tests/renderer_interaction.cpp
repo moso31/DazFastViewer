@@ -10,8 +10,10 @@
 #include <iostream>
 using namespace dfv;using namespace dfv::editor;
 static void check(bool ok,const char *message){if(!ok)throw std::runtime_error(message);}
+#include "joint_region_renderer.inl"
 int main(int argc,char **argv){
-  QApplication app(argc,argv);const auto output=std::filesystem::absolute("artifacts/content-interaction/gpu");std::filesystem::create_directories(output);
+  QApplication app(argc,argv);if(app.arguments().contains("--joint-regions"))return joint_region_renderer(app);
+  const auto output=std::filesystem::absolute("artifacts/content-interaction/gpu");std::filesystem::create_directories(output);
   try{
     auto config=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();config->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(config);ccl::path_init(app.applicationDirPath().toStdString(),dfv::cycles_user_directory());
     auto d=std::make_shared<Document>();d->generation=1;auto &scene=d->loaded.scene;ir::Material material;material.id="surface";scene.materials={material};

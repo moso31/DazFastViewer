@@ -67,8 +67,13 @@ void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::Joi
     std::map<int,std::vector<size_t>> by_joint;
     if(i<regions.size()) for(size_t t=0;t<regions[i].detail.size();++t) {
       if(!mesh.draws(mesh.triangles[t])) continue;
-      const auto &region=regions[i];const int detail=region.detail[t];if(detail>=0) by_joint[detail].push_back(t);
-      if(region.head>=0&&region.body[t]==region.head&&detail!=region.head) by_joint[region.head].push_back(t);
+      const auto &region=regions[i];int joint=region.detail[t];
+      // 同组的父部位包含子部位的面，脚趾总组和各趾第一节均有完整高亮。
+      for(size_t depth=0;joint>=0&&depth<=region.parents.size();++depth) {
+        by_joint[joint].push_back(t);
+        if(joint==region.body[t]||size_t(joint)>=region.parents.size()) break;
+        joint=region.parents[size_t(joint)];
+      }
     }
     for(const auto &[joint,faces]:by_joint) {
       const auto list=glGenLists(1);parts_[i][joint]={list,faces.size()};glNewList(list,GL_COMPILE);glBegin(GL_TRIANGLES);

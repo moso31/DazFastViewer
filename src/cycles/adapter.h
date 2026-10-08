@@ -43,6 +43,10 @@ class CyclesAdapter {
   AdapterStats stats_;
   ir::RenderOptions options_;
   ir::Vec3 environment_;
+  // Render near the camera; retain authored world coordinates in source_.
+  ir::Vec3 render_origin_;
+  bool set_render_origin(const ir::Camera &camera);
+  void rebase(const ir::Camera &camera);
   std::vector<ir::Vec3> light_power_;
   void environment(const ir::RenderOptions &options);
   bool loaded_=false;

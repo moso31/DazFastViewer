@@ -121,10 +121,15 @@ bool parameter_on_node(const std::string &owner,const std::string &group,const s
   // DAZ 有些头部控制器挂在 Figure 上，用原始区域分组补充，而非按显示名猜测。
   return node=="head"&&(group.starts_with("/Actor/Head/")||group.starts_with("/Pose Controls/Head/")||group=="/Actor/Head"||group=="/Pose Controls/Head");
 }
-bool JointRegions::within_head(int joint) const {
-  if(head<0) return false;
-  for(size_t depth=0;joint>=0&&size_t(joint)<parents.size()&&depth<parents.size();++depth) {if(joint==head) return true;joint=parents[size_t(joint)];}return false;
+bool JointRegions::within(int joint,int ancestor) const {
+  if(ancestor<0) return false;
+  for(size_t depth=0;joint>=0&&depth<=parents.size();++depth) {
+    if(joint==ancestor) return true;
+    if(size_t(joint)>=parents.size()) break;
+    joint=parents[size_t(joint)];
+  }return false;
 }
+bool JointRegions::within_head(int joint) const {return within(joint,head);}
 JointRegions joint_regions(const ir::Mesh &mesh,const Skin &skin) {
   JointRegions result;result.detail.reserve(mesh.triangles.size());result.body.reserve(mesh.triangles.size());
   auto lower=[](std::string s) {for(auto &c:s) c=char(std::tolower(static_cast<unsigned char>(c)));return s;};
@@ -135,14 +140,29 @@ JointRegions joint_regions(const ir::Mesh &mesh,const Skin &skin) {
   for(size_t t=0;t<mesh.triangles.size();++t) {
     int detail=hit_joint(mesh,int(t),skin),group=-1;const auto p=mesh.triangles[t].polygon_group;
     if(p<mesh.polygon_groups.size()) if(auto found=by_name.find(lower(mesh.polygon_groups[p]));found!=by_name.end()) group=found->second;
-    // 明确的多边形组决定头 / 颈边界，混合蒙皮权重不能把脖子划进 Head。
-    const bool head=group>=0?result.within_head(group):result.within_head(detail);
-    if(!head&&result.within_head(detail)) detail=group;
-    if(head) {std::map<uint32_t,double> weights;for(auto v:mesh.triangles[t].vertices) if(v<skin.weights.size()) for(const auto &w:skin.weights[v]) if(result.within_head(int(w.joint))) weights[w.joint]+=w.weight;
-      double maximum=0;for(const auto &[j,w]:weights) if(w>maximum) {maximum=w;detail=int(j);}}
-    if(head&&!result.within_head(detail)) detail=result.head;
-    result.detail.push_back(detail);result.body.push_back(head?result.head:detail);
+    // 多边形组保留二级区域边界；组内蒙皮权重定位三级子部位，覆盖脚趾等共享组。
+    int body=group>=0?group:detail;if(result.within_head(body)) body=result.head;
+    if(body>=0) {
+      detail=body;std::map<uint32_t,double> weights;
+      for(auto v:mesh.triangles[t].vertices) if(v<skin.weights.size()) for(const auto &w:skin.weights[v])
+        if(result.within(int(w.joint),body)&&(body==result.head||!result.within_head(int(w.joint)))) weights[w.joint]+=w.weight;
+      double maximum=0;for(const auto &[j,w]:weights) if(w>maximum) {maximum=w;detail=int(j);}
+    }
+    result.detail.push_back(detail);result.body.push_back(body);
   }return result;
+}
+ir::Bounds joint_region_bounds(const ir::Mesh &mesh,const ir::Transform &world,const JointRegions &regions,int joint,const Skin *skin) {
+  ir::Bounds result;if(joint<0) return result;
+  auto add=[&](const ir::Triangle &face) {for(auto v:face.vertices) result.add(world.point(mesh.positions.at(v)));};
+  for(size_t t=0;t<mesh.triangles.size()&&t<regions.detail.size();++t)
+    if(mesh.draws(mesh.triangles[t])&&regions.within(regions.detail[t],joint)) add(mesh.triangles[t]);
+  // 某些控制骨骼有蒙皮影响，但没有成为任何面的最大权重；树选取仍按受影响的面聚焦。
+  if(result.empty&&skin) for(size_t t=0;t<mesh.triangles.size()&&t<regions.body.size();++t) {
+    const auto &face=mesh.triangles[t];if(!mesh.draws(face)||!regions.within(joint,regions.body[t])||(regions.within_head(joint)&&regions.body[t]!=regions.head)) continue;
+    bool influenced=false;for(auto v:face.vertices) if(v<skin->weights.size()) for(const auto &w:skin->weights[v]) influenced|=w.weight>0&&regions.within(int(w.joint),joint);
+    if(influenced) add(face);
+  }
+  return result;
 }
 std::vector<uint8_t> viewport_pick_mask(const ir::Scene &scene,const std::vector<Target> &targets) {
   std::vector<uint8_t> result(scene.instances.size(),1);
@@ -171,18 +191,20 @@ HoverRegion hover_region(const PickHit &hit,int selected_instance,int selected_j
   const auto &parts=regions[size_t(hit.instance)];
   if(hit.instance!=selected_instance||parts.detail.empty()) return {hit.instance,-1};
   if(hit.triangle<0||size_t(hit.triangle)>=parts.detail.size()) return {};
-  const auto t=size_t(hit.triangle);const int joint=parts.body[t]==parts.head&&!parts.within_head(selected_joint)?parts.body[t]:parts.detail[t];
+  const auto t=size_t(hit.triangle);const int joint=parts.within(selected_joint,parts.body[t])?parts.detail[t]:parts.body[t];
   return joint<0?HoverRegion{}:HoverRegion{hit.instance,joint};
 }
 HoverRegion selection_region(const PickHit &hit,HoverRegion active,std::span<const HoverRegion> selections,const std::vector<JointRegions> &regions,bool toggle) {
   if(!toggle) return hover_region(hit,active.instance,active.joint,regions);
   if(hit.instance<0||size_t(hit.instance)>=regions.size()) return {};
   // Ctrl 沿用命中角色已有的骨骼选择层级；活动项可能属于另一个角色。
-  // 只有整体选择时仍切换整个角色，头部细选上下文与多选集合的顺序无关。
+  // 命中组的细选上下文与集合顺序无关，也不能从另一只脚或其他角色借用。
   int joint=-1;
+  const auto &parts=regions[size_t(hit.instance)];
+  const int body=hit.triangle>=0&&size_t(hit.triangle)<parts.body.size()?parts.body[size_t(hit.triangle)]:-1;
   for(const auto &selected:selections) if(selected.instance==hit.instance&&selected.joint>=0) {
     joint=selected.joint;
-    if(regions[size_t(hit.instance)].within_head(joint)) break;
+    if(parts.within(joint,body)) break;
   }
   return hover_region(hit,joint>=0?hit.instance:-1,joint,regions);
 }
