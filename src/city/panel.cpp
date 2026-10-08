@@ -1,3 +1,4 @@
+#include "editor/parameter_widgets.h"
 #include "city/panel.h"
 #include <QComboBox>
 #include <QLineEdit>
@@ -19,9 +20,9 @@ Panel::Panel(const std::filesystem::path &directory,QWidget *parent):QWidget(par
   directory_=new QLineEdit(QString::fromStdWString(directory.wstring()));directory_->setObjectName("CityDirectory");form->addRow(QStringLiteral("建筑 DUF 文件夹"),directory_);
   auto *browse=new QPushButton(QStringLiteral("选择文件夹并扫描"));form->addRow(browse);connect(browse,&QPushButton::clicked,this,[this]{auto path=QFileDialog::getExistingDirectory(this,QStringLiteral("选择建筑文件夹"),directory_->text());if(!path.isEmpty()){directory_->setText(path);scan();}});
   auto *scan_button=new QPushButton(QStringLiteral("扫描建筑原型"));form->addRow(scan_button);connect(scan_button,&QPushButton::clicked,this,[this]{scan();});
-  assets_=new QListWidget;assets_->setMinimumHeight(130);assets_->setMaximumHeight(180);form->addRow(QStringLiteral("参与生成的原型"),assets_);
+  assets_=new QListWidget;assets_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);assets_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);form->addRow(QStringLiteral("参与生成的原型"),assets_);
   auto integer=[&](const QString &label,int minimum,int maximum,int value){auto *w=new QSpinBox;w->setRange(minimum,maximum);w->setValue(value);form->addRow(label,w);return w;};
-  auto real=[&](const QString &label,double minimum,double maximum,double value,int decimals=1){auto *w=new QDoubleSpinBox;w->setRange(minimum,maximum);w->setDecimals(decimals);w->setValue(value);form->addRow(label,w);return w;};
+  auto real=[&](const QString &label,double minimum,double maximum,double value,int decimals=1){auto *w=editor::parameter_widgets::number({});w->setRange(minimum,maximum);w->setDecimals(decimals);w->setValue(value);form->addRow(label,w);return w;};
   seed_=integer(QStringLiteral("随机种子"),0,2147483647,1337);seed_->setObjectName("CitySeed");x_=integer(QStringLiteral("东西街区数"),1,32,4);y_=integer(QStringLiteral("南北街区数"),1,32,4);lots_=integer(QStringLiteral("每边地块数"),1,6,4);
   size_=real(QStringLiteral("街区边长（米）"),40,1000,112);road_=real(QStringLiteral("道路宽度（米）"),2,100,14);density_=real(QStringLiteral("建筑填充率"),.01,1,.85,2);
   const char *axes[]={"X","Y","Z"};for(int i=0;i<3;++i)origin_[i]=real(QStringLiteral("城市原点 %1（米）").arg(axes[i]),-100000,100000,0);
@@ -34,11 +35,13 @@ Panel::Panel(const std::filesystem::path &directory,QWidget *parent):QWidget(par
   connect(lod_,&QComboBox::currentIndexChanged,this,[this]{change_view();});connect(enabled_,&QCheckBox::toggled,this,[this]{change_view();});connect(lock_,&QCheckBox::toggled,this,[this]{change_view();});
   auto *focus_button=new QPushButton(QStringLiteral("聚焦城市"));form->addRow(focus_button);connect(focus_button,&QPushButton::clicked,this,[this]{if(focus)focus(u(cities_->currentData().toString()));});
   remove_=new QPushButton(QStringLiteral("移除城市"));form->addRow(remove_);connect(remove_,&QPushButton::clicked,this,[this]{if(remove)remove(u(cities_->currentData().toString()));});
+  size_->setObjectName("CityBlockSize");road_->setObjectName("CityRoadWidth");density_->setObjectName("CityDensity");for(int i=0;i<3;++i){origin_[i]->setObjectName(QString("CityOrigin%1").arg(i));distances_[i]->setObjectName(QString("CityDistance%1").arg(i));distances_[i]->setDecimals(3);}
+  editor::parameter_widgets::decorate(this,"city/");
   stats_=new QLabel;stats_->setWordWrap(true);layout->addWidget(stats_);message_=new QLabel(QStringLiteral("先扫描原型，再生成。首版建议 4 × 4 街区；共享材质可在材质面板编辑。"));message_->setWordWrap(true);layout->addWidget(message_);layout->addStretch();
   connect(cities_,&QComboBox::currentIndexChanged,this,[this]{if(!updating_)read_selection();});
 }
 void Panel::scan(const std::vector<std::string> &selected){try{assets_->clear();for(const auto &p:discover(std::filesystem::path(directory_->text().toStdWString()))){const auto str=p.filename().u8string();const std::string name(str.begin(),str.end());auto *item=new QListWidgetItem(q(name),assets_);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);const bool recommended=name=="Building5.duf"||name=="Building Tall2.duf"||name=="Building Tall1.duf";item->setCheckState((selected.empty()?recommended:std::find(selected.begin(),selected.end(),name)!=selected.end())?Qt::Checked:Qt::Unchecked);}bool checked=false;for(int i=0;i<assets_->count();++i)checked|=assets_->item(i)->checkState()==Qt::Checked;if(!checked&&assets_->count())assets_->item(0)->setCheckState(Qt::Checked);message(QStringLiteral("找到 %1 个建筑场景；材质预设不会作为建筑导入。").arg(assets_->count()));}catch(const std::exception &e){message(q(e.what()));}}
-void Panel::read_selection(){const auto id=u(cities_->currentData().toString());auto it=std::find_if(source_.begin(),source_.end(),[&](const auto &c){return c->id==id;});updating_=true;
+void Panel::read_selection(){const auto id=u(cities_->currentData().toString());editor::parameter_widgets::context(this)->bind(id.empty()?"@city-new":id);auto it=std::find_if(source_.begin(),source_.end(),[&](const auto &c){return c->id==id;});updating_=true;
   if(it!=source_.end()){const auto &c=(*it)->config;directory_->setText(QString::fromStdWString(c.directory.wstring()));scan(c.assets);seed_->setValue(int(c.seed));x_->setValue(c.blocks_x);y_->setValue(c.blocks_y);lots_->setValue(c.lots);size_->setValue(c.block_size);road_->setValue(c.road_width);density_->setValue(c.density);origin_[0]->setValue(c.origin_x);origin_[1]->setValue(c.origin_y);origin_[2]->setValue(c.origin_z);for(int i=0;i<3;++i)distances_[i]->setValue(c.distances[i]);}
   const auto view=views_.contains(id)?views_.at(id):View{};lod_->setCurrentIndex(lod_->findData(view.forced));lock_->setChecked(view.locked);enabled_->setChecked(view.enabled);updating_=false;
 }

@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QTreeWidget>
 #include <QPushButton>
+#include <QComboBox>
 #include <functional>
 #include <map>
 namespace dfv::cloud {
@@ -13,6 +14,8 @@ class Panel final:public QWidget {
   Config config_;
   std::map<std::string,QDoubleSpinBox *> fields_;
   QCheckBox *collisions_;
+  QCheckBox *distribution_noise_;
+  QComboBox *distribution_;
   QTreeWidget *sources_;
   QPushButton *sort_;
   QLabel *message_;
@@ -21,6 +24,7 @@ class Panel final:public QWidget {
   bool binding_=false;
   bool have_bounds_=false;
   void select(const QString &);
+  void update_distribution_fields();
   void submit(const std::string &field={});
   bool eventFilter(QObject *,QEvent *) override;
 public:

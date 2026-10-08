@@ -1,5 +1,6 @@
 #pragma once
 #include "runtime/morph.h"
+#include "runtime/parameter_settings.h"
 #include <QWidget>
 #include <functional>
 #include <array>
@@ -16,7 +17,8 @@ struct ParameterControl {
   std::string id,label,group,detail;
   std::string favorite_name,favorite_id;
   bool favorite=false;
-  double minimum=-10000,maximum=10000,step=.01,initial=0;
+  double minimum=-10000,maximum=10000,step=.1,initial=0;
+  std::optional<runtime::ParameterSettings> settings;
   double slider_minimum=0,slider_maximum=1;
   int morph=-1;
   bool enabled=true,visible=true;
@@ -78,7 +80,7 @@ public:
   void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
                     std::function<void(size_t,const std::array<double,3> &)> color_callback={});
   void set_extra(std::vector<ParameterControl> controls) {extra_=std::move(controls);}
-  void bind_controls(std::vector<ParameterControl> controls) {option_node_=nullptr;target_=nullptr;values_=nullptr;favorite_scope_.clear();scene_favorites_=false;controls_=std::move(controls);morph_rows_.clear();rebuild();}
+  void bind_controls(std::vector<ParameterControl> controls) {node_.clear();option_node_=nullptr;target_=nullptr;values_=nullptr;favorite_scope_.clear();scene_favorites_=false;controls_=std::move(controls);morph_rows_.clear();rebuild();}
   void refresh(size_t index);
   void query(const QString &text);
   void select_parameter(size_t index);

@@ -29,6 +29,7 @@ static void require(bool value,const char *message) {if(!value) throw std::runti
 #include "extension_panel.inl"
 #include "geograft_panel.inl"
 #include "matte_fog_panel.inl"
+#include "parameter_settings.inl"
 int main(int argc,char **argv) {
   QApplication app(argc,argv);
   try {
@@ -98,6 +99,7 @@ int main(int argc,char **argv) {
       parameters->query("Parameter 1999");app.processEvents();QTest::qWait(180);require(outer.verticalScrollBar()->maximum()<500,"过滤后公共页面保留了空白固定高度");
     }
     parameter_favorites(app);
+    parameter_settings(app);
     parameter_wheel(app);
     matte_fog_panel(app);
     extension_panel(app);

@@ -1,3 +1,4 @@
+#include "editor/parameter_widgets.h"
 #include "editor/project.h"
 #include "runtime/physics_json.h"
 #include <QDialog>
@@ -47,6 +48,7 @@ ProjectSettings ProjectSettings::load(const QString &path) {
   if(error.error!=QJsonParseError::NoError || !doc.isObject()) fail(QStringLiteral("项目设置 JSON 无效：")+error.errorString());
   const auto object=doc.object();
   if(object.contains("physics"))settings.physics=runtime::physics_options_from_json(nlohmann::json::parse(QJsonDocument(object.value("physics").toObject()).toJson().toStdString()));
+  if(object.contains("parameter_settings"))settings.parameter_settings=nlohmann::json::parse(QJsonDocument(object.value("parameter_settings").toObject()).toJson().toStdString()).get<runtime::ParameterSettingsState>();
   settings.history_limit=object.value("history_limit").toInt(50);
   if(settings.history_limit<1||settings.history_limit>500)fail(QStringLiteral("历史记录条数必须在 1 到 500 之间"));
   if(object.value("version").toInt()!=1 || !object.value("content_roots").isArray()) fail(QStringLiteral("不支持的项目设置格式"));
@@ -60,7 +62,7 @@ void ProjectSettings::save() const {
   QJsonArray paths;for(const auto &root:normalize(content_roots)) paths.append(root);
   QSaveFile output(file);if(!output.open(QIODevice::WriteOnly)) fail(QStringLiteral("无法保存项目设置：")+output.errorString());
   const auto physics=QJsonDocument::fromJson(QByteArray::fromStdString(runtime::physics_json(this->physics).dump())).object();
-  const auto bytes=QJsonDocument(QJsonObject{{"version",1},{"content_roots",paths},{"history_limit",history_limit},{"physics",physics}}).toJson(QJsonDocument::Indented);
+  const auto bytes=QJsonDocument(QJsonObject{{"version",1},{"content_roots",paths},{"history_limit",history_limit},{"physics",physics},{"parameter_settings",QJsonDocument::fromJson(QByteArray::fromStdString(nlohmann::json(parameter_settings).dump())).object()}}).toJson(QJsonDocument::Indented);
   if(output.write(bytes)!=bytes.size() || !output.commit()) fail(QStringLiteral("项目设置保存失败：")+output.errorString());
 }
 bool edit_project_settings(QWidget *parent,ProjectSettings &settings,ApplicationSettings &application,const QString &application_file,bool persistent,const std::function<void(bool)> &applied) {
@@ -129,7 +131,7 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
   auto *physics_form=new QFormLayout(section(physics_page,"physics",QStringLiteral("快速物理")));
   auto *paused=new QCheckBox(QStringLiteral("暂停所有已启用的物理"));paused->setObjectName("PhysicsPaused");paused->setChecked(settings.physics.paused);physics_form->addRow(paused);
   auto *ground=new QCheckBox(QStringLiteral("使用虚拟地面"));ground->setObjectName("PhysicsGround");ground->setChecked(settings.physics.ground);physics_form->addRow(ground);
-  auto number=[&](const char *name,double lo,double hi,double value,const QString &label){auto *spin=new QDoubleSpinBox;spin->setObjectName(name);spin->setRange(lo,hi);spin->setDecimals(3);spin->setValue(value);spin->setKeyboardTracking(false);physics_form->addRow(label,spin);return spin;};
+  auto number=[&](const char *name,double lo,double hi,double value,const QString &label){auto *spin=parameter_widgets::number(name,true);spin->setRange(lo,hi);spin->setDecimals(3);spin->setValue(value);spin->setKeyboardTracking(false);physics_form->addRow(label,spin);return spin;};
   auto *refresh=new QLineEdit(QString::number(settings.physics.refresh_hz,'g',17));refresh->setObjectName("PhysicsRefreshHz");refresh->setToolTip(QStringLiteral("默认每秒 4 次，支持任意正数和科学计数法。实际更新频率不会超过渲染帧率，不改变解算时间步长。"));physics_form->addRow(QStringLiteral("物理帧刷新率（次/秒）"),refresh);
   auto *height=number("PhysicsGroundHeight",-1000000,1000000,settings.physics.ground_height*100,QStringLiteral("地面高度（DAZ Y，cm）"));
   auto *gravity=number("PhysicsGravity",0,100,settings.physics.gravity,QStringLiteral("重力（m/s²）"));
@@ -142,9 +144,10 @@ bool edit_project_settings(QWidget *parent,ProjectSettings &settings,Application
   box->button(QDialogButtonBox::Save)->setText(QStringLiteral("保存"));box->button(QDialogButtonBox::Save)->setToolTip(QStringLiteral("应用并保存所有设置，下次启动时恢复。"));
   box->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));box->button(QDialogButtonBox::Cancel)->setToolTip(QStringLiteral("关闭窗口，丢弃尚未应用的修改；已应用的设置继续生效。"));layout->addWidget(box);
   QObject::connect(box,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+  auto *numeric=parameter_widgets::context(&dialog);numeric->local=settings.parameter_settings;numeric->owner="project";parameter_widgets::decorate(&dialog,"project/");
   auto submit=[&](bool save) {
     try {
-      auto updated=settings;updated.content_roots.clear();for(int i=0;i<list->count();++i) updated.content_roots.append(list->item(i)->text());updated.content_roots=ProjectSettings::normalize(updated.content_roots);
+      auto updated=settings;updated.parameter_settings=numeric->local;updated.content_roots.clear();for(int i=0;i<list->count();++i) updated.content_roots.append(list->item(i)->text());updated.content_roots=ProjectSettings::normalize(updated.content_roots);
       auto preferences=application;preferences.ui_percent=ui_percent->value();preferences.viewport={percent->value(),filter->currentIndex()==0?Reconstruction::bicubic:Reconstruction::bilinear,sharpen->value()/100.f};
       updated.history_limit=history_limit->value();
       updated.physics={paused->isChecked(),ground->isChecked(),float(gravity->value()),float(height->value()/100),physics_quality->currentIndex()};bool refresh_ok=false;updated.physics.refresh_hz=refresh->text().trimmed().toDouble(&refresh_ok);if(!refresh_ok)throw std::runtime_error("物理帧刷新率必须是正数");runtime::validate_physics(updated.physics);

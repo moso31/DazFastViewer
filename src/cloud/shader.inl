@@ -8,17 +8,31 @@ static void cloud_shader(ccl::Shader &shader,const ir::Material &material,ccl::S
   auto clamp=[&](ShaderOutput *v){return math(NODE_MATH_MINIMUM,value(1),math(NODE_MATH_MAXIMUM,value(0),v));};
   auto smooth=[&](ShaderOutput *v){auto *u=clamp(v);return math(NODE_MATH_MULTIPLY,math(NODE_MATH_MULTIPLY,u,u),math(NODE_MATH_SUBTRACT,value(3),math(NODE_MATH_MULTIPLY,value(2),u)));};
   auto *coordinates=graph->create_node<TextureCoordinateNode>();auto *position=coordinates->output("Object");
-  auto *noise=graph->create_node<NoiseTextureNode>();noise->set_dimensions(3);noise->set_scale(1/c.scale);noise->set_detail(c.detail);noise->set_roughness(.55f);
-  graph->connect(vm(NODE_VECTOR_MATH_ADD,position,vec(c.offset)),noise->input("Vector"));
+  auto noise=[&](ShaderOutput *p,float scale,float detail){auto *n=graph->create_node<NoiseTextureNode>();n->set_dimensions(3);n->set_scale(1/scale);n->set_detail(detail);n->set_roughness(.55f);graph->connect(p,n->input("Vector"));return n;};
+  // 借鉴 drift「2D Clouds」的低频域扭曲、分形主体和脊状细节组合，
+  // 在三维密度场中实现；颜色和光照交给真实体积散射，而非二维颜色混合。
+  // https://www.shadertoy.com/view/4tdSWr
+  auto *advected=vm(NODE_VECTOR_MATH_ADD,position,vec(c.offset));
+  auto *warped=advected;
+  if(c.warp>0){auto *domain=noise(advected,c.scale*2.8f,2);auto *displacement=vm(NODE_VECTOR_MATH_SUBTRACT,domain->output("Color"),vec({.5f,.5f,.5f}));warped=vm(NODE_VECTOR_MATH_ADD,advected,vm(NODE_VECTOR_MATH_SCALE,displacement,value(c.scale*c.warp*2)));}
+  auto *body=noise(warped,c.scale,c.detail);
+  auto *ridge=noise(vm(NODE_VECTOR_MATH_ADD,warped,vec({37,71,113})),c.scale*.53f,std::min(c.detail,4.f));
+  auto *billows=math(NODE_MATH_SUBTRACT,value(1),math(NODE_MATH_ABSOLUTE,math(NODE_MATH_SUBTRACT,math(NODE_MATH_MULTIPLY,ridge->output("Fac"),value(2)),value(1)),value(0)));
+  auto *shape=math(NODE_MATH_ADD,math(NODE_MATH_MULTIPLY,body->output("Fac"),value(.82f)),math(NODE_MATH_MULTIPLY,billows,value(.18f)));
+  if(c.erosion>0){auto *fine=noise(warped,c.scale*.23f,std::min(c.detail,3.f));shape=math(NODE_MATH_SUBTRACT,shape,math(NODE_MATH_MULTIPLY,fine->output("Fac"),value(c.erosion*.22f)));}
   auto *normalized=vm(NODE_VECTOR_MATH_DIVIDE,vm(NODE_VECTOR_MATH_ABSOLUTE,position,vec({})),vec(c.half_extent));
   auto *split=graph->create_node<SeparateXYZNode>();graph->connect(normalized,split->input("Vector"));
   // Raise the noise threshold towards the top/bottom: isolated billows, rather
   // than a uniformly filled fog box. Zero coverage is exactly empty.
   auto *vertical=math(NODE_MATH_MULTIPLY,split->output("Z"),split->output("Z"));
   auto *threshold=math(NODE_MATH_ADD,value(.75f-.4f*c.coverage),math(NODE_MATH_MULTIPLY,value(.18f),vertical));
-  auto *density=math(NODE_MATH_MULTIPLY,value(c.coverage>0?c.density*8:0),clamp(math(NODE_MATH_SUBTRACT,noise->output("Fac"),threshold)));
-  auto *edge=math(NODE_MATH_MAXIMUM,split->output("X"),math(NODE_MATH_MAXIMUM,split->output("Y"),split->output("Z")));
-  density=math(NODE_MATH_MULTIPLY,density,smooth(math(NODE_MATH_MULTIPLY,value(6.666667f),math(NODE_MATH_SUBTRACT,value(1),edge))));
+  auto *density=math(NODE_MATH_MULTIPLY,value(c.coverage>0?c.density*8:0),clamp(math(NODE_MATH_SUBTRACT,shape,threshold)));
+  auto *edge=math(NODE_MATH_MAXIMUM,split->output("X"),split->output("Y"));
+  if(c.distribution==1){const float radius=std::min(c.half_extent.x,c.half_extent.y);auto *xy=vm(NODE_VECTOR_MATH_MULTIPLY,position,vec({1/radius,1/radius,0}));edge=vm(NODE_VECTOR_MATH_LENGTH,xy,vec({}),true);}
+  auto feather=[&](ShaderOutput *distance){return smooth(math(NODE_MATH_DIVIDE,math(NODE_MATH_SUBTRACT,value(1),distance),value(c.edge_fade)));};
+  auto *mask=math(NODE_MATH_MULTIPLY,feather(edge),feather(split->output("Z")));
+  if(c.distribution_noise){auto *xy=vm(NODE_VECTOR_MATH_MULTIPLY,advected,vec({1,1,0}));auto *weather=noise(xy,c.distribution_scale,c.distribution_detail);auto *patches=smooth(math(NODE_MATH_MULTIPLY,math(NODE_MATH_SUBTRACT,weather->output("Fac"),value(c.distribution_threshold)),value(4)));mask=math(NODE_MATH_MULTIPLY,mask,patches);}
+  density=math(NODE_MATH_MULTIPLY,density,mask);
   for(const auto &o:c.colliders){
     auto *q=vm(NODE_VECTOR_MATH_SUBTRACT,position,vec(o.center));
     auto *lo=value(-1e30f),*hi=value(1e30f);ShaderOutput *side=nullptr;

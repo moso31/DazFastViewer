@@ -629,8 +629,8 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       if(value.is_array()) {for(const auto &v:value) if(v.is_number()) p.value.push_back(v.get<double>());}
       else if(value.is_number()||value.is_boolean()) p.value.push_back(number(value,0));
       if(p.value.empty()) p.supported=false;
-      p.minimum=c.value("min",-10000.0);p.maximum=c.value("max",10000.0);p.step=c.value("step_size",.01);
-      if(!c.value("clamped",false)) {p.minimum=std::min(p.minimum,0.0);p.maximum=std::max(p.maximum,10000.0);}
+      p.minimum=c.value("min",0.0);p.maximum=c.value("max",1.0);p.step=c.value("step_size",.1);
+      p.clamped=c.value("clamped",false);p.authored=true;
       if(c.contains("enum_values")) {p.choices=c["enum_values"].get<std::vector<std::string>>();p.minimum=0;p.maximum=double(p.choices.size()-1);}
       if(p.type=="bool") {p.minimum=0;p.maximum=1;}
       if(p.id=="Gamma"||p.id=="Aperture"||p.id=="Shutter Speed"||p.id=="White Point Scale"||p.id=="White Point") p.minimum=.001;
@@ -1029,8 +1029,18 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   }
   for(const auto &root:repo.roots) out.report["content_roots"].push_back(utf8(root));
   out.report["iray_resource_roots"]=Json::array();if(repo.iray_roots)for(const auto &root:*repo.iray_roots)out.report["iray_resource_roots"].push_back(utf8(root));
+  auto numeric_settings=[](const Json &node){
+    std::array<std::optional<runtime::ParameterSettings>,10> result;
+    auto channel=[&](const Json &c,int index){if(!c.is_object())return;
+      const double factor=index>=6?100.:1.;runtime::ParameterSettings s;
+      s.limited=c.value("clamped",false);s.minimum=c.value("min",0.)*factor;s.maximum=c.value("max",1.)*factor;s.step=c.contains("step_size")?c.at("step_size").get<double>()*factor:.1;
+      if(!std::isfinite(s.step)||s.step<=0)s.step=.1;if(!c.contains("min"))s.minimum=0;if(!c.contains("max"))s.maximum=1;runtime::validate(s);result[index]=s;
+    };
+    const char *groups[]={"translation","rotation","scale"};for(int group=0;group<3;++group)if(node.contains(groups[group])&&node.at(groups[group]).is_array())for(const auto &c:node.at(groups[group])){if(!c.is_object())continue;const auto id=c.value("id","");const int axis=id=="x"?0:id=="y"?1:id=="z"?2:-1;if(axis>=0)channel(c,group*3+axis);}
+    if(node.contains("general_scale"))channel(node.at("general_scale"),9);return result;
+  };
   for(auto &node:out.nodes) if(node.group) {
-    const auto &n=nodes.at(node.id);node.translation_cm=axes(n,"translation",{});node.rotation_degrees=axes(n,"rotation",{});node.scale=axes(n,"scale",{1,1,1});node.general_scale=number(n.value("general_scale",Json(1)),1);node.rotation_order=n.value("rotation_order","XYZ");
+    const auto &n=nodes.at(node.id);node.numeric_settings=numeric_settings(n);node.translation_cm=axes(n,"translation",{});node.rotation_degrees=axes(n,"rotation",{});node.scale=axes(n,"scale",{1,1,1});node.general_scale=number(n.value("general_scale",Json(1)),1);node.rotation_order=n.value("rotation_order","XYZ");
     const auto pivot=axes(n,"center_point",{}),t=node.translation_cm;const auto orientation=rotation(axes(n,"orientation",{}),"XYZ");
     const auto parent=n.value("parent","");const auto parent_world=parent.starts_with('#')?fitted_world(decode(parent.substr(1))):ir::Transform{};
     node.world=render_transform(fitted_world(node.id));node.translation_frame=render_transform(parent_world);
@@ -1041,7 +1051,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     const auto presentation=nodes.at(object.id).value("presentation",Json::object());
     object.content_type=presentation.value("type","");object.preferred_base=presentation.value("preferred_base","");
     object.auto_fit_base=presentation.value("auto_fit_base","");object.extended_bases=presentation.value("extended_bases",std::vector<std::string>{});
-    const auto &n=nodes.at(object.id);object.translation_cm=axes(n,"translation",{});object.rotation_degrees=axes(n,"rotation",{});object.scale=axes(n,"scale",{1,1,1});object.general_scale=number(n.value("general_scale",Json(1)),1);
+    const auto &n=nodes.at(object.id);object.numeric_settings=numeric_settings(n);object.translation_cm=axes(n,"translation",{});object.rotation_degrees=axes(n,"rotation",{});object.scale=axes(n,"scale",{1,1,1});object.general_scale=number(n.value("general_scale",Json(1)),1);
     const auto pivot=axes(n,"center_point",{}),t=object.translation_cm;
     const auto orientation=rotation(axes(n,"orientation",{}),"XYZ");object.rotation_order=n.value("rotation_order","XYZ");
     const auto world_rotation=rotation(object.rotation_degrees,object.rotation_order);

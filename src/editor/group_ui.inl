@@ -14,7 +14,7 @@
     std::vector<ParameterControl> controls;
     append_node_controls(controls,-4,id);
     for(int i=0;i<10;++i){ParameterControl c;c.id="group/"+std::to_string(i);c.label=i==9?"Scale（%）":std::string(1,"XYZ"[i%3])+(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";
-      c.minimum=i==9?.01:-1e9;c.maximum=1e9;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;c.step=i<6?.1:1;c.float_backed=i!=9;
+      c.minimum=i==9?.01:-1e9;c.maximum=1e9;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;c.step=.1;c.settings=node->numeric_settings[i];c.float_backed=i!=9;
       const auto component=[](ir::Vec3 v,int axis){return axis==0?v.x:axis==1?v.y:v.z;};
       const double base=i==9?node->general_scale:i<3?component(node->translation_cm,i):i<6?component(node->rotation_degrees,i-3):component(node->scale,i-6);
       c.initial=i>=6?base*100:base;

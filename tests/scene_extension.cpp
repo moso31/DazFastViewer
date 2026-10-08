@@ -45,6 +45,7 @@ static void roundtrip(const fs::path &folder){
   ir::add_studio(d.loaded.scene);d.operations.push_back({{"op","studio"}});
   auto s=initial_snapshot(d);s.values[0].transform.translation_cm={11,22,33};s.values[0].morphs[0]=.7f;s.poses[0][1].rotation_degrees.z=42;
   s.view=std::array<float,6>{1,2,3,4,.5f,.2f};s.group_transforms["group"].translation_cm.x=7;s.material_overrides[d.loaded.scene.instances[0].id]["Skin"]["roughness"]=.63;
+  s.parameter_settings[d.catalog.targets[0].id]["parameters//Raise"]={true,-2,3,.025};s.parameter_settings["@environment"]["exposure"]={false,0,1,.2};s.parameter_settings[d.catalog.targets[0].id]["ground/GroundAlignmentOffset"]={true,-20,40,.5};
   s.subdivision_levels[subdivision_mesh(d,0).id]=2;for(const auto &i:d.loaded.scene.instances)if(i.prototype>=0)s.instance_ground[i.id].offset_m=.24;
   s.pose_pins.push_back({});s.pose_pins.back().skin=0;s.pose_pins.back().joint=1;s.pose_pins.back().world={1,2,3};
   const auto saved=folder/"standalone.dufex";save_scene_extension(saved,d,s);const auto encoded=daz::read_document_file(saved);
@@ -52,6 +53,7 @@ static void roundtrip(const fs::path &folder){
   for(const auto &o:encoded.at("state").at("objects"))check(!o.contains("physics"),"physics persisted in v2");
   check(daz::supported_content_entry(saved)&&daz::content_asset(saved,{folder})==saved,"DUFEX content resolution failed");
   const auto before=snapshot_json(d,s);
+  {auto bad=before;bad["parameter_settings"].begin().value().begin().value()["step"]=0;rejects([&]{auto copy=s;apply_snapshot_json(d,copy,bad);});auto copy=s;auto legacy=before;legacy.erase("parameter_settings");apply_snapshot_json(d,copy,legacy);check(copy.parameter_settings.empty(),"旧场景错误继承当前 UI 设置");}
   // Plain v1 is still readable, and its first v2 save freezes its source.
   auto v1=scene_extension_json(d,s);v1.erase("archives");v1.erase("source_archive");write(folder/"legacy.dufex",v1);
   auto old=load_scene_extension(folder/"legacy.dufex",{folder},3);check(snapshot_json(*old.document,old.snapshot)==before,"v1 compatibility failed");

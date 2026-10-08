@@ -15,6 +15,7 @@ struct JointChannel {
   std::string label,group;
   float minimum=-10000,maximum=10000,step=.1f,initial=0;
   bool present=false,visible=true,locked=false,clamped=false,percent=false;
+  bool minimum_authored=false,maximum_authored=false,step_authored=false;
 };
 struct Joint {
   std::string id,name,label,rotation_order="XYZ";

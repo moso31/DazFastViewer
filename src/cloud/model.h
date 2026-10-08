@@ -8,7 +8,12 @@ inline constexpr size_t max_sources=16;
 // Metres and seconds. Every sample is independent of wall time and edit history.
 struct Config {
   double x=0,y=0,height=250,thickness=180,width=2000,length=2000;
-  double density=.035,coverage=.65,scale=120,detail=2,wind_speed=12,direction=25,time=0;
+  double density=.035,coverage=.65,scale=120,detail=5,wind_speed=12,direction=25,time=0;
+  // 0 方形，1 圆形；两种边界均可叠加整体分布噪声，并保留边缘衰减。
+  int distribution=0;
+  bool distribution_noise=false;
+  double distribution_threshold=.3675;
+  double edge_fade=.18,distribution_scale=600,distribution_detail=4,warp=.35,erosion=.25;
   double padding=0,softness=1,velocity_x=0,velocity_y=0,velocity_z=-60,trail=8,recovery=5;
   int steps=64;
   uint32_t seed=1337;

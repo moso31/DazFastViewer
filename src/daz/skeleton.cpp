@@ -31,6 +31,7 @@ void joint_channels(runtime::Joint &joint,const Json &node) {
       auto &channel=joint.channels[kind*3+axis];
       if(!channel.present) {channel.initial=kind>=2?1.f:0.f;channel.label=kind==3?"Scale":std::string(1,"XYZ"[axis])+(kind==0?" Translate":kind==1?" Rotate":" Scale");channel.group=groups[kind];}
       channel.present=true;channel.label=c.value("label",channel.label);channel.group=c.value("group",channel.group);
+      channel.minimum_authored|=c.contains("min");channel.maximum_authored|=c.contains("max");channel.step_authored|=c.contains("step_size");
       channel.minimum=c.value("min",channel.minimum);channel.maximum=c.value("max",channel.maximum);channel.step=c.value("step_size",channel.step);
       channel.initial=c.value("value",channel.initial);channel.visible=c.value("visible",channel.visible);channel.locked=c.value("locked",channel.locked);
       channel.clamped=c.value("clamped",channel.clamped);channel.percent=c.value("display_as_percent",channel.percent);

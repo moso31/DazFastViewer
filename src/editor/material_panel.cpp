@@ -1,4 +1,6 @@
 #include "editor/material_panel.h"
+#include "editor/parameter_widgets.h"
+#include "editor/material_numeric_settings.h"
 #include "editor/object_hierarchy.h"
 #include "editor/folder_icon.h"
 #include "editor/numeric_slider.h"
@@ -31,6 +33,8 @@
 #include <QDateTime>
 #include <QPainter>
 #include <set>
+#include <deque>
+#include <QElapsedTimer>
 
 namespace dfv::editor {
 namespace {
@@ -60,13 +64,23 @@ void thumbnail(QLabel *label,const QString &file){
 #include "editor/material_selection_sets.inl"
 #include "editor/material_panel_uv.inl"
 MaterialPanel::MaterialPanel(QWidget *parent):QWidget(parent){
+  auto *binding=parameter_widgets::context(this);
+  binding->read=[this](const std::string &key,const runtime::ParameterSettings &defaults){
+    if(!document_||!snapshot_)return defaults;const auto selected=surfaces();if(selected.empty())return defaults;
+    const auto s=selected.front();const auto &scene=document_->loaded.scene;const auto &i=scene.instances.at(s.instance);
+    if(auto o=snapshot_->parameter_settings.find(i.id);o!=snapshot_->parameter_settings.end())if(auto p=o->second.find("material/"+scene.meshes.at(i.mesh).material_slots.at(s.slot)+"/"+key);p!=o->second.end())return p->second;return defaults;
+  };
+  binding->edit=[this](const std::string &key,const runtime::ParameterSettings &value,const std::function<void()> &apply){
+    if(!document_||!snapshot_)return;auto change=[&]{const auto &scene=document_->loaded.scene;for(auto s:surfaces()){const auto &i=scene.instances.at(s.instance);snapshot_->parameter_settings[i.id]["material/"+scene.meshes.at(i.mesh).material_slots.at(s.slot)+"/"+key]=value;}apply();};
+    if(edit_requested)edit_requested(QStringLiteral("修改材质参数范围与精度"),change);else change();
+  };
   setObjectName("MaterialPanel");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(4,4,4,4);
   auto *toolbar=new QHBoxLayout;scope_=new QComboBox;scope_->setObjectName("materialScope");scope_->addItems({QStringLiteral("当前角色 / 对象"),QStringLiteral("全部场景对象")});toolbar->addWidget(scope_);
   auto *reset_all=new QPushButton(QStringLiteral("还原所选材质"));reset_all->setToolTip(QStringLiteral("还原至加载场景或最近应用的材质预设"));toolbar->addWidget(reset_all);toolbar->addStretch();layout->addLayout(toolbar);
   auto *preset=new QPushButton(QStringLiteral("应用材质 / Shader 预设…"));layout->addWidget(preset);connect(preset,&QPushButton::clicked,this,[this]{const auto selected=surfaces();if(selected.empty()||!preset_requested)return;auto file=QFileDialog::getOpenFileName(this,QStringLiteral("应用到所选表面"),{},QStringLiteral("DAZ 材质预设 (*.duf *.djl)"));if(!file.isEmpty())preset_requested(std::filesystem::path(file.toStdWString()),selected);});
   auto *splitter=new QSplitter(Qt::Horizontal);splitter->setObjectName("materialSplitter");splitter->setChildrenCollapsible(false);layout->addWidget(splitter,1);
   tree_=new QTreeWidget;tree_->setObjectName("materialSurfaces");tree_->setHeaderLabel(QStringLiteral("对象与子材质"));tree_->setSelectionMode(QAbstractItemView::ExtendedSelection);tree_->setMinimumWidth(100);tree_->setTextElideMode(Qt::ElideMiddle);splitter->addWidget(tree_);
-  tree_->setIndentation(14);tree_->setMouseTracking(true);tree_->viewport()->installEventFilter(this);installEventFilter(this);
+  tree_->setIndentation(14);tree_->setMouseTracking(true);
   auto *right=new QWidget;auto *details=new QVBoxLayout(right);details->setContentsMargins(3,0,0,0);
   heading_=new QLabel(QStringLiteral("选择左侧子材质查看参数"));heading_->setWordWrap(true);details->addWidget(heading_);
   auto *filter_row=new QHBoxLayout;search_=new QLineEdit;search_->setObjectName("materialSearch");search_->setPlaceholderText(QStringLiteral("搜索属性 / DAZ 参数名"));search_->setClearButtonEnabled(true);filter_row->addWidget(search_);
@@ -88,10 +102,20 @@ MaterialPanel::MaterialPanel(QWidget *parent):QWidget(parent){
   connect(scope_,&QComboBox::currentIndexChanged,this,[this]{rebuild_tree();});
   connect(search_,&QLineEdit::textChanged,this,[this]{filter();});connect(modified_,&QCheckBox::toggled,this,[this]{filter();});
   connect(reset_all,&QPushButton::clicked,this,[this]{reset({});});
+  qApp->installEventFilter(this);
 }
 void MaterialPanel::clear_hover(){hovered_.clear();if(hovered)hovered({});}
 bool MaterialPanel::eventFilter(QObject *object,QEvent *event){
-  if(object==this&&event->type()==QEvent::Hide){clear_hover();hover_suppressed_.clear();}
+  const auto *widget=qobject_cast<QWidget *>(object);
+  if(widget&&widget->window()->property("parameterSettingsPopup").toBool())return false;
+  const bool owned=widget&&(widget==this||isAncestorOf(widget));
+  if((event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick)&&static_cast<QMouseEvent *>(event)->button()==Qt::LeftButton&&!wheel_selected_.isEmpty()&&object->property("materialWheelRow").toString().isEmpty()){
+    const auto point=static_cast<QMouseEvent *>(event)->globalPosition().toPoint();const auto *under=childAt(mapFromGlobal(point));
+    if(!owned||!under||under->property("materialWheelRow").toString()!=wheel_selected_){wheel_selected_.clear();filter();}
+  }
+  if(!owned)return false;
+  if(event->type()==QEvent::Wheel)if(auto *w=qobject_cast<QWidget *>(object);w&&w->parentWidget()&&w->parentWidget()->objectName()=="materialSourceChannels"){auto *e=static_cast<QWheelEvent *>(event);QWheelEvent forward(properties_->viewport()->mapFromGlobal(e->globalPosition()),e->globalPosition(),e->pixelDelta(),e->angleDelta(),e->buttons(),e->modifiers(),e->phase(),e->inverted());QApplication::sendEvent(properties_->viewport(),&forward);return true;}
+  if(object==this&&event->type()==QEvent::Hide){clear_hover();hover_suppressed_.clear();wheel_selected_.clear();filter();}
   if(object==tree_->viewport()){
     if(event->type()==QEvent::Leave){clear_hover();hover_suppressed_.clear();}
     if(event->type()==QEvent::MouseMove){auto *item=tree_->itemAt(static_cast<QMouseEvent *>(event)->position().toPoint());const auto key=item?item->data(0,Qt::UserRole+2).toString():QString{};
@@ -113,16 +137,19 @@ void MaterialPanel::bind(std::shared_ptr<const Document> document,Snapshot *snap
   document_=std::move(document);snapshot_=snapshot;target_=target;group_=group;rebuild_tree();
 }
 std::vector<MaterialPanel::Surface> MaterialPanel::surfaces() const{
+  if(surface_cache_)return *surface_cache_;
   std::set<std::pair<size_t,size_t>> selected;
   for(auto *item:tree_->selectedItems())for(auto surface:item_surfaces(item))selected.emplace(surface.instance,surface.slot);
-  std::vector<Surface> result;for(auto [i,s]:selected)result.push_back({i,s});return result;
+  std::vector<Surface> result;for(auto [i,s]:selected)result.push_back({i,s});surface_cache_=result;return result;
 }
 void MaterialPanel::rebuild_tree(){
+  surface_cache_.reset();
+  QElapsedTimer elapsed;elapsed.start();
   clear_hover();hover_suppressed_.clear();wheel_selected_.clear();
   // 使用稳定身份恢复选中项，切换骨骼不会改变当前表面。
   std::set<QString> selected,expanded;for(QTreeWidgetItemIterator it(tree_);*it;++it){if((*it)->isSelected())selected.insert((*it)->data(0,Qt::UserRole+2).toString());if((*it)->isExpanded())expanded.insert((*it)->data(0,Qt::UserRole+2).toString());}
-  QSignalBlocker blocker(tree_);tree_->clear();
-  if(!document_||!snapshot_){rebuild_properties();return;}const auto &d=*document_;const auto &scene=d.loaded.scene;
+  QSignalBlocker blocker(tree_);tree_->setUpdatesEnabled(false);tree_->clear();
+  if(!document_||!snapshot_){tree_->setUpdatesEnabled(true);rebuild_properties();return;}const auto &d=*document_;const auto &scene=d.loaded.scene;
   ObjectHierarchy hierarchy(d);
   std::string focus=group_;
   if(target_>=0&&size_t(target_)<hierarchy.targets.size()) {
@@ -159,7 +186,7 @@ void MaterialPanel::rebuild_tree(){
   }
   bool restored=false;for(QTreeWidgetItemIterator it(tree_);*it;++it){const auto key=(*it)->data(0,Qt::UserRole+2).toString();if(expanded.contains(key))(*it)->setExpanded(true);if(selected.contains(key)){(*it)->setSelected(true);restored=true;}}
   if(!restored&&scope_->currentIndex()==0&&families.contains(focus))tree_->setCurrentItem(families.at(focus));
-  else if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}rebuild_properties();
+  else if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}tree_->setUpdatesEnabled(true);rebuild_properties();setProperty("lastBindMilliseconds",double(elapsed.nsecsElapsed())/1e6);
 }
 J MaterialPanel::value(Surface s,const P &p)const{auto textures=document_->loaded.scene.textures;auto m=effective_material(document_->loaded.scene,snapshot_->material_overrides,s.instance,s.slot,textures);return material_value(m,textures,p);}
 std::vector<std::pair<std::string,std::string>> MaterialPanel::selection_ids() const {
@@ -168,7 +195,7 @@ std::vector<std::pair<std::string,std::string>> MaterialPanel::selection_ids() c
 }
 void MaterialPanel::restore_selection(const std::vector<std::pair<std::string,std::string>> &selection) {
   if(!document_)return;
-  {QSignalBlocker block(tree_);tree_->clearSelection();for(QTreeWidgetItemIterator it(tree_);*it;++it){auto *item=*it;if(!item->data(0,Qt::UserRole+1).isValid())continue;
+  {QSignalBlocker block(tree_);tree_->clearSelection();surface_cache_.reset();for(QTreeWidgetItemIterator it(tree_);*it;++it){auto *item=*it;if(!item->data(0,Qt::UserRole+1).isValid())continue;
     const auto &scene=document_->loaded.scene;const auto &i=scene.instances.at(size_t(item->data(0,Qt::UserRole).toULongLong()));const auto &slot=scene.meshes.at(i.mesh).material_slots.at(size_t(item->data(0,Qt::UserRole+1).toULongLong()));
     if(std::find(selection.begin(),selection.end(),std::make_pair(i.id,slot))!=selection.end()){item->setSelected(true);for(auto *p=item->parent();p;p=p->parent())p->setExpanded(true);}}}
   if(scope_->currentIndex()==0&&selection_ids().size()<selection.size()){scope_->setCurrentIndex(1);restore_selection(selection);return;}
@@ -177,8 +204,8 @@ void MaterialPanel::restore_selection(const std::vector<std::pair<std::string,st
 void MaterialPanel::schedule_properties(){if(refresh_pending_)return;refresh_pending_=true;QTimer::singleShot(0,this,[this]{refresh_pending_=false;rebuild_properties();});}
 void MaterialPanel::commit(const P &p,const J &v,int component){
   if(!document_||!snapshot_)return;
-  try{auto next=snapshot_->material_overrides;const auto &scene=document_->loaded.scene;
-    for(auto s:surfaces()){auto textures=scene.textures;auto m=effective_material(scene,next,s.instance,s.slot,textures);auto input=v;if(component>=0){input=material_value(m,textures,p);input.at(size_t(component))=v;}set_material_value(m,textures,p,input);ir::validate(m,textures.size());const auto &i=scene.instances.at(s.instance);next[i.id][scene.meshes.at(i.mesh).material_slots.at(s.slot)][p.id]=input;}
+  try{auto next=snapshot_->material_overrides;const auto &scene=document_->loaded.scene;auto textures=scene.textures;
+    for(auto s:surfaces()){auto m=effective_material(scene,next,s.instance,s.slot,textures);auto input=v;if(component>=0){input=material_value(m,textures,p);input.at(size_t(component))=v;}set_material_value(m,textures,p,input);ir::validate(m,textures.size());const auto &i=scene.instances.at(s.instance);next[i.id][scene.meshes.at(i.mesh).material_slots.at(s.slot)][p.id]=input;}
     if(next==snapshot_->material_overrides)return;
     auto apply=[&]{snapshot_->material_overrides=std::move(next);status_->clear();if(changed)changed();};
     if(edit_requested)edit_requested(QStringLiteral("修改材质：")+text(p.label),apply);else apply();
@@ -195,6 +222,7 @@ void MaterialPanel::reset(const std::string &parameter){
   prune_material_overrides(scene,snapshot_->material_overrides);if(previous!=snapshot_->material_overrides&&changed)changed();schedule_properties();
 }
 void MaterialPanel::rebuild_properties(){
+  surface_cache_.reset();
   if(interaction_changed)interaction_changed(false);
   const auto generation=++properties_generation_;restoring_scroll_=true;
   // setWidget destroys the old controls and temporarily collapses the range.
@@ -204,18 +232,32 @@ void MaterialPanel::rebuild_properties(){
   const auto selected=surfaces();if(!document_||!snapshot_||selected.empty()){heading_->setText(QStringLiteral("选择左侧子材质查看参数"));layout->addStretch();return;}
   const auto &scene=document_->loaded.scene;const auto first=selected.front();const auto &instance=scene.instances.at(first.instance);
   heading_->setText(selected.size()==1?QStringLiteral("表面：%1").arg(text(scene.meshes.at(instance.mesh).material_slots.at(first.slot))):QStringLiteral("已选 %1 个表面 · 不同数值标记为“多值”").arg(selected.size()));
-  std::vector<std::pair<ir::Material,std::vector<ir::Texture>>> resolved;
-  for(auto s:selected){auto textures=scene.textures;auto m=effective_material(scene,snapshot_->material_overrides,s.instance,s.slot,textures);resolved.emplace_back(std::move(m),std::move(textures));}
+  // 实例共享材质时只读取一次。纹理表最多复制一次且仅发生在有覆盖时，
+  // 避免“大量表面 × 全场纹理表”的内存和主线程开销。
+  std::vector<std::pair<const ir::Material *,const std::vector<ir::Texture> *>> resolved;
+  std::deque<ir::Material> edited;std::optional<std::vector<ir::Texture>> edited_textures;
+  std::set<std::pair<uint32_t,std::string>> unique;
+  for(auto s:selected){const auto &i=scene.instances.at(s.instance);const MaterialPatch *patch=nullptr;
+    if(auto object=snapshot_->material_overrides.find(i.id);object!=snapshot_->material_overrides.end())if(auto p=object->second.find(scene.meshes.at(i.mesh).material_slots.at(s.slot));p!=object->second.end()&&!p->second.empty())patch=&p->second;
+    const auto material=i.materials.at(s.slot);if(!unique.emplace(material,patch?J(*patch).dump():std::string{}).second)continue;
+    if(patch){if(!edited_textures)edited_textures=scene.textures;edited.push_back(effective_material(scene,snapshot_->material_overrides,s.instance,s.slot,*edited_textures));resolved.emplace_back(&edited.back(),&*edited_textures);}
+    else resolved.emplace_back(&scene.materials.at(material),&scene.textures);
+  }
+  setProperty("resolvedMaterialCount",qulonglong(resolved.size()));setProperty("textureTableCopies",edited_textures?1:0);
+  const auto authored_settings=material_numeric_settings(*resolved.front().first);
   std::string group;QWidget *group_body=nullptr;QVBoxLayout *rows=nullptr;
   for(const auto &p:material_parameters()){
     if(group!=p.group){group=p.group;auto *header=new QToolButton;header->setText(text(group).section('/',0,0).trimmed());header->setToolTip(text(group));header->setCheckable(true);header->setChecked(true);header->setArrowType(Qt::DownArrow);header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);header->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);header->setProperty("materialGroupHeader",true);layout->addWidget(header);
       group_body=new QWidget;group_body->setProperty("materialGroup",true);rows=new QVBoxLayout(group_body);rows->setContentsMargins(0,0,0,4);rows->setSpacing(4);layout->addWidget(group_body);header->setChecked(!collapsed_[group]);group_body->setVisible(header->isChecked());header->setArrowType(header->isChecked()?Qt::DownArrow:Qt::RightArrow);connect(header,&QToolButton::toggled,group_body,[this,header,group_body,group](bool open){collapsed_[group]=!open;group_body->setVisible(open);header->setArrowType(open?Qt::DownArrow:Qt::RightArrow);});}
-    const auto current=material_value(resolved.front().first,resolved.front().second,p);bool mixed=false;for(const auto &r:resolved)mixed|=material_value(r.first,r.second,p)!=current;
-    auto *row=new QWidget;row->setObjectName("materialRow/"+text(p.id));row->setProperty("materialParameter",text(p.id));row->setProperty("materialSearchText",text(p.label+" "+p.id+" "+p.group));auto *horizontal=new QHBoxLayout(row);horizontal->setContentsMargins(3,1,3,1);horizontal->setSpacing(4);
+    const auto current=material_value(*resolved.front().first,*resolved.front().second,p);bool mixed=false;for(const auto &r:resolved)if(material_value(*r.first,*r.second,p)!=current){mixed=true;break;}
+    auto *row=new QWidget;row->setObjectName("materialRow/"+text(p.id));row->setProperty("materialParameter",text(p.id));row->setProperty("materialSearchText",text(p.label+" "+p.id+" "+p.group));auto *row_layout=new QVBoxLayout(row);row_layout->setContentsMargins(3,1,3,1);row_layout->setSpacing(1);auto *horizontal=new QHBoxLayout;horizontal->setSpacing(4);row_layout->addLayout(horizontal);
     auto *label=new ParameterLabel(text(p.label).section(QStringLiteral(" · "),0,0));label->setFixedWidth(84);label->setToolTip(text(p.label));horizontal->addWidget(label);auto *reset_button=new QToolButton;reset_button->setObjectName("materialRevert/"+text(p.id));reset_button->setText(QStringLiteral("↺"));reset_button->setToolTip(QStringLiteral("还原此参数"));reset_button->setFixedWidth(22);connect(reset_button,&QToolButton::clicked,this,[this,id=p.id]{reset(id);});
-    auto *controls=new QHBoxLayout;controls->setSpacing(3);horizontal->addLayout(controls,1);horizontal->addWidget(reset_button);const auto *parameter=&p;
-    if(p.kind==P::number){auto *spin=new NumericSpinBox(true);spin->setButtonSymbols(QAbstractSpinBox::NoButtons);spin->setFixedWidth(74);spin->setObjectName("material/"+text(p.id));spin->setDecimals(6);spin->setRange(std::min(p.minimum,current.get<double>()),std::max(p.maximum,current.get<double>()));spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->sync(current.get<double>());if(mixed)spin->setSuffix(QStringLiteral("（多值）"));auto *slider=new NumericSlider;slider->setMinimumWidth(30);slider->sync(spin->value(),p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),p.step);controls->addWidget(slider,1);controls->addWidget(spin);
-      auto sync=[=]{slider->sync(spin->value(),p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),p.step);};
+    auto *controls=new QHBoxLayout;controls->setSpacing(3);if(p.kind==P::number){row_layout->addLayout(controls);label->setMaximumWidth(QWIDGETSIZE_MAX);horizontal->setStretch(0,1);}else horizontal->addLayout(controls,1);horizontal->addWidget(reset_button);const auto *parameter=&p;
+    if(p.kind==P::number){auto *spin=new NumericSpinBox(true);spin->setFixedWidth(110);spin->setObjectName("material/"+text(p.id));spin->setDecimals(6);spin->setRange(std::min(p.minimum,current.get<double>()),std::max(p.maximum,current.get<double>()));spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->sync(current.get<double>());if(mixed)spin->setSuffix(QStringLiteral("（多值）"));auto *slider=new NumericSlider;slider->setMinimumWidth(30);slider->sync(spin->value(),p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),p.step);controls->addWidget(slider,1);controls->addWidget(spin);
+      auto *settings=new parameter_widgets::SettingsButtons(parameter_widgets::context(this),p.id,spin,authored_settings.contains(p.id)?authored_settings.at(p.id):runtime::ParameterSettings{},slider,p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),row);horizontal->insertWidget(horizontal->count()-1,settings);
+      auto *favorite=new QToolButton;favorite->setObjectName("favoriteButton");favorite->setAutoRaise(true);favorite->setCheckable(true);favorite->setToolTip(QStringLiteral("收藏参数"));const auto scope="material/"+instance.id+"/"+scene.meshes.at(instance.mesh).material_slots.at(first.slot);if(snapshot_->control_favorites)if(auto f=snapshot_->control_favorites->nodes.find(scope);f!=snapshot_->control_favorites->nodes.end())if(auto v=f->second.find(p.id);v!=f->second.end())favorite->setChecked(v->second);favorite->setText(favorite->isChecked()?QStringLiteral("★"):QStringLiteral("☆"));horizontal->insertWidget(horizontal->count()-1,favorite);
+      connect(favorite,&QToolButton::clicked,this,[this,favorite,scope,id=p.id](bool on){auto apply=[&]{if(!snapshot_->control_favorites)snapshot_->control_favorites.emplace();snapshot_->control_favorites->nodes[scope][id]=on;favorite->setText(on?QStringLiteral("★"):QStringLiteral("☆"));};if(edit_requested)edit_requested(QStringLiteral("修改材质参数收藏"),apply);else apply();});
+      auto sync=[settings]{settings->sync_slider();};
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,spin,sync](double v){spin->setSuffix({});commit(*parameter,v);sync();});connect(spin->findChild<QLineEdit *>(),&QLineEdit::textEdited,spin,[spin]{spin->setProperty("materialTyped",true);});
       connect(spin,&QDoubleSpinBox::editingFinished,this,[this,parameter,spin,sync]{if(!spin->property("materialTyped").toBool())return;spin->setProperty("materialTyped",false);spin->setSuffix({});commit(*parameter,spin->value());sync();});
       slider->edited=[spin](double v){spin->setValue(v);};slider->wheeled=[spin](QWheelEvent *event){QApplication::sendEvent(spin,event);};
@@ -229,7 +271,7 @@ void MaterialPanel::rebuild_properties(){
           HdrColorDialog dialog(initial,linear(parameter->maximum),this);
           if(dialog.exec()==QDialog::Accepted&&dialog.color()!=initial){commit(*parameter,J(dialog.color()));schedule_properties();}
         });}
-      for(int component=0;component<3;++component){auto *spin=new NumericSpinBox(true);spin->setButtonSymbols(QAbstractSpinBox::NoButtons);spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setObjectName("material/"+text(p.id)+"/"+QString::number(component));spin->setDecimals(6);const double shown=p.kind==P::color?srgb(current[size_t(component)]):current[size_t(component)].get<double>();spin->setRange(0,std::max(p.maximum,shown));spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->setPrefix(QString("%1 ").arg("RGB"[component]));spin->sync(shown);if(mixed)spin->setSuffix(QStringLiteral(" *"));controls->addWidget(spin,1);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,component,spin,swatch](double v){spin->setSuffix({});commit(*parameter,parameter->kind==P::color?linear(v):v,component);if(swatch){const auto selected=surfaces();if(!selected.empty()){const auto c=value(selected.front(),*parameter);bool mixed=false;for(auto s:selected)mixed|=value(s,*parameter)!=c;color_swatch(swatch,c,mixed);}}});}
+      for(int component=0;component<3;++component){auto *spin=new NumericSpinBox(true);spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setObjectName("material/"+text(p.id)+"/"+QString::number(component));spin->setDecimals(6);const double shown=p.kind==P::color?srgb(current[size_t(component)]):current[size_t(component)].get<double>();spin->setRange(0,std::max(p.maximum,shown));spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->setPrefix(QString("%1 ").arg("RGB"[component]));spin->sync(shown);if(mixed)spin->setSuffix(QStringLiteral(" *"));controls->addWidget(spin,1);controls->addWidget(new parameter_widgets::SettingsButtons(parameter_widgets::context(this),p.id+"/"+std::to_string(component),spin,{},nullptr,0,1,row));connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,component,spin,swatch](double v){spin->setSuffix({});commit(*parameter,parameter->kind==P::color?linear(v):v,component);if(swatch){const auto selected=surfaces();if(!selected.empty()){const auto c=value(selected.front(),*parameter);bool mixed=false;for(auto s:selected)mixed|=value(s,*parameter)!=c;color_swatch(swatch,c,mixed);}}});}
     }else if(p.kind==P::texture){auto *button=new QPushButton;button->setObjectName("material/"+text(p.id));button->setText(mixed?QStringLiteral("多张贴图"):current.is_null()?QStringLiteral("无贴图 · 点击选择"):QFileInfo(text(current.at("file").get<std::string>())).fileName());button->setToolTip(current.is_null()?QStringLiteral("选择场景贴图或图像文件"):text(current.dump(2)));controls->addWidget(button,1);
       connect(button,&QPushButton::clicked,this,[this,parameter,button]{QMenu menu;auto *browse=menu.addAction(QStringLiteral("浏览图像文件…"));auto *clear=menu.addAction(QStringLiteral("移除贴图"));menu.addSeparator();std::map<QAction *,J> available;const auto &scene=document_->loaded.scene;for(size_t i=0;i<scene.textures.size();++i){ir::Material m;m.*parameter->texture_member=int(i);auto v=material_value(m,scene.textures,*parameter);auto *action=menu.addAction(QFileInfo(text(v["file"].get<std::string>())).fileName());action->setToolTip(text(v["file"].get<std::string>()));available.emplace(action,std::move(v));}auto *action=menu.exec(button->mapToGlobal(QPoint(0,button->height())));if(!action)return;
         if(action==clear)commit(*parameter,J{});else if(action==browse){auto file=QFileDialog::getOpenFileName(this,QStringLiteral("选择材质贴图"),{},QStringLiteral("图像 (*.png *.jpg *.jpeg *.tif *.tiff *.exr *.hdr *.bmp *.tga *.webp);;所有文件 (*)"));if(file.isEmpty())return;commit(*parameter,J{{"file",utf8(QFileInfo(file).absoluteFilePath())}});}else commit(*parameter,available.at(action));schedule_properties();});
@@ -237,7 +279,7 @@ void MaterialPanel::rebuild_properties(){
     if(p.kind==P::texture){auto *preview=new QLabel;thumbnail(preview,!mixed&&!current.is_null()?text(current.at("file").get<std::string>()):QString{});controls->addWidget(preview);if(auto *button=row->findChild<QPushButton *>()){button->setMinimumWidth(45);button->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}}
     if(p.kind==P::texture){auto *locate=new QToolButton;locate->setObjectName("materialLocate/"+text(p.id));locate->setIcon(folder_icon());locate->setToolTip(QStringLiteral("在内容库中定位"));locate->setFixedWidth(22);locate->setEnabled(!mixed&&!current.is_null());horizontal->insertWidget(horizontal->count()-1,locate);connect(locate,&QToolButton::clicked,this,[this,parameter]{const auto selected=surfaces();if(selected.empty()||!locate_file)return;const auto v=value(selected.front(),*parameter);if(!v.is_null())locate_file(text(v.at("file").get<std::string>()));});}
     if(p.kind==P::choice)if(auto *combo=row->findChild<QComboBox *>()){combo->setMinimumWidth(40);combo->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}
-    auto children=row->findChildren<QWidget *>();children.push_back(row);for(auto *child:children){child->setProperty("materialWheelRow",text(p.id));child->installEventFilter(this);}
+    auto children=row->findChildren<QWidget *>();children.push_back(row);for(auto *child:children){child->setProperty("materialWheelRow",text(p.id));}
     rows->addWidget(row);
   }
   auto *uv_row=new QWidget;uv_row->setObjectName("materialRow/uv_set");uv_row->setProperty("materialParameter","uv_set");uv_row->setProperty("materialSearchText",QStringLiteral("UV Set UV ? ???? ??"));
@@ -245,16 +287,17 @@ void MaterialPanel::rebuild_properties(){
   auto *uv_combo=new QComboBox;uv_combo->setObjectName("material/uv_set");uv_combo->setMinimumWidth(40);uv_combo->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);uv_layout->addWidget(uv_combo,1);rows->insertWidget(0,uv_row);populate_uv_combo(uv_combo);
   auto *uv_revert=new QToolButton;uv_revert->setObjectName("materialRevert/uv_set");uv_revert->setText(QStringLiteral("↺"));uv_revert->setFixedWidth(22);uv_revert->setToolTip(QStringLiteral("还原至加载场景或最近应用的材质 UV Set"));uv_layout->addWidget(uv_revert);connect(uv_revert,&QToolButton::clicked,this,[this]{reset("uv_set");});
   connect(uv_combo,&QComboBox::activated,this,[this,uv_combo](int index){const auto data=uv_combo->itemData(index).toString();if(data.isEmpty()||!uv_requested)return;const auto j=J::parse(utf8(data));uv_requested({j.at("uri"),j.at("owner"),j.at("label")},surfaces());});
-  for(auto *widget:{uv_row,static_cast<QWidget *>(uv_combo),static_cast<QWidget *>(uv_label)}){widget->setProperty("materialWheelRow","uv_set");widget->installEventFilter(this);}
-  auto *source=new QTreeWidget;source->setObjectName("materialSourceChannels");source->setHeaderLabels({QStringLiteral("源材质通道"),QStringLiteral("原值 / 状态")});source->setMinimumHeight(150);source->setMaximumHeight(260);source->setColumnWidth(0,180);
+  for(auto *widget:{uv_row,static_cast<QWidget *>(uv_combo),static_cast<QWidget *>(uv_label)}){widget->setProperty("materialWheelRow","uv_set");}
+  auto *source=new QTreeWidget;source->setObjectName("materialSourceChannels");source->setHeaderLabels({QStringLiteral("源材质通道"),QStringLiteral("原值 / 状态")});source->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);source->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);source->setAutoScroll(false);source->setColumnWidth(0,180);
   for(const auto &c:scene.materials.at(instance.materials.at(first.slot)).source_channels){auto *item=new QTreeWidgetItem(source,{text(c.label),text(c.value)+(c.mapped?QStringLiteral(" · 已转换"):QStringLiteral(" · 未映射"))});item->setToolTip(0,text(c.id+"\n"+c.type));item->setToolTip(1,text(c.image));if(!c.mapped)item->setForeground(1,QColor(210,150,70));}
+  source->doItemsLayout();int source_height=source->header()->height()+2*source->frameWidth();for(int r=0;r<source->topLevelItemCount();++r)source_height+=source->sizeHintForRow(r);source->setFixedHeight(std::max(40,source_height));
   auto *source_header=new QToolButton;source_header->setText(QStringLiteral("源通道与兼容信息（只读）"));source_header->setCheckable(true);source_header->setArrowType(Qt::RightArrow);source_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);layout->addWidget(source_header);layout->addWidget(source);source->hide();connect(source_header,&QToolButton::toggled,source,[source_header,source](bool on){source->setVisible(on);source_header->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
   source_header->setToolTip(QStringLiteral("显示第一个所选表面的原始通道。上方参数为 Cycles 转换后的可编辑值；未映射通道不参与渲染。"));layout->addStretch();filter();
 }
 void MaterialPanel::filter(){
   if(!properties_->widget()||!document_||!snapshot_)return;const auto query=search_->text().trimmed();const auto selected=surfaces();const auto &scene=document_->loaded.scene;
   for(auto *row:properties_->widget()->findChildren<QWidget *>()){auto id=row->property("materialParameter");if(!id.isValid())continue;bool edited=false;
-    if(id.toString()=="uv_set")for(auto s:selected)edited|=daz::material_uv_baseline(scene.materials.at(scene.instances.at(s.instance).materials.at(s.slot))).has_value();
+    if(id.toString()=="uv_set"){std::set<uint32_t> checked;for(auto s:selected){const auto m=scene.instances.at(s.instance).materials.at(s.slot);if(checked.insert(m).second&&daz::material_uv_baseline(scene.materials.at(m)).has_value()){edited=true;break;}}}
     for(auto s:selected){const auto &i=scene.instances.at(s.instance);auto object=snapshot_->material_overrides.find(i.id);if(object==snapshot_->material_overrides.end())continue;auto slot=object->second.find(scene.meshes.at(i.mesh).material_slots.at(s.slot));edited|=slot!=object->second.end()&&slot->second.contains(utf8(id.toString()));}
     row->setVisible((!modified_->isChecked()||edited)&&(query.isEmpty()||row->property("materialSearchText").toString().contains(query,Qt::CaseInsensitive)));
     if(auto *label=row->findChild<QLabel *>()){auto font=label->font();font.setBold(edited);label->setFont(font);}

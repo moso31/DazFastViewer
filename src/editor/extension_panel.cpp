@@ -1,3 +1,4 @@
+#include "editor/parameter_widgets.h"
 #include "editor/extension_panel.h"
 #include "editor/numeric_spinbox.h"
 #include "runtime/measurement_units.h"
@@ -29,7 +30,7 @@ ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   for(auto *button:{smaller,larger}){button->setFixedWidth(24);shape_row->addWidget(button);button->setToolTip(QStringLiteral("按步长 × 每年增长调整缩放，年龄保持当前值"));}form->addLayout(shape_row);
   auto notify=[this](bool shape,double scale=0){if(changed)changed(value_,shape,scale);};
   connect(age_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.age=v;notify(true);});
-  connect(step_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.age_step=v;age_->setSingleStep(v);notify(false);});
+  connect(step_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.age_step=v;for(auto *w:age_->parentWidget()->findChildren<QWidget *>())if(auto *settings=dynamic_cast<parameter_widgets::SettingsButtons *>(w)){auto next=settings->settings();next.step=v;settings->commit(next);}notify(false);});
   connect(sense_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.sensitivity=v;notify(false);});
   connect(strength_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.strength=v;notify(true);});
   connect(smaller,&QPushButton::clicked,this,[this,notify]{notify(false,-value_.age_step);});connect(larger,&QPushButton::clicked,this,[this,notify]{notify(false,value_.age_step);});
@@ -40,14 +41,15 @@ ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   details_=new QToolButton;details_->setObjectName("WeightDetails");details_->setText(QStringLiteral("部位重量详情"));details_->setCheckable(true);details_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);details_->setArrowType(Qt::RightArrow);body->addWidget(details_);
   parts_=new QLabel;parts_->setObjectName("WeightParts");parts_->setTextFormat(Qt::RichText);parts_->setWordWrap(true);parts_->setFont(font);parts_->setAlignment(Qt::AlignTop|Qt::AlignLeft);
   parts_->hide();parts_scroll_=parts_;body->addWidget(parts_);
-  connect(details_,&QToolButton::toggled,this,[this](bool on){parts_scroll_->setVisible(on);details_->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});hide();
+  connect(details_,&QToolButton::toggled,this,[this](bool on){parts_scroll_->setVisible(on);details_->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});parameter_widgets::decorate(this,"extension/");hide();
 }
 void ExtensionPanel::bind(const runtime::ObjectExtension &v,bool selection){
   const bool reset=selection||v.kind!=value_.kind;value_=v;
   if(reset){has_result_=false;summary_->setText(QStringLiteral("等待测量…"));summary_->setToolTip({});status_->clear();status_->hide();parts_->clear();details_->setChecked(false);}
   setVisible(v.kind!=runtime::ExtensionKind::none);if(v.kind==runtime::ExtensionKind::none)return;
   const bool character=v.kind==runtime::ExtensionKind::growth;header_->setText(character?QStringLiteral("生长与体重"):QStringLiteral("密度与重量"));growth_->setVisible(character);density_row_->setVisible(!character);details_->setVisible(character);
-  for(const auto &[s,x]:std::vector<std::pair<QDoubleSpinBox *,double>>{{age_,v.age},{step_,v.age_step},{sense_,v.sensitivity},{strength_,v.strength},{density_,v.density}}){QSignalBlocker block(s);s->setValue(x);}age_->setSingleStep(v.age_step);
+  for(const auto &[s,x]:std::vector<std::pair<QDoubleSpinBox *,double>>{{age_,v.age},{step_,v.age_step},{sense_,v.sensitivity},{strength_,v.strength},{density_,v.density}}){QSignalBlocker block(s);s->setValue(x);}
+  for(auto *w:age_->parentWidget()->findChildren<QWidget *>())if(auto *settings=dynamic_cast<parameter_widgets::SettingsButtons *>(w))settings->defaults({false,0,1,v.age_step});
   parts_scroll_->setVisible(character&&details_->isChecked());
 }
 void ExtensionPanel::expand(){header_->setChecked(true);}

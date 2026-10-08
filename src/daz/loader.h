@@ -1,6 +1,7 @@
 #pragma once
 #include "render_ir/scene.h"
 #include "runtime/rigid_follow.h"
+#include "runtime/parameter_settings.h"
 #include <nlohmann/json.hpp>
 #include <memory>
 #include "daz/source_archive.h"
@@ -40,6 +41,7 @@ struct AssetObject {
   bool attachment_bind_rest=false;
   std::vector<MaterialSelectionSet> material_selection_sets;
   std::shared_ptr<SourceArchive> archive;
+  std::array<std::optional<runtime::ParameterSettings>,10> numeric_settings;
 };
 struct AssetNode {
   std::string id,parent,label;bool group=false;
@@ -48,6 +50,7 @@ struct AssetNode {
   float general_scale=1;
   std::string rotation_order="XYZ";
   bool visible=true,selectable=true;
+  std::array<std::optional<runtime::ParameterSettings>,10> numeric_settings;
 };
 struct LoadedScene {ir::Scene scene;nlohmann::json report;std::vector<AssetObject> objects;std::vector<AssetNode> nodes;std::vector<std::shared_ptr<const nlohmann::json>> source_documents;std::shared_ptr<SourceArchive> archive;};
 inline std::shared_ptr<SourceArchive> instance_archive(const LoadedScene &loaded,size_t instance){

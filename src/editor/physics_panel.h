@@ -1,4 +1,5 @@
 #pragma once
+#include "editor/parameter_widgets.h"
 #include "runtime/physics_settings.h"
 #include <QCheckBox>
 #include <QComboBox>
@@ -86,7 +87,7 @@ public:
       sync_surface_selection();publish();
     });
     auto add=[&](const char *id,const QString &label,float runtime::PhysicsObjectSettings::*member,double lo,double hi,double step,double scale=1.){
-      auto *spin=new QDoubleSpinBox;spin->setObjectName(id);spin->setRange(lo,hi);spin->setDecimals(3);spin->setSingleStep(step);spin->setKeyboardTracking(false);spin->setProperty("historyInput",true);auto *title=new QLabel(label);form->addRow(title,spin);watch(spin,title);numbers_.push_back({spin,member,scale});
+      auto *spin=parameter_widgets::number(id,true);spin->setRange(lo,hi);spin->setDecimals(3);spin->setSingleStep(step);spin->setKeyboardTracking(false);spin->setProperty("historyInput",true);auto *title=new QLabel(label);form->addRow(title,spin);watch(spin,title);numbers_.push_back({spin,member,scale});
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this,member,scale](double v){value_.*member=float(v/scale);publish();});
     };
     add("PhysicsMass",QStringLiteral("质量（kg）"),&runtime::PhysicsObjectSettings::mass,.001,1000,.1);
@@ -103,13 +104,13 @@ public:
     connect(run_,&QPushButton::clicked,this,[this]{if(simulate)simulate(false);});connect(reset_,&QPushButton::clicked,this,[this]{if(simulate)simulate(true);});
     connect(joined_,&QCheckBox::toggled,this,[this](bool v){value_.joined=v;publish();});
     connect(kind_,&QComboBox::currentIndexChanged,this,[this](int v){value_.kind=runtime::PhysicsKind(v);publish();});
-    qApp->installEventFilter(this);setVisible(false);
+    qApp->installEventFilter(this);parameter_widgets::decorate(this,"physics/");setVisible(false);
   }
   void bind(const runtime::PhysicsObjectSettings &value,const std::vector<std::string> &surfaces){
     binding_=true;hover(-1);wheel_selected_=nullptr;value_=value;const QSignalBlocker a(enabled_),b(rounds_),c(joined_),d(kind_);
     enabled_->setChecked(value.enabled);rounds_->setValue(value.rounds);joined_->setChecked(value.joined);kind_->setCurrentIndex(int(value.kind));run_->setEnabled(value.enabled);reset_->setEnabled(value.enabled);
     surface_checks_.clear();while(auto *item=flow_->takeAt(0)){delete item->widget();delete item;}
-    for(size_t slot=0;slot<surfaces.size();++slot){const auto &id=surfaces[slot];auto *check=new QCheckBox(QString::fromStdString(id));check->setObjectName("PhysicsSurface");check->setToolTip(QString::fromStdString(id));check->setProperty("physicsSurfaceSlot",int(slot));check->setChecked(!value.excluded_surfaces.contains(id));flow_->addWidget(check);
+    for(size_t slot=0;slot<surfaces.size();++slot){const auto &id=surfaces[slot];auto *check=new QCheckBox(QString::fromStdString(id));check->setObjectName("PhysicsSurface");check->setToolTip(QString::fromStdString(id));check->setProperty("physicsSurfaceSlot",int(slot));check->installEventFilter(this);check->setChecked(!value.excluded_surfaces.contains(id));flow_->addWidget(check);
       surface_checks_.emplace_back(id,check);connect(check,&QCheckBox::toggled,this,[this,id](bool on){if(on)value_.excluded_surfaces.erase(id);else value_.excluded_surfaces.insert(id);sync_surface_selection();publish();});}
     sync_surface_selection();
     for(const auto &n:numbers_){QSignalBlocker block(n.spin);n.spin->setValue(value.*n.member*n.scale);}binding_=false;

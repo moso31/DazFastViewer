@@ -35,10 +35,10 @@ bool editable_channel(const Skin &skin,size_t joint,int channel) {
   const auto &c=skin.joints.at(joint).channels.at(channel);
   return c.present&&!c.locked&&!skin.static_local_weights&&!(channel>=6&&skin.separate_scale_weights)&&!(c.clamped&&c.minimum==c.maximum);
 }
-void set_joint_value(const Skin &skin,std::vector<JointPose> &poses,size_t joint,int channel,float value) {
+void set_joint_value(const Skin &skin,std::vector<JointPose> &poses,size_t joint,int channel,float value,bool enforce_limits) {
   if(!std::isfinite(value)) throw std::runtime_error("骨骼参数必须为有限值");
   if(!editable_channel(skin,joint,channel)) throw std::runtime_error("该骨骼通道已锁定或暂不支持");
-  const auto &c=skin.joints.at(joint).channels.at(channel);if(c.clamped) value=std::clamp(value,c.minimum,c.maximum);
+  const auto &c=skin.joints.at(joint).channels.at(channel);if(enforce_limits&&c.clamped) value=std::clamp(value,c.minimum,c.maximum);
   auto candidate=poses.at(joint);if(channel==9) candidate.general_scale=value;else axis(channel<3?candidate.translation_cm:channel<6?candidate.rotation_degrees:candidate.scale,channel%3)=value;
   if(candidate.scale.x==0||candidate.scale.y==0||candidate.scale.z==0||candidate.general_scale==0) throw std::runtime_error("骨骼缩放不能为零");poses.at(joint)=candidate;
 }

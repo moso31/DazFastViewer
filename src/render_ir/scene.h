@@ -77,7 +77,11 @@ struct CloudCollider {
 };
 struct CloudVolume {
   Vec3 half_extent{1000,1000,90},offset;
-  float density=.035f,coverage=.65f,scale=120,detail=2;
+  float density=.035f,coverage=.65f,scale=120,detail=5;
+  int distribution=0;
+  bool distribution_noise=false;
+  float distribution_threshold=.3675f;
+  float edge_fade=.18f,distribution_scale=600,distribution_detail=4,warp=.35f,erosion=.25f;
   int steps=64;
   std::vector<CloudCollider> colliders;
   bool operator==(const CloudVolume &) const=default;
@@ -232,8 +236,9 @@ struct Option {
   std::string id,label,group,type,image_uri;
   std::vector<double> value;
   std::vector<std::string> choices;
-  double minimum=-10000,maximum=10000,step=.01;
+  double minimum=-10000,maximum=10000,step=.1;
   bool visible=true,supported=false;
+  bool clamped=false,authored=false;
   bool operator==(const Option &) const = default;
 };
 struct OptionNode {

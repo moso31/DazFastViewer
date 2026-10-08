@@ -1,4 +1,5 @@
 #include "editor/material_panel.h"
+#include "editor/material_numeric_settings.h"
 #include "editor/hdr_color_dialog.h"
 #include "render_ir/emission.h"
 #include <QFontDatabase>
@@ -39,6 +40,18 @@ static std::shared_ptr<Document> fixture(){
   ir::Material m;m.id="shared";s.materials={m};ir::Mesh mesh;mesh.id="mesh";mesh.material_slots={"Skin","Nails"};mesh.positions={{0,0,0},{1,0,0},{0,0,1}};ir::Triangle triangle;triangle.vertices={0,1,2};mesh.triangles={triangle};s.meshes={mesh};
   for(const auto *name:{"figure","dress","other"}){ir::Instance i;i.id=name;i.materials={0,0};s.instances.push_back(i);runtime::Target t;t.id=std::string(name)+"/geometry";t.label=name;t.instance=uint32_t(d->catalog.targets.size());if(t.instance==1){t.parent="#figure";t.conform_target="#figure";t.ancestors={"#figure"};}d->catalog.targets.push_back(t);daz::AssetObject o;o.id=name;o.instance=t.instance;o.figure=true;o.auto_fit_base=t.instance==1?"":"Genesis8Female";o.conform_target=t.conform_target;d->loaded.objects.push_back(o);}
   d->formulas.graphs.resize(3);s.validate();return d;
+}
+static void parameter_settings_and_shared_materials(){
+  auto d=fixture();auto &scene=d->loaded.scene;
+  scene.materials[0].source_definition=R"({"channels":{"Metallic Weight":{"min":0.2,"max":0.8,"clamped":true,"step_size":0.025},"Luminance":{"step_size":25}}})";
+  const auto settings=material_numeric_settings(scene.materials[0]);check(settings.at("metallic")==runtime::ParameterSettings{true,.2,.8,.025},"材质 DUF 范围或精度未继承");check(settings.at("emission_luminance").step==25&&!settings.contains("bump_distance"),"材质精度或派生参数规则错误");
+  scene.instances.clear();d->catalog.targets.clear();d->loaded.objects.clear();d->formulas.graphs.clear();
+  d->loaded.nodes.push_back({"crowd",{},"Crowd",true});
+  for(int n=0;n<2000;++n){ir::Instance instance;instance.id="crowd/"+std::to_string(n);instance.instance_node=instance.id;instance.materials={0,0};instance.prototype=n?0:-1;scene.instances.push_back(instance);daz::AssetNode node;node.id=instance.id;node.parent="#crowd";d->loaded.nodes.push_back(node);}
+  for(int n=0;n<100;++n){ir::Texture texture;texture.id="unused/"+std::to_string(n);scene.textures.push_back(texture);}
+  auto snapshot=initial_snapshot(*d);MaterialPanel panel;panel.bind(d,&snapshot,-4,"crowd");
+  check(panel.selected_surfaces().size()==4000,"组选择漏掉实例表面");check(panel.property("resolvedMaterialCount").toInt()==1&&panel.property("textureTableCopies").toInt()==0,"共享材质选择重复解析或复制全场纹理表");
+  auto *metallic=panel.findChild<QDoubleSpinBox *>("material/metallic");check(metallic&&metallic->minimum()==.2&&metallic->maximum()==.8&&metallic->singleStep()==.025,"材质行未使用 DUF 编辑规则");
 }
 static void apply_library_sample(daz::LoadedScene preset){
   // 合成网格只验证参数替换；真实 UV 拓扑和层级身份由独立的精确夹具验证。
@@ -138,6 +151,7 @@ static void clipboard_ui(QApplication &app){
 int main(int argc,char **argv){
   QApplication app(argc,argv);QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");app.setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
   try{
+    parameter_settings_and_shared_materials();
     material_hdr_color(app,argc>2&&std::string(argv[1])=="--hdr-color"?QString::fromLocal8Bit(argv[2]):QString{});
     if(argc>1&&std::string(argv[1])=="--hdr-color"){std::cout<<"HDR color dialog and material integration: PASS\n";return 0;}
     if(argc>1&&std::string(argv[1])=="--uv-selection"){real_uv_selection(app,app.arguments());return 0;}

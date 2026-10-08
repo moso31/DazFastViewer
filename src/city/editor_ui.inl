@@ -23,7 +23,7 @@
     });
   }
   void install_city_ui(QMenu *create){
-    city_panel_=new city::Panel(city::default_directory(roots_));auto *scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setWidget(city_panel_);auto *panel=dock(QStringLiteral("城市 PCG"),scroll,Qt::RightDockWidgetArea);panel->setObjectName("CityPCG");if(auto *materials=findChild<QDockWidget *>("Materials"))tabifyDockWidget(materials,panel);panel->hide();
+    city_panel_=new city::Panel(city::default_directory(roots_));bind_widget_settings(city_panel_,"@city-new");auto *scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setWidget(city_panel_);auto *panel=dock(QStringLiteral("城市 PCG"),scroll,Qt::RightDockWidgetArea);panel->setObjectName("CityPCG");if(auto *materials=findChild<QDockWidget *>("Materials"))tabifyDockWidget(materials,panel);panel->hide();
     auto *action=create->addAction(QStringLiteral("城市 PCG…"));action->setObjectName("OpenCityPCG");connect(action,&QAction::triggered,this,[panel]{panel->show();panel->raise();});
     city_panel_->generate=[this](city::Config config,std::string id){generate_city(std::move(config),std::move(id));};city_panel_->cancel=[this]{loader_.request_stop();};city_panel_->focus=[this](const std::string &id){focus_city(id);};
     city_panel_->view_changed=[this](const std::string &id,city::View view){if(loading_||!document_)return;auto edit=history_edit(QStringLiteral("城市 LOD"));snapshot_.city_views[id]=view;send();};

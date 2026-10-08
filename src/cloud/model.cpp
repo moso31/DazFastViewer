@@ -8,7 +8,8 @@ void validate(const Config &c){
   auto range=[](double v,double a,double b){return std::isfinite(v)&&v>=a&&v<=b;};
   if(!range(c.x,-1e6,1e6)||!range(c.y,-1e6,1e6)||!range(c.height,-1e6,1e6)||
      !range(c.width,1,1e6)||!range(c.length,1,1e6)||!range(c.thickness,1,1e5)||
-     !range(c.density,0,10)||!range(c.coverage,0,1)||!range(c.scale,1,1e5)||!range(c.detail,0,4)||
+     !range(c.density,0,10)||!range(c.coverage,0,1)||!range(c.scale,1,1e5)||!range(c.detail,0,8)||
+     c.distribution<0||c.distribution>1||!range(c.distribution_threshold,0,1)||!range(c.edge_fade,.001,1)||!range(c.distribution_scale,1,1e6)||!range(c.distribution_detail,0,8)||!range(c.warp,0,2)||!range(c.erosion,0,1)||
      !range(c.wind_speed,0,10000)||!range(c.direction,-36000,36000)||!range(c.time,-1e6,1e6)||
      !range(c.padding,0,10000)||!range(c.softness,0,10000)||!range(c.trail,0,1000)||!range(c.recovery,.01,1000)||
      !range(c.velocity_x,-10000,10000)||!range(c.velocity_y,-10000,10000)||!range(c.velocity_z,-10000,10000)||
@@ -19,14 +20,20 @@ nlohmann::json json(const Cloud &v){validate(v.config);const auto &c=v.config;nl
 #define FIELD(n) j[#n]=c.n
   FIELD(x);FIELD(y);FIELD(height);FIELD(thickness);FIELD(width);FIELD(length);FIELD(density);FIELD(coverage);FIELD(scale);FIELD(detail);FIELD(wind_speed);FIELD(direction);FIELD(time);FIELD(padding);FIELD(softness);FIELD(velocity_x);FIELD(velocity_y);FIELD(velocity_z);FIELD(trail);FIELD(recovery);FIELD(steps);FIELD(seed);FIELD(collisions);FIELD(sources);
 #undef FIELD
-  return j;
+  j["distribution"]=c.distribution;j["distribution_noise"]=c.distribution_noise;j["distribution_threshold"]=c.distribution_threshold;j["edge_fade"]=c.edge_fade;j["distribution_scale"]=c.distribution_scale;j["distribution_detail"]=c.distribution_detail;j["warp"]=c.warp;j["erosion"]=c.erosion;return j;
 }
 std::shared_ptr<const Cloud> from_json(const nlohmann::json &j){
   if(j.at("version")!=1)throw std::runtime_error("不支持的体积云版本");auto v=std::make_shared<Cloud>();v->id=j.at("id");if(v->id.empty())throw std::runtime_error("体积云身份为空");auto &c=v->config;
 #define FIELD(n) c.n=j.at(#n).get<decltype(c.n)>()
   FIELD(x);FIELD(y);FIELD(height);FIELD(thickness);FIELD(width);FIELD(length);FIELD(density);FIELD(coverage);FIELD(scale);FIELD(detail);FIELD(wind_speed);FIELD(direction);FIELD(time);FIELD(padding);FIELD(softness);FIELD(velocity_x);FIELD(velocity_y);FIELD(velocity_z);FIELD(trail);FIELD(recovery);FIELD(steps);FIELD(seed);FIELD(collisions);FIELD(sources);
 #undef FIELD
-  validate(c);return v;
+  c.distribution=j.value("distribution",0);
+  // 旧分形模式等价于方形叠加噪声；迁移时保留原来由云量决定的阈值。
+  const bool legacy_noise=c.distribution==2;
+  if(legacy_noise)c.distribution=0;
+  c.distribution_noise=j.value("distribution_noise",legacy_noise);
+  c.distribution_threshold=j.value("distribution_threshold",legacy_noise?.53-.25*c.coverage:.3675);
+  c.edge_fade=j.value("edge_fade",.18);c.distribution_scale=j.value("distribution_scale",600.);c.distribution_detail=j.value("distribution_detail",4.);c.warp=j.value("warp",.35);c.erosion=j.value("erosion",.25);validate(c);return v;
 }
 std::shared_ptr<const Cloud> prefixed(const Cloud &v,const std::string &prefix){auto result=std::make_shared<Cloud>(v);result->id=prefix+v.id;for(auto &id:result->config.sources)id=prefix+id;return result;}
 const Cloud *find(const Clouds &values,const std::string &id){for(const auto &v:values)if(v->id==id||v->id+"/volume"==id)return v.get();return nullptr;}
@@ -41,6 +48,7 @@ ir::Material material(const Cloud &v){
   validate(v.config);const auto &c=v.config;ir::Material m;m.id=v.id+"/material";m.cloud.emplace();auto &o=*m.cloud;
   o.half_extent={float(c.width*.5),float(c.length*.5),float(c.thickness*.5)};
   o.density=float(c.density);o.coverage=float(c.coverage);o.scale=float(c.scale);o.detail=float(c.detail);o.steps=c.steps;
+  o.distribution=c.distribution;o.distribution_noise=c.distribution_noise;o.distribution_threshold=float(c.distribution_threshold);o.edge_fade=float(c.edge_fade);o.distribution_scale=float(c.distribution_scale);o.distribution_detail=float(c.distribution_detail);o.warp=float(c.warp);o.erosion=float(c.erosion);
   const double a=c.direction*3.141592653589793/180;
   // Noise is periodic only at very long distances; reduce in double precision.
   const double period=c.scale*10000;

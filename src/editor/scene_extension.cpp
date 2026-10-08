@@ -89,12 +89,12 @@ J snapshot_json(const Document &d,const Snapshot &s,bool water_state){
   validate_instance_ground(d.loaded.scene,s.instance_ground);j["instance_ground"]=J::object();for(const auto &[id,v]:s.instance_ground)j["instance_ground"][id]={{"offset_m",v.offset_m},{"ratio",v.ratio},{"offset_cm",v.offset_cm},{"body_only",v.body_only}};
   if(water_state){j["waters"]=J::array();for(const auto &w:s.water_overrides)j["waters"].push_back(water::json(*w));}
   if(water_state){j["clouds"]=J::array();for(const auto &v:s.cloud_overrides)j["clouds"].push_back(cloud::json(*v));}
-  j["cities"]=city::json(s.city_views);j["control_favorites"]=favorites(s.control_favorites);return j;
+  j["cities"]=city::json(s.city_views);j["control_favorites"]=favorites(s.control_favorites);j["parameter_settings"]=s.parameter_settings;return j;
 }
 void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   cloud::Clouds clouds;for(const auto &value:j.value("clouds",J::array())){auto v=cloud::from_json(value);const auto *base=cloud::find(d.clouds,v->id);if(!base||cloud::find(clouds,v->id)||v->config.x!=base->config.x||v->config.y!=base->config.y||v->config.height!=base->config.height||v->config.thickness!=base->config.thickness)throw std::runtime_error("体积云快照引用无效");clouds.push_back(std::move(v));}
   water::Waters waters;for(const auto &value:j.value("waters",J::array())){auto w=water::from_json(value);const auto *base=water::find(d.waters,w->id);if(!base||water::find(waters,w->id)||w->config.x!=base->config.x||w->config.y!=base->config.y||w->config.level!=base->config.level)throw std::runtime_error("水体参数快照引用无效");waters.push_back(std::move(w));}
-  auto next=s;next.city_views=city::views_from_json(j.value("cities",J::object()));for(const auto &[id,v]:next.city_views)if(std::none_of(d.cities.begin(),d.cities.end(),[&](const auto &c){return c->id==id;}))throw std::runtime_error("城市视图引用无效");
+  auto next=s;next.parameter_settings=j.value("parameter_settings",J::object()).get<runtime::ParameterSettingsState>();next.city_views=city::views_from_json(j.value("cities",J::object()));for(const auto &[id,v]:next.city_views)if(std::none_of(d.cities.begin(),d.cities.end(),[&](const auto &c){return c->id==id;}))throw std::runtime_error("城市视图引用无效");
   next.view.reset();if(j.contains("view")){next.view=j.at("view").get<std::array<float,6>>();for(float v:*next.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*next.view)[3]<=0)throw std::runtime_error("观察相机距离无效");}
   next.group_transforms.clear();const auto groups=j.value("groups",J::object());for(const auto &[id,value]:groups.items())read_transform(next.group_transforms[id],value);validate_group_transforms(d,next.group_transforms);
   next.node_properties.clear();const auto node_states=j.value("node_properties",J::object());for(const auto &[id,v]:node_states.items())next.node_properties[id]={v.value("visible",true),v.value("selectable",true)};validate_node_properties(d,next.node_properties);

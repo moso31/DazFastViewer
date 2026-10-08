@@ -29,12 +29,12 @@ int main(int argc,char **argv){QApplication app(argc,argv);try{
   panel->refresh_candidates=[&]{panel->bind(&water,objects);};objects[3].volume=2e9;sort->click();check(tree->topLevelItem(0)->data(0,Qt::UserRole).toString()=="3","button did not fetch current evaluated bounds");panel->refresh_candidates={};objects[3].volume=27;
   water.id="loading";auto unknown=objects;for(auto &o:unknown)o.volume=-1;panel->bind(&water,unknown);panel->bind(&water,objects);check(tree->topLevelItem(0)->data(0,Qt::UserRole).toString()=="2","first available bounds did not establish initial order");
   x->setFocus();wheel(x);check(x->value()==0,"focus without click permitted wheel edit");check(outer.verticalScrollBar()->value()>0,"unselected spin swallowed outer scrolling");
-  QTest::mouseClick(x,Qt::LeftButton);wheel(x,120);check(x->value()==1,"selected spin rejected wheel edit");
+  QTest::mouseClick(x,Qt::LeftButton);wheel(x,120);check(x->value()==.1,"selected spin rejected wheel edit");
   check(arrows(x)==arrows(reference),"selected water arrows differ from GroundPanel");
   auto *density=panel->findChild<QDoubleSpinBox *>("density"),*foam=panel->findChild<QDoubleSpinBox *>("foam_uv_scale");water::Config edited;panel->changed=[&](water::Config c,bool){edited=c;};density->setValue(12);foam->setValue(2.5);check(edited.density==8&&edited.foam_uv_scale==2.5,"new parameters did not submit or density exceeded 8x");panel->changed={};
-  panel->bind(&water,objects);wheel(x,120);check(x->value()==1,"same-object refresh lost selected row");
+  panel->bind(&water,objects);wheel(x,120);check(x->value()==.1,"same-object refresh lost selected row");
   wheel(y);check(y->value()==0,"wheel over another row changed value");
-  panel->hide();panel->show();wheel(x);check(x->value()==1,"hidden panel retained selection");
+  panel->hide();panel->show();wheel(x);check(x->value()==.1,"hidden panel retained selection");
   auto *combo=qobject_cast<QComboBox *>(tree->itemWidget(tree->topLevelItem(0),1));combo->setFocus();wheel(combo);check(combo->currentIndex()==0,"unselected combo changed mode");
   QTest::mouseClick(tree->viewport(),Qt::LeftButton,Qt::NoModifier,tree->visualItemRect(tree->topLevelItem(0)).center());wheel(combo);check(combo->currentIndex()==1,"selected source row could not wheel-edit mode");
   water.id="two";panel->bind(&water,objects);combo=qobject_cast<QComboBox *>(tree->itemWidget(tree->topLevelItem(0),1));wheel(combo);check(combo->currentIndex()==0,"object switch retained old selected source");

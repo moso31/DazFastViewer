@@ -23,6 +23,7 @@ class MaterialPanel final:public QWidget {
   QScrollArea *properties_;
   QLabel *heading_,*status_;
   using Surface=MaterialSurface;
+  mutable std::optional<std::vector<Surface>> surface_cache_;
   std::vector<Surface> surfaces() const;
   std::vector<Surface> item_surfaces(QTreeWidgetItem *item) const;
   void add_selection_sets(QTreeWidgetItem *object,size_t instance);

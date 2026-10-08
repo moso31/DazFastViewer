@@ -39,7 +39,7 @@ int wmain(int argc,wchar_t **argv) {
     }
     ir::Scene scene;ir::Mesh mesh;mesh.positions={{1,2,3},{4,5,6}};scene.meshes={mesh,mesh};
     ir::Instance a,b;b.mesh=1;scene.instances={a,b};
-    runtime::Morph m;m.minimum=-1;m.maximum=2;m.offsets={{0,{.1f,.2f,.3f}}};
+    runtime::Morph m;m.clamped=true;m.minimum=-1;m.maximum=2;m.offsets={{0,{.1f,.2f,.3f}}};
     runtime::Morph n=m;n.offsets={{0,{-.2f,.4f,0}},{1,{.5f,0,0}}};
     runtime::Target first;first.morphs={m,n};runtime::Target second=first;second.instance=1;
     std::vector<runtime::Target> targets={first,second};runtime::MorphRuntime runtime(scene,targets);

@@ -9,6 +9,7 @@
 #include "city/model.h"
 #include "water/model.h"
 #include "cloud/model.h"
+#include "runtime/parameter_settings.h"
 #include <map>
 
 namespace dfv::editor {
@@ -52,6 +53,7 @@ struct Snapshot {
   InstanceGrounds instance_ground;
   MaterialOverrides material_overrides;
   std::optional<runtime::FavoriteState> control_favorites;
+  runtime::ParameterSettingsState parameter_settings;
   // 按稳定网格身份保存，追加／删除对象不会把级别套到其他对象。
   std::map<std::string,int> subdivision_levels;
   ir::RenderOptions options;

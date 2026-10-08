@@ -1,4 +1,5 @@
 #include "editor/parameters.h"
+#include "editor/parameter_widgets.h"
 #include "render_ir/matte_fog.h"
 #include <QDateEdit>
 #include <QApplication>
@@ -86,6 +87,7 @@ bool ParameterPanel::eventFilter(QObject *object,QEvent *event) {
   if(event->type()!=QEvent::MouseButtonPress&&event->type()!=QEvent::MouseButtonDblClick&&event->type()!=QEvent::Wheel&&event->type()!=QEvent::Hide)return QWidget::eventFilter(object,event);
   if(event->type()==QEvent::Hide&&object==this)wheel_selection(-1);
   const auto *widget=qobject_cast<QWidget *>(object);
+  if(widget&&widget->window()->property("parameterSettingsPopup").toBool())return false;
   const bool owned=widget&&(widget==this||isAncestorOf(widget));
   if(!owned) {
     if(event->type()==QEvent::MouseButtonPress&&static_cast<QMouseEvent *>(event)->button()==Qt::LeftButton)wheel_selection(-1);
@@ -147,6 +149,7 @@ void ParameterPanel::toggle_favorite(size_t index) {
   QTimer::singleShot(0,this,[this]{filter();});
 }
 void ParameterPanel::bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node) {
+  const auto selected=target&&target_==target&&node_==node&&wheel_selected_>=0?controls_.at(size_t(wheel_selected_)).id:std::string{};
   option_node_=nullptr;
   if(!target)bind_favorites(nullptr);
   target_=target;values_=values;node_=node;effective_.clear();controls_.clear();morph_rows_.clear();
@@ -170,16 +173,18 @@ void ParameterPanel::bind(const runtime::Target *target,const runtime::Propertie
       if(!m.scene_channel&&(scene_names.contains(m.channel_name)||scene_names.contains(m.channel_id))) c.favorite=false;
       c.minimum=m.clamped?std::min(m.minimum,values_->morphs[i]):std::min(-100.f,m.minimum);c.maximum=m.clamped?std::max(m.maximum,values_->morphs[i]):std::max(100.f,m.maximum);c.slider_minimum=m.minimum;c.slider_maximum=m.maximum;c.step=m.step;c.initial=m.initial;c.visible=m.visible;c.enabled=m.unsupported.empty()&&!m.locked;
       c.float_backed=true;c.read=[this,i]{return double(values_->morphs.at(i));};c.write=[this,i](double v){if(changed) changed(i,v);};
+      c.settings=runtime::ParameterSettings{m.clamped,decimal_float(m.minimum),decimal_float(m.maximum),std::max(1e-9,decimal_float(m.step))};
       if(m.value_type=="bool") c.choices={"关闭","开启"};morph_rows_[i]=int(controls_.size());controls_.push_back(std::move(c));
     }
   }
   rebuild();
+  if(!selected.empty())for(size_t i=0;i<controls_.size();++i)if(controls_[i].id==selected&&!items_[i]->isHidden()){wheel_selection(int(i));tree_->setCurrentItem(items_[i]);break;}
 }
 void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
                                   std::function<void(size_t,const std::array<double,3> &)> color_callback) {
   const bool same=node&&node==option_node_&&node->id==option_node_id_;
   const auto selected=same&&wheel_selected_>=0?controls_.at(size_t(wheel_selected_)).id:std::string{};
-  option_node_=node;option_node_id_=node?node->id:std::string{};
+  node_.clear();option_node_=node;option_node_id_=node?node->id:std::string{};
   target_=nullptr;values_=nullptr;controls_.clear();morph_rows_.clear();
   favorite_scope_.clear();scene_favorites_=false;
   if(node) for(size_t i=0;i<node->parameters.size();++i) {const auto &p=node->parameters[i];
@@ -187,6 +192,7 @@ void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t
     for(size_t k=0;k<(color?1:p.value.size());++k) {
       ParameterControl c;c.id=node->id+"/"+p.id+std::to_string(k);c.label=p.label+(!color&&p.value.size()==3?std::string(" ")+"RGB"[k]:"");c.group=p.group;c.minimum=p.minimum;c.maximum=p.maximum;c.slider_minimum=p.minimum;c.slider_maximum=std::min(p.maximum,std::max(2.0,p.value[k]*2));c.step=p.step;c.initial=p.value[k];c.visible=p.visible;c.enabled=p.supported;c.choices=p.choices;
       if(p.type=="bool") c.choices={"关闭","开启"};c.detail=p.image_uri+(!p.supported?"\n已保留原值，此参数尚未参与渲染":"");
+      if(p.authored)c.settings=runtime::ParameterSettings{p.clamped,p.minimum,p.maximum,std::max(1e-9,p.step)};
       if(ir::matte_fog_option(p.id)) {
         c.enforce_limits=true;c.visible=true;
         c.detail="模型与天空穿过同一片雾层。能见度是在基准高度处，物体对比度降至 2% 的距离；数值越小，雾越浓。距离单位均为米。";
@@ -278,9 +284,12 @@ void ParameterPanel::mount() {
       slider->setToolTip(QStringLiteral("左右拖动可越过标尺范围；Shift 精细调整。左键选中参数后，滚轮可调值；未选中时滚轮翻页。右侧可直接输入数值。"));
       auto *spin=new NumericSpinBox(c.float_backed);spin->setObjectName("valueSpin");spin->setDecimals(c.enforce_limits&&c.step==1?0:6);spin->setRange(c.enforce_limits?c.minimum:-std::numeric_limits<float>::max(),c.enforce_limits?c.maximum:std::numeric_limits<float>::max());spin->setSingleStep(std::max(.000001,c.step));spin->setKeyboardTracking(false);spin->setFixedWidth(125);spin->setEnabled(c.enabled);
       spin->setProperty("parameterId",text(c.id));
-      line->addWidget(slider,1);line->addWidget(spin);spin->sync(c.read());slider->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);
+      line->addWidget(slider,1);line->addWidget(spin);spin->sync(c.read());
+      const auto key="parameters/"+node_+"/"+(c.favorite_id.empty()?c.id:c.favorite_id);
+      auto *settings=new parameter_widgets::SettingsButtons(parameter_widgets::context(this),key,spin,c.settings.value_or(runtime::ParameterSettings{false,0,1,c.float_backed?decimal_float(float(c.step)):c.step}),slider,c.slider_minimum,c.slider_maximum,widget);
+      settings->setEnabled(c.enabled);title->insertWidget(title->count()-1,settings);
       slider->wheeled=[spin](QWheelEvent *event){forward_wheel(spin,event);};
-      slider->edited=[this,i](double value){current_=i;const auto &c=controls_[i];if(c.enforce_limits) value=std::clamp(std::round(value/c.step)*c.step,c.minimum,c.maximum);c.write(value);update_rows();};
+      slider->edited=[spin](double value){spin->setValue(value);};
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){current_=i;controls_[i].write(value);update_rows();});
       connect(spin,&QDoubleSpinBox::editingFinished,this,[this,spin]{if(auto *line=spin->findChild<QLineEdit *>()) line->setModified(false);update_rows();});
     }
@@ -306,7 +315,7 @@ void ParameterPanel::update_rows() {
       // 后台渲染状态持续刷新时，不能覆盖尚未按 Enter / 失焦提交的输入文本。
       if(!(spin->hasFocus()&&line&&line->isModified())&&spin->value()!=c.read()) {QSignalBlocker block(spin);static_cast<NumericSpinBox *>(spin)->sync(c.read());}
     }
-    if(auto *slider=w->findChild<QSlider *>("valueSlider")) {QSignalBlocker block(slider);static_cast<NumericSlider *>(slider)->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step);}
+    for(auto *child:w->findChildren<QWidget *>())if(auto *settings=dynamic_cast<parameter_widgets::SettingsButtons *>(child))settings->sync_slider();
     if(auto *combo=w->findChild<QComboBox *>("valueChoice")) {QSignalBlocker block(combo);combo->setCurrentIndex(int(c.read()));}
     if(auto *date=w->findChild<QDateEdit *>("valueDate");date&&!date->hasFocus()) {QSignalBlocker block(date);date->setDate(QDate::fromJulianDay(qRound64(c.read())));}
     if(auto *time=w->findChild<QTimeEdit *>("valueTime");time&&!time->hasFocus()) {QSignalBlocker block(time);time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)));}
@@ -322,7 +331,14 @@ bool ParameterPanel::edit_control(const std::string &id,double value) {
 }
 void ParameterPanel::query(const QString &value) {search_->setText(value);}
 void ParameterPanel::select_parameter(size_t index) {if(index<morph_rows_.size()&&morph_rows_[index]>=0) {current_=morph_rows_[index];auto *item=items_[size_t(current_)];tree_->setCurrentItem(item);show_item(item);mount();}}
-void ParameterPanel::set_slider(int value) {if(current_>=0) {const auto &c=controls_.at(size_t(current_));if(c.read_color)return;c.write(c.slider_minimum+(c.slider_maximum-c.slider_minimum)*value/1000);update_rows();}}
+void ParameterPanel::set_slider(int value) {if(current_>=0) {
+  const auto &c=controls_.at(size_t(current_));if(c.read_color)return;
+  const auto key="parameters/"+node_+"/"+(c.favorite_id.empty()?c.id:c.favorite_id);
+  const auto settings=parameter_widgets::context(this)->get(key,c.settings.value_or(runtime::ParameterSettings{false,0,1,c.step}));
+  const double low=settings.limited?settings.minimum:c.slider_minimum,high=settings.limited?settings.maximum:c.slider_maximum;
+  double next=low+(high-low)*value/1000.;if(settings.limited)next=std::clamp(next,low,high);if(c.enforce_limits)next=std::clamp(next,c.minimum,c.maximum);
+  c.write(next);update_rows();
+}}
 void ParameterPanel::evaluated(const std::vector<float> &values) {effective_=values;update_rows();}
 void ParameterPanel::resource_states() {update_rows();}
 }

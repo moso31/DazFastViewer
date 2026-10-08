@@ -1,3 +1,4 @@
+#include "editor/parameter_widgets.h"
 #include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
 #include "editor/project.h"
@@ -413,6 +414,7 @@ class Editor final:public EditorWindow {
   QByteArray default_layout_;
   QByteArray workflow_layout_;
   QDoubleSpinBox *light_power_=nullptr;
+  QWidget *light_power_row_=nullptr;
   ir::Transform light_base_;
   size_t test_morph_=0;
   uint64_t generation_=0,test_evaluations_=0;
@@ -515,7 +517,7 @@ class Editor final:public EditorWindow {
   void progress(const QString &message) {QMetaObject::invokeMethod(this,[this,message] {statusBar()->showMessage(message);},Qt::QueuedConnection);}
   void sync_selection() {
     if(history_&&!restoring_history_)history_->finish_gesture();
-    {QSignalBlocker block(hierarchy_);for(QTreeWidgetItemIterator it(hierarchy_);*it;++it){auto font=(*it)->font(0);font.setBold((*it)->isSelected());(*it)->setFont(0,font);}}
+    {QSignalBlocker block(hierarchy_);for(QTreeWidgetItemIterator it(hierarchy_);*it;++it){auto font=(*it)->font(0);if(font.bold()!=(*it)->isSelected()){font.setBold((*it)->isSelected());(*it)->setFont(0,font);}}}
     auto *item=active_selection(hierarchy_);
     select(item?item->data(0,Qt::UserRole).toInt():-1,item?item->data(0,Qt::UserRole+1).toInt():-1,item?item->data(0,Qt::UserRole+2).toInt():-1);
   }
@@ -947,11 +949,24 @@ class Editor final:public EditorWindow {
     if(!document_||effective_generation_!=document_->generation||selected_<0||size_t(selected_)>=effective_roots_.size()) return 1;
     const auto &p=effective_roots_[size_t(selected_)];return axis<0?p.general_scale:axis==0?p.scale.x:axis==1?p.scale.y:p.scale.z;
   }
+  void bind_widget_settings(QWidget *panel,const std::string &owner) {
+    if(!panel)return;auto *binding=parameter_widgets::context(panel);
+    binding->read=[this,binding](const std::string &key,const runtime::ParameterSettings &defaults){
+      const auto found=snapshot_.parameter_settings.find(binding->owner);if(found!=snapshot_.parameter_settings.end())if(auto p=found->second.find(key);p!=found->second.end())return p->second;return defaults;
+    };
+    binding->edit=[this,binding](const std::string &key,const runtime::ParameterSettings &value,const std::function<void()> &apply){
+      if(loading_||!document_)return;auto edit=history_edit(QStringLiteral("修改参数范围与精度"));snapshot_.parameter_settings[binding->owner][key]=value;apply();
+    };
+    binding->bind(owner);
+  }
   void select(int index,int joint=-1,int light=-1) {
     if(powerpose_) powerpose_->cancel();
     parameters_->bind_favorites(nullptr);initialize_favorites();
     selected_group_.clear();if(index==-4&&document_){auto *item=active_selection(hierarchy_);if(item){const auto id=item->data(0,Qt::UserRole+3).toString().toStdString();if(group_node(*document_,id))selected_group_=id;}}
-    selected_=index;selected_joint_=joint;selected_light_=light;light_power_->setVisible(light>=0);
+    selected_=index;selected_joint_=joint;selected_light_=light;light_power_row_->setVisible(light>=0);
+    std::string settings_owner;
+    if(document_){if(light>=0)settings_owner=snapshot_.lights.at(size_t(light)).id;else if(index>=0)settings_owner=document_->catalog.targets.at(size_t(index)).id;else if(index==-2)settings_owner="@environment";else if(index==-3)settings_owner="@tonemapper";else if(auto *item=active_selection(hierarchy_))settings_owner=item->data(0,Qt::UserRole+3).toString().toStdString();}
+    for(auto *p:std::initializer_list<QWidget *>{parameters_,cloud_panel_,water_panel_,ground_panel_,physics_panel_,extension_panel_,light_power_row_})bind_widget_settings(p,settings_owner);
     if(environment_tools_)environment_tools_->setVisible(index==-2);
     bind_water();bind_cloud();
     parameters_->setVisible(!selected_water()&&!selected_cloud());
@@ -993,17 +1008,17 @@ class Editor final:public EditorWindow {
     const float saved[]={asset?asset->translation_cm.x:0,asset?asset->translation_cm.y:0,asset?asset->translation_cm.z:0,asset?asset->rotation_degrees.x:0,asset?asset->rotation_degrees.y:0,asset?asset->rotation_degrees.z:0,asset?asset->scale.x:1,asset?asset->scale.y:1,asset?asset->scale.z:1};
     if(joint<0) {
       append_node_controls(controls,index);
-      ParameterControl general;general.id="transform/general_scale";general.favorite_name="Scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.float_backed=false;general.read=[this,initial]{return runtime::decimal_derived_float(double(initial)*root_scale())*snapshot_.values[size_t(selected_)].transform.general_scale*100;};general.write=[this,initial](double value){auto edit=history_edit(QStringLiteral("修改整体缩放"));const double base=runtime::decimal_derived_float(double(initial)*root_scale())*100;if(base!=0) {snapshot_.values[size_t(selected_)].transform.general_scale=value/base;send();}};controls.push_back(std::move(general));
-      for(int i=0;i<9;++i) {ParameterControl c;c.id="transform/"+std::to_string(i);c.favorite_name=std::string(1,"XYZ"[i%3])+(i<3?"Translate":i<6?"Rotate":"Scale");c.label=std::string(1,"XYZ"[i%3])+std::string(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.float_backed=true;c.minimum=transform_[i]->minimum();c.maximum=transform_[i]->maximum();c.step=.1;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;const float base=saved[i];c.read=[this,i,base]{return i<6?transform_[i]->value()+base:transform_[i]->value()*base*root_scale(i-6);};c.write=[this,i,base](double v){const double scale=double(base)*(i>=6?root_scale(i-6):1);if(i<6||scale!=0) transform_[i]->setValue(i<6?v-base:v/scale);};controls.push_back(std::move(c));}
+      ParameterControl general;general.id="transform/general_scale";general.favorite_name="Scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.settings=asset?asset->numeric_settings[9]:std::nullopt;general.float_backed=false;general.read=[this,initial]{return runtime::decimal_derived_float(double(initial)*root_scale())*snapshot_.values[size_t(selected_)].transform.general_scale*100;};general.write=[this,initial](double value){auto edit=history_edit(QStringLiteral("修改整体缩放"));const double base=runtime::decimal_derived_float(double(initial)*root_scale())*100;if(base!=0) {snapshot_.values[size_t(selected_)].transform.general_scale=value/base;send();}};controls.push_back(std::move(general));
+      for(int i=0;i<9;++i) {ParameterControl c;c.id="transform/"+std::to_string(i);c.favorite_name=std::string(1,"XYZ"[i%3])+(i<3?"Translate":i<6?"Rotate":"Scale");c.label=std::string(1,"XYZ"[i%3])+std::string(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.float_backed=true;c.minimum=transform_[i]->minimum();c.maximum=transform_[i]->maximum();c.step=.1;c.settings=asset?asset->numeric_settings[i]:std::nullopt;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;const float base=saved[i];c.read=[this,i,base]{return i<6?transform_[i]->value()+base:transform_[i]->value()*base*root_scale(i-6);};c.write=[this,i,base](double v){const double scale=double(base)*(i>=6?root_scale(i-6):1);if(i<6||scale!=0) transform_[i]->setValue(i<6?v-base:v/scale);};controls.push_back(std::move(c));}
     } else if(const int skin=selected_skin();skin>=0) {
       const auto &skeleton=document_->skeletons.skins[size_t(skin)];
       for(int i=0;i<10;++i) {const auto &channel=skeleton.joints[size_t(joint)].channels[i];if(!channel.present) continue;
         const double factor=channel.percent?100.:1.;ParameterControl c;c.id="joint/"+std::to_string(i);c.favorite_name=i==9?"Scale":std::string(1,"XYZ"[i%3])+(i<3?"Translate":i<6?"Rotate":"Scale");c.label=channel.label+(channel.percent?"（%）":i>=3&&i<6?"（度）":"");c.group=channel.group;
         c.enabled=runtime::editable_channel(skeleton,size_t(joint),i);c.visible=channel.visible;c.float_backed=true;c.minimum=channel.minimum*factor;c.maximum=channel.maximum*factor;
-        c.slider_minimum=c.minimum;c.slider_maximum=c.maximum;const double saved_value=runtime::joint_value(snapshot_.poses.at(skin).at(joint),i)*factor;c.minimum=std::min(c.minimum,saved_value);c.maximum=std::max(c.maximum,saved_value);c.step=std::max(.000001,double(channel.step)*factor);c.initial=channel.initial*factor;c.enforce_limits=channel.clamped;
+        c.slider_minimum=c.minimum;c.slider_maximum=c.maximum;const double saved_value=runtime::joint_value(snapshot_.poses.at(skin).at(joint),i)*factor;c.minimum=std::min(c.minimum,saved_value);c.maximum=std::max(c.maximum,saved_value);c.step=std::max(.000001,double(channel.step)*factor);c.initial=channel.initial*factor;c.settings=runtime::ParameterSettings{channel.clamped,channel.minimum_authored?runtime::decimal_float(channel.minimum)*factor:0,channel.maximum_authored?runtime::decimal_float(channel.maximum)*factor:1,channel.step_authored&&channel.step>0?runtime::decimal_float(channel.step)*factor:.1};
         c.detail=skeleton.joints[size_t(joint)].id+" / "+channel.label+(channel.locked?"\n资产锁定此通道":skeleton.static_local_weights?"\n此资产需要尚未支持的 TriAx 轴权重":i>=6&&skeleton.separate_scale_weights?"\n此资产需要尚未支持的独立缩放权重":"\n编辑骨骼输入，联动 ERC、JCM 和穿戴物");
         c.read=[this,skin,joint,i,factor]{return runtime::joint_value(snapshot_.poses.at(skin).at(joint),i)*factor;};
-        c.write=[this,skin,joint,i,factor](double v) {auto edit=history_edit(QStringLiteral("修改骨骼参数"));try {runtime::set_joint_value(document_->skeletons.skins.at(skin),snapshot_.poses.at(skin),size_t(joint),i,float(v/factor));constrain_pins(skin);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}};
+        c.write=[this,skin,joint,i,factor](double v) {auto edit=history_edit(QStringLiteral("修改骨骼参数"));try {runtime::set_joint_value(document_->skeletons.skins.at(skin),snapshot_.poses.at(skin),size_t(joint),i,float(v/factor),false);constrain_pins(skin);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}};
         controls.push_back(std::move(c));}
       for(bool angle:{false,true}) {ParameterControl pin;pin.id=angle?"pose/pin-angle":"pose/pin";pin.label=angle?"固定角度（IK）":"固定位置（IK）";pin.group="/Pose/IK";pin.choices={"关闭","固定"};pin.enabled=!runtime::ik_chain(skeleton,joint).empty();
         pin.detail=angle?"固定开启时的世界朝向；仍可拖动位置。与固定位置独立，可同时开启。":"固定开启时的世界位置；与固定角度独立。";
@@ -1106,9 +1121,18 @@ class Editor final:public EditorWindow {
       const auto label=selection_test_labels_.at(qsizetype(selection_test_case_));selection_test_key_=-1;
       for(size_t t=0;t<document_->catalog.targets.size();++t) if(text(document_->catalog.targets[t].label)==label) {selection_test_key_=int(t);selection_test_instance_=int(document_->catalog.targets[t].instance);break;}
       if(selection_test_key_==-1) for(size_t i=0;i<scene.instances.size();++i) if(scene.instances[i].prototype>=0&&text(scene.instances[i].id).contains(label)) {const runtime::InstanceGroups groups(scene);selection_test_instance_=int(groups.roots[i]);selection_test_key_=runtime::instance_selection(uint32_t(selection_test_instance_));break;}
+      if(selection_test_key_==-1&&!focus_only_test_)for(const auto &node:document_->loaded.nodes)if(node.group&&(text(node.label)==label||text(node.id)==label)){
+        for(QTreeWidgetItemIterator it(hierarchy_);*it;++it)if((*it)->data(0,Qt::UserRole).toInt()==-4&&(*it)->data(0,Qt::UserRole+3).toString()==text(node.id)){
+          const auto begin=std::chrono::steady_clock::now();hierarchy_->setCurrentItem(*it,0,QItemSelectionModel::ClearAndSelect);
+          const double elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();
+          if(selected_group_!=node.id){finish_test(false,"组选择没有更新参数面板");return;}
+          selection_checks_.push_back({{"group",node.id},{"ui_selection_ms",elapsed},{"material_surfaces",materials_->selected_surfaces().size()}});selection_test_key_=-4;test_stage_=90;return;
+        }
+      }
       if(selection_test_key_==-1) {finish_test(false,"找不到选取验证对象："+label.toStdString());return;}
       choose(selection_test_key_);if(selected_!=selection_test_key_) {finish_test(false,"场景树缺少实例 / 插件选择项");return;}test_stage_=1;return;
     }
+    if(test_stage_==90){if(state.selected_target!=-4||state.selection_bounds.empty)return;save("selected-group");if(++selection_test_case_<size_t(selection_test_labels_.size())){test_stage_=0;return;}finish_test(true);return;}
     if(test_stage_==1) {
       if(state.selected_target!=selection_test_key_||state.selection_bounds.empty) return;
       selection_test_epoch_=state.camera.epoch;options_geometry_=state.adapter.geometry_updates;
@@ -1979,7 +2003,7 @@ public:
       });
     }
     auto *legacy_transforms=new QWidget(panel);legacy_transforms->setLayout(form);legacy_transforms->hide();
-    light_power_=new QDoubleSpinBox;light_power_->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->hide();properties->addWidget(light_power_);
+    light_power_=parameter_widgets::number("LightPower",true);light_power_->setRange(-std::numeric_limits<float>::max(),std::numeric_limits<float>::max());light_power_->setPrefix(QStringLiteral("灯光功率 "));light_power_->setKeyboardTracking(false);light_power_->setObjectName("LightPower");light_power_row_=new QWidget;auto *power_layout=new QVBoxLayout(light_power_row_);power_layout->setContentsMargins(0,0,0,0);power_layout->addWidget(light_power_);parameter_widgets::decorate(light_power_row_,"light/");light_power_row_->hide();properties->addWidget(light_power_row_);
     light_power_->setProperty("historyInput",true);
     connect(light_power_,&QDoubleSpinBox::valueChanged,this,[this](double value) {if(selected_light_<0) return;auto edit=history_edit(QStringLiteral("修改灯光功率"));auto &p=snapshot_.lights[size_t(selected_light_)].power;const auto previous=std::max({p.x,p.y,p.z});const float ratio=previous>0?float(value)/previous:0;p=previous>0?ir::Vec3{p.x*ratio,p.y*ratio,p.z*ratio}:ir::Vec3{float(value),float(value),float(value)};send();});
     pose_status_=new QLabel(QStringLiteral("双击加载姿势、形态或材质；单选骨骼后 Ctrl+左键双击姿势，仅应用该部位及其后代。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
@@ -2222,6 +2246,7 @@ public:
           for(const auto &[id,value]:loaded_snapshot.node_properties)merged_snapshot.node_properties[prefix+id]=value;
           for(const auto &[id,value]:loaded_snapshot.instance_ground)merged_snapshot.instance_ground[prefix+id]=value;
           for(const auto &[id,value]:loaded_snapshot.city_views)merged_snapshot.city_views[prefix+id]=value;
+          for(const auto &[id,value]:loaded_snapshot.parameter_settings)if(!id.starts_with("@"))merged_snapshot.parameter_settings[prefix+id]=value;
           for(size_t l=0;l<loaded_snapshot.lights.size();++l){auto value=loaded_snapshot.lights[l];value.id=prefix+value.id;merged_snapshot.lights.at(first_light+l)=value;}
           if(loaded_snapshot.control_favorites){
             merged_snapshot.control_favorites.emplace();const auto &favorites=*loaded_snapshot.control_favorites;
@@ -2253,7 +2278,7 @@ public:
           if(preserve||previous_document){for(const auto &[id,value]:previous.group_transforms)snapshot_.group_transforms[id]=value;prune_group_transforms(*document_,snapshot_.group_transforms);}
           if(preserve||previous_document){for(const auto &[id,value]:previous.node_properties)snapshot_.node_properties[id]=value;prune_node_properties(*document_,snapshot_.node_properties);}
           if(preserve||previous_document){for(const auto &[id,value]:previous.instance_ground)snapshot_.instance_ground[id]=value;prune_instance_ground(document_->loaded.scene,snapshot_.instance_ground);}
-          if(preserve||previous_document){auto incoming=std::move(snapshot_.control_favorites);snapshot_.control_favorites=previous.control_favorites;
+          if(preserve||previous_document){auto settings=std::move(snapshot_.parameter_settings);snapshot_.parameter_settings=previous.parameter_settings;if(previous_document)for(auto &entry:settings)if(!entry.first.starts_with("@"))snapshot_.parameter_settings[entry.first]=std::move(entry.second);auto incoming=std::move(snapshot_.control_favorites);snapshot_.control_favorites=previous.control_favorites;
             if(previous_document&&incoming){if(!snapshot_.control_favorites)snapshot_.control_favorites.emplace();for(auto &[node,values]:incoming->nodes)snapshot_.control_favorites->nodes[node]=std::move(values);}}
           if(previous_document) for(size_t l=0;l<previous.lights.size();++l) snapshot_.lights[l]=previous.lights[l];
           frame_pending_=false;pose_report_=nullptr;pose_status_->setText(QStringLiteral("单击姿势应用全身；单选骨骼后 Ctrl+左键双击姿势，仅应用该部位及其后代。形态 DUF 可双击应用。"));

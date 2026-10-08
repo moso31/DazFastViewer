@@ -5,7 +5,7 @@
 
 namespace dfv::runtime {
 float joint_value(const JointPose &pose,int channel);
-void set_joint_value(const Skin &skin,std::vector<JointPose> &poses,size_t joint,int channel,float value);
+void set_joint_value(const Skin &skin,std::vector<JointPose> &poses,size_t joint,int channel,float value,bool enforce_limits=true);
 bool editable_channel(const Skin &skin,size_t joint,int channel);
 // 所有目标点使用角色局部 Render IR 坐标（米）；对象矩阵在交互边界转换。
 ir::Vec3 joint_point(const Skin &skin,const std::vector<JointPose> &poses,int joint,bool end=false);

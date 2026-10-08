@@ -311,7 +311,7 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
             if(deltas.value("_dfv_rows",array_member(deltas,"values").size())!=morph.source_offset_count) throw std::runtime_error("Morph 差值 count 不一致");
           }
           morph.group=modifier.value("group","");morph.minimum=number(channel,"min",0);morph.maximum=number(channel,"max",1);
-          morph.initial=number(channel,"current_value",number(channel,"value",0));morph.step=number(channel,"step_size",.01f);
+          morph.initial=number(channel,"current_value",number(channel,"value",0));morph.step=number(channel,"step_size",.1f);
           if(!std::isfinite(morph.minimum)||!std::isfinite(morph.maximum)||!std::isfinite(morph.initial)||!std::isfinite(morph.step)||morph.minimum>morph.maximum) throw std::runtime_error("参数范围无效");
           morph.clamped=channel.value("clamped",false);morph.visible=channel.value("visible",true);morph.auto_follow=channel.value("auto_follow",false);
           if(type=="bool") {morph.minimum=0;morph.maximum=1;morph.step=1;morph.clamped=true;}

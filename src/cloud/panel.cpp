@@ -1,3 +1,4 @@
+#include "editor/parameter_widgets.h"
 #include "cloud/panel.h"
 #include <QApplication>
 #include <QFormLayout>
@@ -42,12 +43,20 @@ Panel::Panel(QWidget *parent):QWidget(parent){
   setStyleSheet(QStringLiteral("QLabel[cloudSelected=\"true\"] { color: palette(highlight); }"));
   auto *note=new QLabel(QStringLiteral("体积云 · 时间仅生成指定静态帧，不自动播放。点击参数行后可用滚轮调节。"));note->setWordWrap(true);layout->addWidget(note);
   auto *form=new QFormLayout;layout->addLayout(form);
-  auto scalar=[&](const char *id,const QString &label,double min,double max,double step,int decimals=3){auto *spin=new QDoubleSpinBox;spin->setObjectName(id);spin->setRange(min,max);spin->setDecimals(decimals);spin->setSingleStep(step);spin->setKeyboardTracking(false);spin->setFocusPolicy(Qt::StrongFocus);spin->setProperty("historyInput",true);spin->setProperty("cloudWheelKey",id);fields_[id]=spin;auto *caption=new QLabel(label);caption->setProperty("cloudWheelKey",id);form->addRow(caption,spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,id]{submit(id);});};
+  auto scalar=[&](const char *id,const QString &label,double min,double max,double step,int decimals=3){auto *spin=editor::parameter_widgets::number(id);spin->setRange(min,max);spin->setDecimals(decimals);spin->setSingleStep(step);spin->setKeyboardTracking(false);spin->setFocusPolicy(Qt::StrongFocus);spin->setProperty("historyInput",true);spin->setProperty("cloudWheelKey",id);fields_[id]=spin;auto *caption=new QLabel(label);caption->setProperty("cloudWheelKey",id);form->addRow(caption,spin);connect(spin,&QDoubleSpinBox::valueChanged,this,[this,id]{submit(id);});};
   scalar("x",QStringLiteral("位置 X（米）"),-1e6,1e6,10);scalar("y",QStringLiteral("位置 Y（米）"),-1e6,1e6,10);
   scalar("height",QStringLiteral("云底高度（米）"),-1e6,1e6,10);scalar("thickness",QStringLiteral("云层厚度（米）"),1,1e5,10);
   scalar("width",QStringLiteral("宽度（米）"),1,1e6,100);scalar("length",QStringLiteral("长度（米）"),1,1e6,100);
   scalar("density",QStringLiteral("体积密度（每米）"),0,10,.005,4);scalar("coverage",QStringLiteral("云量"),0,1,.05);
-  scalar("scale",QStringLiteral("云团大小（米）"),1,1e5,10);scalar("detail",QStringLiteral("细节层数"),0,4,.5,1);
+  scalar("scale",QStringLiteral("云团大小（米）"),1,1e5,10);scalar("detail",QStringLiteral("细节层数"),0,8,.5,1);
+  scalar("warp",QStringLiteral("云团扭曲"),0,2,.1);scalar("erosion",QStringLiteral("细节侵蚀"),0,1,.1);
+  distribution_=new QComboBox;distribution_->setObjectName("CloudDistribution");distribution_->addItems({QStringLiteral("方形"),QStringLiteral("圆形")});form->addRow(QStringLiteral("整体分布"),distribution_);connect(distribution_,&QComboBox::currentIndexChanged,this,[this]{submit("distribution");});
+  scalar("edge_fade",QStringLiteral("边缘衰减比例"),.001,1,.1);
+  distribution_noise_=editor::parameter_widgets::checkbox(QStringLiteral("整体分布噪声"),"CloudDistributionNoise");form->addRow(distribution_noise_);connect(distribution_noise_,&QCheckBox::toggled,this,[this]{submit("distribution_noise");});
+  scalar("distribution_threshold",QStringLiteral("有云阈值"),0,1,.1,4);scalar("distribution_scale",QStringLiteral("分布尺度（米）"),1,1e6,10);scalar("distribution_detail",QStringLiteral("分布分形层数"),0,8,.5);
+  distribution_noise_->setToolTip(QStringLiteral("在方形或圆形范围内叠加分形噪声，控制云层的整体疏密分布；关闭时保留噪声参数。"));
+  fields_["distribution_threshold"]->setToolTip(QStringLiteral("整体分布噪声值大于此阈值时才有云（0～1）。数值越高，有云区域越少；云团边界仍平滑衰减。"));
+  fields_["detail"]->setToolTip(QStringLiteral("控制静态云体的分形细节，最多 8 层。采样预算单独控制体积积分速度。"));
   scalar("wind_speed",QStringLiteral("风速（米/秒）"),0,10000,1);scalar("direction",QStringLiteral("风向（度）"),-36000,36000,5);
   scalar("time",QStringLiteral("时间（秒）"),-1e6,1e6,.1);scalar("seed",QStringLiteral("随机种子"),0,4294967295.,1,0);
   scalar("steps",QStringLiteral("体积采样预算"),16,192,16,0);fields_["steps"]->setToolTip(QStringLiteral("沿云层最长轴的步进数量。默认 64；降低可加快视口，提高可改善薄云和小型云洞。较大的云层请相应增大云团与碰撞范围。"));
@@ -62,15 +71,23 @@ Panel::Panel(QWidget *parent):QWidget(parent){
   sort_=new QPushButton(QStringLiteral("按AABB重新排序"));sort_->setObjectName("CloudSortSources");sort_->setToolTip(QStringLiteral("按当前对象 AABB 体积从大到小排列，保留参与碰撞的勾选。"));layout->addWidget(sort_);
   connect(sort_,&QPushButton::clicked,this,[this]{if(refresh_candidates)refresh_candidates();if(sort_->isEnabled())sources_->sortItems(0,Qt::DescendingOrder);});
   sources_=new QTreeWidget;sources_->setObjectName("CloudSources");sources_->setHeaderLabels({QStringLiteral("参与碰撞的对象")});sources_->setRootIsDecorated(false);sources_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);sources_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);sources_->setAutoScroll(false);sources_->header()->setSectionResizeMode(QHeaderView::Stretch);layout->addWidget(sources_);connect(sources_,&QTreeWidget::itemChanged,this,[this]{submit();});
-  message_=new QLabel;message_->setWordWrap(true);message_->setObjectName("CloudStatus");layout->addWidget(message_);qApp->installEventFilter(this);hide();
+  message_=new QLabel;message_->setWordWrap(true);message_->setObjectName("CloudStatus");layout->addWidget(message_);qApp->installEventFilter(this);editor::parameter_widgets::decorate(this,"cloud/");update_distribution_fields();hide();
+}
+void Panel::update_distribution_fields(){
+  const bool enabled=distribution_noise_->isChecked();
+  for(const auto *id:{"distribution_threshold","distribution_scale","distribution_detail"}){
+    // decorate 创建的整行包含数值框及范围、精度按钮，一起禁用。
+    fields_.at(id)->parentWidget()->setEnabled(enabled);
+    for(auto *label:findChildren<QLabel *>())if(label->property("cloudWheelKey").toString()==QLatin1String(id))label->setEnabled(enabled);
+  }
 }
 void Panel::submit(const std::string &field){
   if(binding_)return;auto previous=config_;
   // Do not round untouched authored coordinates to the spin box's display precision.
 #define FIELD(n) if(field==#n)config_.n=decltype(config_.n)(fields_.at(#n)->value())
-  FIELD(x);FIELD(y);FIELD(height);FIELD(thickness);FIELD(width);FIELD(length);FIELD(density);FIELD(coverage);FIELD(scale);FIELD(detail);FIELD(wind_speed);FIELD(direction);FIELD(time);FIELD(padding);FIELD(softness);FIELD(velocity_x);FIELD(velocity_y);FIELD(velocity_z);FIELD(trail);FIELD(recovery);FIELD(steps);FIELD(seed);
+  FIELD(x);FIELD(y);FIELD(height);FIELD(thickness);FIELD(width);FIELD(length);FIELD(density);FIELD(coverage);FIELD(scale);FIELD(detail);FIELD(edge_fade);FIELD(distribution_threshold);FIELD(distribution_scale);FIELD(distribution_detail);FIELD(warp);FIELD(erosion);FIELD(wind_speed);FIELD(direction);FIELD(time);FIELD(padding);FIELD(softness);FIELD(velocity_x);FIELD(velocity_y);FIELD(velocity_z);FIELD(trail);FIELD(recovery);FIELD(steps);FIELD(seed);
 #undef FIELD
-  config_.collisions=collisions_->isChecked();std::set<std::string> checked;for(int row=0;row<sources_->topLevelItemCount();++row){auto *item=sources_->topLevelItem(row);if(item->checkState(0)==Qt::Checked)checked.insert(item->data(0,Qt::UserRole).toString().toStdString());}
+  if(field=="distribution")config_.distribution=distribution_->currentIndex();if(field=="distribution_noise")config_.distribution_noise=distribution_noise_->isChecked();update_distribution_fields();config_.collisions=collisions_->isChecked();std::set<std::string> checked;for(int row=0;row<sources_->topLevelItemCount();++row){auto *item=sources_->topLevelItem(row);if(item->checkState(0)==Qt::Checked)checked.insert(item->data(0,Qt::UserRole).toString().toStdString());}
   // A view-only sort must not change the authored collision order on the next edit.
   std::erase_if(config_.sources,[&](const auto &id){return !checked.contains(id);});for(const auto &id:config_.sources)checked.erase(id);for(const auto &id:checked)config_.sources.push_back(id);
   try{validate(config_);}catch(const std::exception &e){config_=previous;binding_=true;for(int row=0;row<sources_->topLevelItemCount();++row){auto *i=sources_->topLevelItem(row);const auto id=i->data(0,Qt::UserRole).toString().toStdString();i->setCheckState(0,std::find(config_.sources.begin(),config_.sources.end(),id)!=config_.sources.end()?Qt::Checked:Qt::Unchecked);}binding_=false;message_->setText(QString::fromUtf8(e.what()));return;}
@@ -80,11 +97,11 @@ void Panel::bind(const Cloud *v,const std::vector<Candidate> &objects){
   std::map<std::string,int> order;if(v&&v->id==bound_id_&&have_bounds_)for(int row=0;row<sources_->topLevelItemCount();++row)order.emplace(sources_->topLevelItem(row)->data(0,Qt::UserRole).toString().toStdString(),row);
   const bool ready=std::any_of(objects.begin(),objects.end(),[](const auto &o){return o.volume>=0;});
   have_bounds_=(v&&v->id==bound_id_&&have_bounds_)||ready;sort_->setEnabled(ready);
-  if(!v||v->id!=bound_id_)select({});bound_id_=v?v->id:std::string{};setVisible(v!=nullptr);if(!v)return;binding_=true;config_=v->config;
+  if(!v||v->id!=bound_id_)select({});bound_id_=v?v->id:std::string{};setVisible(v!=nullptr);if(!v)return;binding_=true;editor::parameter_widgets::context(this)->bind(v->id+"/volume");config_=v->config;
 #define FIELD(n) fields_.at(#n)->setValue(config_.n)
-  FIELD(x);FIELD(y);FIELD(height);FIELD(thickness);FIELD(width);FIELD(length);FIELD(density);FIELD(coverage);FIELD(scale);FIELD(detail);FIELD(wind_speed);FIELD(direction);FIELD(time);FIELD(padding);FIELD(softness);FIELD(velocity_x);FIELD(velocity_y);FIELD(velocity_z);FIELD(trail);FIELD(recovery);FIELD(steps);FIELD(seed);
+  FIELD(x);FIELD(y);FIELD(height);FIELD(thickness);FIELD(width);FIELD(length);FIELD(density);FIELD(coverage);FIELD(scale);FIELD(detail);FIELD(edge_fade);FIELD(distribution_threshold);FIELD(distribution_scale);FIELD(distribution_detail);FIELD(warp);FIELD(erosion);FIELD(wind_speed);FIELD(direction);FIELD(time);FIELD(padding);FIELD(softness);FIELD(velocity_x);FIELD(velocity_y);FIELD(velocity_z);FIELD(trail);FIELD(recovery);FIELD(steps);FIELD(seed);
 #undef FIELD
-  collisions_->setChecked(config_.collisions);auto available=objects;for(const auto &id:config_.sources)if(std::none_of(available.begin(),available.end(),[&](const auto &o){return o.id==id;}))available.push_back({id,"[已移除] "+id});
+  distribution_->setCurrentIndex(config_.distribution);distribution_noise_->setChecked(config_.distribution_noise);update_distribution_fields();collisions_->setChecked(config_.collisions);auto available=objects;for(const auto &id:config_.sources)if(std::none_of(available.begin(),available.end(),[&](const auto &o){return o.id==id;}))available.push_back({id,"[已移除] "+id});
   if(!order.empty())std::stable_sort(available.begin(),available.end(),[&](const auto &a,const auto &b){const auto rank=[&](const auto &id){auto i=order.find(id);return i==order.end()?int(order.size()):i->second;};return rank(a.id)<rank(b.id);});
   sources_->clear();for(const auto &[id,label,volume]:available){auto *item=new SourceItem(sources_,{QString::fromStdString(label)});item->setData(0,Qt::UserRole,QString::fromStdString(id));item->setData(0,Qt::UserRole+1,volume);item->setToolTip(0,QString::fromStdString(id));item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(0,std::find(config_.sources.begin(),config_.sources.end(),id)!=config_.sources.end()?Qt::Checked:Qt::Unchecked);}
   if(order.empty())sources_->sortItems(0,Qt::DescendingOrder);

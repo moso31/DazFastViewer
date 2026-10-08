@@ -1,9 +1,21 @@
 ---
 name: dazfastviewer-qt-ui
-description: Implement or review Qt parameter panels in DazFastViewer. Apply the user's persistent rules for click-selected wheel editing and a single outer scrollbar whenever adding or changing project UI. Not a general Qt styling guide or a rule for unrelated projects.
+description: Implement or review DazFastViewer Qt parameter panels using the project's shared parameter widgets, saved range/precision settings, click-selected wheel editing, and one outer scrollbar. Applies only to this project; new experimental UI forms are not automatically standardized.
 ---
 
 # DazFastViewer Qt 参数面板
+
+## 已确认的参数控件合集
+
+使用 `src/editor/parameter_widgets.h` 管理固定控件形态；通用参数目录在 `src/editor/parameters.cpp`，不要为各模块重新选择一套 Qt 数值交互。现有单行参数可用 `parameter_widgets::decorate` 接入；新增控件直接使用合集中的数值、勾选框和 HDR 色块入口。颜色选择继续使用 `HdrColorDialog`，HDR 值不能被普通颜色对话框截断为 0～1。
+
+- Slider：两行。第一行放标签、范围、精度和收藏按钮；第二行放滑轨与实际值。开启范围后滑轨保持原样，滑块使用胶囊形。数值步长作用于拖动、键盘、箭头和选中后的滚轮；直接输入保留有效精细数值。
+- 普通浮点参数：保持原来的一行布局，在原生数值框右侧追加范围与精度按钮。参数标签和数字使用一致字号，选中只提示行标签，不改数值框箭头或边框。
+- 范围按钮点击切换限制，悬停编辑 min/max；精度按钮悬停编辑步长。弹窗紧邻按钮并避开屏幕边缘，鼠标可直接移入。只有 OK 提交；离开弹窗取消草稿，不能提前写值或记录撤销。原生功能默认不启用范围，启用时默认 0～1，默认浮点步长 0.1；算法必需的有效值约束仍应保留。
+- 优先采用 DUF 的 `clamped`、`min`、`max`、`step_size`，再覆盖用户已保存的编辑规则。注意百分比等显示单位的换算；整数和枚举保持离散语义。
+- 范围和步长属于数据：使用 `runtime::ParameterSettings`，按稳定对象／通道身份保存到 `Snapshot::parameter_settings`，接入 DUFEX、撤销／重做及追加身份重映射。控件卸载、筛选或切换对象不能丢失设置。项目设置中的控件规则随项目设置保存。
+
+新的控件类型或新交互可在功能模块内试用；只有用户明确认可并要求纳入时，才扩展这个合集和技能。不要把后续每一种新 UI 自动固化成项目约定。
 
 用户固定要求（2026-10-06）：
 

@@ -9,7 +9,10 @@ void MaterialPanel::populate_uv_combo(QComboBox *combo) {
   QSignalBlocker block(combo);combo->clear();if(!document_)return;const auto selected=surfaces();if(selected.empty())return;
   const auto &scene=document_->loaded.scene;auto current=daz::material_uv_set(scene.materials.at(scene.instances.at(selected.front().instance).materials.at(selected.front().slot)));
   bool mixed=false,waiting=false,prototype=false;std::set<size_t> instances;std::vector<daz::MaterialUVSet> common;bool first=true;QStringList warnings;
-  for(auto s:selected){const auto &i=scene.instances.at(s.instance);mixed|=daz::material_uv_set(scene.materials.at(i.materials.at(s.slot))).uri!=current.uri;prototype|=i.prototype>=0;instances.insert(s.instance);}
+  std::set<uint32_t> materials;for(auto s:selected){const auto &i=scene.instances.at(s.instance);if(materials.insert(i.materials.at(s.slot)).second)mixed|=daz::material_uv_set(scene.materials.at(i.materials.at(s.slot))).uri!=current.uri;prototype|=i.prototype>=0;instances.insert(s.instance);}
+  // 实例 UV 随原型，不可在实例上编辑。直接显示当前状态，避免为数千个
+  // 实例排队扫描同一套资产、每次完成又在 GUI 线程遍历整个选择。
+  if(prototype){combo->addItem(mixed?QStringLiteral("多值"):current.uri.empty()?QStringLiteral("未记录 UV Set"):text(current.label));combo->setEnabled(false);combo->setToolTip(QStringLiteral("DAZ Instance 共用原型的 UV Set；请在原型对象上切换。"));return;}
   for(auto instance:instances){const auto key=uv_catalog_key(instance);auto found=uv_catalogs_.find(key);
     if(found==uv_catalogs_.end()){
       waiting=true;if(uv_pending_.insert(key).second){QPointer<MaterialPanel> guard(this);auto document=document_;

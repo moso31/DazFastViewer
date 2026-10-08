@@ -23,8 +23,8 @@ struct Morph {
   int64_t source_vertex_count=0;
   size_t source_offset_count=0,repaired_references=0;
   std::string geometry_validation;
-  float minimum=0,maximum=1,initial=0,step=.01f;
-  bool clamped=true,visible=true,auto_follow=false;
+  float minimum=0,maximum=1,initial=0,step=.1f;
+  bool clamped=false,visible=true,auto_follow=false;
   std::vector<SparseOffset> offsets;
   std::shared_ptr<MorphPayload> payload;
   size_t offset_count() const {return payload?payload->count:offsets.size();}
