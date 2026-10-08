@@ -23,6 +23,7 @@ static ir::Scene evaluate(const editor::Document &d,const editor::Snapshot &s) {
 static ir::Vec3 point(const ir::Scene &scene,size_t instance,size_t vertex=0) {const auto &i=scene.instances.at(instance);return i.transform.point(scene.meshes.at(i.mesh).positions.at(vertex));}
 static double distance(ir::Vec3 a,ir::Vec3 b) {return std::abs(a.x-b.x)+std::abs(a.y-b.y)+std::abs(a.z-b.z);}
 #include "derived_wearable.inl"
+#include "outfit_copy.inl"
 static void unit() {
   const auto folder=fs::temp_directory_path()/("dfv-wear-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   fs::create_directories(folder/"data/Body/Morphs");fs::create_directories(folder/"data/Wear");
@@ -79,6 +80,7 @@ static void unit() {
   rejects([&]{daz::load(folder/"wear.duf",{{folder},false});},"没有目标上下文时静默加载了附件");
   auto d=load(folder/"body.duf",{folder});const auto original=d;auto source=load(folder/"wear.duf",{folder},true);
   derived_wearable_tests(folder,base,original);
+  outfit_copy_tests(folder,original,base,preset);
   require(source.loaded.objects[0].preferred_base=="/Genesis 8/Female","未保留兼容基型");
   d.generation=2;editor::append_document(d,std::move(source));editor::attach_import(d,2,0);
   require(d.catalog.targets[2].conform_target=="#body0"&&d.catalog.targets[2].smoothing.collision_target=="#body0","Fit To / 碰撞目标没有解析到已有角色");

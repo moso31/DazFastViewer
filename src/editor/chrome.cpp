@@ -12,6 +12,8 @@
 #include <QStyleOptionToolBar>
 #include <QApplication>
 #include <QSignalBlocker>
+#include <QSettings>
+#include <QDockWidget>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -47,7 +49,9 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
   auto *logo=new QToolButton(this);logo->setObjectName("ApplicationIcon");logo->setIcon(tool_icon(4));logo->setIconSize({24,24});logo->setFixedSize(32,34);logo->setToolTip("DazFastViewer");logo->setPopupMode(QToolButton::InstantPopup);auto *app_menu=new QMenu(logo);logo->setMenu(app_menu);row->addWidget(logo,0,Qt::AlignTop);owner->setWindowIcon(tool_icon(4));
   modules_=new QMainWindow(this);modules_->setWindowFlags(Qt::Widget);modules_->setObjectName("ToolbarModules");modules_->setContentsMargins(0,0,0,0);modules_->setContextMenuPolicy(Qt::PreventContextMenu);modules_->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);modules_->installEventFilter(this);row->addWidget(modules_,1);
   menus_=new ModuleToolBar(QStringLiteral("菜单模块"),modules_);menus_->setObjectName("MenuModule");menus_->setAllowedAreas(Qt::TopToolBarArea|Qt::BottomToolBarArea);menus_->setMinimumHeight(34);modules_->addToolBar(menus_);
-  menu_=new QMenuBar(menus_);menu_->setNativeMenuBar(false);menu_->setSizePolicy(QSizePolicy::Minimum,QSizePolicy::Preferred);menus_->addWidget(menu_);
+  menu_=new QMenuBar(menus_);menu_->setObjectName("ToolbarMenu");menu_->setNativeMenuBar(false);
+  // 保持菜单自身的自然高度，由工具栏布局垂直居中，避免菜单项在拉高的控件内偏上。
+  menu_->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Fixed);menus_->addWidget(menu_);
   history_=new ModuleToolBar(QStringLiteral("撤销／重做模块"),modules_);history_->setObjectName("HistoryModule");history_->setAllowedAreas(Qt::TopToolBarArea|Qt::BottomToolBarArea);history_->setMinimumHeight(34);history_->setIconSize({20,20});modules_->addToolBar(history_);
   undo_=history_->addAction(tool_icon(7),QStringLiteral("撤销"));undo_->setObjectName("Undo");undo_->setEnabled(false);
   redo_=history_->addAction(tool_icon(8),QStringLiteral("重做"));redo_->setObjectName("Redo");redo_->setEnabled(false);
@@ -76,10 +80,18 @@ EditorChrome::EditorChrome(QMainWindow *owner):QWidget(owner),owner_(owner) {
 void EditorChrome::emit_settings() {const bool enabled=settings_.tool==GizmoTool::translate||settings_.tool==GizmoTool::rotate;world_->setEnabled(enabled);local_->setEnabled(enabled);local_->setChecked(settings_.space==GizmoSpace::local);world_->setChecked(settings_.space==GizmoSpace::world);if(changed) changed(settings_);}
 void EditorChrome::bind_ground(bool enabled) {ground_->setEnabled(enabled);}
 void EditorChrome::fit_height() {
+  // restoreState 会重建工具栏布局并清除其最小高度，按当前缩放重新约束。
+  for(auto *bar:{menus_,history_,tools_,functions_})if(bar->minimumHeight()!=ui_pixels(34))bar->setMinimumHeight(ui_pixels(34));
+  const int menu_width=menu_->sizeHint().width();
+  if(menu_->minimumWidth()!=menu_width)menu_->setMinimumWidth(menu_width);
+  const int module_width=menus_->sizeHint().width();
+  if(menus_->minimumWidth()!=module_width)menus_->setMinimumWidth(module_width);
   // 恢复旧工具栏布局会重置最小宽度；重新按当前缩放保留两个按钮的空间。
   const int history_width=history_->sizeHint().width();
   if(history_->minimumWidth()!=history_width) history_->setMinimumWidth(history_width);
-  const int height=std::clamp(modules_->minimumSizeHint().height(),ui_pixels(34),ui_pixels(160));
+  int required=modules_->minimumSizeHint().height();
+  for(auto *bar:{menus_,history_,tools_,functions_})if(bar->isVisible()&&!bar->isFloating())required=std::max(required,bar->y()+bar->sizeHint().height());
+  const int height=std::clamp(required,ui_pixels(34),ui_pixels(160));
   if(modules_->minimumHeight()!=height||modules_->maximumHeight()!=height) modules_->setFixedHeight(height);
   if(minimumHeight()!=height||maximumHeight()!=height) {setFixedHeight(height);updateGeometry();owner_->layout()->invalidate();}
 }
@@ -118,6 +130,53 @@ void EditorWindow::install_chrome() {
   if(QGuiApplication::platformName()!=QStringLiteral("windows")) return;
   const auto hwnd=reinterpret_cast<HWND>(winId());MARGINS margins{1,1,1,1};DwmExtendFrameIntoClientArea(hwnd,&margins);
   SetWindowPos(hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+}
+void EditorWindow::restore_layout(QSettings &settings) {
+  restoreGeometry(settings.value("window/geometry").toByteArray());
+  const auto state=Qt::WindowStates(settings.value("window/state",int(windowState())).toInt())&~Qt::WindowMinimized;
+  const auto docks=settings.value("window/docks").toByteArray(),modules=settings.value("window/topModules").toByteArray();
+  QMap<QString,QByteArray> floating;
+  settings.beginGroup("window/floating");for(const auto &name:settings.childKeys())floating[name]=settings.value(name).toByteArray();settings.endGroup();
+  // 原生边框在 install_chrome 中已经创建。隐藏状态下直接 showMaximized 会让
+  // Qt 记为最大化、HWND 却仍是普通窗口；先同步普通状态再切换。
+  showNormal();
+  if(state.testFlag(Qt::WindowFullScreen))showFullScreen();
+  else if(state.testFlag(Qt::WindowMaximized))showMaximized();
+  // Windows 的最大化尺寸通知和首次字体布局完成后，再分配保存的停靠尺寸。
+  pending_layout_=[this,docks,modules,floating] {
+    if(chrome&&!modules.isEmpty())chrome->restore_modules(modules);
+    if(layout())layout()->activate();
+    if(!docks.isEmpty())restoreState(docks,1);
+    for(auto *widget:findChildren<QWidget *>())if(widget->isWindow()&&floating.contains(widget->objectName())&&
+        (qobject_cast<QDockWidget *>(widget)||qobject_cast<QToolBar *>(widget)))widget->restoreGeometry(floating.value(widget->objectName()));
+  };
+  QTimer::singleShot(0,this,[this]{finish_layout_restore();});
+}
+void EditorWindow::finish_layout_restore() {
+  if(!pending_layout_)return;
+  if(QGuiApplication::platformName()==QStringLiteral("windows")) {
+    RECT client{};if(GetClientRect(HWND(winId()),&client)) {
+      const QSize native_size(qRound(client.right/devicePixelRatioF()),qRound(client.bottom/devicePixelRatioF()));
+      // 零延时定时器也可能早于 WM_SIZE；此时等待真正的 resizeEvent，避免
+      // Qt 在普通窗口宽度中压缩保存的分栏，再在最大化时按错误比例扩展。
+      if(size()!=native_size)return;
+    }
+  }
+  auto restore=std::move(pending_layout_);pending_layout_={};restore();
+}
+void EditorWindow::resizeEvent(QResizeEvent *event) {
+  QMainWindow::resizeEvent(event);
+  if(pending_layout_)QTimer::singleShot(0,this,[this]{finish_layout_restore();});
+}
+void EditorWindow::save_layout(QSettings &settings) const {
+  settings.setValue("window/geometry",saveGeometry());
+  settings.setValue("window/state",int(windowState()&~Qt::WindowMinimized));
+  settings.setValue("window/docks",saveState(1));
+  if(chrome)settings.setValue("window/topModules",chrome->save_modules());
+  settings.remove("window/floating");
+  for(auto *widget:findChildren<QWidget *>())if(widget->isWindow()&&
+      (qobject_cast<QDockWidget *>(widget)||qobject_cast<QToolBar *>(widget)))
+    settings.setValue("window/floating/"+widget->objectName(),widget->saveGeometry());
 }
 bool EditorWindow::nativeEvent(const QByteArray &type,void *message,qintptr *result) {
   const auto *m=static_cast<MSG *>(message);if(!chrome) return QMainWindow::nativeEvent(type,message,result);

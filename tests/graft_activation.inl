@@ -50,7 +50,10 @@ static editor::Document activation_document(ir::Scene scene=bench::graft_fixture
 static void graft_activation_checks() {
   auto d=activation_document();auto snapshot=editor::initial_snapshot(d);auto scene=d.loaded.scene;
   runtime::DeformationRuntime runtime(scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);runtime.evaluate(snapshot.values,{});
-  require(editor::geograft_targets(d,0)==std::vector<size_t>{1}&&editor::geograft_targets(d,1)==std::vector<size_t>{1},"宿主和插件没有找到相同的 Geograft 开关");
+  require(editor::geograft_targets(d,0)==std::vector<size_t>{1}&&editor::geograft_targets(d,1).empty(),"Geograft 应当只在角色上提供控制入口");
+  require(editor::geograft_visibility_editable(d,snapshot,1),"启用的 Geograft 不能编辑显隐");snapshot.values[1].graft_enabled=false;
+  require(!editor::geograft_visibility_editable(d,snapshot,1),"停用的 Geograft 仍可编辑显隐");snapshot.values[1].graft_enabled=true;snapshot.values[0].visible=false;
+  require(!editor::geograft_visibility_editable(d,snapshot,1),"角色隐藏后 Geograft 仍可编辑显隐");snapshot.values[0].visible=true;
   snapshot.values[1].visible=false;auto hidden=runtime.evaluate(snapshot.values,{});
   require(hidden.masks.empty()&&scene.meshes[0].hidden_polygons==std::vector<uint32_t>{4},"普通显隐错误解除了 Geograft 遮罩");
   runtime::PickingScene picking;picking.update(scene);const auto origin=scene.instances[0].transform.point({1.5f,1.5f,2});

@@ -14,6 +14,9 @@
 #include "editor/physics_panel.h"
 #include "editor/ground_panel.h"
 #include "editor/geograft_panel.h"
+#include "editor/geograft_visibility.h"
+#include "editor/outfit_dialog.h"
+#include "editor/dialog_layout.h"
 #include "editor/ground_selection.h"
 #include "editor/object_hierarchy.h"
 #include "editor/group_transforms.h"
@@ -427,7 +430,7 @@ class Editor final:public EditorWindow {
     }
     return submitted;
   }
-  void send() {if(powerpose_) powerpose_->cancel();if(document_&&selected_>=0)sync_object_transform(*document_,snapshot_,size_t(selected_));snapshot_.revision=next_revision();renderer_->edit(submitted_snapshot());}
+  void send() {if(powerpose_) powerpose_->cancel();if(document_){sync_geograft_visibility(hierarchy_,*document_,snapshot_);if(selected_>=0)sync_object_transform(*document_,snapshot_,size_t(selected_));}snapshot_.revision=next_revision();renderer_->edit(submitted_snapshot());}
   GroundSelection ground_objects() const {
     if(loading_||!document_)return {};
     const ObjectHierarchy nodes(*document_);std::vector<std::string> ids;
@@ -531,7 +534,7 @@ class Editor final:public EditorWindow {
     if(physics_only_&&physics_only_->isChecked()){
       for(size_t i=0;i<document_->catalog.targets.size();++i)if(snapshot_.values[i].physics.enabled&&physics_eligible(*document_,i)){
         const auto &target=document_->catalog.targets[i];auto *item=new QTreeWidgetItem(hierarchy_,{text(target.label)});identify(item,int(i));item->setData(0,Qt::UserRole+3,text(target.id));item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(0,snapshot_.values[i].visible?Qt::Checked:Qt::Unchecked);
-      }return;
+      }sync_geograft_visibility(hierarchy_,*document_,snapshot_);return;
     }
     std::vector<QTreeWidgetItem *> items;const ObjectTargets object_targets(*document_);
     for(const auto &node:document_->loaded.nodes) if(node.group) {
@@ -580,6 +583,7 @@ class Editor final:public EditorWindow {
     }
     for(int option=0;option<2;++option) {const auto &node=option==0?snapshot_.options.environment:snapshot_.options.tonemapper;if(!node.id.empty()) {auto *item=new QTreeWidgetItem(hierarchy_,{text(node.label)});identify(item,option==0?-2:-3);}}
     for(size_t i=0;i<snapshot_.lights.size();++i) {auto *item=new QTreeWidgetItem(hierarchy_,{QStringLiteral("灯光 · ")+text(snapshot_.lights[i].id)});identify(item,-1,-1,int(i));}
+    sync_geograft_visibility(hierarchy_,*document_,snapshot_);
   }
   nlohmann::json hierarchy_report() const {
     auto rows=nlohmann::json::array();
@@ -591,6 +595,7 @@ class Editor final:public EditorWindow {
   }
   void set_visible(size_t target,bool visible) {
     if(loading_||!document_||snapshot_.values.at(target).visible==visible) return;
+    if(!geograft_visibility_editable(*document_,snapshot_,target)){sync_geograft_visibility(hierarchy_,*document_,snapshot_);return;}
     auto edit=history_edit(QStringLiteral("切换对象显隐"));
     const ObjectTargets objects(*document_);target=objects.primary.at(target);for(auto member:objects.members[target])snapshot_.values[member].visible=visible;
     {QSignalBlocker block(hierarchy_);for(QTreeWidgetItemIterator it(hierarchy_);*it;++it) if((*it)->data(0,Qt::UserRole).toInt()==int(target)&&(*it)->data(0,Qt::UserRole+1).toInt()<0) (*it)->setCheckState(0,visible?Qt::Checked:Qt::Unchecked);}
@@ -758,6 +763,26 @@ class Editor final:public EditorWindow {
         }
       });
     } catch(const std::exception &e) {if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法更新附件"),text(e.what()));}
+  }
+  void copy_selected_outfit() {
+    if(loading_)return;
+    try {
+      if(!document_||selected_<0||selected_joint_>=0)throw std::runtime_error("请先在场景中选中一个角色模型，再使用复制穿搭");
+      const auto characters=outfit_characters(*document_);if(std::find(characters.begin(),characters.end(),size_t(selected_))==characters.end())throw std::runtime_error("请先选中 Genesis 8 / 8.1 角色模型");
+      OutfitDialog dialog(*document_,snapshot_,size_t(selected_),this);if(dialog.exec()!=QDialog::Accepted)return;
+      const auto source=dialog.source();const auto clothing=dialog.clothing(),hosts=dialog.hosts();const auto previous=document_;const auto state=snapshot_;const auto generation=++generation_;
+      loading_=true;open_->setEnabled(false);project_action_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在复制服装并绑定到目标角色…"));
+      loader_=std::jthread([this,previous,state,source,clothing,hosts,generation](std::stop_token){
+        try {
+          auto next=std::make_shared<Document>(*previous);auto snapshot=state;const auto result=copy_outfit(*next,snapshot,source,clothing,hosts);next->generation=generation;snapshot.generation=generation;
+          QMetaObject::invokeMethod(this,[this,next,snapshot=std::move(snapshot),source,result]()mutable{
+            if(closing_)return;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);
+            if(result.copied){auto edit=history_edit(QStringLiteral("复制穿搭"));parameters_->bind(nullptr,nullptr);document_=next;snapshot_=std::move(snapshot);snapshot_.revision=next_revision();rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);choose(int(source));}
+            statusBar()->showMessage(QStringLiteral("已复制 %1 件服装，跳过 %2 件已穿戴的服装。").arg(qulonglong(result.copied)).arg(qulonglong(result.skipped)));
+          },Qt::QueuedConnection);
+        }catch(const std::exception &e){const std::string error=e.what();QMetaObject::invokeMethod(this,[this,error]{if(closing_)return;loading_=false;open_->setEnabled(true);project_action_->setEnabled(true);QMessageBox::warning(this,QStringLiteral("无法复制穿搭"),text(error));},Qt::QueuedConnection);}
+      });
+    }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("无法复制穿搭"),text(e.what()));}
   }
   void update_libraries() {
     roots_.clear();for(const auto &root:project_.content_roots) roots_.push_back(file_path(root));
@@ -1907,6 +1932,7 @@ public:
     browser_=new ContentBrowser;browser_->open_asset=[this](const QString &file){open_asset(file_path(file),QApplication::keyboardModifiers().testFlag(Qt::ControlModifier));};browser_->apply_pose=[this](const QString &file,bool partial){open_asset(file_path(file),partial);};update_libraries();
     auto *explorer_dock=dock(QStringLiteral("内容浏览器"),browser_,Qt::LeftDockWidgetArea);
     hierarchy_=new QTreeWidget;hierarchy_->setSelectionMode(QAbstractItemView::ExtendedSelection);hierarchy_->setHeaderLabel(QStringLiteral("场景对象"));hierarchy_->setMinimumWidth(240);hierarchy_->setIndentation(12);hierarchy_->header()->setStretchLastSection(false);hierarchy_->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    hierarchy_->setItemDelegate(new GeograftVisibilityDelegate(hierarchy_));
     auto *hierarchy_panel=new QWidget;auto *hierarchy_layout=new QVBoxLayout(hierarchy_panel);hierarchy_layout->setContentsMargins(0,0,0,0);physics_only_=new QCheckBox(QStringLiteral("仅显示物理模型"));physics_only_->setObjectName("PhysicsOnlyModels");hierarchy_layout->addWidget(physics_only_);hierarchy_layout->addWidget(hierarchy_,1);connect(physics_only_,&QCheckBox::toggled,this,[this]{refresh_physics_filter();});
     auto *hierarchy_dock=dock(QStringLiteral("场景层次"),hierarchy_panel,Qt::LeftDockWidgetArea);tabifyDockWidget(explorer_dock,hierarchy_dock);hierarchy_dock->raise();
     auto *property_scroll=new QScrollArea;property_scroll->setObjectName("ObjectPropertiesScroll");property_scroll->setWidgetResizable(true);property_scroll->setFrameShape(QFrame::NoFrame);auto *panel=new QWidget;auto *properties=new QVBoxLayout(panel);properties->setAlignment(Qt::AlignTop);panel->setMinimumWidth(380);property_scroll->setWidget(panel);
@@ -2013,6 +2039,7 @@ public:
     edit->addAction(chrome->ground_action());edit->addAction(chrome->weight_action());
     auto *units=edit->addAction(QStringLiteral("测量单位…"));units->setObjectName("MeasurementUnits");connect(units,&QAction::triggered,this,[this]{measurement_units();});
     auto *attachment_menu=chrome->menus()->addMenu(QStringLiteral("穿戴与附件"));
+    auto *copy_outfit_action=attachment_menu->addAction(QStringLiteral("复制穿搭"));copy_outfit_action->setObjectName("CopyOutfit");connect(copy_outfit_action,&QAction::triggered,this,[this]{copy_selected_outfit();});
     auto *fit=attachment_menu->addAction(QStringLiteral("绑定到角色 / 更换目标…"));connect(fit,&QAction::triggered,this,[this]{change_attachment(false);});
     auto *detach=attachment_menu->addAction(QStringLiteral("解除挂接"));detach->setToolTip(QStringLiteral("整套附件恢复独立载入位置，角色被遮盖的表面随绑定关系重新计算"));connect(detach,&QAction::triggered,this,[this]{change_attachment(true);});
     delete_=edit->addAction(QStringLiteral("删除选中对象及其子对象"));delete_->setShortcut(QKeySequence::Delete);delete_->setEnabled(false);
@@ -2050,7 +2077,6 @@ public:
     const QRect available=initial_screen->availableGeometry();
     resize(QSize(1580,920).boundedTo(available.size()));move(available.center()-QPoint(width()/2,height()/2));
     resizeDocks({viewport_dock,property_dock},{850,330},Qt::Horizontal);default_layout_=saveState(1);
-    if(!self_test_) {QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());restoreState(settings.value("window/docks").toByteArray(),1);powerpose_->restore_template(settings.value("powerpose/template","Body").toString());chrome->restore_modules(settings.value("window/topModules").toByteArray());}
     auto fit_windows=[this] {
       QList<QRect> areas;for(auto *screen:QGuiApplication::screens()) areas.push_back(screen->availableGeometry());
       if(areas.isEmpty()) return;
@@ -2060,12 +2086,16 @@ public:
         window->resize(bounds.size());window->move(bounds.topLeft());
       };
       if(!isMaximized()&&!isFullScreen()) fit(this);
-      for(auto *dock:findChildren<QDockWidget *>()) if(dock->isFloating()) fit(dock);
+      for(auto *dock:findChildren<QDockWidget *>()) if(dock->isFloating()&&!dock->isMaximized()&&!dock->isFullScreen()) fit(dock);
     };
     if(!self_test_) application_settings_=ApplicationSettings::load();
     if(!self_test_&&!sampling.quality_override) static_cast<RenderQuality &>(sampling)=application_settings_.render;
     else application_settings_.render=sampling;
+    // 状态栏也须在缩放与停靠恢复之前创建，否则首次消息改变栏高后会重新分配面板尺寸。
+    statusBar()->ensurePolished();
     ui_scale_=new UiScale(false,{},this);ui_scale_->set_percent(application_settings_.ui_percent);
+    // 先应用字体和尺寸，再恢复用户停靠布局，避免首次样式刷新覆盖保存的尺寸。
+    if(!self_test_) {new DialogLayouts({},this);QSettings settings;powerpose_->restore_template(settings.value("powerpose/template","Body").toString());}
     viewport_settings_=new ViewportSettings(false,{},this);viewport_settings_->set(application_settings_.viewport);
     viewport_settings_->changed=[this](ViewportQuality value){if(renderer_) renderer_->quality(value);};
     fit_windows();
@@ -2075,7 +2105,7 @@ public:
     for(auto *screen:QGuiApplication::screens()) watch_screen(screen);
     connect(qApp,&QGuiApplication::screenAdded,this,[watch_screen](QScreen *screen){watch_screen(screen);});
     connect(qApp,&QGuiApplication::screenRemoved,this,[this,fit_windows]{QTimer::singleShot(0,this,fit_windows);});
-    show();
+    if(!self_test_){QSettings settings;restore_layout(settings);}else show();
     // Native frame margins and the first dock layout settle after the initial show.
     QTimer::singleShot(0,this,fit_windows);
     // 样式首次重建后重新落实默认停靠宽度；已保存的用户布局仍由 restoreState 负责。
@@ -2091,7 +2121,7 @@ public:
     connect(qApp,&QGuiApplication::applicationStateChanged,this,[this](Qt::ApplicationState state){if(state!=Qt::ApplicationActive){if(history_input_)history_input_->finish();if(renderer_)renderer_->interaction(false);}});
     auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this] {tick();});timer->start(50);
   }
-  void closeEvent(QCloseEvent *event) override {if(renderer_)accept_pose_commit(renderer_->status());if(auto *focus=QApplication::focusWidget())focus->clearFocus();if(history_input_)history_input_->finish();closing_=true;checkpoint();if(!self_test_) {QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("window/docks",saveState(1));settings.setValue("window/topModules",chrome->save_modules());settings.setValue("powerpose/template",powerpose_->template_name());browser_->save();}QMainWindow::closeEvent(event);}
+  void closeEvent(QCloseEvent *event) override {if(renderer_)accept_pose_commit(renderer_->status());if(auto *focus=QApplication::focusWidget())focus->clearFocus();if(history_input_)history_input_->finish();closing_=true;checkpoint();if(!self_test_) {QSettings settings;save_layout(settings);settings.setValue("powerpose/template",powerpose_->template_name());settings.sync();browser_->save();}QMainWindow::closeEvent(event);}
   ~Editor() override {closing_=true;loader_.request_stop();if(loader_.joinable()) loader_.join();if(history_input_){delete history_input_;history_input_=nullptr;}if(history_)history_->finish_gesture();auto final_state=recovery_?std::optional<EditState>(capture_edit()):std::nullopt;renderer_.reset();if(recovery_&&final_state){recovery_->checkpoint(std::move(*final_state),roots_,true);recovery_->flush();}}
   void options_test() {options_test_=self_test_=true;}
   void navigation_test() {navigation_test_=self_test_=true;}
@@ -2208,7 +2238,7 @@ public:
           for(const auto &target:document_->catalog.targets) {
             auto values=loaded_snapshot.values.at(snapshot_.values.size());
             if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
-              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;values.ground_alignment_offset_cm=previous.values[t].ground_alignment_offset_cm;values.ground_alignment_body_only=previous.values[t].ground_alignment_body_only;std::map<std::string,float> weights;
+              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.graft_enabled=previous.values[t].graft_enabled;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;values.ground_alignment_offset_cm=previous.values[t].ground_alignment_offset_cm;values.ground_alignment_body_only=previous.values[t].ground_alignment_body_only;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if((target.morphs[m].evaluable||target.morphs[m].unsupported.empty())&&weights.contains(target.morphs[m].id)) values.morphs[m]=weights[target.morphs[m].id];
             }

@@ -58,6 +58,7 @@ struct Snapshot {
 };
 Snapshot initial_snapshot(const Document &document);
 std::vector<size_t> geograft_targets(const Document &document,size_t selected);
+bool geograft_visibility_editable(const Document &document,const Snapshot &snapshot,size_t target);
 std::string retain_archive(Document &document,const std::shared_ptr<daz::SourceArchive> &archive);
 std::shared_ptr<daz::SourceArchive> material_archive(const Document &,MaterialSurface,const std::string &owner);
 const ir::Mesh &subdivision_mesh(const Document &document,size_t target);
@@ -69,6 +70,11 @@ void append_document(Document &destination,Document source,const std::string &id
 size_t attachment_host(const Document &document,size_t selected);
 void attach_import(Document &document,size_t first_target,size_t host);
 void fit_attachment(Document &document,size_t follower,int host);
+std::vector<size_t> outfit_characters(const Document &document);
+std::vector<size_t> outfit_clothing(const Document &document,size_t host);
+std::vector<size_t> outfit_roots(const Document &document,size_t host);
+struct OutfitCopyResult {size_t copied=0,skipped=0;};
+OutfitCopyResult copy_outfit(Document &document,Snapshot &snapshot,size_t source,const std::vector<size_t> &clothing,const std::vector<size_t> &hosts);
 size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &preset,Snapshot *snapshot=nullptr);
 size_t apply_surface_materials(Document &document,Snapshot &snapshot,const daz::LoadedScene &preset,const std::vector<MaterialSurface> &surfaces);
 std::vector<std::string> paste_material(Document &document,Snapshot &snapshot,const nlohmann::json &copy,const std::vector<MaterialSurface> &surfaces);

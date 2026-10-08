@@ -5,6 +5,7 @@
 #include <QToolBar>
 #include <QDoubleSpinBox>
 #include <functional>
+class QSettings;
 
 namespace dfv::editor {
 // 应用标识和系统按钮固定，菜单／工具由独立 QToolBar 承载，可移动、浮动、隐藏。
@@ -40,10 +41,15 @@ public:
   void add_layout_actions(QMenu *menu);
 };
 class EditorWindow:public QMainWindow {
+  std::function<void()> pending_layout_;
+  void finish_layout_restore();
 protected:
   bool nativeEvent(const QByteArray &,void *,qintptr *) override;
+  void resizeEvent(QResizeEvent *) override;
 public:
   EditorChrome *chrome=nullptr;
   void install_chrome();
+  void restore_layout(QSettings &settings);
+  void save_layout(QSettings &settings) const;
 };
 }

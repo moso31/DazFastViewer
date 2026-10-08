@@ -64,7 +64,7 @@ void ProjectSettings::save() const {
   if(output.write(bytes)!=bytes.size() || !output.commit()) fail(QStringLiteral("项目设置保存失败：")+output.errorString());
 }
 bool edit_project_settings(QWidget *parent,ProjectSettings &settings,ApplicationSettings &application,const QString &application_file,bool persistent,const std::function<void(bool)> &applied) {
-  QDialog dialog(parent);dialog.setObjectName("ProjectSettingsDialog");dialog.setWindowTitle(QStringLiteral("项目设置"));dialog.resize(760,660);
+  QDialog dialog(parent);dialog.setObjectName("ProjectSettingsDialog");dialog.setWindowTitle(QStringLiteral("项目设置"));dialog.setWindowFlag(Qt::WindowMaximizeButtonHint);dialog.resize(760,660);
   auto *layout=new QVBoxLayout(&dialog);auto *tabs=new QTabWidget;tabs->setObjectName("ProjectSettingsTabs");layout->addWidget(tabs,1);
   QMap<QString,QToolButton *> headers;
   auto page=[&](const QString &title,const char *name) {

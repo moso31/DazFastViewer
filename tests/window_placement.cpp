@@ -1,8 +1,10 @@
 #include "editor/window_placement.h"
+#include "editor/dialog_layout.h"
 #include "viewport/window.h"
 #include <QApplication>
 #include <QScreen>
 #include <QWidget>
+#include <QTemporaryDir>
 #include <iostream>
 #include <stdexcept>
 #include <GL/gl.h>
@@ -21,6 +23,11 @@ int main(int argc,char **argv) {
     check(scaled.contains(visible_window_geometry({1400,-60,1580,920},{primary,scaled},primary)),"Mixed-DPI screen size not respected");
     check(primary.contains(visible_window_geometry({1300,700,400,300},{primary},primary)),"Partially hidden window was not clamped");
     check(primary.contains(visible_window_geometry({6000,4000,300,200},{primary},primary)),"Floating dock outside all screens was not recovered");
+    QTemporaryDir preferences;dfv::editor::DialogLayouts dialogs(preferences.filePath("layout.ini"));
+    QSize normal;QPoint position;
+    {QDialog dialog;dialog.setObjectName("LayoutTest");dialog.resize(480,360);dialog.move(app.primaryScreen()->availableGeometry().topLeft()+QPoint(80,90));dialog.show();app.processEvents();normal=dialog.size();position=dialog.pos();dialog.reject();}
+    {QDialog dialog;dialog.setObjectName("LayoutTest");dialog.resize(200,100);dialog.show();app.processEvents();check(dialog.size()==normal&&dialog.pos()==position,"取消后重开对话框没有继承尺寸和位置");dialog.showMaximized();app.processEvents();check(dialog.isMaximized(),"测试窗口没有最大化");dialog.reject();}
+    {QDialog dialog;dialog.setObjectName("LayoutTest");dialog.show();app.processEvents();check(dialog.isMaximized(),"重建对话框没有继承最大化布局");dialog.showNormal();app.processEvents();check(dialog.size()==normal,"最大化还原丢失普通窗口尺寸");dialog.reject();}
     if(app.arguments().contains("--native")) {
       // Test real WGL creation without requiring CUDA/OptiX or a second monitor.
       QWidget host;host.setAttribute(Qt::WA_ShowWithoutActivating);host.resize(320,240);

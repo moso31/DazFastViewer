@@ -12,6 +12,7 @@
 #include <QPainter>
 #include <QProxyStyle>
 #include <QStyleOptionDockWidget>
+#include <QStyleOptionMenuItem>
 #include <QStyleFactory>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -26,9 +27,34 @@ namespace dfv::editor {
 namespace {
 class ScaledStyle final:public QProxyStyle {
   QStyle *text_style_=QStyleFactory::create("Fusion");
+  static bool toolbar_menu(const QWidget *widget){return widget&&widget->objectName()=="ToolbarMenu";}
 public:
   explicit ScaledStyle(const QString &name):QProxyStyle(name) {text_style_->setParent(this);}
+  QSize sizeFromContents(ContentsType type,const QStyleOption *option,const QSize &contents,const QWidget *widget=nullptr) const override {
+    if(type==CT_MenuBarItem&&toolbar_menu(widget))return contents+QSize(ui_pixels(12),ui_pixels(4));
+    if(ui_scale()!=1&&type==CT_MenuItem) {
+      const auto size=text_style_->sizeFromContents(type,option,contents,widget);
+      return contents+QSize(ui_pixels(size.width()-contents.width()),ui_pixels(size.height()-contents.height()));
+    }
+    return QProxyStyle::sizeFromContents(type,option,contents,widget);
+  }
+  void drawPrimitive(PrimitiveElement element,const QStyleOption *option,QPainter *painter,const QWidget *widget=nullptr) const override {
+    if(element==PE_PanelMenuBar&&toolbar_menu(widget))return;
+    QProxyStyle::drawPrimitive(element,option,painter,widget);
+  }
   void drawControl(ControlElement element,const QStyleOption *option,QPainter *painter,const QWidget *widget=nullptr) const override {
+    // 嵌入工具栏的菜单使用同一套测量和文字绘制，不画原生菜单栏的底边线。
+    if(toolbar_menu(widget)) {
+      if(element==CE_MenuBarEmptyArea)return;
+      if(element==CE_MenuBarItem)if(const auto *menu=qstyleoption_cast<const QStyleOptionMenuItem *>(option)) {
+        auto item=*menu;painter->save();painter->setFont(widget->font());
+        const bool selected=item.state.testFlag(State_Selected)&&item.state.testFlag(State_Enabled);
+        painter->fillRect(item.rect,item.palette.brush(selected?QPalette::Highlight:QPalette::Window));
+        if(selected)item.palette.setBrush(QPalette::ButtonText,item.palette.brush(QPalette::HighlightedText));
+        // Fusion 在每个菜单项底部画分隔线，还向上偏移文字；工具栏只需居中的菜单标签。
+        QCommonStyle::drawControl(element,&item,painter,widget);painter->restore();return;
+      }
+    }
     if(element==CE_DockWidgetTitle&&widget)if(const auto *dock=qstyleoption_cast<const QStyleOptionDockWidget *>(option)) {
       // QDockWidget 绘制标题时可能切回创建时缓存的字体；文字与裁切统一使用当前控件字体。
       auto title=*dock;title.fontMetrics=widget->fontMetrics();painter->save();painter->setFont(widget->font());
@@ -39,6 +65,7 @@ public:
     else QProxyStyle::drawControl(element,option,painter,widget);
   }
   int pixelMetric(PixelMetric metric,const QStyleOption *option=nullptr,const QWidget *widget=nullptr) const override {
+    if(toolbar_menu(widget)&&(metric==PM_MenuBarPanelWidth||metric==PM_MenuBarHMargin||metric==PM_MenuBarVMargin))return 0;
     const int value=QProxyStyle::pixelMetric(metric,option,widget);
     // 只缩放几何尺寸，保留比例、数量及系统拖动阈值的原义。
     switch(metric) {
@@ -80,6 +107,9 @@ struct UiScale::Impl {
       widgets.insert(w,m);QObject::connect(w,&QObject::destroyed,owner,[this,w]{widgets.remove(w);});
     }
     const auto all=w->findChildren<QLayout *>();for(auto *layout:all)if(!layouts.contains(layout)) {
+      // Qt 的主窗口和工具栏内部布局使用已缩放的 style metrics；再乘一次
+      // 会使恢复布局时新建的内部布局与启动时捕获的布局产生不同边距。
+      if(qobject_cast<QToolBar *>(layout->parentWidget())||qobject_cast<QMainWindow *>(layout->parentWidget()))continue;
       layouts.insert(layout,{layout->contentsMargins(),layout->spacing()});QObject::connect(layout,&QObject::destroyed,owner,[this,layout]{layouts.remove(layout);});
     }
   }

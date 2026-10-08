@@ -10,6 +10,7 @@
 namespace dfv::editor {
 std::vector<size_t> geograft_targets(const Document &document,size_t selected) {
   const auto &scene=document.loaded.scene;const auto host=document.catalog.targets.at(selected).instance;std::vector<size_t> result;
+  if(!document.catalog.targets.at(selected).character||scene.instances.at(host).graft_source>=0)return result;
   for(size_t t=0;t<document.catalog.targets.size();++t) {
     auto i=document.catalog.targets[t].instance;const auto &instance=scene.instances.at(i);
     if(instance.shell_source>=0||instance.graft_source<0||scene.meshes.at(instance.mesh).graft_vertex_pairs.empty())continue;
@@ -20,6 +21,18 @@ std::vector<size_t> geograft_targets(const Document &document,size_t selected) {
     }
   }
   return result;
+}
+bool geograft_visibility_editable(const Document &d,const Snapshot &s,size_t target) {
+  auto i=d.catalog.targets.at(target).instance;const auto &scene=d.loaded.scene;
+  if(scene.instances.at(i).shell_source>=0||scene.instances.at(i).graft_source<0||scene.meshes.at(scene.instances.at(i).mesh).graft_vertex_pairs.empty())return true;
+  std::set<uint32_t> seen;
+  while(seen.insert(i).second) {
+    for(size_t t=0;t<d.catalog.targets.size();++t)if(d.catalog.targets[t].instance==i) {
+      if(!s.values.at(t).graft_enabled||(i!=d.catalog.targets[target].instance&&!s.values.at(t).visible))return false;
+    }
+    const auto parent=scene.instances.at(i).graft_source;if(parent<0)break;i=uint32_t(parent);
+  }
+  return true;
 }
 std::string retain_archive(Document &d,const std::shared_ptr<daz::SourceArchive> &archive){
   if(!archive)return {};for(const auto &[id,p]:d.archives)if(p==archive)return id;
