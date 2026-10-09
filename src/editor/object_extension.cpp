@@ -81,13 +81,19 @@ bool growth_character(const Document &d,size_t t){
   if(index<0||!d.catalog.targets[t].conform_target.empty())return false;
   for(const auto &o:d.loaded.objects)if(o.instance==instance){
     if(!o.figure||!o.conform_target.empty())return false;
-    if(o.content_type=="Actor"||o.content_type.starts_with("Actor/"))return true;
-    if(!o.content_type.empty())return false;
+    if(!o.content_type.empty()&&o.content_type!="Actor"&&!o.content_type.starts_with("Actor/"))return false;
   }
-  // 缺少元数据的旧资产只接受完整的人形骨架，不能用 figure / skin 判定道具。
+  // 部分可动道具也标为 Actor；生长表只适用于具备完整人形骨架的角色。
   const auto &skin=d.skeletons.skins[size_t(index)];
   auto has=[&](std::initializer_list<const char *> names){for(const auto &j:skin.joints)for(auto name:names)if(j.id==name||j.name==name)return true;return false;};
-  return has({"hip","pelvis"})&&has({"head"})&&has({"lHand"})&&has({"rHand"})&&has({"lFoot"})&&has({"rFoot"});
+  return has({"hip","pelvis"})&&has({"head"})&&has({"lHand","l_hand"})&&has({"rHand","r_hand"})&&has({"lFoot","l_foot"})&&has({"rFoot","r_foot"});
+}
+void normalize_object_extensions(const Document &d,Snapshot &s){
+  for(size_t t=0;t<s.values.size();++t){
+    auto &v=s.values[t];
+    if(v.extension.kind==runtime::ExtensionKind::growth&&!growth_character(d,t))v.extension.kind=runtime::ExtensionKind::density;
+    if(water::find(d.waters,d.catalog.targets[t].id))v.selectable=false;
+  }
 }
 std::vector<std::string> edit_growth(const Document &d,Snapshot &snapshot,size_t t,runtime::ObjectExtension next,bool apply_shape,double scale_step){
   runtime::validate_extension(next);if(!growth_character(d,t))throw std::runtime_error("请选择角色本体或其骨骼");

@@ -35,6 +35,7 @@ struct RenderProbe {
   std::vector<std::string> hidden;
 };
 struct RenderStatus {
+  uint64_t clay_presentations=0;
   city::Stats city;
   bool physics_busy=false,physics_committing=false,physics_prepared=false;
   uint64_t physics_applied=0;

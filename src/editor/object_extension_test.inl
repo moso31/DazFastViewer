@@ -1,4 +1,5 @@
   bool extension_test_=false;
+  std::string extension_module_target_;
   bool dufex_test_=false;
   nlohmann::json dufex_expected_;
   std::filesystem::path dufex_native_;
@@ -77,8 +78,21 @@
       return now-extension_measured_at_>=100; // 等待新增结果行完成布局与屏幕呈现后再截图。
     };
     auto screen_save=[this](const char *name){QCoreApplication::sendPostedEvents(nullptr,QEvent::LayoutRequest);repaint();screen()->grabWindow(winId()).save(QString::fromStdWString((output_/name).wstring()));};
+    if(!extension_module_target_.empty()){
+      if(test_stage_==0){
+        for(size_t t=0;t<document_->catalog.targets.size();++t)if(document_->catalog.targets[t].label==extension_module_target_||document_->catalog.targets[t].id==extension_module_target_){extension_prop_=int(t);break;}
+        if(!check(extension_prop_>=0,"找不到模块验证对象"))return;
+        choose(extension_prop_);chrome->weight_action()->trigger();++test_stage_;return;
+      }
+      const bool character=growth_character(*document_,size_t(extension_prop_));
+      if(!check(snapshot_.values[extension_prop_].extension.kind==(character?runtime::ExtensionKind::growth:runtime::ExtensionKind::density),"重量模块与节点类型不一致"))return;
+      if(!check(extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->isVisible()==!character&&extension_panel_->findChild<QDoubleSpinBox *>("GrowthAge")->isVisible()==character,"重量面板显示了错误参数集"))return;
+      for(size_t t=0;t<snapshot_.values.size();++t)if(water::find(document_->waters,document_->catalog.targets[t].id)&&!check(!snapshot_.values[t].selectable,"旧存档水体仍可在视口选中"))return;
+      extension_checks_.push_back({{"check","weight-module-assignment"},{"id",document_->catalog.targets[extension_prop_].id},{"character",character},{"kind",int(snapshot_.values[extension_prop_].extension.kind)}});
+      screen_save("weight-module.png");finish_test(true);return;
+    }
     if(test_stage_==0){
-      for(size_t t=0;t<document_->catalog.targets.size();++t)if(growth_character(*document_,t)){if(extension_figure_<0)extension_figure_=int(t);else if(extension_other_<0)extension_other_=int(t);}else if(extension_prop_<0)extension_prop_=int(t);
+      for(size_t t=0;t<document_->catalog.targets.size();++t)if(growth_character(*document_,t)){if(extension_figure_<0)extension_figure_=int(t);else if(extension_other_<0)extension_other_=int(t);}else if(extension_prop_<0||document_->catalog.targets[t].label.starts_with("Rowboat"))extension_prop_=int(t);
       if(!check(extension_figure_>=0&&extension_other_>=0&&extension_prop_>=0,"测试需要两个角色和一个道具"))return;
       choose(extension_figure_);extension_before_=snapshot_.values[extension_figure_];chrome->weight_action()->trigger();
       if(!check(snapshot_.values[extension_figure_].morphs==extension_before_.morphs&&snapshot_.values[extension_figure_].transform.general_scale==extension_before_.transform.general_scale,"注册生长立即改变了外形"))return;
@@ -111,7 +125,7 @@
       if(!check(document_->loaded.scene.instances.size()==extension_instances_&&document_->loaded.scene.meshes.size()==extension_meshes_,"真实场景保存重开丢失几何"))return;
       extension_checks_.push_back({{"check","character-dufex-roundtrip-and-isolation"},{"passed",true},{"instances",extension_instances_},{"meshes",extension_meshes_}});
       choose(extension_prop_);chrome->weight_action()->trigger();const auto &native=document_->catalog.targets[extension_prop_].native_extension;const double density=native.kind==runtime::ExtensionKind::density?native.density:1000;
-      if(!check(snapshot_.values[extension_prop_].extension.kind==runtime::ExtensionKind::density&&snapshot_.values[extension_prop_].extension.density==density,"道具密度未继承原生值或默认值"))return;extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->setValue(7890);++test_stage_;return;
+      if(!check(snapshot_.values[extension_prop_].extension.kind==runtime::ExtensionKind::density&&snapshot_.values[extension_prop_].extension.density==density,"道具密度未继承原生值或默认值"))return;extension_checks_.push_back({{"check","prop-density-module"},{"id",document_->catalog.targets[extension_prop_].id},{"density",density}});extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->setValue(7890);++test_stage_;return;
     }
     if(test_stage_==5){if(!measured())return;extension_mass_=measurements_.result().weight.kg;extension_geometry_=state.adapter.geometry_updates;if(!check(extension_mass_>0,"道具体积测量为零"))return;screen_save("object-weight.png");extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->setValue(3945);++test_stage_;return;}
     if(test_stage_==6){if(!measured())return;if(!check(std::abs(measurements_.result().weight.kg-extension_mass_*.5)<1e-8&&state.adapter.geometry_updates==extension_geometry_,"密度更改触发几何更新或重量未线性变化"))return;extension_checks_.push_back({{"check","density-multiplier-without-geometry-update"},{"kg",measurements_.result().weight.kg}});save_extension();extension_expected_=snapshot_json(*document_,snapshot_);++test_stage_;load(extension_file_);return;}

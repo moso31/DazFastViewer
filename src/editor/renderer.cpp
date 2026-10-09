@@ -657,8 +657,11 @@ void Renderer::run(std::stop_token stop) {
           }water_camera_epoch=camera.epoch;
         }
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
-        wanted_preview=navigation_preview||(!clay_wait&&!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||new_render_edit));
-        if(!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.grafts.empty()||!delta.masks.empty())clay_wait=true;
+        // 相机触发的水体 LOD／城市显隐更新仍属于导航，等待期间保留光追预览。
+        // 用户编辑、姿态恢复和物理更新继续使用原有白模流程。
+        const bool camera_only_update=!edit_pending&&!editing&&!pose_recovery.active&&desired.revision==gpu_revision&&!clay_wait;
+        wanted_preview=navigation_preview||(!clay_wait&&!pose_recovery.active&&edit_affects_render&&(editing||now()<preview_until||(!camera_only_update&&new_render_edit)));
+        if(!camera_only_update&&(!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.grafts.empty()||!delta.masks.empty()))clay_wait=true;
         if(clay_wait)wanted_preview=false;
         if(subdivision_edit&&queued_subdivision_before.empty())queued_subdivision_before=previous_subdivision;
         if(wanted_preview!=preview||resolution_changed||new_render_edit||delta.camera)queued.merge(delta,subdivision_edit||material_layout_edit);
@@ -783,7 +786,7 @@ void Renderer::run(std::stop_token stop) {
       state.pose_restoring=pose_recovery.active||clay_wait;
       if(!clay_wait||camera.epoch!=physics_display_camera||physics_ticket.load()!=physics_display_ticket||editing)physics_display_wait=false;
       // 仅物理更新时保留上一张完整画面，避免持续模拟造成白模闪烁；操作相机立即使用交互预览。
-      if(clay_wait&&!pose_recovery.active&&!(physics_display_wait&&beauty.id)){overlay.draw_pose(camera,window_->width,window_->height,{}, {},{},{});Frame f;f.id=applied_revision;telemetry_.event("edit_clay_present",f);}
+      if(clay_wait&&!pose_recovery.active&&!(physics_display_wait&&beauty.id)){overlay.draw_pose(camera,window_->width,window_->height,{}, {},{},{});++state.clay_presentations;Frame f;f.id=applied_revision;telemetry_.event("edit_clay_present",f);}
       // 松手后的等待使用本次手势的白模和输入版本，不能借用另一种工具的旧状态。
       if(pose_recovery.active) {
         if(pose_recovery.gizmo) {

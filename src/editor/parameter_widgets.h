@@ -166,7 +166,7 @@ inline QWidget *decorate_number(QWidget *root,QDoubleSpinBox *spin,const std::st
   auto *layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);layout->setSpacing(3);layout->addWidget(spin,1);
   const auto font=QApplication::font("QWidget");spin->setFont(font);spin->setFocusPolicy(Qt::StrongFocus);spin->setProperty("historyInput",true);
   if(label){label->setFont(font);label->setProperty("numericRow",QString::fromStdString(key));label->setProperty("numericLabel",QVariant::fromValue<QObject *>(label));}
-  auto *buttons=new SettingsButtons(context(root),key,spin,{},nullptr,0,1,row);layout->addWidget(buttons);return row;
+  if(!spin->property("fixedParameterSettings").toBool()){auto *buttons=new SettingsButtons(context(root),key,spin,{},nullptr,0,1,row);layout->addWidget(buttons);}return row;
 }
 inline void decorate(QWidget *root,const std::string &prefix){
   auto *binding=context(root);qApp->removeEventFilter(root);binding->wheel_selection();

@@ -173,8 +173,8 @@ def main():
                        ("update_display(render_work)", "display_update")):
         replace("src/integrator/path_trace.cpp", f"  {call};",
                 f'  {{ const double start = time_dt(); {call}; if (dfv_event) dfv_event("{name}", (time_dt()-start)*1000.0); }}')
-    # Analytic matte fog operates on camera-visible closures, preserving cutout
-    # alpha and environment lighting. Keep this reproducible, not in .deps only.
+    # Analytic atmosphere shares extinction across camera, reflection and light
+    # paths while preserving cutout alpha. Keep this reproducible, not in .deps only.
     replace("src/scene/background.h", "  NODE_SOCKET_API(bool, use_shader)", """  NODE_SOCKET_API(bool, use_shader)
   NODE_SOCKET_API(float3, dfv_fog_extinction)
   NODE_SOCKET_API(float3, dfv_fog_color)
@@ -201,12 +201,19 @@ KERNEL_STRUCT_MEMBER(background, float4, dfv_fog_settings)""")
     files["src/kernel/integrator/dfv_matte_fog.h"] = (ROOT / "src/cycles/matte_fog_kernel.h").read_bytes()
     files["src/kernel/integrator/dfv_fog_column.h"] = (ROOT / "src/render_ir/fog_column.h").read_bytes()
     replace("src/kernel/CMakeLists.txt", "set(SRC_KERNEL_INTEGRATOR_HEADERS", "set(SRC_KERNEL_INTEGRATOR_HEADERS\n  integrator/dfv_matte_fog.h\n  integrator/dfv_fog_column.h")
-    for path in ("src/kernel/integrator/shade_surface.h", "src/kernel/integrator/shade_background.h"):
+    for path in ("src/kernel/integrator/shade_surface.h", "src/kernel/integrator/shade_background.h", "src/kernel/integrator/shade_light.h"):
         replace(path, "CCL_NAMESPACE_BEGIN", '#include "kernel/integrator/dfv_matte_fog.h"\n\nCCL_NAMESPACE_BEGIN')
     replace("src/kernel/integrator/shade_surface.h", "      /* Write emission. */", """      dfv_matte_fog_surface(kg, state, &sd, render_buffer);
       /* Write emission. */""")
-    replace("src/kernel/integrator/shade_background.h", "    /* Background MIS weights. */", """    L = dfv_matte_fog_background(kg, state, L);
+    replace("src/kernel/integrator/shade_background.h", "    /* Background MIS weights. */", """    L = dfv_matte_fog_background(kg, state, L, render_buffer);
     /* Background MIS weights. */""")
+    # Attenuate each complete light connection before transparent hits can split it.
+    replace("src/kernel/integrator/shade_surface.h", "  const Spectrum throughput = unlit_throughput * bsdf_spectrum;", """  const Spectrum throughput = unlit_throughput * bsdf_spectrum *
+      dfv_fog_segment(kg, ray->P, ray->D, ray->tmax, ray->tmax == FLT_MAX, false);""")
+    replace("src/kernel/integrator/shade_background.h", "    const float3 eval = shader_eval * light_eval.eval_fac;", """    const float3 eval = shader_eval * light_eval.eval_fac *
+        dfv_fog_transmittance(kg, state, 0.0f, true);""")
+    replace("src/kernel/integrator/shade_light.h", "  const float3 eval = shader_eval * light_eval.eval_fac;", """  const float3 eval = shader_eval * light_eval.eval_fac *
+      dfv_fog_transmittance(kg, state, isect.t);""")
     # Reuse the illumination map (solid-angle weighted), independent of Draw
     # Dome and camera atmosphere. Constant worlds use adapter's value.
     replace("src/scene/light.cpp", "  const float map_average_radiance = cdf_total * M_PI_2_F;", """  const float map_average_radiance = cdf_total * M_PI_2_F;

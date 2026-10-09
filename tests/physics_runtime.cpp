@@ -99,7 +99,7 @@ static void independent_characters(){
     const auto host=k*2,garment=host+1;ir::Mesh body;d->loaded.scene.meshes.push_back(body);d->loaded.scene.meshes.push_back(cloth());
     ir::Instance actor;actor.id="actor"+std::to_string(k)+"/mesh";actor.mesh=host;ir::Instance dress;dress.id="dress"+std::to_string(k)+"/mesh";dress.mesh=garment;d->loaded.scene.instances.push_back(actor);d->loaded.scene.instances.push_back(dress);
     Target a;a.id=actor.id;a.instance=host;Target b;b.id=dress.id;b.instance=garment;b.parent="#actor"+std::to_string(k);d->catalog.targets.push_back(a);d->catalog.targets.push_back(b);
-    Skin skin;skin.instance=host;d->skeletons.skins.push_back(skin);daz::AssetObject object;object.instance=host;object.figure=true;object.content_type="Actor/Character";d->loaded.objects.push_back(object);
+    Skin skin;skin.instance=host;for(const char *name:{"hip","head","lHand","rHand","lFoot","rFoot"}){Joint joint;joint.id=name;skin.joints.push_back(joint);}skin.initial.resize(skin.joints.size());d->skeletons.skins.push_back(skin);daz::AssetObject object;object.instance=host;object.figure=true;object.content_type="Actor/Character";d->loaded.objects.push_back(object);
   }
   d->formulas.graphs.resize(4);auto input=editor::initial_snapshot(*d);for(auto t:{1,3}){input.values[t].physics.enabled=true;input.values[t].physics.kind=PhysicsKind::cloth;input.values[t].physics.rounds=600;input.values[t].physics.run_sequence=1;}
   editor::PhysicsService service;auto serial=service.request(d,input,{});

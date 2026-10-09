@@ -32,6 +32,8 @@ static void rules(){
   const auto values=runtime::growth_values(10.5,.375);require(values.size()==19,"生长表数量错误");
   auto get=[&](const char *name){for(const auto &v:values)if(v.label==name)return v.value;throw std::runtime_error("missing table");};
   near(get("Head Propagating Scale"),-.09,1e-12,"小数年龄插值");near(get("Foot Propagating Scale"),.135,1e-12,"体格强度和年龄双线性插值");near(get("Body Size"),.015,1e-12,"体格强度过渡");
+  for(const auto [strength,body]:std::vector<std::pair<double,double>>{{-.25,-.125},{1.25,.625}}){const auto outside=growth_values(20,strength);for(const auto &v:outside){require(std::isfinite(v.value),"范围外体格产生无效值");if(v.label=="Body Size")near(v.value,body,1e-12,"范围外体格没有沿边缘区间延伸");}}
+  ObjectExtension unlimited;unlimited.age_step=25;unlimited.strength=-2;unlimited.sensitivity=200000;validate_extension(unlimited);
   const auto lo=runtime::calibrate_weight(17.28792285,141.26960385),hi=runtime::calibrate_weight(54.59738645,159.74123669);
   near(lo.kg,25,1e-8,"低段标定锚点");near(hi.kg,54.59738645*25/22.54333905,1e-8,"高段标定锚点");
   near(runtime::calibrate_weight(17.28792285*8,141.26960385*2).kg,200,1e-8,"等比放大遵循立方关系");
@@ -53,14 +55,15 @@ static void volume(){
 static editor::Document growth_document(){
   editor::Document d;d.generation=1;d.loaded.scene.meshes={cube()};ir::Instance instance;instance.id="figure/mesh";d.loaded.scene.instances={instance};
   runtime::Target t;t.id=instance.id;t.instance=0;for(const auto &v:runtime::growth_values(3,.5)){runtime::Morph m;m.id=m.label=v.label;m.evaluable=true;m.minimum=-2;m.maximum=2;t.morphs.push_back(m);}d.catalog.targets={t};
-  runtime::Skin skin;skin.id="figure";skin.joints.resize(1);skin.joints[0].id="root";skin.initial.resize(1);d.skeletons.skins={skin};daz::AssetObject actor;actor.figure=true;actor.content_type="Actor/Character";d.loaded.objects={actor};
+  runtime::Skin skin;skin.id="figure";for(const char *name:{"hip","head","lHand","rHand","lFoot","rFoot"}){runtime::Joint j;j.id=name;skin.joints.push_back(j);}skin.initial.resize(skin.joints.size());d.skeletons.skins={skin};daz::AssetObject actor;actor.figure=true;actor.content_type="Actor/Character";d.loaded.objects={actor};
   runtime::FormulaGraph graph;graph.skin=0;for(size_t i=0;i<t.morphs.size();++i){runtime::Channel c;c.binding.index=uint32_t(i);graph.morph_channels.push_back(int(graph.channels.size()));graph.channels.push_back(c);}
   runtime::Channel root;root.binding={runtime::Property::general_scale,0,0};root.initial=1;graph.channels.push_back(root);
   // 模拟旧 DAZ 通道中的 -1% ERC，用实际缩放校准验证不再需要脚本补偿。
   runtime::Expression e;e.owner=0;e.output=uint32_t(graph.channels.size()-1);e.code={{runtime::Op::constant,-.01}};graph.expressions.push_back(e);graph.prepare();d.formulas.graphs={graph};return d;
 }
 static void growth(){
-  {auto d=growth_document();require(editor::growth_character(d,0),"角色元数据未被识别");d.loaded.objects[0].content_type="Prop";require(!editor::growth_character(d,0),"带骨架道具被误判角色");d.loaded.objects[0].content_type.clear();require(!editor::growth_character(d,0),"单链骨架被误判角色");d.loaded.objects[0].content_type="Follower/Hair";require(!editor::growth_character(d,0),"头发被误判角色");}
+  {auto d=growth_document();for(auto &j:d.skeletons.skins[0].joints){if(j.id=="lHand")j.id="l_hand";if(j.id=="rHand")j.id="r_hand";if(j.id=="lFoot")j.id="l_foot";if(j.id=="rFoot")j.id="r_foot";}require(editor::growth_character(d,0),"Genesis 9 的骨骼命名未被识别");}
+  {auto d=growth_document();require(editor::growth_character(d,0),"角色元数据未被识别");d.loaded.objects[0].content_type="Prop";require(!editor::growth_character(d,0),"带骨架道具被误判角色");d.loaded.objects[0].content_type="Actor";d.skeletons.skins[0].joints.resize(2);d.skeletons.skins[0].joints[0].id="Hull";d.skeletons.skins[0].joints[1].id="Oars";require(!editor::growth_character(d,0),"Rowboat 的 Actor 标签覆盖了道具骨架");auto s=editor::initial_snapshot(d);s.values[0].extension.kind=runtime::ExtensionKind::growth;editor::normalize_object_extensions(d,s);require(s.values[0].extension.kind==runtime::ExtensionKind::density,"旧道具生长模块未迁移为密度");d.loaded.objects[0].content_type.clear();require(!editor::growth_character(d,0),"单链骨架被误判角色");d.loaded.objects[0].content_type="Follower/Hair";require(!editor::growth_character(d,0),"头发被误判角色");}
   auto d=growth_document();auto s=editor::initial_snapshot(d);s.values[0].extension.kind=runtime::ExtensionKind::growth;s.values[0].transform.translation_cm.y=23;
   {auto target=d.catalog.targets[0];auto &head=*std::find_if(target.morphs.begin(),target.morphs.end(),[](const auto &m){return m.label=="Head Propagating Scale";});head.scene_channel=true;head.id="native-head";head.initial=-.25f;
     auto duplicate=head;duplicate.id="vendor-head";duplicate.scene_channel=false;duplicate.initial=0;target.morphs.insert(target.morphs.begin(),duplicate);
@@ -120,6 +123,11 @@ static void serialization(const fs::path &folder){
 }
 int main(int argc,char **argv){
   try{rules();volume();growth();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
+    if(argc>2&&std::string(argv[2])=="--classify"){
+      const auto scene=editor::load_scene_extension(fs::u8path(argv[1]),{"H:/g1","H:/g3"},1);J report=J::array();
+      for(size_t t=0;t<scene.document->catalog.targets.size();++t){const auto &target=scene.document->catalog.targets[t];if(target.label.find("Rowboat")!=std::string::npos){require(!editor::growth_character(*scene.document,t),"真实 Rowboat 被误判为角色");report.push_back({{"id",target.id},{"label",target.label},{"character",false},{"extension_kind",int(scene.snapshot.values[t].extension.kind)}});}}
+      require(!report.empty(),"场景中未找到 Rowboat");std::cout<<report.dump(2)<<'\n';return 0;
+    }
     if(argc>1){const auto file=fs::u8path(argv[1]);auto d=load(file);auto s=editor::initial_snapshot(d);J report=J::array();
       for(size_t t=0;t<d.catalog.targets.size();++t){const bool character=editor::growth_character(d,t);if(!character)continue;s.values[t].extension.kind=runtime::ExtensionKind::growth;const auto start=std::chrono::steady_clock::now();auto missing=editor::edit_growth(d,s,t,s.values[t].extension);const auto measured=editor::measure_object(d,s,t);report.push_back({{"id",d.catalog.targets[t].id},{"height_cm",measured.height_cm},{"kg",measured.kg},{"liters",measured.liters},{"missing",missing},{"notes",measured.notes},{"ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()}});}
       std::cout<<report.dump(2)<<'\n';

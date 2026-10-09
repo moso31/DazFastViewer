@@ -37,8 +37,8 @@ void install(editor::Document &d,std::shared_ptr<const Water> w,bool record){
   }else{
     if(target!=d.catalog.targets.end()||std::any_of(s.instances.begin(),s.instances.end(),[&](const auto &i){return i.id==w->id+"/surface";}))throw std::runtime_error("水体身份冲突");
     ir::Instance i;i.id=w->id+"/surface";i.instance_node=w->id;i.instance_label="水体";i.mesh=uint32_t(s.meshes.size());i.materials={uint32_t(s.materials.size())};i.transform=ir::Transform::translate({float(w->config.x),float(w->config.y),float(w->config.level)});
-    runtime::Target t;t.id=i.id;t.label="水体";t.instance=uint32_t(s.instances.size());d.catalog.targets.push_back(t);d.formulas.graphs.emplace_back();
-    daz::AssetNode n;n.id=w->id;n.label="水体";d.loaded.nodes.push_back(n);
+    runtime::Target t;t.id=i.id;t.label="水体";t.instance=uint32_t(s.instances.size());t.initial_selectable=false;d.catalog.targets.push_back(t);d.formulas.graphs.emplace_back();
+    daz::AssetNode n;n.id=w->id;n.label="水体";n.selectable=false;d.loaded.nodes.push_back(n);
     s.instances.push_back(i);s.meshes.push_back(std::move(generated));s.materials.push_back(std::move(mat));d.waters.push_back(w);
   }
   ++d.asset_revision;s.validate();if(record){nlohmann::json op={{"op","water"},{"water",json(*w)}};if(!d.operations.empty()&&d.operations.back().value("op","")=="water"&&d.operations.back().at("water").at("id")==w->id)d.operations.back()=std::move(op);else d.operations.push_back(std::move(op));}

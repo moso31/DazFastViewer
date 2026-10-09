@@ -608,7 +608,7 @@ class Editor final:public EditorWindow {
     parameters_->refresh(0);
   }
   void set_selectable(size_t target,bool value) {
-    if(loading_||!document_||snapshot_.values.at(target).selectable==value)return;
+    if(loading_||!document_||water::find(document_->waters,document_->catalog.targets.at(target).id)||snapshot_.values.at(target).selectable==value)return;
     auto edit=history_edit(QStringLiteral("切换对象可选中"));const ObjectTargets objects(*document_);target=objects.primary.at(target);
     for(auto member:objects.members[target])snapshot_.values[member].selectable=value;send();parameters_->refresh(0);
   }
@@ -622,7 +622,9 @@ class Editor final:public EditorWindow {
   void append_node_controls(std::vector<ParameterControl> &controls,int target,const std::string &id={}) {
     for(bool selectable:{false,true}){ParameterControl c;c.id=selectable?"Selectable":"Visible";c.favorite_name=c.id;c.label=selectable?"可选中 · Selectable":"可见 · Visible";c.group="/General/Display";c.choices={"关闭","开启"};c.minimum=0;c.maximum=1;c.initial=id.empty()?(selectable?document_->catalog.targets.at(size_t(target)).initial_selectable:document_->catalog.targets.at(size_t(target)).initial_visible.value_or(true)):(selectable?group_node(*document_,id)->selectable:group_node(*document_,id)->visible);
       c.detail=selectable?"关闭后不能在视口中点击选中，也不会在鼠标悬停时黄色高亮；仍可从场景树选择并重新开启。":"父对象或组关闭时隐藏其子对象，重新开启后保留子对象各自的显隐设置。";
-      c.enabled=selectable||!id.empty()||geograft_visibility_editable(*document_,snapshot_,size_t(target));
+      const bool native_water=id.empty()&&water::find(document_->waters,document_->catalog.targets.at(size_t(target)).id);
+      if(selectable&&native_water)c.detail="水体不参与视口点击选中和悬停高亮；可从场景树选择并调整水体参数。";
+      c.enabled=selectable?!native_water:!id.empty()||geograft_visibility_editable(*document_,snapshot_,size_t(target));
       c.read=[this,target,id,selectable]{if(!id.empty()){const auto state=node_properties(*document_,snapshot_,id);return double(selectable?state.selectable:state.visible);}const auto &v=snapshot_.values.at(size_t(target));return double(selectable?v.selectable:v.visible);};
       c.write=[this,target,id,selectable](double value){if(!id.empty())set_node_property(id,selectable,value!=0);else if(selectable)set_selectable(size_t(target),value!=0);else set_visible(size_t(target),value!=0);};controls.push_back(std::move(c));
     }
@@ -1072,7 +1074,7 @@ class Editor final:public EditorWindow {
     if(powerpose_test_&&!edit_resume_test_) {report["scope"]="powerpose-qt-proxy-commit-cancel-native-limits-pins";report["checks"]=pp_checks_;}
     if(gizmo_test_) {report["scope"]="gizmo-local-world-proxy-commit-cancel-restore";report["checks"]=gz_checks_;}
     if(group_test_) {report["scope"]="group-transform-properties-gizmo-save-undo";report["checks"]=gt_checks_;}
-    if(extension_test_){report["scope"]="native-growth-weight-and-dufex";report["checks"]=extension_checks_;}
+    if(extension_test_){report["scope"]=extension_module_target_.empty()?"native-growth-weight-and-dufex":"weight-module-assignment";report["checks"]=extension_checks_;}
     if(dufex_test_)report["scope"]="dufex-v2-save-thumbnail-camera-reopen-native-independence";
     if(empty_test_)report["scope"]="empty-startup-refresh";
     if(city_test_){report["scope"]="city-generation-lod-materials-history-reopen";report["checks"]=city_checks_;report["city_stage"]=city_test_stage_;}
@@ -2185,6 +2187,7 @@ public:
   void rebuild_test(const std::filesystem::path &file) {rebuild_test_file_=file;self_test_=true;}
   void subdivision_stress_test() {subdivision_stress_test_=true;self_test_=true;}
   void extension_test(){extension_test_=true;self_test_=true;}
+  void weight_module_test(std::string target){extension_module_target_=std::move(target);extension_test();}
   void dufex_test(){dufex_test_=true;self_test_=true;}
   void feedback_test(){feedback_test_=true;self_test_=true;}
   void city_test(){city_test_=self_test_=true;}
@@ -2223,7 +2226,7 @@ public:
           const auto instances=document->loaded.scene.instances.size();ir::add_studio(document->loaded.scene);
           if(document->loaded.scene.instances.size()!=instances)document->operations.push_back({{"op","studio"}});
         }
-        loaded_snapshot=initial_snapshot(*document);
+        loaded_snapshot=initial_snapshot(*document);normalize_object_extensions(*document,loaded_snapshot);
         }
         std::ofstream(output_/"asset-report.json")<<document->loaded.report.dump(2);
         std::ofstream(output_/"morph-catalog.json")<<document->catalog.report.dump(2);
@@ -2377,6 +2380,7 @@ int main(int argc,char **argv) {
   parser.addOption({"physics-ui-test",QStringLiteral("验证物理属性公共滚动、收起布局和模型筛选")});
   parser.addOption({"empty-test",QStringLiteral("验证默认空场景及移动缩放后的视口刷新")});
   parser.addOption({"extension-test",QStringLiteral("副屏验证生长、重量、密度、折叠与 DUFEX 保存重开")});
+  parser.addOption({"weight-module-test",QStringLiteral("验证指定节点的角色生长／道具密度模块分配"),"label"});
   parser.addOption({"dufex-test",QStringLiteral("副屏验证 DUFEX v2、缩略图、观察相机及原 DUF 独立打开")});
   parser.addOption({"pose-test-level",QStringLiteral("FK / IK 验证时使用的宿主细分等级"),"level","-1"});
   parser.addOption({"formula-test",QStringLiteral("验证指定 Morph 滑块、ERC 与恢复后退出")});
@@ -2417,7 +2421,7 @@ int main(int argc,char **argv) {
     }
     auto project=ProjectSettings::load(project_file);
     project.content_roots=ProjectSettings::normalize(parser.values("content-root")+project.content_roots);
-    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("cloud-test")||parser.isSet("water-test")||parser.isSet("water-scene-test")||parser.isSet("city-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||(parser.isSet("gizmo-test")||parser.isSet("gizmo-scale-test"))||parser.isSet("group-transform-test")||parser.isSet("node-properties-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
+    Editor editor(output,std::move(project),parser.isSet("self-test")||parser.isSet("extension-test")||parser.isSet("weight-module-test")||parser.isSet("cloud-test")||parser.isSet("water-test")||parser.isSet("water-scene-test")||parser.isSet("city-test")||parser.isSet("physics-ui-test")||parser.isSet("render-profile")||(parser.isSet("gizmo-test")||parser.isSet("gizmo-scale-test"))||parser.isSet("group-transform-test")||parser.isSet("node-properties-test")||parser.isSet("group-motion-test")||parser.isSet("collective-ground-test")||(parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))||parser.isSet("rebuild-test")||parser.isSet("wear-test")||parser.isSet("reload-test")||parser.isSet("lifecycle-test")||parser.isSet("scene-reopen-test")||parser.isSet("lazy-test")||parser.isSet("interaction-test"),parser.isSet("reload-test")?file_path(parser.value("reload-test")):std::filesystem::path{},
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("history-test"))editor.history_test();
@@ -2435,6 +2439,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("group-motion-test")) editor.group_motion_test(parser.value("group-motion-test").toStdString());
     if(parser.isSet("collective-ground-test")) editor.collective_ground_test(parser.value("collective-ground-test").toStdString());
     if(parser.isSet("extension-test")) editor.extension_test();
+    if(parser.isSet("weight-module-test")) editor.weight_module_test(parser.value("weight-module-test").toStdString());
     if(parser.isSet("dufex-test")) editor.dufex_test();
     if(parser.isSet("feedback-test")) editor.feedback_test();
     if(parser.isSet("physics-ui-test"))editor.physics_ui_test();

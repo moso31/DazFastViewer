@@ -3,6 +3,7 @@
 #include "render_ir/default_options.h"
 #include "daz/documents.h"
 #include "editor/ground_selection.h"
+#include "editor/node_properties.h"
 #include "editor/physics_service.h"
 #include "editor/mesh_diagnostics.h"
 #include <iostream>
@@ -51,6 +52,7 @@ int main(){try{
   const auto folder=fs::temp_directory_path()/("dfv-water-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);auto file=folder/"columns.duf";water_fixture::write(file);auto d=water_fixture::load(file);
   auto water=std::make_shared<water::Water>();water->id="native-water";water->config.width=water->config.length=128;water->config.coast=true;water->config.scan_scene=false;water->config.precision=1;
   for(const auto &o:d.loaded.objects)water->config.sources.push_back({o.id,true});water::install(d,water);auto snapshot=editor::initial_snapshot(d);snapshot.options.environment=ir::default_options(true);snapshot.options.tonemapper=ir::default_options(false);
+  check(!snapshot.values.back().selectable,"新水体默认可选中");auto legacy_pick=snapshot;legacy_pick.values.back().selectable=true;check(!editor::scene_pick_mask(d,legacy_pick,d.loaded.scene).at(d.catalog.targets.back().instance),"旧水体 selectable=true 仍能在视口被选中");
   {auto grouped=d;grouped.loaded.nodes.push_back({"columns-group",{},"Columns",true});for(auto &o:grouped.loaded.objects)o.parent="#columns-group";
     std::vector<ir::Bounds> boxes(grouped.loaded.scene.instances.size());for(int i=0;i<3;++i){boxes[i].add({float(i*10),0,0});boxes[i].add({float(i*10+2),3,4});}
     const auto candidates=water::candidates(grouped,boxes);check(candidates.size()==4,"candidate list includes native water or misses group");for(const auto &v:candidates)check(v.volume==(v.id=="columns-group"?264.:24.),"candidate volume did not use world AABB union");

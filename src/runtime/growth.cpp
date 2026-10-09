@@ -8,8 +8,8 @@
 namespace dfv::runtime {
 void validate_extension(const ObjectExtension &v) {
   if(v.kind!=ExtensionKind::none&&v.kind!=ExtensionKind::growth&&v.kind!=ExtensionKind::density) throw std::runtime_error("未知对象扩展类型");
-  if(!std::isfinite(v.age)||v.age<1||v.age>20||!std::isfinite(v.age_step)||v.age_step<.001||v.age_step>19||
-     !std::isfinite(v.sensitivity)||std::abs(v.sensitivity)>100000||!std::isfinite(v.strength)||v.strength<0||v.strength>1||
+  if(!std::isfinite(v.age)||v.age<1||v.age>20||!std::isfinite(v.age_step)||
+     !std::isfinite(v.sensitivity)||!std::isfinite(v.strength)||
      !std::isfinite(v.density)||v.density<0||v.density>100000) throw std::runtime_error("生长或密度参数超出范围");
 }
 bool legacy_extension_channel(const std::string &name) {
@@ -17,11 +17,16 @@ bool legacy_extension_channel(const std::string &name) {
 }
 std::vector<GrowthValue> growth_values(double age,double strength) {
   ObjectExtension v;v.age=age;v.strength=strength;validate_extension(v);
-  const double a=age-1,s=strength*4;const auto a0=size_t(std::floor(a)),a1=size_t(std::ceil(a)),s0=size_t(std::floor(s)),s1=size_t(std::ceil(s));
+  const double a=age-1;const auto a0=size_t(std::floor(a)),a1=size_t(std::ceil(a));
+  // 表格外沿最近一段线性延伸，先限制索引再计算权重，负体格也不会越界。
+  const auto s0=size_t(std::floor(std::clamp(strength,0.0,.75)*4)),s1=s0+1;
   std::vector<GrowthValue> result;
   for(const auto &table:growth_tables) {
     const auto at=[&](size_t row){return std::lerp(table.values[row][a0],table.values[row][a1],a-a0);};
-    result.push_back({table.label,std::lerp(at(s0),at(s1),s-s0)*.01});
+    const double lo=at(s0)*.01,hi=at(s1)*.01;
+    const double value=lo+(strength-double(s0)*.25)*((hi-lo)*4);
+    if(!std::isfinite(value))throw std::runtime_error("体格计算结果超出有效数值范围");
+    result.push_back({table.label,value});
   }
   return result;
 }

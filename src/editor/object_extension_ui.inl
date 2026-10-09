@@ -29,7 +29,7 @@
   void enable_extension() {
     auto edit=history_edit(QStringLiteral("添加生长或密度参数"));
     const int t=extension_target();if(t<0)return;auto &v=snapshot_.values.at(t);
-    if(v.extension.kind==runtime::ExtensionKind::none){v.extension={};v.extension.kind=growth_character(*document_,size_t(t))?runtime::ExtensionKind::growth:runtime::ExtensionKind::density;send();}
+    if(v.extension.kind==runtime::ExtensionKind::none||(v.extension.kind==runtime::ExtensionKind::growth&&!growth_character(*document_,size_t(t)))){v.extension={};v.extension.kind=growth_character(*document_,size_t(t))?runtime::ExtensionKind::growth:runtime::ExtensionKind::density;send();}
     bind_extension();extension_panel_->expand();auto *d=findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"));if(d){d->show();d->raise();}
   }
   void change_extension(runtime::ObjectExtension next,bool shape,double step) {

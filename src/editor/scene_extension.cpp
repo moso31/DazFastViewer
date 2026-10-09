@@ -1,4 +1,5 @@
 #include "editor/scene_extension.h"
+#include "editor/object_extension.h"
 #include "city/document.h"
 #include "water/document.h"
 #include "cloud/document.h"
@@ -152,6 +153,6 @@ RestoredScene restore_scene_extension(const J &j,const fs::path &folder,const st
   auto resolved=roots;for(const auto &r:j.value("content_roots",J::array())){auto p=fs::u8path(r.get<std::string>());if(fs::is_directory(p)&&std::find(resolved.begin(),resolved.end(),p)==resolved.end())resolved.push_back(p);}
   auto d=load_source(source,resolved,progress);d->archives=std::move(archives);d->generation=generation;replay(*d,j.at("operations"),resolved,folder,progress);
   if(version==2&&structure(*d)!=j.at("structure"))throw std::runtime_error("场景结构或依赖资产已变化，无法完整恢复保存的关系");
-  auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));for(const auto &w:s.water_overrides)water::install(*d,w);s.water_overrides.clear();for(const auto &v:s.cloud_overrides)cloud::install(*d,v);s.cloud_overrides.clear();d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
+  auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));for(const auto &w:s.water_overrides)water::install(*d,w);s.water_overrides.clear();for(const auto &v:s.cloud_overrides)cloud::install(*d,v);s.cloud_overrides.clear();normalize_object_extensions(*d,s);d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
 }
 }

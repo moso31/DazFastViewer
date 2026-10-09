@@ -13,6 +13,7 @@
 #include <nlohmann/json.hpp>
 using namespace dfv;namespace fs=std::filesystem;using J=nlohmann::json;
 static void check(bool v,const char *why){if(!v)throw std::runtime_error(why);}
+#include "matte_fog_transport.inl"
 int main(int argc,char **argv){const auto output=fs::absolute(argc>1?argv[1]:"artifacts/matte-fog/gpu");fs::create_directories(output);try{
   auto ocio=OCIO_NAMESPACE::Config::CreateRaw()->createEditableCopy();ocio->setRole("scene_linear","raw");OCIO_NAMESPACE::SetCurrentConfig(ocio);ccl::path_init(fs::absolute(argv[0]).parent_path().string(),cycles_user_directory());
   const bool cpu=argc>2&&std::string(argv[2])=="cpu";
@@ -90,5 +91,6 @@ int main(int argc,char **argv){const auto output=fs::absolute(argc>1?argv[1]:"ar
   for(int i=0;i<4;++i){source.instances[i].visible=true;source.instances[i].transform.value[3]=source.instances[i].transform.value[7]=0;}
   source.camera.transform.value[3]=source.camera.transform.value[7]=0;const auto origin=render("giant-at-origin");
   check(std::abs(mean(origin,far_black,58)-mean(giant,far_black,58))<.002,"Horizontal world offset changed atmosphere");
-  std::ofstream(output/"result.json")<<J{{"result","PASS"},{"device",devices.front().description},{"near_contrast",near_contrast},{"far_contrast",far_contrast},{"stages",records}}.dump(2);std::cout<<"Matte fog rendering: PASS\n";return 0;
+  const auto transport=fog_transport(output/"transport",devices.front());
+  std::ofstream(output/"result.json")<<J{{"result","PASS"},{"device",devices.front().description},{"near_contrast",near_contrast},{"far_contrast",far_contrast},{"stages",records},{"transport",transport}}.dump(2);std::cout<<"Matte fog rendering: PASS\n";return 0;
 }catch(const std::exception &e){std::ofstream(output/"error.txt")<<e.what();std::cerr<<e.what()<<'\n';return 1;}}

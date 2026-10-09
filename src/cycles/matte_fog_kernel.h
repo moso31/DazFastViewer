@@ -5,17 +5,31 @@ CCL_NAMESPACE_BEGIN
 #define DFV_FOG_INLINE ccl_device_inline
 #include "kernel/integrator/dfv_fog_column.h"
 
+ccl_device_inline Spectrum dfv_fog_segment(KernelGlobals kg,
+                                           const float3 origin,
+                                           const float3 direction,
+                                           const float distance,
+                                           const bool background,
+                                           const bool camera)
+{
+  if (kernel_data.background.dfv_fog_extinction.w == 0.0f) {
+    return one_spectrum();
+  }
+  const float4 settings = kernel_data.background.dfv_fog_settings;
+  const float d = dfv_fog_column(origin.z, direction.z, distance,
+                                 camera ? settings.x : 0.0f, settings.y, settings.z, background);
+  const float4 beta = kernel_data.background.dfv_fog_extinction;
+  return rgb_to_spectrum(make_float3(expf(-beta.x * d), expf(-beta.y * d), expf(-beta.z * d)));
+}
+
 ccl_device_inline Spectrum dfv_fog_transmittance(KernelGlobals kg,
                                                  IntegratorState state,
                                                  const float distance,
                                                  const bool background = false)
 {
-  const float4 settings = kernel_data.background.dfv_fog_settings;
-  const float d = dfv_fog_column(INTEGRATOR_STATE(state, ray, P).z,
-                                 INTEGRATOR_STATE(state, ray, D).z,
-                                 distance, settings.x, settings.y, settings.z, background);
-  const float4 beta = kernel_data.background.dfv_fog_extinction;
-  return rgb_to_spectrum(make_float3(expf(-beta.x * d), expf(-beta.y * d), expf(-beta.z * d)));
+  return dfv_fog_segment(kg, INTEGRATOR_STATE(state, ray, P),
+                         INTEGRATOR_STATE(state, ray, D), distance, background,
+                         INTEGRATOR_STATE(state, path, visibility) & PATH_RAY_VISIBILITY_CAMERA);
 }
 
 ccl_device_inline Spectrum dfv_fog_radiance(KernelGlobals kg)
@@ -30,8 +44,7 @@ ccl_device_inline void dfv_matte_fog_surface(KernelGlobals kg,
                                             ccl_private ShaderData *sd,
                                             ccl_global float *ccl_restrict render_buffer)
 {
-  if (kernel_data.background.dfv_fog_extinction.w == 0.0f ||
-      !(INTEGRATOR_STATE(state, path, visibility) & PATH_RAY_VISIBILITY_CAMERA)) {
+  if (kernel_data.background.dfv_fog_extinction.w == 0.0f) {
     return;
   }
   // Transparent hits keep the original ray origin: ray_length is the full
@@ -53,14 +66,18 @@ ccl_device_inline void dfv_matte_fog_surface(KernelGlobals kg,
 
 ccl_device_inline Spectrum dfv_matte_fog_background(KernelGlobals kg,
                                                    IntegratorState state,
-                                                   const Spectrum background)
+                                                   const Spectrum background,
+                                                   ccl_global float *ccl_restrict render_buffer)
 {
-  if (kernel_data.background.dfv_fog_extinction.w == 0.0f ||
-      !(INTEGRATOR_STATE(state, path, visibility) & PATH_RAY_VISIBILITY_CAMERA)) {
+  if (kernel_data.background.dfv_fog_extinction.w == 0.0f) {
     return background;
   }
-  const Spectrum amount = one_spectrum() - dfv_fog_transmittance(kg, state, 0.0f, true);
-  return background * (one_spectrum() - amount) + dfv_fog_radiance(kg) * amount;
+  const Spectrum transmission = dfv_fog_transmittance(kg, state, 0.0f, true);
+  // The analytic source term belongs to the main path, not background-light MIS.
+  // This prevents reflected and indirect fog from being counted twice.
+  const Spectrum fog = (one_spectrum() - transmission) * dfv_fog_radiance(kg);
+  film_write_surface_emission(kg, state, fog, 1.0f, render_buffer, LIGHTGROUP_NONE);
+  return background * transmission;
 }
 
 CCL_NAMESPACE_END

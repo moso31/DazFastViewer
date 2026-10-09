@@ -2,6 +2,7 @@
   nlohmann::json water_checks_=nlohmann::json::array();
   bool water_scene_test_=false;
   qint64 water_scene_recorded_=0;
+  uint64_t water_navigation_clay_=0;
   const Document *water_test_shared_document_=nullptr;size_t water_test_scene_updates_=0;
   void water_scene_test_tick(const RenderStatus &state){
     auto fail=[&](const std::string &why){finish_test(false,why);water_test_=false;};
@@ -12,9 +13,9 @@
     auto record=[&](const char *name){const auto now=QDateTime::currentMSecsSinceEpoch();PROCESS_MEMORY_COUNTERS_EX memory{};memory.cb=sizeof(memory);K32GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory),sizeof(memory));water_checks_.push_back({{"stage",name},{"elapsed_ms",water_scene_recorded_?now-water_scene_recorded_:0},{"private_bytes",memory.PrivateUsage},{"source",document_->source_file.string()},{"sessions",state.sessions},{"instances",state.adapter.instances},{"triangles",state.adapter.triangles},{"max_displacement",state.max_displacement},{"water_count",document_->waters.size()}});water_scene_recorded_=now;renderer_->trace(name);std::ofstream(output_/"water-checks.json")<<water_checks_.dump(2);};
     try{
       if(water_test_stage_==0){check(document_->waters.empty(),"Use a source scene without native water");record("full-scene-loaded");findChild<QAction *>("CreateWater")->trigger();}
-      else if(water_test_stage_==1){check(document_->waters.size()==1&&selected_water(),"Create menu did not select native water");water_test_shared_document_=document_.get();water_test_scene_updates_=state.adapter.scene_updates;record("water-created");renderer_->camera_view({4.6f,.4f,0,90000,1.015f,.595f});}
-      else if(water_test_stage_==2){record("far-lod");renderer_->camera_view({4.6f,.4f,0,60,1.015f,.595f});}
-      else if(water_test_stage_==3){record("near-lod");water_panel_->findChild<QDoubleSpinBox *>("time")->setValue(4.5);}
+      else if(water_test_stage_==1){check(document_->waters.size()==1&&selected_water(),"Create menu did not select native water");water_test_shared_document_=document_.get();water_test_scene_updates_=state.adapter.scene_updates;water_navigation_clay_=state.clay_presentations;record("water-created");renderer_->camera_view({4.6f,.4f,0,90000,1.015f,.595f});}
+      else if(water_test_stage_==2){check(state.clay_presentations==water_navigation_clay_,"远距离相机移动触发白模等待");record("far-lod");renderer_->camera_view({4.6f,.4f,0,60,1.015f,.595f});}
+      else if(water_test_stage_==3){check(state.clay_presentations==water_navigation_clay_,"近距离相机移动触发白模等待");record("near-lod");water_panel_->findChild<QDoubleSpinBox *>("time")->setValue(4.5);}
       else if(water_test_stage_==4){check(selected_water()&&water::effective(*document_,snapshot_).front()->config.time==4.5,"Water time did not update");check(document_.get()==water_test_shared_document_&&state.adapter.scene_updates==water_test_scene_updates_,"Water time/LOD copied or synchronized the entire scene");record("time-edit");auto config=selected_water()->config;config.coast=true;generate_water(config,selected_water()->id,true);}
       else if(water_test_stage_==5){const auto *w=selected_water();check(w&&w->cache&&w->cache->objects>0&&!w->cache->cells.empty(),"Full-scene coast did not produce contacts");check(w->cache->stamp==water::input_stamp(*document_,snapshot_),"Full-scene coast stamp stale");check(document_.get()==water_test_shared_document_&&state.adapter.scene_updates==water_test_scene_updates_,"Coast rebuild copied or synchronized the entire scene");std::ofstream(output_/"coast.json")<<water::json(*w).dump();record("full-scene-coast");delete_selection();}
       else if(water_test_stage_==6){check(document_->waters.empty(),"Delete left native water behind");record("deleted");history_->undo();}

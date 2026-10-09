@@ -32,7 +32,7 @@ inline std::vector<runtime::Properties> scene_properties(const Document &d,const
 inline std::vector<uint8_t> scene_pick_mask(const Document &d,const Snapshot &s,const ir::Scene &scene) {
   auto mask=runtime::viewport_pick_mask(scene,d.catalog.targets);const auto values=scene_properties(d,s);
   const auto children=runtime::visibility_children(scene,d.catalog.targets);std::vector<size_t> disabled;std::vector<bool> selectable(values.size());
-  for(size_t t=0;t<values.size();++t){selectable[t]=values[t].selectable;if(!selectable[t])disabled.push_back(t);}
+  for(size_t t=0;t<values.size();++t){selectable[t]=values[t].selectable&&!water::find(d.waters,d.catalog.targets[t].id);if(!selectable[t])disabled.push_back(t);}
   while(!disabled.empty()){const auto t=disabled.back();disabled.pop_back();for(auto child:children[t])if(selectable[child]){selectable[child]=false;disabled.push_back(child);}}
   for(size_t t=0;t<values.size();++t)if(!selectable[t])mask.at(d.catalog.targets[t].instance)=0;
   const ObjectHierarchy h(d,false);
