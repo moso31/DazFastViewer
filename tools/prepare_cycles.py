@@ -65,6 +65,43 @@ def main():
             raise RuntimeError("补丁定位不唯一: " + path)
         files[path] = original.replace(before, after).encode("utf-8")
 
+    # 网页夜空作为单个 CPU/CUDA SVM 节点执行，避免把 27 邻域循环展开成数千个图节点。
+    # NVCC 的 Windows 主机预处理仍可能按系统代码页读取头文件；生成副本将中文注释
+    # 转成 ASCII 转义，仓库原文件保留 UTF-8，避免非 ASCII 行末吞掉下一行代码。
+    files["src/kernel/svm/dfv_night_sky_model.h"] = (ROOT / "src/cycles/night_sky_model.h").read_text(encoding="utf-8").encode("ascii", "backslashreplace")
+    files["src/kernel/svm/dfv_night_sky.h"] = (ROOT / "src/cycles/night_sky_kernel.h").read_text(encoding="utf-8").encode("ascii", "backslashreplace")
+    replace("src/kernel/CMakeLists.txt", "set(SRC_KERNEL_SVM_HEADERS", "set(SRC_KERNEL_SVM_HEADERS\n  svm/dfv_night_sky_model.h\n  svm/dfv_night_sky.h")
+    replace("src/kernel/svm/node_types_template.h", "SHADER_NODE_TYPE(NODE_TEX_NOISE)", "SHADER_NODE_TYPE(NODE_TEX_NOISE)\nSHADER_NODE_TYPE(NODE_DFV_NIGHT_SKY)")
+    replace("src/kernel/svm/node_types.h", "/* NODE_TEX_NOISE */", """struct SVMNodeDfvNightSky {
+  int quality;
+  float contrast;
+  float density;
+  SVMStackOffset vector;
+  SVMStackOffset galaxy_offset;
+  SVMStackOffset stars_offset;
+  uint8_t _pad;
+};
+static_assert(alignof(SVMNodeDfvNightSky) <= alignof(uint));
+static_assert(sizeof(SVMNodeDfvNightSky) % sizeof(uint) == 0);
+
+/* NODE_TEX_NOISE */""")
+    replace("src/kernel/svm/svm.h", '#include "kernel/svm/noisetex.h"', '#include "kernel/svm/noisetex.h"\n#include "kernel/svm/dfv_night_sky.h"')
+    replace("src/kernel/svm/svm.h", "      SVM_CASE(NODE_TEX_NOISE)", """      SVM_CASE(NODE_DFV_NIGHT_SKY)
+      svm_node_dfv_night_sky(stack, svm_node_get<SVMNodeDfvNightSky>(kg, &offset));
+      break;
+      SVM_CASE(NODE_TEX_NOISE)""")
+    replace("src/scene/shader_nodes.h", "class NoiseTextureNode : public TextureNode {", """class DfvNightSkyNode : public ShaderNode {
+ public:
+  SHADER_NODE_CLASS(DfvNightSkyNode)
+  NODE_SOCKET_API(float3, vector)
+  NODE_SOCKET_API(int, quality)
+  NODE_SOCKET_API(float, contrast)
+  NODE_SOCKET_API(float, density)
+};
+
+class NoiseTextureNode : public TextureNode {""")
+    replace("src/scene/shader_nodes.cpp", "NODE_DEFINE(NoiseTextureNode)", (ROOT / "src/cycles/night_sky_node.inl").read_text(encoding="utf-8") + "\nNODE_DEFINE(NoiseTextureNode)")
+
     replace("src/cmake/external_libs.cmake",
             'set(_cycles_lib_dir "${CMAKE_CURRENT_SOURCE_DIR}/lib/${_cycles_lib_platform}")',
             'set(_cycles_lib_dir "${DFV_LIB_DIR}")')
@@ -221,7 +258,7 @@ KERNEL_STRUCT_MEMBER(background, float4, dfv_fog_settings)""")
     for name, data in files.items():
         write_changed(destination / name, data)
     manifest = {"standalone_commit": STANDALONE, "blender_commit": BLENDER, "adopted_files": adopted,
-                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry", "object-space displacement bump projection", "analytic shared surface and sky height atmosphere"]}
+                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry", "object-space displacement bump projection", "analytic shared surface and sky height atmosphere", "procedural cellular night sky SVM node"]}
     write_changed(destination / "dfv-source-manifest.json", json.dumps(manifest, indent=2) + "\n")
     print(f"Cycles 构建树已生成：{destination}；接入 {len(adopted)} 个 Blender 5.2.2 文件")
 

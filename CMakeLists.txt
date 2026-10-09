@@ -44,6 +44,7 @@ foreach(required "${DFV_BLENDER_SOURCE}/.git" "${DFV_STANDALONE_SOURCE}/.git"
 endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${DFV_ROOT}/tools/prepare_cycles.py" "${DFV_ROOT}/src/cycles/matte_fog_kernel.h" "${DFV_ROOT}/src/render_ir/fog_column.h" "${DFV_ROOT}/tools/dependencies.lock.json"
+  "${DFV_ROOT}/src/cycles/night_sky_kernel.h" "${DFV_ROOT}/src/cycles/night_sky_model.h" "${DFV_ROOT}/src/cycles/night_sky_node.inl"
   "${DFV_ROOT}/specs/001-cycles-static-camera/evidence/source-differences.json")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E env PYTHONUTF8=1 "${Python3_EXECUTABLE}" "${DFV_ROOT}/tools/prepare_cycles.py"
   --blender "${DFV_BLENDER_SOURCE}" --standalone "${DFV_STANDALONE_SOURCE}"
@@ -84,6 +85,7 @@ add_library(dfv_scene STATIC src/render_ir/scene.cpp src/daz/loader.cpp src/daz/
   src/editor/document.cpp src/runtime/picking.cpp src/runtime/conform.cpp src/runtime/rigid_follow.cpp src/daz/documents.cpp src/runtime/morph_data.cpp)
 target_sources(dfv_scene PRIVATE src/runtime/subdivision.cpp src/runtime/graft_surface.cpp src/editor/attachments.cpp src/runtime/pose_edit.cpp src/editor/pose_drag.cpp)
 target_sources(dfv_scene PRIVATE src/runtime/geometry_shell.cpp)
+target_sources(dfv_scene PRIVATE src/render_ir/night_sky.cpp src/render_ir/night_astronomy.cpp)
 target_sources(dfv_scene PRIVATE src/daz/source_archive.cpp)
 target_sources(dfv_scene PRIVATE src/city/model.cpp src/city/generator.cpp src/city/document.cpp src/city/runtime.cpp)
 target_sources(dfv_scene PRIVATE src/water/model.cpp src/water/geometry.cpp src/water/document.cpp)
@@ -220,6 +222,10 @@ add_executable(RenderOptionsTest tests/render_options.cpp)
 target_link_libraries(RenderOptionsTest PRIVATE dfv_scene bf::dependencies::zlib)
 target_compile_options(RenderOptionsTest PRIVATE /utf-8)
 add_test(NAME render_options COMMAND RenderOptionsTest)
+add_executable(NightSkyTest tests/night_sky.cpp)
+target_link_libraries(NightSkyTest PRIVATE dfv_scene)
+target_compile_options(NightSkyTest PRIVATE /utf-8)
+add_test(NAME night_sky COMMAND NightSkyTest)
 add_executable(SubdivisionTest tests/subdivision.cpp)
 target_link_libraries(SubdivisionTest PRIVATE dfv_scene)
 target_compile_options(SubdivisionTest PRIVATE /utf-8)

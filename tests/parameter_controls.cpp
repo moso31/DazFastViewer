@@ -29,6 +29,7 @@ static void require(bool value,const char *message) {if(!value) throw std::runti
 #include "extension_panel.inl"
 #include "geograft_panel.inl"
 #include "matte_fog_panel.inl"
+#include "night_sky_panel.inl"
 #include "parameter_settings.inl"
 int main(int argc,char **argv) {
   QApplication app(argc,argv);
@@ -102,6 +103,7 @@ int main(int argc,char **argv) {
     parameter_settings(app);
     parameter_wheel(app);
     matte_fog_panel(app);
+    night_sky_panel(app);
     extension_panel(app);
     geograft_panel(app);
     std::cout<<"Numeric text / focus commit / unbounded slider / sun-sky date-time / DUF favorites: PASS\n";return 0;

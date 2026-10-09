@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cfloat>
 #include <ppl.h>
+#include "cycles/night_sky.inl"
 
 namespace dfv {
 static ccl::float3 vector(ir::Vec3 v) {return ccl::make_float3(v.x,v.y,v.z);}
@@ -256,9 +257,10 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
   using namespace ccl;options_=options;
   auto graph=make_unique<ShaderGraph>();auto *bg=graph->create_node<BackgroundNode>();
   const auto &n=options.environment;const int mode=int(ir::number(n,"Environment Mode",0));
+  const bool night=ir::night_enabled(n);const auto astronomy=night?ir::night_astronomy(n):ir::NightAstronomy{};
   bg->set_color(vector(n.id.empty()?environment_:ir::color(n,"Environment Tint")));
   bg->set_strength(n.id.empty()?1:mode==3?0:float(ir::number(n,"Environment Intensity",1)*ir::number(n,"Environment Map",1)));
-  if(mode==2) {
+  if((mode==2||night)&&(!night||astronomy.darkness<1)) {
     auto *sky=graph->create_node<SkyTextureNode>();sky->set_sky_type(NODE_SKY_MULTIPLE_SCATTERING);
     const auto direction=ir::solar_direction(n);
     sky->set_sun_elevation(std::asin(std::clamp(direction.z,-1.f,1.f)));
@@ -274,9 +276,10 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
     graph->connect(sky->output("Color"),tint->input("Vector1"));graph->connect(tint->output("Vector"),bg->input("Color"));
     // 现有 HDRI/EV13 预览尺度下的辐射单位归一化；不声称 Iray 绝对测光等价。
     double units=ir::number(n,"SS RGB Unit Conversion",1);if(units==0) units=1.0/80000;
-    bg->set_strength(float(std::max(0.0,ir::number(n,"Environment Intensity",1)*ir::number(n,"SS Multiplier",.10132)*units)));
+    bg->set_strength(float(std::max(0.0,ir::number(n,"Environment Intensity",1)*ir::number(n,"SS Multiplier",.10132)*units))*(night?float(1-astronomy.darkness):1));
   }
-  if(!options.environment_file.empty()&&(mode==0||mode==1)) {
+  if(night&&astronomy.darkness>=1)bg->set_strength(0);
+  if(!night&&!options.environment_file.empty()&&(mode==0||mode==1)) {
     auto *tex=graph->create_node<EnvironmentTextureNode>();const auto path=options.environment_file.u8string();tex->set_filename(ustring(std::string(path.begin(),path.end())));tex->set_colorspace(u_colorspace_data);
     auto *coord=graph->create_node<TextureCoordinateNode>();ShaderOutput *direction=coord->output("Generated");
     // 逆向采样穹顶旋转，并转换 DAZ Y 向上坐标。
@@ -295,6 +298,7 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
   scene_.background->set_dfv_fog_distances(make_float3(fog.start,fog.base_height-render_origin_.z,fog.scale_height));
   scene_.background->tag_update(&scene_);
   ShaderOutput *surface=bg->output("Background");
+  if(night){auto *sum=graph->create_node<AddClosureNode>();graph->connect(surface,sum->input("Closure1"));graph->connect(night_background(scene_,*graph,n),sum->input("Closure2"));surface=sum->output("Closure");}
   if(!n.id.empty()&&!ir::number(n,"Draw Dome",0)) {
     auto *back=graph->create_node<BackgroundNode>();back->set_color(make_float3(options.backdrop[0],options.backdrop[1],options.backdrop[2]));back->set_strength(1);
     auto *path=graph->create_node<LightPathNode>();auto *mix=graph->create_node<MixClosureNode>();graph->connect(surface,mix->input("Closure1"));graph->connect(back->output("Background"),mix->input("Closure2"));graph->connect(path->output("Is Camera Ray"),mix->input("Fac"));surface=mix->output("Closure");
@@ -306,7 +310,7 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
     auto *object=scene_.create_node<Object>();object->set_geometry(background_light_);object->tag_update(&scene_);
     array<Node *> shaders;shaders.push_back_slow(scene_.default_background);background_light_->set_used_shaders(shaders);
   }
-  background_light_->set_use_mis(mode!=3);background_light_->set_map_resolution(0);background_light_->tag_update(&scene_);
+  background_light_->set_use_mis(mode!=3);background_light_->set_map_resolution(night?2048:0);background_light_->tag_update(&scene_);
   for(size_t i=0;i<lights_.size();++i) {lights_[i]->set_strength(ir::scene_lights(options)?vector(light_power_[i]):zero_float3());lights_[i]->tag_update(&scene_);}
 }
 #include "cycles/graft_geometry.inl"

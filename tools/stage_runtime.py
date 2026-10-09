@@ -151,7 +151,7 @@ def main():
             raise RuntimeError('MSVC v143 redistributable files missing; install the VS C++ workload.')
         for source in redists[-1].glob('*.dll'):
             stage(source, out / source.name)
-    for name in ('qt', 'nlohmann', 'jolt', 'opensubdiv'):
+    for name in ('qt', 'nlohmann', 'jolt', 'opensubdiv', 'hyg'):
         shutil.copytree(ROOT / 'third_party' / name, out / 'licenses' / name, dirs_exist_ok=True)
         deployed.update(p for p in (out / 'licenses' / name).rglob('*') if p.is_file())
     if (qt / 'sbom').exists():

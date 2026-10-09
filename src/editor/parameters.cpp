@@ -1,6 +1,7 @@
 #include "editor/parameters.h"
 #include "editor/parameter_widgets.h"
 #include "render_ir/matte_fog.h"
+#include "render_ir/night_sky.h"
 #include <QDateEdit>
 #include <QApplication>
 #include <QTimeEdit>
@@ -202,12 +203,27 @@ void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t
         if(p.id=="Matte Fog Brightness Relative to Environment")c.detail="开启时随环境平均亮度变化；关闭时使用独立雾亮度。Scene Only 下可关闭此项来制作可见的远景雾。";
       }
       if(p.id=="SS Day") {c.format=ParameterControl::Format::date;c.label="SS Day（年月日）";}
+      if(ir::night_option(p.id)){
+        c.enforce_limits=p.type=="bool"||p.type=="enum";
+        if(p.type=="bool")c.format=ParameterControl::Format::checkbox;
+        if(p.id!="DFV Night Enabled")c.read_enabled=[node,supported=p.supported]{return supported&&ir::night_enabled(*node);};
+        c.detail="夜景关闭时不参与渲染。使用 SS 日期、当地时间、UTC 时差与经纬度；仅场景模式下不启用天空。";
+        if(p.id=="DFV Night Enabled")c.detail="启用日期驱动的日夜天空，替代环境贴图；关闭后恢复原有环境。原生 DAZ DUF 默认关闭。";
+        if(p.id=="DFV Night Limiting Magnitude"){c.detail="仅用于真实星表模式。根据星等保留亮星、隐藏暗星；目录最暗为 7 等，超过目录不会凭空增加恒星。";c.read_enabled=[node,supported=p.supported]{return supported&&ir::night_enabled(*node)&&ir::number(*node,"DFV Night Star Distribution",0)==1;};}
+        if(p.id=="DFV Night Star Density"){c.detail="仅用于网页式星空。1 对应参考网页，减小逐渐隐藏暗星，增大显示更多暗星；星位保持稳定。";c.read_enabled=[node,supported=p.supported]{return supported&&ir::night_enabled(*node)&&ir::number(*node,"DFV Night Star Distribution",0)==0;};}
+        if(p.id=="DFV Night Star Distribution")c.detail="网页式星空使用三维球面上的稳定程序化分布，包含远近星光和尘埃遮挡；真实星表保留 HYG 恒星位置及 B-V 色彩。两者均随日期系统旋转。";
+        if(p.id=="DFV Night Lighting")c.detail="所有档位只有一个环境光，不创建逐星点光源。均色与 SH 将非相机光线中的星空近似为平滑补光；完整环境保留星点反射，可能需要更多采样降噪。月光始终独立。";
+        if(p.id=="DFV Night Quality")c.detail="控制银河球状云团的噪声层数；中档与网页默认层数一致。日常调参不烘焙天空纹理。真实星表模式同时调整星位查询表的精细度。";
+        if(p.id=="DFV Night Rotation")c.detail="在日期驱动的天球上附加艺术旋转，不移动月亮。Dome Rotation 同时旋转太阳、月亮和星空。";
+        if(c.read_enabled)c.enabled=c.read_enabled();
+      }
       if(p.id=="SS Time") {c.format=ParameterControl::Format::time;c.label="SS Time（时分秒）";}
       c.read=[node,i,k]{return node->parameters.at(i).value.at(k);};c.write=[this,callback,i,k](double v){callback(i,k,v);update_rows();};controls_.push_back(std::move(c));
       if(color) {
         auto &control=controls_.back();control.format=ParameterControl::Format::color;
         control.read_color=[node,i]{const auto &v=node->parameters.at(i).value;return std::array<double,3>{v[0],v[1],v[2]};};
-        control.write_color=[this,callback,color_callback,i,minimum=p.minimum,maximum=p.maximum](auto v){for(auto &c:v)c=std::clamp(c,minimum,maximum);if(color_callback)color_callback(i,v);else for(size_t k=0;k<3;++k)callback(i,k,v[k]);update_rows();};
+        if(ir::night_option(p.id))control.maximum=std::numeric_limits<float>::max();
+        control.write_color=[this,callback,color_callback,i,minimum=p.minimum,maximum=p.maximum,night=ir::night_option(p.id)](auto v){if(!night)for(auto &c:v)c=std::clamp(c,minimum,maximum);if(color_callback)color_callback(i,v);else for(size_t k=0;k<3;++k)callback(i,k,v[k]);update_rows();};
       }
     }
   }
@@ -267,6 +283,9 @@ void ParameterPanel::mount() {
         HdrColorDialog dialog(initial,std::max(1e-6,control.maximum),this);dialog.setWindowTitle(text(control.label));
         if(dialog.exec()==QDialog::Accepted&&dialog.color()!=initial)control.write_color(dialog.color());
       });
+    } else if(c.format==ParameterControl::Format::checkbox) {
+      auto *check=parameter_widgets::checkbox(QStringLiteral("启用"),"valueCheck");check->setChecked(c.read()!=0);check->setEnabled(c.enabled);line->addWidget(check);
+      connect(check,&QCheckBox::toggled,this,[this,i](bool checked){current_=i;controls_[i].write(checked?1:0);update_rows();});
     } else if(c.format==ParameterControl::Format::date) {
       auto *date=new QDateEdit;date->setObjectName("valueDate");date->setProperty("historyInput",true);date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setDateRange(QDate(1,1,1),QDate(9999,12,31));date->setDate(QDate::fromJulianDay(qRound64(c.read())));date->setKeyboardTracking(false);date->setEnabled(c.enabled);line->addWidget(date);
       connect(date,&QDateEdit::dateChanged,this,[this,i](QDate value){current_=i;controls_[i].write(double(value.toJulianDay()));update_rows();});
@@ -293,6 +312,10 @@ void ParameterPanel::mount() {
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){current_=i;controls_[i].write(value);update_rows();});
       connect(spin,&QDoubleSpinBox::editingFinished,this,[this,spin]{if(auto *line=spin->findChild<QLineEdit *>()) line->setModified(false);update_rows();});
     }
+    if(c.read_enabled){
+      for(auto *child:widget->findChildren<QWidget *>())if(qobject_cast<QDoubleSpinBox *>(child)||qobject_cast<QSlider *>(child)||qobject_cast<QComboBox *>(child)||qobject_cast<QPushButton *>(child)||qobject_cast<QCheckBox *>(child)||dynamic_cast<parameter_widgets::SettingsButtons *>(child))child->setEnabled(true);
+      widget->setEnabled(c.enabled);
+    }
     widget->setToolTip(text(c.detail));
     auto watched=widget->findChildren<QWidget *>();watched.push_back(widget);
     for(auto *child:watched) child->setProperty("parameterRow",i);
@@ -301,7 +324,11 @@ void ParameterPanel::mount() {
   }
 }
 void ParameterPanel::update_rows() {
+  for(auto &c:controls_)if(c.read_enabled)c.enabled=c.read_enabled();
+  if(wheel_selected_>=0&&!controls_[wheel_selected_].enabled)wheel_selection(-1);
   for(const auto &[i,w]:mounted_) {const auto &c=controls_[i];
+    if(c.read_enabled)w->setEnabled(c.enabled);
+    if(auto *check=w->findChild<QCheckBox *>("valueCheck")){QSignalBlocker block(check);check->setChecked(c.read()!=0);}
     if(auto *button=w->findChild<QPushButton *>("valueColor"))hdr_color::swatch(button,c.read_color(),false,true);
     if(target_&&c.morph>=0) {
       const auto &m=target_->morphs[size_t(c.morph)];QString detail=text(c.detail),status;

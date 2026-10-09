@@ -1,0 +1,13 @@
+HYG v4.1 Bright Star Subset
+Copyright David Nash / The Astronomy Nexus (astronexus).
+Source: https://github.com/astronexus/HYG-Database
+Pinned revision: 3bf37f4b2d5460e1278286320d1d62fab9b493c1
+Source SHA-256: d9f69fd86bbf90a4e4d52b4c5c53eacfa6dfc0bfdef85bfd94f095e0bebe4ebd
+
+This data is licensed under Creative Commons Attribution-ShareAlike 4.0 International:
+https://creativecommons.org/licenses/by-sa/4.0/
+https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+Modified for DazFastViewer: retained 15,598 stars with visual magnitude <= 7,
+excluded Sol, retained J2000 RA/Dec, visual magnitude and B-V; missing B-V is 0.65.
+The resulting data subset remains under CC BY-SA 4.0. See tools/import_night_stars.py.

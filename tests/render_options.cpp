@@ -101,6 +101,7 @@ int main() {try {
     {"scene",{{"nodes",J::array({{{"id","saved-tone"},{"url","#tone"}},{{"id","saved-env"},{"url","#env"},{"extra",{{{"type","studio_node_channels"},{"channels",{{{"channel",{{"id","Environment Map"},{"current_value",3},{"image_file","studio.hdr"}}}}}}}}}}})}}}};
   std::ofstream(file)<<d.dump();auto loaded=daz::load(file,{{folder},false});const auto &o=loaded.scene.options;
   require(ir::number(o.environment,"Environment Map",0)==3&&ir::number(o.environment,"Environment Intensity",0)==2,"节点覆盖或资产通道继承失败");
+  require(ir::option(o.environment,"DFV Night Enabled")&&!ir::night_enabled(o.environment),"原生 DUF 未默认关闭夜景");
   require(o.environment_file==std::filesystem::weakly_canonical(folder/"studio.hdr"),"HDRI 路径丢失");
   require(ir::number(o.environment,"Matte Fog Visibility",0)==600&&ir::option(o.environment,"Matte Fog Visibility")->visible&&ir::option(o.environment,"Matte Fog Visibility")->supported&&!ir::option(o.environment,"Ground Fog")->supported,"DAZ fog inheritance / visibility / scope wrong");
   require(!ir::scene_lights(o)&&std::abs(ir::exposure(o)-.5f)<1e-6f,"Dome Only / EV 曝光错误");
@@ -127,6 +128,7 @@ int main() {try {
     for(const auto &id:{"DFV Matte Fog Background Distance","DFV Matte Fog Horizon Height"}){ir::Option p;p.id=id;p.value={0};old_node.parameters.push_back(p);}
     auto upgraded=ir::options_from_json(ir::options_json(old));const auto upgraded_fog=ir::matte_fog(upgraded);
     require(upgraded_fog.enabled&&upgraded_fog.scale_height==1000&&upgraded_fog.base_height==0&&!ir::option(upgraded.environment,"DFV Matte Fog Background Distance")&&!ir::option(upgraded.environment,"DFV Matte Fog Horizon Height"),"Old background overlay did not migrate to shared atmosphere");
+    for(auto &p:fog_options.environment.parameters){if(p.id=="DFV Night Enabled")p.value={1};if(p.id=="DFV Night Moon Intensity")p.value={3.5};if(p.id=="DFV Night Lighting")p.value={2};}
     editor::Document doc;doc.loaded=loaded;doc.source_file=file;auto snapshot=editor::initial_snapshot(doc);snapshot.options=fog_options;
     editor::save_scene_extension(folder/"fog.dufex",doc,snapshot);const auto restored=editor::load_scene_extension(folder/"fog.dufex",{folder},2);
     require(restored.snapshot.options==fog_options,"DUFEX lost matte fog parameters");

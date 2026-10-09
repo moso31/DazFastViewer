@@ -24,11 +24,12 @@ struct ParameterControl {
   bool enabled=true,visible=true;
   bool float_backed=false;
   bool enforce_limits=false;
-  enum class Format {number,date,time,color};
+  enum class Format {number,date,time,color,checkbox};
   Format format=Format::number;
   std::vector<std::string> choices;
   std::set<int> disabled_choices;
   std::function<double()> read;
+  std::function<bool()> read_enabled;
   std::function<void(double)> write;
   std::function<std::array<double,3>()> read_color;
   std::function<void(const std::array<double,3> &)> write_color;
