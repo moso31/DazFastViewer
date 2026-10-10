@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <functional>
 #include <memory>
+#include <map>
 
 namespace dfv::water {
 // Metres, seconds and degrees. Time is an authored sample, never a running clock.
@@ -19,6 +20,8 @@ struct Config {
   ir::Vec3 color{.018f,.12f,.16f};
   uint32_t seed=1337;
   bool coast=false,scan_scene=true;
+  bool manual_lod=false;
+  int lod_level=0; // 0 为当前密度的最高精度；每级将网格间距扩大一倍。
   std::vector<Source> sources;
   bool operator==(const Config &) const=default;
 };
@@ -43,9 +46,21 @@ struct Water {
   std::shared_ptr<const Cache> cache;
 };
 using Waters=std::vector<std::shared_ptr<const Water>>;
+// 精确复用同一组四叉树叶节点；不改变采样间距或水面精度。
+struct MeshCache {
+  struct Entry {std::vector<Cell> leaves;std::shared_ptr<const ir::Mesh> mesh;};
+  std::string id;
+  Config config;
+  std::shared_ptr<const Cache> coast;
+  std::map<double,Entry> entries;
+  size_t builds=0,hits=0;
+};
 struct Candidate {std::string id,label;double volume=0;};
 using Progress=std::function<void(const std::string &)>;
 void validate(const Config &);
+struct LodLayout {int maximum_level=0,depth=0;uint64_t side=1,vertices=5,triangles=4,bytes=0;};
+LodLayout lod_layout(const Config &);
+void check_manual_lod_budget(const Water &);
 Wave wave(const Config &,double x,double y);
 bool same_shape(const Config &,const Config &);
 nlohmann::json json(const Water &);
@@ -57,6 +72,7 @@ ir::Material material(const Water &);
 ir::Bounds reference_bounds(const Water &,const ir::Transform &world);
 // Camera coordinates are water-local. Cache cells always retain their resolution.
 ir::Mesh mesh(const Water &,ir::Vec3 eye={0,0,10},const Progress &progress={});
+std::shared_ptr<const ir::Mesh> cached_mesh(const Water &,ir::Vec3 eye,MeshCache &,const Progress &progress={});
 struct Obstacle {std::string id;ir::Mesh mesh;ir::Transform transform;bool volume=false;};
 std::shared_ptr<const Cache> calculate(const Water &,const std::vector<Obstacle> &,uint64_t stamp,const Progress &progress={});
 }

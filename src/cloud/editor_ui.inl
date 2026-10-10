@@ -17,12 +17,13 @@
   }
   void generate_cloud(cloud::Config config,std::string id={}){
     if(loading_||closing_)return;try{cloud::validate(config);}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),10000);return;}
-    if(history_)history_->finish_gesture();if(id.empty())id="cloud-"+std::to_string(QDateTime::currentMSecsSinceEpoch());
+    if(id.empty())id="cloud-"+std::to_string(QDateTime::currentMSecsSinceEpoch());
     auto value=std::make_shared<cloud::Cloud>();value->id=id;value->config=config;
     const auto *base=document_?cloud::find(document_->clouds,id):nullptr;
-    if(base&&base->config.x==config.x&&base->config.y==config.y&&base->config.height==config.height&&base->config.thickness==config.thickness){
+    if(base){
       auto edit=history_edit(QStringLiteral("修改体积云"));std::erase_if(snapshot_.cloud_overrides,[&](const auto &v){return v->id==id;});snapshot_.cloud_overrides.push_back(value);send();return;
     }
+    if(history_)history_->finish_gesture();
     const auto source=document_?document_:std::make_shared<Document>();auto saved=document_?snapshot_:initial_snapshot(*source);const auto expected=document_;const auto revision=snapshot_.revision;
     loading_=true;open_->setEnabled(false);project_action_->setEnabled(false);cloud_panel_->setEnabled(false);statusBar()->showMessage(QStringLiteral("正在后台创建体积云…"));
     loader_=std::jthread([this,source,saved=std::move(saved),value,expected,revision](std::stop_token stop)mutable{

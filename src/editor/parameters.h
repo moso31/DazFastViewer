@@ -15,6 +15,7 @@ class QLabel;
 namespace dfv::editor {
 struct ParameterControl {
   std::string id,label,group,detail;
+  std::vector<std::string> alternate_groups;
   std::string favorite_name,favorite_id;
   bool favorite=false;
   double minimum=-10000,maximum=10000,step=.1,initial=0;
@@ -33,6 +34,8 @@ struct ParameterControl {
   std::function<void(double)> write;
   std::function<std::array<double,3>()> read_color;
   std::function<void(const std::array<double,3> &)> write_color;
+  std::function<std::array<double,2>()> read_location;
+  std::function<void(const std::array<double,2> &)> write_location;
 };
 class ParameterPanel final:public QWidget {
   const runtime::Target *target_=nullptr;
@@ -79,7 +82,8 @@ public:
   void bind_favorites(const runtime::FavoriteState *state,const std::string &node={}) {saved_favorites_=state;saved_favorite_node_=node;}
   void bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node={});
   void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
-                    std::function<void(size_t,const std::array<double,3> &)> color_callback={});
+                    std::function<void(size_t,const std::array<double,3> &)> color_callback={},
+                    std::function<void(const std::array<size_t,3> &,const std::array<double,3> &)> location_callback={});
   void set_extra(std::vector<ParameterControl> controls) {extra_=std::move(controls);}
   void bind_controls(std::vector<ParameterControl> controls) {node_.clear();option_node_=nullptr;target_=nullptr;values_=nullptr;favorite_scope_.clear();scene_favorites_=false;controls_=std::move(controls);morph_rows_.clear();rebuild();}
   void refresh(size_t index);

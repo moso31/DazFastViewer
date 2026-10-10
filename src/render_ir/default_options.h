@@ -10,7 +10,7 @@ inline OptionNode default_options(bool environment){
     add("Environment Mode","环境模式",0,0,3,1,"enum").choices={"穹顶与场景","仅穹顶","太阳与天空","仅场景"};
     add("Environment Intensity","环境强度",1,0,1000);add("Environment Map","环境贴图强度",1,0,1000);
     add("Environment Tint","环境颜色",1,0,10,.01,"float_color").value={1,1,1};add("Draw Dome","显示穹顶",1,0,1,1,"bool");add("Dome Rotation","穹顶旋转",0,-360,360,1);
-    add("SS Latitude","纬度",0,-90,90,1);add("SS Longitude","经度",0,-180,180,1);add("SS Day","日期（儒略日）",2457092,2000000,3000000,1);add("SS Time","当地时间（秒）",43200,0,86400,60);add("SS UTC Offset","UTC 时差",0,-14,14,1);
+    add("SS Latitude","纬度",0,-90,90,1);add("SS Longitude","经度",0,-180,180,1);add("SS Day","日期（儒略日）",2457092,2000000,3000000,1);add("SS Time","当地时间",43200,0,86400,1800);add("SS UTC Offset","SS UTC Offset",0,-14,14,.5);
     add("SS Sun Disk Intensity","太阳强度",1,0,100);add("SS Sun Disk Scale","太阳大小",1,.01,100);add("SS Haze","雾霾",0,0,10);add("SS Multiplier","天空强度",1,0,100);
   }else{
     add("Tone Mapping Enable","启用色调映射",1,0,1,1,"bool");add("Exposure Value","曝光值",13,-20,30,.1);add("Film ISO","感光度 ISO",100,1,102400,10);

@@ -18,6 +18,17 @@ void validate(const Config &c){
      !range(c.foam_width,.01,1000)||!range(c.foam_strength,0,1)||!range(c.precision,.02,1000)||!range(c.density,.25,8)||!range(c.foam_uv_scale,.01,100)||
      !range(c.color.x,0,1)||!range(c.color.y,0,1)||!range(c.color.z,0,1))throw std::runtime_error("水体参数超出有效范围");
   std::set<std::string> ids;for(const auto &s:c.sources)if(s.id.empty()||!ids.insert(s.id).second)throw std::runtime_error("海岸线对象身份无效或重复");
+  if(c.lod_level<0||c.lod_level>26)throw std::runtime_error("水体 LOD 等级无效");
+}
+LodLayout lod_layout(const Config &c){
+  validate(c);const double spacing=std::max(c.precision,c.wavelength/8.);
+  const double exponent=std::log2(std::max(c.width,c.length)/spacing);
+  const int base=std::clamp(int(std::ceil(exponent)),0,26);
+  auto vertices=[](int level){const uint64_t n=uint64_t(1)<<level;return n*n+(n+1)*(n+1);};
+  int finest=std::clamp(int(std::ceil(exponent+std::log2(c.density)/2)),0,26);
+  while(c.density>1&&finest>0&&double(vertices(finest))>double(vertices(base))*c.density)--finest;
+  LodLayout layout;layout.maximum_level=finest;layout.depth=std::max(0,finest-c.lod_level);layout.side=uint64_t(1)<<layout.depth;
+  layout.vertices=vertices(layout.depth);layout.triangles=4*layout.side*layout.side;layout.bytes=layout.vertices*(sizeof(ir::Vec3)+sizeof(float))+layout.triangles*sizeof(ir::Triangle);return layout;
 }
 Wave wave(const Config &c,double x,double y){
   Wave out{x,y,0,0};double compression=0;
@@ -40,6 +51,7 @@ nlohmann::json json(const Water &w){
     {"depth",c.depth},{"clarity",c.clarity},{"wave_height",c.wave_height},{"wavelength",c.wavelength},{"steepness",c.steepness},{"direction",c.direction},
     {"time",c.time},{"ripples",c.ripples},{"roughness",c.roughness},{"foam_width",c.foam_width},{"foam_strength",c.foam_strength},{"precision",c.precision},
     {"density",c.density},{"foam_uv_scale",c.foam_uv_scale},{"color",{c.color.x,c.color.y,c.color.z}},{"seed",c.seed},{"coast",c.coast},{"scan_scene",c.scan_scene},{"sources",J::array()}};
+  j["manual_lod"]=c.manual_lod;j["lod_level"]=c.lod_level;
   for(const auto &s:c.sources)j["sources"].push_back({{"id",s.id},{"volume",s.volume}});
   if(w.cache){auto &cache=j["cache"];cache={{"stamp",w.cache->stamp},{"objects",w.cache->objects},{"sampling_spacing",w.cache->sampling_spacing},{"warnings",w.cache->warnings},{"cells",J::array()}};for(const auto &v:w.cache->cells)cache["cells"].push_back({v.x,v.y,v.level,v.clearance});}
   return j;
@@ -53,6 +65,7 @@ std::shared_ptr<const Water> from_json(const nlohmann::json &j){
   DFV_WATER_READ(foam_width);DFV_WATER_READ(foam_strength);DFV_WATER_READ(precision);DFV_WATER_READ(seed);DFV_WATER_READ(coast);DFV_WATER_READ(scan_scene);
 #undef DFV_WATER_READ
   c.density=j.value("density",1.);c.foam_uv_scale=j.value("foam_uv_scale",1.);
+  c.manual_lod=j.value("manual_lod",false);c.lod_level=j.value("lod_level",0);
   auto rgb=j.at("color").get<std::array<float,3>>();c.color={rgb[0],rgb[1],rgb[2]};for(const auto &s:j.at("sources"))c.sources.push_back({s.at("id"),s.at("volume")});validate(c);
   if(j.contains("cache")){const auto &v=j.at("cache");auto cache=std::make_shared<Cache>();cache->stamp=v.at("stamp");cache->objects=v.at("objects");cache->warnings=v.at("warnings").get<std::vector<std::string>>();
     cache->sampling_spacing=v.value("sampling_spacing",c.precision);if(!std::isfinite(cache->sampling_spacing)||cache->sampling_spacing<0||cache->sampling_spacing>1000000)throw std::runtime_error("海岸线采样间距无效");

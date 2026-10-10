@@ -1,5 +1,7 @@
 #include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
+#include "cloud/document.h"
+#include "water/document.h"
 #include "powerpose_fixture.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
@@ -65,6 +67,14 @@ int main(int argc,char **argv){
       mouse(WM_LBUTTONUP,x+8,y+12);const auto committed=wait([&](const auto &s){return s.pose_commit>before.pose_commit;},"IK 未提交");snapshot.poses[0]=committed.pose_input;changed();cpu();
     };
     ik(false);ik(true);const auto final=full();check(final.sessions==1,"连续编辑重建了会话");check(final.presented_revision==snapshot.revision,"显示了过期编辑帧");
-    std::ofstream(output/"result.json")<<nlohmann::json{{"result","PASS"},{"checks",checks},{"sessions",final.sessions},{"revision",snapshot.revision}}.dump(2);return 0;
+    auto added=std::make_shared<Document>(*d);added->generation=2;auto cloud=std::make_shared<cloud::Cloud>();cloud->id="burst";cloud->config.width=cloud->config.length=20;cloud->config.height=10;cloud->config.thickness=3;cloud::install(*added,cloud);auto next=initial_snapshot(*added);next.revision=1;
+    renderer.set_document(added,next,false);
+    QThread::msleep(20);renderer.set_document(d,snapshot,false);app.processEvents();QThread::msleep(20);
+    auto replaced=std::make_shared<Document>(*added);replaced->generation=3;next.generation=3;renderer.set_document(replaced,next,false);
+    auto ready=wait([&](const auto &s){return s.generation==3&&s.presented_revision==next.revision&&!s.preview&&s.samples>=4;},"连续添加对象未完成最新场景",90);check(ready.sessions==1,"添加对象重建了渲染会话");
+    const auto updates=ready.adapter.scene_updates;
+    for(int i=1;i<=3;++i){auto value=std::make_shared<cloud::Cloud>(*cloud);value->config.height+=i;value->config.thickness+=i;value->config.density*=i;next.cloud_overrides={value};++next.revision;renderer.edit(next);}
+    ready=wait([&](const auto &s){return s.generation==3&&s.presented_revision==next.revision&&!s.preview&&s.samples>=4;},"云连续参数没有呈现最终版本",90);check(ready.adapter.scene_updates==updates,"云范围编辑重建整个场景");checks.push_back({{"case","append_and_cloud_burst"},{"generation",ready.generation},{"revision",ready.presented_revision},{"sessions",ready.sessions}});
+    std::ofstream(output/"result.json")<<nlohmann::json{{"result","PASS"},{"checks",checks},{"sessions",ready.sessions},{"revision",next.revision}}.dump(2);return 0;
   }catch(const std::exception &e){std::ofstream(output/"error.txt")<<e.what();std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -57,6 +57,7 @@ class CollisionRuntime {
     std::vector<ir::Transform> graft_relatives;
     bool initialized=false;
     uint64_t cache_key=0;
+    double reference_edges=0;
     std::vector<ir::Vec3> output;
   };
   ir::Scene &scene_;

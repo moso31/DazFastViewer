@@ -3,6 +3,8 @@
 #include <numbers>
 
 namespace dfv::ir {
+// 每 15° 经度对应一小时；地图采用最接近的半小时时区，不使用行政区划。
+inline double longitude_utc_offset(double longitude){return std::round(std::remainder(longitude,360.)/7.5)*.5;}
 // 低阶太阳历：儒略日 + 当地秒数/UTC 时差。坐标为东 X、北 Y、天顶 Z。
 // 与 NOAA 的赤纬/时角定义一致；不包括地形遮挡和近地平线大气折射。
 inline Vec3 solar_direction(const OptionNode &n) {

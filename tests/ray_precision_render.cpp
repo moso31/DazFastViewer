@@ -5,6 +5,7 @@
 #include "scene/scene.h"
 #include "scene/pass.h"
 #include "scene/integrator.h"
+#include "scene/camera.h"
 #include "session/session.h"
 #include "util/path.h"
 #include <OpenColorIO/OpenColorIO.h>
@@ -53,6 +54,22 @@ int main(int argc,char **argv){const auto output=fs::absolute(argc>1?argv[1]:"ar
   CameraState camera;camera.target={.499f,.499f,2.499f};camera.distance=.039f;camera.yaw=-.3f;camera.pitch=.1f;source.camera=render_camera(camera,256,256);
   const auto geometry_updates=adapter.stats().geometry_updates;{ccl::thread_scoped_lock lock(scene.mutex);ir::Delta delta;delta.camera=source.camera;adapter.apply(delta);}reference.clear();render("camera-cell-delta");
   {ccl::thread_scoped_lock lock(scene.mutex);adapter.synchronize(source);}render("camera-cell-synchronized");check(adapter.stats().geometry_updates==geometry_updates,"Camera rebase rebuilt geometry");
+  // 连续平移穿过多个 1 m 单元：预览不更新全场景原点，停下后无需再改变
+  // 相机输入即可恢复精确坐标。完整图像必须与普通同步相同。
+  {
+    ccl::thread_scoped_lock lock(scene.mutex);const auto before=adapter.stats().origin_updates;ir::Delta move;
+    for(int k=1;k<=20;++k){move.camera=source.camera;move.camera->transform.value[3]+=k*.25f;adapter.apply(move,true,4);}
+    check(adapter.stats().origin_updates==before,"Navigation rebased every metre");
+    adapter.apply({});check(adapter.stats().origin_updates==before+1,"Navigation end did not restore precise origin");
+    const auto matrix=scene.camera->get_matrix();check(std::max({std::abs(matrix.x.w),std::abs(matrix.y.w),std::abs(matrix.z.w)})<=.50001f,"Final camera is not near render origin");
+    auto synchronized=source;move.camera->transform.value[3]+=5;adapter.apply(move,true,4);synchronized.camera=*move.camera;adapter.synchronize(synchronized);
+    const auto synced=scene.camera->get_matrix();check(std::max({std::abs(synced.x.w),std::abs(synced.y.w),std::abs(synced.z.w)})<=.50001f,"Full sync changed origin without updating camera");
+    // 超过预览范围的瞬移及时重定位，防止无限积累坐标误差。
+    move.camera->transform.value[3]+=1000;adapter.apply(move,true,4);check(adapter.stats().origin_updates==before+2,"Large navigation jump did not rebase");
+    // 在预览状态回到眼球特写，再用空增量结束导航。
+    move.camera=source.camera;adapter.apply(move,true,.0039f);const auto close=scene.camera->get_matrix();check(std::max({std::abs(close.x.w),std::abs(close.y.w),std::abs(close.z.w)})<=.50001f,"Close-up navigation lost precise origin");adapter.apply({});
+  }
+  render("navigation-restored-eye");check(adapter.stats().geometry_updates==geometry_updates,"Navigation rebuilt eye meshes");
   source.materials[0].base_color={.05f,.09f,.3f};{ccl::thread_scoped_lock lock(scene.mutex);ir::Delta delta;delta.materials={{0,source.materials[0]}};adapter.apply(delta);}reference.clear();render("material-delta");
   {ccl::thread_scoped_lock lock(scene.mutex);adapter.synchronize(source);}render("material-synchronized");
   std::ofstream(output/"checks.json")<<J{{"result",passed?"PASS":"FAIL"},{"device",devices.front().description},{"samples",params.samples},{"stages",stages}}.dump(2);check(passed,"Distant transparent surfaces acquired triangle seams");return 0;

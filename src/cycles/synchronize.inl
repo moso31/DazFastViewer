@@ -254,7 +254,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     }changed=true;
   }
   if(!loaded_||environment_!=source.environment||options_!=source.options||origin_changed) {environment_=source.environment;environment(source.options);changed=true;}
-  const bool camera_changed=!loaded_||source_.camera.transform!=source.camera.transform||source_.camera.width!=source.camera.width||source_.camera.height!=source.camera.height||source_.camera.fov!=source.camera.fov;
+  const bool camera_changed=origin_changed||!loaded_||source_.camera.transform!=source.camera.transform||source_.camera.width!=source.camera.width||source_.camera.height!=source.camera.height||source_.camera.fov!=source.camera.fov;
   texture_map_=std::move(texture_map);shaders_=std::move(shaders);canonical_materials_=std::move(canonical);bump_distances_=std::move(bumps);emission_strengths_=emission;subdivisions_=std::move(subdivisions);meshes_=std::move(meshes);hairs_=std::move(hairs);objects_=std::move(objects);vertex_counts_=std::move(counts);source_=std::move(saved);loaded_=true;
   grafts_=std::move(grafts);graft_bindings_=std::move(graft_bindings);graft_renders_=std::move(graft_renders);
   stats_.instances=source.instances.size();stats_.materials=source.materials.size();stats_.textures=source.textures.size();++stats_.scene_updates;

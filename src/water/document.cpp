@@ -110,7 +110,11 @@ Inputs inputs(const editor::Document &d,const ir::Scene &scene,const Water &wate
   return result;
 }
 bool adapt(const Waters &waters,ir::Scene &scene,ir::Vec3 world_eye,const Progress &progress){
-  bool changed=false;for(const auto &w:waters){auto i=std::find_if(scene.instances.begin(),scene.instances.end(),[&](const auto &v){return v.id==w->id+"/surface";});if(i==scene.instances.end()||!i->visible)continue;auto generated=mesh(*w,ir::inverse(i->transform).point(world_eye),progress);auto &old=scene.meshes.at(i->mesh);if(old.positions!=generated.positions||old.triangles!=generated.triangles||old.water_foam!=generated.water_foam){old=std::move(generated);changed=true;}}
+  Runtime runtime;return runtime.adapt(waters,scene,world_eye,progress);
+}
+bool Runtime::adapt(const Waters &waters,ir::Scene &scene,ir::Vec3 world_eye,const Progress &progress){
+  std::erase_if(meshes_,[&](const auto &v){return !find(waters,v.first);});
+  bool changed=false;for(const auto &w:waters){auto i=std::find_if(scene.instances.begin(),scene.instances.end(),[&](const auto &v){return v.id==w->id+"/surface";});if(i==scene.instances.end()||!i->visible)continue;const auto generated=cached_mesh(*w,ir::inverse(i->transform).point(world_eye),meshes_[w->id],progress);auto &old=scene.meshes.at(i->mesh);if(old.positions!=generated->positions||old.triangles!=generated->triangles||old.water_foam!=generated->water_foam){old=*generated;changed=true;}}
   return changed;
 }
 }

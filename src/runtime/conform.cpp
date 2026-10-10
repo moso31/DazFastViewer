@@ -19,6 +19,7 @@ ir::Vec3 add(ir::Vec3 a,ir::Vec3 b) {return {a.x+b.x,a.y+b.y,a.z+b.z};}
 ir::Vec3 sub(ir::Vec3 a,ir::Vec3 b) {return {a.x-b.x,a.y-b.y,a.z-b.z};}
 ir::Vec3 mul(ir::Vec3 a,float v) {return {a.x*v,a.y*v,a.z*v};}
 float dot(ir::Vec3 a,ir::Vec3 b) {return a.x*b.x+a.y*b.y+a.z*b.z;}
+double edge_measure(const ir::Mesh &mesh){double sum=0;for(const auto &t:mesh.triangles)for(int k=0;k<3;++k){const auto e=sub(mesh.positions[t.vertices[k]],mesh.positions[t.vertices[(k+1)%3]]);sum+=double(e.x)*e.x+double(e.y)*e.y+double(e.z)*e.z;}return sum;}
 ir::Vec3 normal(ir::Vec3 a,ir::Vec3 b) {const ir::Vec3 n{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};const float length=std::sqrt(dot(n,n));return length>0?mul(n,1/length):ir::Vec3{};}
 ir::Vec3 direction(const ir::Transform &m,ir::Vec3 v) {const auto &a=m.value;return {a[0]*v.x+a[1]*v.y+a[2]*v.z,a[4]*v.x+a[5]*v.y+a[6]*v.z,a[8]*v.x+a[9]*v.y+a[10]*v.z};}
 float box_distance(const ir::Bounds &b,ir::Vec3 p) {
@@ -206,6 +207,7 @@ CollisionRuntime::CollisionRuntime(ir::Scene &scene,const std::vector<Target> &t
     const auto found=ids.find(s.collision_target);
     if(found==ids.end()||found->second.size()!=1) throw std::runtime_error("无法唯一解析碰撞对象："+s.collision_target);
     Binding b;b.follower=t.instance;b.source=found->second.front();b.settings=s;
+    b.reference_edges=edge_measure(scene.meshes.at(scene.instances.at(b.source).mesh));
     const auto &mesh=scene.meshes.at(scene.instances.at(t.instance).mesh);
     if(mesh.triangles.empty()) continue;
     if(scene.meshes.at(scene.instances.at(b.source).mesh).triangles.empty()) throw std::runtime_error("碰撞对象没有表面："+s.collision_target);
@@ -250,7 +252,7 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
     }
     if(b.initialized&&!graft_changed&&!changed.contains(follower.mesh)&&!changed.contains(source.mesh)&&relative.value==b.relative.value) continue;
     b.initialized=true;b.relative=relative;b.graft_relatives=std::move(graft_relatives);
-    GeometryKey cache;cache.points(b.input);cache.topology(scene_.meshes[follower.mesh]);cache.add(relative);cache.add(uint64_t(b.settings.collision_iterations));cache.add(uint64_t(b.settings.smoothing_iterations));cache.add(b.settings.weight);
+    GeometryKey cache;cache.points(b.input);cache.topology(scene_.meshes[follower.mesh]);cache.add(relative);cache.add(uint64_t(b.settings.collision_iterations));cache.add(uint64_t(b.settings.smoothing_iterations));cache.add(b.settings.weight);cache.add(std::bit_cast<uint64_t>(b.reference_edges));
     cache.add(source.id);cache.points(scene_.meshes[source.mesh].positions);cache.topology(scene_.meshes[source.mesh]);cache.add(uint64_t(b.grafts.size()));
     for(size_t k=0;k<b.grafts.size();++k) {const auto &g=scene_.instances[b.grafts[k]];cache.add(g.id);cache.add(uint64_t(g.visible));cache.add(b.graft_relatives[k]);cache.points(scene_.meshes[g.mesh].positions);cache.topology(scene_.meshes[g.mesh]);}
     if(cache.value==b.cache_key&&b.output.size()==b.input.size()) {
@@ -286,8 +288,11 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
       if(parallel&&cache.triangle!=SIZE_MAX&&cache.point==p) {hit.vertices=surfaces[surface].triangles[cache.triangle].vertices;hit.barycentric=cache.barycentric;hit.polygon=surfaces[surface].triangles[cache.triangle].source_polygon;hit.triangle=cache.triangle;}
       else {hit=indexes[surface]->nearest(p);cache={p,hit.barycentric,hit.triangle};}return hit;
     };
-    // 半毫米安全间隙用于基础三角面近似，不改变资源本身或人体顶点。
-    constexpr float clearance=.0005f;
+    // ERC 总体缩放会进入蒙皮顶点；固定毫米间隙会把微型角色的衣物推裂。
+    // 用边长比例保留尺寸一致性，旋转和平移不影响该比例。
+    const double current_edges=edge_measure(scene_.meshes[source.mesh]);
+    const float shape_scale=b.reference_edges>0?float(std::sqrt(std::max(0.,current_edges)/b.reference_edges)):1.f;
+    const float clearance=.0005f*shape_scale;
     auto correction=[&](ir::Vec3 p,size_t slot) {
       const auto input=p;const auto anchor=nearest(0,p,slot);
       for(size_t c=0;c<surfaces.size();++c) {
@@ -326,7 +331,7 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
       {diagnostics::Scope phase("faces");for(size_t face=0;face<mesh.triangles.size();++face) {const auto &f=mesh.triangles[face];
         const auto v=f.vertices;float longest=0;
         for(int k=0;k<3;++k) {const auto e=sub(positions[v[k]],positions[v[(k+1)%3]]);longest=std::max(longest,dot(e,e));}
-        if(longest<.0001f) continue;
+        if(longest<.0001f*shape_scale*shape_scale) continue;
         size_t sample=0;for(const ir::Vec3 w:std::array<ir::Vec3,4>{{{1.f/3,1.f/3,1.f/3},{.5f,.5f,0},{.5f,0,.5f},{0,.5f,.5f}}}) {
           const auto p=add(add(mul(positions[v[0]],w.x),mul(positions[v[1]],w.y)),mul(positions[v[2]],w.z));
           const auto d=correction(p,positions.size()+face*4+sample++);const float sum=w.x*w.x+w.y*w.y+w.z*w.z;
@@ -345,7 +350,7 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
         const auto q=add(add(mul(positions[v[0]],w.x),mul(positions[v[1]],w.y)),mul(positions[v[2]],w.z));
         const auto n=normal(sub(positions[v[1]],positions[v[0]]),sub(positions[v[2]],positions[v[0]]));
         const float depth=dot(sub(p,q),n);
-        if(depth<=0||depth>.02f||dot(n,normals[c][k])<.5f) continue;
+        if(depth<=0||depth>.02f*shape_scale||dot(n,normals[c][k])<.5f) continue;
         const auto d=mul(n,depth+clearance);const float sum=w.x*w.x+w.y*w.y+w.z*w.z;
         positions[v[0]]=add(positions[v[0]],mul(d,w.x/sum));positions[v[1]]=add(positions[v[1]],mul(d,w.y/sum));positions[v[2]]=add(positions[v[2]],mul(d,w.z/sum));
       }}

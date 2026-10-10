@@ -6,10 +6,11 @@
 namespace dfv::ir {
 void ensure_night_options(OptionNode &node) {
   if(node.id.empty())return;
+  std::erase_if(node.parameters,[](const auto &p){return p.id=="DFV Night Lighting"||p.id=="DFV Night Quality";});
   auto add=[&](const char *id,const char *label,const char *type,std::vector<double> value,double low,double high,double step=.1)->Option & {
     auto it=std::find_if(node.parameters.begin(),node.parameters.end(),[&](const auto &p){return p.id==id;});
     if(it==node.parameters.end()){Option p;p.id=id;p.value=std::move(value);node.parameters.push_back(std::move(p));it=std::prev(node.parameters.end());}
-    auto &p=*it;p.label=label;p.group="/Environment/夜景";p.type=type;p.minimum=low;p.maximum=high;p.step=step;p.visible=true;p.supported=p.value.size()==(p.type=="float_color"?3:1);p.clamped=false;p.authored=false;
+    auto &p=*it;p.label=label;p.group="/Environment/Dome/夜景";p.type=type;p.minimum=low;p.maximum=high;p.step=step;p.visible=true;p.supported=p.value.size()==(p.type=="float_color"?3:1);p.clamped=false;p.authored=false;
     // min/max 仅提供初始滑轨尺度；范围限制统一来自 ParameterSettings。
     // 导入和刷新也不能再次把用户已保存的数值截回建议范围。
     for(auto &v:p.value){if(!std::isfinite(v))v=low;if(p.type=="bool"||p.type=="enum")v=std::clamp(std::round(v),low,high);}return p;
@@ -17,27 +18,28 @@ void ensure_night_options(OptionNode &node) {
   add("DFV Night Enabled","是否启用夜景","bool",{0},0,1,1);
   add("DFV Night Sky Intensity","夜空底色强度","float",{1},0,100);
   add("DFV Night Stars Intensity","星光强度","float",{1},0,100);
+  add("DFV Night Star Distribution","星空分布","enum",{0},0,1,1).choices={"程序化星空","真实天文星表"};
   add("DFV Night Limiting Magnitude","可见极限星等（越大星越多）","float",{6.5},-1.5,7);
+  add("DFV Night Star Density","星空密度","float",{1},0,2);
   add("DFV Night Milky Way Intensity","银河强度","float",{1},0,100);
   add("DFV Night Milky Way Detail","银河细节对比度","float",{1},.25,3);
   add("DFV Night Rotation","星空附加旋转（°）","float",{0},-360,360,1);
   add("DFV Night Moon Intensity","月亮强度","float",{1},0,100);
-  add("DFV Night Moon Scale","月亮大小","float",{1},.1,20);
+  add("DFV Night Moon Lighting Gain","月光照明增益（艺术）","float",{1},0,10);
+  add("DFV Night Moon Scale","月亮大小","float",{6},.1,20);
   add("DFV Night Moon Physical","月亮大小保持总光量","bool",{1},0,1,1);
-  add("DFV Night Moon Color","月光颜色","float_color",{1,.94,.82},0,100);
-  add("DFV Night Lighting","星空补光方式","enum",{1},0,2,1).choices={"均色补光（最快）","SH 补光（平滑方向）","完整环境采样（保留星点反射）"};
+  add("DFV Night Moon Color","月光颜色","float_color",{1,1,1},0,100);
   add("DFV Night Lighting Intensity","星空补光强度","float",{1},0,100);
-  add("DFV Night Quality","夜空精细度","enum",{1},0,2,1).choices={"低（快速预览）","标准（网页效果）","高（更多细节）"};
-  add("DFV Night Star Distribution","星空分布","enum",{0},0,1,1).choices={"网页式程序化星空","真实天文星表"};
-  add("DFV Night Star Density","程序化星空密度","float",{1},0,2);
   // 原生 HDRI 预设可能省略或隐藏 Sun-Sky 的时间通道。共享原通道，避免用户
-  // 启用夜景后找不到日期；已创作的数值、范围、精度及分组保持不变。
+  // 启用夜景后找不到日期；已创作的数值、范围和精度保持不变。
   auto time=[&](const char *id,const char *label,double initial,double low,double high,double step){
     for(auto &p:node.parameters)if(p.id==id){p.visible=true;return;}
-    auto &p=add(id,label,"float",{initial},low,high,step);p.group="/Environment/日期与位置";
+    auto &p=add(id,label,"float",{initial},low,high,step);p.group="/Environment/Dome/Sun-Sky";
   };
-  time("SS Day","日期（儒略日）",2457092,2000000,3000000,1);time("SS Time","当地时间（秒）",43200,0,86400,60);
-  time("SS UTC Offset","UTC 时差",0,-14,14,1);time("SS Latitude","纬度",0,-90,90,1);time("SS Longitude","经度",0,-180,180,1);
+  time("SS Day","日期（儒略日）",2457092,2000000,3000000,1);time("SS Time","当地时间",43200,0,86400,1800);
+  time("SS UTC Offset","SS UTC Offset",0,-14,14,.5);time("SS Latitude","纬度",0,-90,90,1);time("SS Longitude","经度",0,-180,180,1);
+  for(auto &p:node.parameters)if(p.id=="SS UTC Offset"){p.type="float";p.label="SS UTC Offset";p.step=.5;p.supported=p.value.size()==1;}
+  for(auto &p:node.parameters){if(p.id.starts_with("SS "))p.group="/Environment/Dome/Sun-Sky";else if(p.id.starts_with("Dome ")||p.id=="Draw Dome")p.group="/Environment/Dome";}
 }
 namespace {
 constexpr double pi=std::numbers::pi;

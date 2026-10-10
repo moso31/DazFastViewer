@@ -12,7 +12,9 @@ namespace dfv::water {
 class Panel final:public QWidget {
   Config config_;
   std::map<std::string,QDoubleSpinBox *> fields_;
-  QCheckBox *coast_,*scan_;
+  QCheckBox *coast_,*scan_,*manual_lod_;
+  QLabel *lod_info_;
+  void lod_controls();
   QTreeWidget *sources_;
   QLabel *message_;
   QPushButton *calculate_,*cancel_,*color_,*sort_;

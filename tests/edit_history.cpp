@@ -38,6 +38,9 @@ static void water_history(){
   check(history.stack().count()==20&&state.document==d,"water edits duplicated the scene document or failed to enter history");
   history.undo();check(water::effective(*d,state.snapshot).front()->config.time==19,"water time undo failed");history.redo();check(water::effective(*d,state.snapshot).front()->config.time==20,"water time redo failed");
   while(history.stack().canUndo())history.undo();check(state.snapshot.water_overrides.empty()&&state.document==d,"water undo did not restore the shared baseline");
+  history.execute("Water LOD",[&]{auto next=std::make_shared<water::Water>(*w);next->config.manual_lod=true;next->config.lod_level=2;state.snapshot.water_overrides={next};});
+  history.undo();check(!water::effective(*d,state.snapshot).front()->config.manual_lod,"Manual LOD undo failed");
+  history.redo();const auto &lod=water::effective(*d,state.snapshot).front()->config;check(lod.manual_lod&&lod.lod_level==2,"Manual LOD redo lost level");
 }
 static void geograft_history(){
   auto current=state_for(fixture());EditHistory history([&]{return current;},[&](const EditState &s){current=s;});

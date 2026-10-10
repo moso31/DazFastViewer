@@ -2,6 +2,7 @@
 #include "editor/group_transforms.h"
 #include "editor/node_properties.h"
 #include "water/document.h"
+#include "water/lod_worker.h"
 #include "cloud/document.h"
 #include "editor/pose_drag.h"
 #include "editor/powerpose_drag.h"
@@ -57,7 +58,7 @@ void Renderer::focus(const ir::Bounds &bounds) {
   const auto dx=bounds.maximum.x-bounds.minimum.x,dy=bounds.maximum.y-bounds.minimum.y,dz=bounds.maximum.z-bounds.minimum.z;
   window_->camera.distance=std::max(.025f,.55f*std::sqrt(dx*dx+dy*dy+dz*dz)/std::sin(.4f));window_->publish();
 }
-void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) {snapshot_=snapshot;edit_preview_until_=now()+.15;Frame f;f.id=snapshot.revision;telemetry_.event("edit_input",f);}}
+void Renderer::edit(const Snapshot &snapshot) {std::lock_guard lock(mutex_);if(document_ && snapshot.generation==document_->generation) {if(snapshot.cloud_overrides!=snapshot_.cloud_overrides)cloud_edit_until_=now()+.18;snapshot_=snapshot;edit_preview_until_=now()+.15;Frame f;f.id=snapshot.revision;telemetry_.event("edit_input",f);}}
 void Renderer::interaction(bool active) {std::lock_guard lock(mutex_);if(active&&!edit_active_) interaction_revision_=snapshot_.revision+1;edit_active_=active;}
 void Renderer::retry_resources() {std::lock_guard lock(mutex_);++retry_resources_;}
 void Renderer::select(uint64_t generation,int target,int joint,std::vector<Selection> selections,bool ik_allowed,const std::string &group) {std::lock_guard lock(mutex_);selected_group_=group;selection_generation_=generation;selected_target_=target;selected_joint_=joint;selections_=std::move(selections);ik_allowed_=ik_allowed;++window_->pose_selection;}
@@ -184,9 +185,17 @@ void Renderer::run(std::stop_token stop) {
     std::shared_ptr<const Document> pending_document;
     std::unique_ptr<ir::Scene> pending_scene;
     cloud::Runtime cloud_runtime,cloud_physics_runtime;
+    water::Runtime water_runtime;
+    water::LodWorker water_lod;uint64_t water_ticket=0,water_revision=0;
+    bool freeze_water_lod=false;
     city::Runtime city_runtime;uint64_t city_camera_epoch=0,water_camera_epoch=0;
     std::unique_ptr<runtime::DeformationRuntime> pending_runtime;
     std::unique_ptr<runtime::DeformationRuntime> runtime;
+    // 结构变化的首次形变可包含整套服装碰撞；等待期间继续呈现现有画面。
+    std::atomic<bool> cancel_prepare{false};
+    runtime::PayloadProgress pending_resources;
+    std::future<void> pending_prepare;uint64_t pending_revision=0;
+    auto finish_prepare=[&]{cancel_prepare=true;if(pending_prepare.valid())try{pending_prepare.get();}catch(...){}cancel_prepare=false;};
     DeformationRefiner refiner;
     uint64_t refine_ticket=0,refine_revision=0;
     bool refine_pending=false,refine_enabled=false;
@@ -212,6 +221,7 @@ void Renderer::run(std::stop_token stop) {
     RenderEditQueue queued;bool clay_wait=false;uint64_t gpu_revision=0;
     std::vector<ir::SubdivisionSettings> queued_subdivision_before;
     auto reset_render_state=[&] {
+      finish_prepare();
       refiner.cancel();refine_pending=false;refine_frames.clear();refined_collision={};
       runtime.reset();render_scene_ptr.reset();pending_runtime.reset();pending_scene.reset();pending_document.reset();
       runtime_document.reset();runtime_source.reset();runtime_frames.reset();
@@ -226,7 +236,7 @@ void Renderer::run(std::stop_token stop) {
     while(!stop.stop_requested()) {
       std::shared_ptr<const Document> document;std::string selected_group;
       std::vector<Selection> selections;int width,height,selected_target,selected_joint;uint64_t selection_generation,retry;
-      bool editing,ik_allowed;double preview_until,resize_until;
+      bool editing,ik_allowed;double preview_until,resize_until,cloud_edit_until;
       std::vector<runtime::PosePin> pose_pins;
       runtime::PowerPoseInput powerpose;
       GizmoSettings gizmo_settings;
@@ -234,11 +244,12 @@ void Renderer::run(std::stop_token stop) {
       {std::lock_guard lock(mutex_);material_hover_generation=material_hover_generation_;material_hover=material_hover_;}
       {std::lock_guard lock(mutex_);document=document_;if(document&&(desired.generation!=snapshot_.generation||desired.revision!=snapshot_.revision)){desired=snapshot_;source_lights=desired.lights;}selected_group=selected_group_;width=requested_width_;height=requested_height_;selected_target=selected_target_;selected_joint=selected_joint_;selections=selections_;selection_generation=selection_generation_;retry=retry_resources_;editing=edit_active_&&snapshot_.revision>=interaction_revision_;preview_until=edit_preview_until_;resize_until=resize_preview_until_;pose_pins=pose_pins_;ik_allowed=ik_allowed_;}
       {std::lock_guard lock(mutex_);powerpose=powerpose_input_;gizmo_settings=gizmo_settings_;quality=quality_;}
+      {std::lock_guard lock(mutex_);cloud_edit_until=cloud_edit_until_;}
       try {
         if(!document){group_source.reset();group_document.reset();group_frames.reset();applied_groups.clear();document_groups.clear();}
         if(document&&(document!=group_source||desired.group_transforms!=applied_groups)) {
           const auto begin=now();GroupFrames next(*document,desired.group_transforms);bool reused=false;
-          if(runtime&&session&&runtime_source==document&&runtime_frames){std::vector<ir::Transform> frames;for(const auto &id:next.hierarchy.targets){const auto a=next.delta(id),b=runtime_frames->delta(id);frames.push_back(a==b?ir::Transform{}:a*ir::inverse(b));}reused=runtime->reframe(frames);if(reused)refine_frames=std::move(frames);}
+          if(!pending_prepare.valid()&&runtime&&session&&runtime_source==document&&runtime_frames){std::vector<ir::Transform> frames;for(const auto &id:next.hierarchy.targets){const auto a=next.delta(id),b=runtime_frames->delta(id);frames.push_back(a==b?ir::Transform{}:a*ir::inverse(b));}reused=runtime->reframe(frames);if(reused)refine_frames=std::move(frames);}
           if(!reused){group_document=transformed_groups(document,desired.group_transforms);document_groups=desired.group_transforms;}
           group_frames=std::move(next);group_source=document;applied_groups=desired.group_transforms;
           if(reused)timing("group_reframe",begin,desired.revision);
@@ -297,18 +308,39 @@ void Renderer::run(std::stop_token stop) {
         state.error.clear();
       }
       if((!runtime||!session)&&document_groups!=applied_groups){group_document=transformed_groups(group_source,applied_groups);document=group_document;document_groups=applied_groups;}
-      if(current!=document||!session) {
+      if(current!=document||!session||pending_prepare.valid()) {
         diagnostics::EventProfile profile(sampling_.rebuild_probe,[&](const char *name,double ms){telemetry_.event(name,{},ms);});
+        auto preparing=[&]{
+          if(!pending_prepare.valid()||pending_prepare.wait_for(std::chrono::seconds(0))==std::future_status::ready)return false;
+          if(display){GLContext::Binding binding(window_->present_context);glViewport(0,0,window_->width,window_->height);glClear(GL_COLOR_BUFFER_BIT);display->draw({});window_->swap();}
+          publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(8));return true;
+        };
+        if(preparing())continue;
+        if(pending_prepare.valid())pending_prepare.get();
         if(pending_document!=document||!pending_runtime) {
           diagnostics::Scope scope("document_prepare");
           pending_runtime.reset();pending_scene=std::make_unique<ir::Scene>(document->loaded.scene);pending_document=document;
-          diagnostics::Scope construction("runtime_construct");
-          pending_runtime=std::make_unique<runtime::DeformationRuntime>(*pending_scene,document->catalog.targets,document->skeletons.skins,document->formulas.graphs,runtime.get());
+          pending_revision=0;
+          pending_resources={};
         }
-        const auto resources=pending_runtime->prepare(desired.values,desired.poses,retry_payloads);retried=retry;
-        state.pending_payloads=resources.pending;state.resource_error=resources.error;
-        if(resources.pending||!resources.error.empty()) {publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
-        {diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(scene_properties(*document,desired),desired.poses);}
+        if(!pending_resources.error.empty()){
+          state.pending_payloads=0;state.resource_error=pending_resources.error;
+          if(retried==retry&&pending_revision==desired.revision){publish_state();std::this_thread::sleep_for(std::chrono::milliseconds(10));continue;}
+          pending_revision=UINT64_MAX;
+        }
+        if(!pending_runtime||pending_revision!=desired.revision){
+          pending_revision=desired.revision;const auto snapshot=desired;retried=retry;
+          pending_prepare=std::async(std::launch::async,[&,document,snapshot,retry_payloads]{
+#ifdef DFV_RENDER_INTERACTION_TEST
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+#endif
+            diagnostics::EventProfile profile(sampling_.rebuild_probe,[&](const char *name,double ms){telemetry_.event(name,{},ms);});
+            if(!pending_runtime){diagnostics::Scope construction("runtime_construct");pending_runtime=std::make_unique<runtime::DeformationRuntime>(*pending_scene,document->catalog.targets,document->skeletons.skins,document->formulas.graphs,runtime.get());}
+            for(;;){if(stop.stop_requested()||cancel_prepare)return;pending_resources=pending_runtime->prepare(snapshot.values,snapshot.poses,retry_payloads);if(!pending_resources.error.empty())return;if(!pending_resources.pending)break;std::this_thread::sleep_for(std::chrono::milliseconds(10));}
+            diagnostics::Scope scope("initial_evaluate");pending_runtime->evaluate(scene_properties(*document,snapshot),snapshot.poses);
+          });continue;
+        }
+        state.pending_payloads=0;state.resource_error.clear();
         apply_instance_node_visibility(*document,desired,*pending_scene);
         pending_scene->lights=group_lights(*group_source,*pending_scene,group_frames->hierarchy,desired.lights,pending_runtime->effective_poses(),&*group_frames);pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
         apply_material_overrides(*pending_scene,document->loaded.scene,desired.material_overrides);
@@ -316,9 +348,10 @@ void Renderer::run(std::stop_token stop) {
         applied_instance_ground=desired.instance_ground;
         const auto camera=window_->mailbox.latest();pending_scene->camera=render_camera(camera,window_->width,window_->height);
         city_runtime.bind(document->cities,*pending_scene);city_runtime.apply(*pending_scene,desired.city_views);state.city=city_runtime.stats;city_camera_epoch=camera.epoch;
-        {const auto eye=camera.eye();water::materials(water::effective(*document,desired),*pending_scene);water::adapt(water::effective(*document,desired),*pending_scene,{eye.x,eye.y,eye.z});water_camera_epoch=camera.epoch;}
+        {const auto eye=camera.eye();water_runtime.clear();water::materials(water::effective(*document,desired),*pending_scene);water_runtime.adapt(water::effective(*document,desired),*pending_scene,{eye.x,eye.y,eye.z});water_camera_epoch=camera.epoch;}
         cloud_runtime.apply(*document,cloud::effective(*document,desired),*pending_scene);
         cloud_physics_runtime.clear();
+        water_lod.cancel();water_ticket=0;water_revision=desired.revision;
         camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;
         set_quality(camera.navigating||now()<camera.preview_until);
         if(!session) {
@@ -598,13 +631,16 @@ void Renderer::run(std::stop_token stop) {
       const bool quality_changed=wanted_preview!=preview||resolution_changed;
       ir::Delta delta;bool new_render_edit=false,subdivision_edit=false,material_layout_edit=false,refinement_finished=false;
       const bool city_pending=!current->cities.empty()&&!navigation_preview&&city_camera_epoch!=camera.epoch;
-      const bool water_pending=!current->waters.empty()&&!navigation_preview&&water_camera_epoch!=camera.epoch;
+      const auto current_waters=water::effective(*current,desired);
+      const bool automatic_water=std::any_of(current_waters.begin(),current_waters.end(),[](const auto &w){return !w->config.manual_lod;});
+      const bool water_pending=!freeze_water_lod&&!current_waters.empty()&&!navigation_preview&&
+        (water_revision!=desired.revision||(automatic_water&&water_camera_epoch!=camera.epoch));
       std::vector<ir::SubdivisionSettings> previous_subdivision;
       // 进入预览时允许取消尚未出图的完整渲染；预览之间仍等待出图，防止连续输入饿死渲染。
       if((quality_changed || size_changed || camera.epoch!=camera_epoch || edit_pending || city_pending || water_pending) &&
          (edit_pending||clay_wait||resolution_changed||(wanted_preview&&!preview)||((telemetry_.displayed_epoch.load()>=epoch||
            (pose_recovery.active&&display->drawn_frame().epoch>=epoch))&&session->ready_to_reset()))) {
-        if(desired.generation==current->generation && desired.revision!=attempted_revision) {
+        if(desired.generation==current->generation && desired.revision!=attempted_revision && now()>=cloud_edit_until) {
           try {
             const auto prepare_begin=now();
             const auto resources=runtime->prepare(desired.values,desired.poses,retry_payloads);
@@ -649,12 +685,10 @@ void Renderer::run(std::stop_token stop) {
         }
         if(camera.epoch!=camera_epoch||size_changed) {delta.camera=render_camera(camera,window_->width,window_->height);render_scene.camera=*delta.camera;camera_epoch=camera.epoch;camera_width=window_->width;camera_height=window_->height;}
         if(!current->cities.empty()&&(edit_pending||(!navigation_preview&&(city_pending||size_changed)))){const auto count=delta.visibility.size();material_layout_edit=city_runtime.apply(render_scene,desired.city_views,&delta)||material_layout_edit;state.city=city_runtime.stats;city_camera_epoch=camera.epoch;new_render_edit=new_render_edit||material_layout_edit||count!=delta.visibility.size();}
-        if(!current->waters.empty()&&!navigation_preview&&(water_pending||edit_pending)){
-          const auto eye=camera.eye();const auto begin=now();if(water::adapt(water::effective(*current,desired),render_scene,{eye.x,eye.y,eye.z})){
-            new_render_edit=true;
-            for(const auto &i:render_scene.instances)if(water::find(current->waters,i.id)){std::erase_if(delta.meshes,[&](const auto &e){return e.index==i.mesh;});delta.meshes.push_back({i.mesh,render_scene.meshes[i.mesh].positions});if(std::find(queued.water_meshes.begin(),queued.water_meshes.end(),i.mesh)==queued.water_meshes.end())queued.water_meshes.push_back(i.mesh);}
-            timing("water_lod",begin,applied_revision);
-          }water_camera_epoch=camera.epoch;
+        if(!freeze_water_lod&&!current->waters.empty()&&!navigation_preview&&applied_revision==desired.revision&&(water_pending||edit_pending)){
+          const auto eye=camera.eye();std::vector<water::LodWorker::Input> inputs;
+          for(const auto &w:water::effective(*current,desired))for(const auto &i:render_scene.instances)if(i.visible&&i.id==w->id+"/surface")inputs.push_back({w,i.mesh,ir::inverse(i.transform).point({eye.x,eye.y,eye.z})});
+          water_ticket=water_lod.request(std::move(inputs));water_revision=applied_revision;water_camera_epoch=camera.epoch;
         }
         // 色调等仅影响显示的编辑保留累计采样；真实场景修改才启动编辑预览。
         // 相机触发的水体 LOD／城市显隐更新仍属于导航，等待期间保留光追预览。
@@ -666,6 +700,14 @@ void Renderer::run(std::stop_token stop) {
         if(subdivision_edit&&queued_subdivision_before.empty())queued_subdivision_before=previous_subdivision;
         if(wanted_preview!=preview||resolution_changed||new_render_edit||delta.camera)queued.merge(delta,subdivision_edit||material_layout_edit);
         state.applied_revision=applied_revision;
+      }
+      if(auto result=water_lod.take();result&&result->ticket==water_ticket&&water_revision==desired.revision&&(!automatic_water||water_camera_epoch==camera.epoch)){
+        if(!result->error.empty())state.edit_error=result->error;
+        else {ir::Delta water_delta;for(const auto &[index,mesh]:result->meshes){auto &old=render_scene.meshes.at(index);
+          if(old.positions==mesh->positions&&old.triangles==mesh->triangles&&old.water_foam==mesh->water_foam)continue;
+          old=*mesh;water_delta.meshes.push_back({index,old.positions});if(std::find(queued.water_meshes.begin(),queued.water_meshes.end(),index)==queued.water_meshes.end())queued.water_meshes.push_back(index);
+        }if(!water_delta.meshes.empty()){queued.merge(water_delta);for(auto &edit:water_delta.meshes){std::erase_if(delta.meshes,[&](const auto &v){return v.index==edit.index;});delta.meshes.push_back(std::move(edit));}}
+        Frame frame;frame.id=water_revision;telemetry_.event("water_lod",frame,result->seconds*1000);}
       }
       // Apply only the current snapshot's complete deformation. Preview remains
       // editable while the independent CPU worker resolves clothing collisions.
@@ -693,17 +735,19 @@ void Renderer::run(std::stop_token stop) {
         }
       }
       // 拖动期间只更新白模；松手后尝试提交，锁繁忙时保留最新 Delta，下一轮继续处理输入。
-      if(!refine_pending&&!physics_commit.valid()&&queued.pending&&!(clay_wait&&editing)) {
+      bool latest_edit;{std::lock_guard lock(mutex_);latest_edit=document_==group_source&&snapshot_.generation==desired.generation&&snapshot_.revision==applied_revision&&now()>=cloud_edit_until_;}
+      if(latest_edit&&!refine_pending&&!physics_commit.valid()&&queued.pending&&!(clay_wait&&editing)) {
         thread_scoped_lock lock(session->scene->mutex,std::try_to_lock);
         if(lock.owns_lock()) {
           const auto begin=now();if(!queued.synchronize&&!queued.water_meshes.empty()){
             if(!adapter->update_water_meshes(render_scene,queued.water_meshes))queued.synchronize=true;
             else std::erase_if(queued.delta.meshes,[&](const auto &e){return std::find(queued.water_meshes.begin(),queued.water_meshes.end(),e.index)!=queued.water_meshes.end();});
+            timing("water_adapter",begin,applied_revision);
           }
           if(queued.synchronize){
             try{adapter->synchronize(render_scene);}catch(const std::exception &e){for(size_t m=0;m<queued_subdivision_before.size();++m)render_scene.meshes[m].subdivision=queued_subdivision_before[m];state.edit_error=e.what();adapter->apply(queued.delta);}
             ir::Delta camera_only;camera_only.camera=queued.delta.camera;adapter->apply(camera_only);
-          }else adapter->apply(queued.delta);
+          }else adapter->apply(queued.delta,navigation_preview,camera.distance);
           timing("adapter_apply",begin,applied_revision);set_quality(clay_wait?false:wanted_preview);session->dfv_requested_epoch=++epoch;session->reset(params,buffers);gpu_revision=applied_revision;queued.clear();
           queued_subdivision_before.clear();
           Frame f;f.epoch=epoch;f.id=gpu_revision;f.width=buffers.width;f.height=buffers.height;telemetry_.event("edit_reset",f);
@@ -717,9 +761,11 @@ void Renderer::run(std::stop_token stop) {
         const auto begin=now();water_request->result.set_value(water::inputs(*current,render_scene,water_request->water));timing("water_inputs",begin,applied_revision);
       }catch(...){water_request->result.set_exception(std::current_exception());}}
       if(!physics_commit.valid()&&probe.serial!=state.probe_serial&&session->ready_to_reset()) {
+        freeze_water_lod=probe.freeze_water_lod;water_lod.cancel();water_ticket=0;water_camera_epoch=0;
         ir::Delta experiment;
         for(uint32_t i=0;i<render_scene.materials.size();++i) {
           auto material=render_scene.materials[i];
+          if(probe.matte_water&&material.water){material.water.reset();material.transmission=0;material.roughness=1;material.specular=0;}
           if(probe.disable_sss) {material.subsurface=0;if(!material.thin_walled) material.translucency_texture=-1;}
           if(probe.disable_bump) {material.bump_texture=-1;material.normal_texture=-1;}
           experiment.materials.push_back({i,material});

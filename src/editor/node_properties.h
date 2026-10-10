@@ -2,6 +2,7 @@
 #include "editor/object_hierarchy.h"
 #include "runtime/visibility.h"
 #include "runtime/picking.h"
+#include "cloud/document.h"
 
 namespace dfv::editor {
 inline NodeProperties node_properties(const Document &d,const Snapshot &s,const std::string &id) {
@@ -26,7 +27,12 @@ inline NodeProperties ancestor_properties(const Document &d,const Snapshot &s,co
 // 父组只影响求值副本，重新开启父组时保留子对象原有的独立开关。
 inline std::vector<runtime::Properties> scene_properties(const Document &d,const Snapshot &s) {
   auto values=s.values;const ObjectHierarchy h(d,false);
-  for(size_t t=0;t<values.size();++t){const auto state=ancestor_properties(d,s,h,h.targets[t]);values[t].visible&=state.visible;values[t].selectable&=state.selectable;}
+  for(size_t t=0;t<values.size();++t){const auto state=ancestor_properties(d,s,h,h.targets[t]);values[t].visible&=state.visible;values[t].selectable&=state.selectable;
+    // 云的范围参数是快照编辑；通过既有变换求值保留组参考框架和撤销语义。
+    const auto &id=d.catalog.targets[t].id;const auto *base=cloud::find(d.clouds,id),*edited=cloud::find(s.cloud_overrides,id);
+    if(base&&edited){auto &p=values[t].transform.translation_cm;const auto &a=base->config,&b=edited->config;
+      p.x+=float((b.x-a.x)*100);p.y+=float((b.height-a.height+(b.thickness-a.thickness)*.5)*100);p.z-=float((b.y-a.y)*100);}
+  }
   return values;
 }
 inline std::vector<uint8_t> scene_pick_mask(const Document &d,const Snapshot &s,const ir::Scene &scene) {

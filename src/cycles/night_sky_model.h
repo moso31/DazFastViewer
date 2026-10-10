@@ -63,10 +63,26 @@ struct DfvNightRaw {
   float3 galaxy;
   float3 transmission;
   float stars[6];
+  float star_rank[6];
 };
+ccl_device_noinline float dfv_night_point(float3 p,float seed,ccl_private float *rank)
+{
+  const float3 cell=make_float3(floorf(p.x),floorf(p.y),floorf(p.z));
+  const float3 local=p-cell-make_float3(.5f,.5f,.5f);float result=0;*rank=1;
+  // 紧凑高斯核，去掉平顶圆盘和宽柔光层。密度只筛选星体，不改变星核半径。
+  constexpr float sigma=.065f,reach=3*sigma;
+  for(int z=-1;z<=1;++z)for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x){
+    const float3 neighbor=make_float3(float(x),float(y),float(z));
+    const auto offset=dfv_night_hash(cell+neighbor,dfv_night_madd(seed,2,.15f))-make_float3(.5f,.5f,.5f);
+    const auto delta=neighbor+offset-local;const float r2=dot(delta,delta);if(r2>=reach*reach)continue;
+    const float profile=expf(-.5f*r2/(sigma*sigma));
+    if(profile>result){result=profile;*rank=dfv_night_hash(offset,13.17f+seed).x;}
+  }
+  return result;
+}
 ccl_device_noinline DfvNightRaw dfv_night_raw(float3 direction,int quality,bool stars)
 {
-  DfvNightRaw out;for(int i=0;i<6;++i)out.stars[i]=0;
+  DfvNightRaw out;for(int i=0;i<6;++i){out.stars[i]=0;out.star_rank[i]=1;}
   const int steps=quality<=0?2:quality==1?4:5;
   const float3 axis=normalize(make_float3(.4f,1,-.2f)),orient=make_float3(0,0,1);
   const float3 projected=normalize(cross(axis,cross(orient,axis)));
@@ -86,12 +102,10 @@ ccl_device_noinline DfvNightRaw dfv_night_raw(float3 direction,int quality,bool 
   out.transmission=outer*inner;
   out.galaxy=(make_float3(.99f,.95f,.9f)*(powf(core,3)*.002f+powf(glow_mask,2)*.07f)*inner+make_float3(.1f,.3f,.99f)*(periphery*.05f))*outer;
   if(stars){
-    // 固定参考角尺度：原网页 800px / CameraZoom=.35。尺寸不随窗口分辨率跳变。
-    const float s=500.0f/(.35f*800.0f);
     for(int layer=0;layer<2;++layer){const float seed=layer==0?435.34f:968.148f;
-      out.stars[layer*3]=dfv_night_sphere(direction*175,seed+254.564f,.45f*s,.025f,.1f);
-      out.stars[layer*3+1]=dfv_night_sphere(direction*175,seed+26.274f,.25f*s,.25f,.05f);
-      out.stars[layer*3+2]=dfv_night_sphere(direction*225,seed+656.344f,.25f*s,.25f,.3f);
+      out.stars[layer*3]=dfv_night_point(direction*175,seed+254.564f,&out.star_rank[layer*3]);
+      out.stars[layer*3+1]=dfv_night_point(direction*175,seed+26.274f,&out.star_rank[layer*3+1]);
+      out.stars[layer*3+2]=dfv_night_point(direction*225,seed+656.344f,&out.star_rank[layer*3+2]);
     }
   }
   return out;
@@ -109,9 +123,8 @@ ccl_device_inline void dfv_night_finish(const DfvNightRaw &raw,float contrast,fl
   const float exponent=fmaxf(contrast,.0001f);
   *galaxy=make_float3(powf(base.x,exponent),powf(base.y,exponent),powf(base.z,exponent));
   if(density<=0){*stars=zero_float3();return;}
-  float light[2];
-  for(int k=0;k<2;++k){const float curve=float(k+1)/fmaxf(density,.0001f);light[k]=(.196f)*(1.5f*powf(raw.stars[k*3],1000*curve)+.5f*powf(raw.stars[k*3+1],4*curve)+.25f*powf(raw.stars[k*3+2],curve));}
-  const float3 total=raw.galaxy+raw.transmission*(light[0]*.13f)+make_float3(light[1]*.46f,light[1]*.46f,light[1]*.46f);
-  *stars=max(dfv_night_look(total)-base,zero_float3());
+  float light[2]={0,0};
+  for(int i=0;i<6;++i){const float rank=raw.star_rank[i];const float visible=1-dfv_night_smooth(density*.65f-.04f,density*.65f+.04f,rank);light[i/3]+=raw.stars[i]*(.35f+3*powf(1-rank,4))*visible;}
+  *stars=raw.transmission*(light[0]*.65f)+make_float3(light[1],light[1],light[1]);
 }
 CCL_NAMESPACE_END

@@ -58,6 +58,10 @@ Panel::Panel(QWidget *parent):QWidget(parent){
   scalar("x",QStringLiteral("位置 X（米）"),-1000000,1000000,1);scalar("y",QStringLiteral("位置 Y（米）"),-1000000,1000000,1);scalar("level",QStringLiteral("水位（米）"),-1000000,1000000,.1);
   scalar("width",QStringLiteral("宽度（米）"),1,1000000,100);scalar("length",QStringLiteral("长度（米）"),1,1000000,100);
   scalar("density",QStringLiteral("顶点密度（倍）"),.25,8,.25,2);
+  manual_lod_=editor::parameter_widgets::checkbox(QStringLiteral("手动 LOD"),"WaterManualLod");form->addRow(QStringLiteral("水面分块"),manual_lod_);
+  manual_lod_->setToolTip(QStringLiteral("可先选择等级，再开启手动模式。全域使用指定等级，移动镜头不再切换网格；关闭后恢复自动 LOD。时间、波浪和交界修改仍会更新水面。"));connect(manual_lod_,&QCheckBox::toggled,this,[this]{submit();});
+  scalar("lod_level",QStringLiteral("LOD 等级（0 最精细）"),0,26,1,0);fields_["lod_level"]->setProperty("fixedParameterSettings",true);
+  lod_info_=new QLabel;lod_info_->setObjectName("WaterLodEstimate");lod_info_->setWordWrap(true);form->addRow(lod_info_);
   fields_["density"]->setToolTip(QStringLiteral("1 倍保持原密度；上限为同一视角下原顶点数的 8 倍。实际数量受自适应分块与视口预算限制。交界细节由交界采样间距单独控制，无需重算。"));
   scalar("depth",QStringLiteral("水体深度（米）"),.01,100000,1);scalar("clarity",QStringLiteral("清澈距离（米）"),.01,100000,1);
   fields_["depth"]->setToolTip(QStringLiteral("整片水体的统一等效光学深度，用于水色与透射衰减；不会创建海底。"));
@@ -87,7 +91,7 @@ void Panel::submit(){
   DFV_WATER_FIELD(density);DFV_WATER_FIELD(foam_uv_scale);
   DFV_WATER_FIELD(x);DFV_WATER_FIELD(y);DFV_WATER_FIELD(level);DFV_WATER_FIELD(width);DFV_WATER_FIELD(length);DFV_WATER_FIELD(depth);DFV_WATER_FIELD(clarity);DFV_WATER_FIELD(wave_height);DFV_WATER_FIELD(wavelength);DFV_WATER_FIELD(steepness);DFV_WATER_FIELD(direction);DFV_WATER_FIELD(time);DFV_WATER_FIELD(ripples);DFV_WATER_FIELD(roughness);DFV_WATER_FIELD(foam_width);DFV_WATER_FIELD(foam_strength);DFV_WATER_FIELD(precision);
 #undef DFV_WATER_FIELD
-  config_.seed=uint32_t(fields_.at("seed")->value());config_.coast=coast_->isChecked();config_.scan_scene=scan_->isChecked();std::map<std::string,bool> checked;
+  config_.seed=uint32_t(fields_.at("seed")->value());config_.coast=coast_->isChecked();config_.scan_scene=scan_->isChecked();config_.manual_lod=manual_lod_->isChecked();config_.lod_level=int(fields_.at("lod_level")->value());lod_controls();std::map<std::string,bool> checked;
   for(int i=0;i<sources_->topLevelItemCount();++i){auto *item=sources_->topLevelItem(i);if(item->checkState(0)==Qt::Checked){auto *mode=qobject_cast<QComboBox *>(sources_->itemWidget(item,1));checked.emplace(item->data(0,Qt::UserRole).toString().toStdString(),mode&&mode->currentIndex()==1);}}
   // View sorting must not reorder overlapping group/object selection precedence.
   std::erase_if(config_.sources,[&](const auto &s){return !checked.contains(s.id);});for(auto &s:config_.sources){s.volume=checked.at(s.id);checked.erase(s.id);}for(const auto &[id,volume]:checked)config_.sources.push_back({id,volume});
@@ -103,7 +107,7 @@ void Panel::bind(const Water *water,const std::vector<Candidate> &objects){
   DFV_WATER_FIELD(density);DFV_WATER_FIELD(foam_uv_scale);
   DFV_WATER_FIELD(x);DFV_WATER_FIELD(y);DFV_WATER_FIELD(level);DFV_WATER_FIELD(width);DFV_WATER_FIELD(length);DFV_WATER_FIELD(depth);DFV_WATER_FIELD(clarity);DFV_WATER_FIELD(wave_height);DFV_WATER_FIELD(wavelength);DFV_WATER_FIELD(steepness);DFV_WATER_FIELD(direction);DFV_WATER_FIELD(time);DFV_WATER_FIELD(ripples);DFV_WATER_FIELD(roughness);DFV_WATER_FIELD(foam_width);DFV_WATER_FIELD(foam_strength);DFV_WATER_FIELD(precision);DFV_WATER_FIELD(seed);
 #undef DFV_WATER_FIELD
-  coast_->setChecked(config_.coast);scan_->setChecked(config_.scan_scene);sources_->setSortingEnabled(false);sources_->clear();
+  coast_->setChecked(config_.coast);scan_->setChecked(config_.scan_scene);manual_lod_->setChecked(config_.manual_lod);lod_controls();fields_.at("lod_level")->setValue(config_.lod_level);sources_->setSortingEnabled(false);sources_->clear();
   auto available=objects;for(const auto &s:config_.sources)if(std::none_of(available.begin(),available.end(),[&](const auto &v){return v.id==s.id;}))available.push_back({s.id,"[对象已移除] "+s.id,-1});
   if(!order.empty())std::stable_sort(available.begin(),available.end(),[&](const auto &a,const auto &b){const auto rank=[&](const auto &id){auto i=order.find(id);return i==order.end()?int(order.size()):i->second;};return rank(a.id)<rank(b.id);});
   for(const auto &[id,label,volume]:available){auto *item=new SourceItem(sources_,{QString::fromStdString(label)});item->setData(0,Qt::UserRole,QString::fromStdString(id));item->setToolTip(0,QString::fromStdString(id));item->setData(0,Qt::UserRole+1,volume);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);auto found=std::find_if(config_.sources.begin(),config_.sources.end(),[&](const auto &s){return s.id==id;});item->setCheckState(0,found!=config_.sources.end()?Qt::Checked:Qt::Unchecked);auto *mode=new QComboBox;mode->addItems({QStringLiteral("表面交界"),QStringLiteral("排水体积")});mode->setCurrentIndex(found!=config_.sources.end()&&found->volume?1:0);sources_->setItemWidget(item,1,mode);connect(mode,&QComboBox::currentIndexChanged,this,[this,item]{if(item->checkState(0)!=Qt::Checked)item->setCheckState(0,Qt::Checked);else submit();});}
@@ -111,5 +115,9 @@ void Panel::bind(const Water *water,const std::vector<Candidate> &objects){
   for(int row=0;row<sources_->topLevelItemCount();++row){auto *item=sources_->topLevelItem(row);auto *mode=sources_->itemWidget(item,1);const auto key="source:"+item->data(0,Qt::UserRole).toString();mode->setProperty("waterWheelKey",key);mode->setProperty("numericRow",key);item->setData(0,Qt::UserRole+200,key);mode->setFocusPolicy(Qt::StrongFocus);}
   expand_sources();select(selected_);binding_=false;busy(busy_);
 }
-void Panel::busy(bool value){busy_=value;for(auto &[id,field]:fields_)field->setEnabled(!value);color_->setEnabled(!value);coast_->setEnabled(!value);scan_->setEnabled(!value);sources_->setEnabled(!value);sort_->setEnabled(!value);calculate_->setEnabled(!value&&config_.coast);cancel_->setEnabled(value);}
+void Panel::lod_controls(){
+  const auto layout=lod_layout(config_);auto *level=fields_.at("lod_level");QSignalBlocker block(level);level->setMaximum(std::max(layout.maximum_level,config_.lod_level));level->setEnabled(!busy_);
+  lod_info_->setText(QStringLiteral("可用等级 0–%1；手动等级预估：%2 万三角形，原始网格 %3 MiB（运行占用更高，交界细节另计）。").arg(layout.maximum_level).arg(layout.triangles/10000.,0,'f',1).arg(layout.bytes/1048576.,0,'f',1));
+}
+void Panel::busy(bool value){busy_=value;for(auto &[id,field]:fields_)field->setEnabled(!value);color_->setEnabled(!value);coast_->setEnabled(!value);scan_->setEnabled(!value);manual_lod_->setEnabled(!value);lod_controls();sources_->setEnabled(!value);sort_->setEnabled(!value);calculate_->setEnabled(!value&&config_.coast);cancel_->setEnabled(value);}
 }

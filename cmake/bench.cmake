@@ -1,4 +1,9 @@
 # 在 Cycles app 目录作用域定义，继承该版本所需的编译选项和 ABI。
+add_executable(LargeScaleProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tools/large_scale_probe.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp")
+target_include_directories(LargeScaleProbe PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(LargeScaleProbe PRIVATE ${LIB} dfv_scene)
+target_compile_definitions(LargeScaleProbe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(LargeScaleProbe PRIVATE /utf-8)
 add_executable(EyeSurfaceProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tools/eye_surface_probe.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp")
 target_include_directories(EyeSurfaceProbe PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(EyeSurfaceProbe PRIVATE ${LIB} dfv_scene)
@@ -146,6 +151,13 @@ target_include_directories(RendererInteractionTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(RendererInteractionTest PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_compile_definitions(RendererInteractionTest PRIVATE DFV_RENDER_INTERACTION_TEST QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(RendererInteractionTest PRIVATE /utf-8)
+add_executable(WaterNavigationProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tools/water_navigation_probe.cpp"
+  "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
+  "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
+target_include_directories(WaterNavigationProbe PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(WaterNavigationProbe PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
+target_compile_definitions(WaterNavigationProbe PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(WaterNavigationProbe PRIVATE /utf-8)
 add_executable(RendererPhysicsTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_physics.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")

@@ -2,6 +2,7 @@
 #include "editor/document.h"
 #include "editor/scene_extension.h"
 #include "runtime/picking.h"
+#include "editor/node_properties.h"
 #include <cmath>
 #include <iostream>
 using namespace dfv;
@@ -9,6 +10,10 @@ static void check(bool v,const char *why){if(!v)throw std::runtime_error(why);}
 #include "cloud_collision_cases.h"
 int main(){try{
   convex_collision_cases();
+  {editor::Document d;auto base=std::make_shared<cloud::Cloud>();base->id="live";cloud::install(d,base);auto s=editor::initial_snapshot(d);auto edited=std::make_shared<cloud::Cloud>(*base);edited->config.x+=17;edited->config.y-=23;edited->config.height+=41;edited->config.thickness+=30;s.cloud_overrides={edited};
+    auto scene=d.loaded.scene;runtime::DeformationRuntime deform(scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);cloud::Runtime clouds;
+    auto evaluate=[&]{auto delta=deform.evaluate(editor::scene_properties(d,s),s.poses);clouds.apply(d,cloud::effective(d,s),scene,&delta);};evaluate();const auto expected=ir::Transform::translate({float(edited->config.x),float(edited->config.y),float(edited->config.height+edited->config.thickness*.5)});
+    check(scene.instances[0].transform==expected,"live cloud placement incorrect");check(scene.meshes[0].positions==cloud::mesh(*edited).positions,"live cloud thickness incorrect");evaluate();check(scene.instances[0].transform==expected,"cloud placement accumulated");s.cloud_overrides.clear();evaluate();check(scene.instances[0].transform==d.loaded.scene.instances[0].transform&&scene.meshes[0].positions==d.loaded.scene.meshes[0].positions,"cloud placement undo failed");}
   for(int mode=0;mode<2;++mode)for(bool noise:{false,true}){cloud::Cloud c;c.id="distribution";c.config.distribution=mode;c.config.distribution_noise=noise;c.config.distribution_threshold=.61;c.config.edge_fade=.3;c.config.detail=8;c.config.distribution_detail=7;c.config.warp=.6;c.config.erosion=.4;auto restored=cloud::from_json(cloud::json(c));check(restored->config==c.config,"cloud distribution roundtrip");const auto payload=*cloud::material(c).cloud;check(payload.distribution==mode&&payload.distribution_noise==noise&&std::abs(payload.distribution_threshold-.61f)<1e-6f&&payload.detail==8&&std::abs(payload.edge_fade-.3f)<1e-6f,"cloud shader payload lost distribution");}
   {cloud::Cloud c;c.id="legacy";auto old=cloud::json(c);for(const auto *key:{"distribution","distribution_noise","distribution_threshold","edge_fade","distribution_scale","distribution_detail","warp","erosion"})old.erase(key);check(cloud::from_json(old)->config==c.config,"legacy cloud defaults changed");
     old["distribution"]=1;check(cloud::from_json(old)->config.distribution==1&&!cloud::from_json(old)->config.distribution_noise,"legacy circular cloud gained noise");

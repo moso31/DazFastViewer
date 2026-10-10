@@ -16,10 +16,14 @@ class HoverOverlay {
   std::vector<bool> visible_;
   std::vector<bool> detail_pending_;
   std::vector<ir::Bounds> bounds_;
+  std::vector<std::string> identities_;
+  std::vector<uint64_t> geometry_keys_;
+  uint64_t geometry_builds_=0;
   void draw_instance(size_t instance,GLuint list) const;
   void projection(const CameraState &camera,int width,int height,const ir::Mesh *proxy=nullptr,const ir::Transform *world=nullptr) const;
   void rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i,bool preview=false);
 public:
+  uint64_t geometry_builds()const{return geometry_builds_;}
   void draw_gizmo(const editor::GizmoShape &shape,int width,int height,int active=-1,float dpi=1);
   void update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions);
   void apply(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,const ir::Delta &delta,bool preview=false);

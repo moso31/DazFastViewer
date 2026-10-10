@@ -5,6 +5,9 @@
 #include <QDateEdit>
 #include <QApplication>
 #include <QTimeEdit>
+#include "editor/solar_time_edit.h"
+#include "editor/solar_location_picker.h"
+#include "render_ir/sun_sky.h"
 #include "editor/numeric_slider.h"
 #include "editor/numeric_spinbox.h"
 #include "editor/hdr_color_dialog.h"
@@ -57,7 +60,7 @@ ParameterPanel::ParameterPanel(QWidget *parent):QWidget(parent) {
   const auto overrides=QSettings().value("parameters/favoriteOverrides").toMap();
   for(auto it=overrides.cbegin();it!=overrides.cend();++it) favorite_overrides_[it.key().toStdString()]=it.value().toBool();
   connect(search_,&QLineEdit::textChanged,this,[this]{filter();});connect(hidden_,&QCheckBox::toggled,this,[this]{filter();});
-  connect(groups_,&QTreeWidget::currentItemChanged,this,[this]{filter();});
+  connect(groups_,&QTreeWidget::currentItemChanged,this,[this]{wheel_selection(-1);filter();});
   connect(tree_,&QTreeWidget::currentItemChanged,this,[this](QTreeWidgetItem *item){current_=item?item->data(0,Qt::UserRole).toInt():-1;if(current_!=wheel_selected_) wheel_selection(-1);});
   connect(tree_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{mount();});
   auto *timer=new QTimer(this);connect(timer,&QTimer::timeout,this,[this]{mount();});timer->start(150);
@@ -182,7 +185,8 @@ void ParameterPanel::bind(const runtime::Target *target,const runtime::Propertie
   if(!selected.empty())for(size_t i=0;i<controls_.size();++i)if(controls_[i].id==selected&&!items_[i]->isHidden()){wheel_selection(int(i));tree_->setCurrentItem(items_[i]);break;}
 }
 void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
-                                  std::function<void(size_t,const std::array<double,3> &)> color_callback) {
+                                  std::function<void(size_t,const std::array<double,3> &)> color_callback,
+                                  std::function<void(const std::array<size_t,3> &,const std::array<double,3> &)> location_callback) {
   const bool same=node&&node==option_node_&&node->id==option_node_id_;
   const auto selected=same&&wheel_selected_>=0?controls_.at(size_t(wheel_selected_)).id:std::string{};
   node_.clear();option_node_=node;option_node_id_=node?node->id:std::string{};
@@ -210,14 +214,26 @@ void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t
         c.detail="夜景关闭时不参与渲染。使用 SS 日期、当地时间、UTC 时差与经纬度；仅场景模式下不启用天空。";
         if(p.id=="DFV Night Enabled")c.detail="启用日期驱动的日夜天空，替代环境贴图；关闭后恢复原有环境。原生 DAZ DUF 默认关闭。";
         if(p.id=="DFV Night Limiting Magnitude"){c.detail="仅用于真实星表模式。根据星等保留亮星、隐藏暗星；目录最暗为 7 等，超过目录不会凭空增加恒星。";c.read_enabled=[node,supported=p.supported]{return supported&&ir::night_enabled(*node)&&ir::number(*node,"DFV Night Star Distribution",0)==1;};}
-        if(p.id=="DFV Night Star Density"){c.detail="仅用于网页式星空。1 对应参考网页，减小逐渐隐藏暗星，增大显示更多暗星；星位保持稳定。";c.read_enabled=[node,supported=p.supported]{return supported&&ir::night_enabled(*node)&&ir::number(*node,"DFV Night Star Distribution",0)==0;};}
-        if(p.id=="DFV Night Star Distribution")c.detail="网页式星空使用三维球面上的稳定程序化分布，包含远近星光和尘埃遮挡；真实星表保留 HYG 恒星位置及 B-V 色彩。两者均随日期系统旋转。";
-        if(p.id=="DFV Night Lighting")c.detail="所有档位只有一个环境光，不创建逐星点光源。均色与 SH 将非相机光线中的星空近似为平滑补光；完整环境保留星点反射，可能需要更多采样降噪。月光始终独立。";
-        if(p.id=="DFV Night Quality")c.detail="控制银河球状云团的噪声层数；中档与网页默认层数一致。日常调参不烘焙天空纹理。真实星表模式同时调整星位查询表的精细度。";
+        if(p.id=="DFV Night Star Density"){c.detail="仅用于程序化星空。减小逐渐隐藏暗星，增大显示更多暗星；星位和星核尺寸保持稳定。";c.read_enabled=[node,supported=p.supported]{return supported&&ir::night_enabled(*node)&&ir::number(*node,"DFV Night Star Distribution",0)==0;};}
+        if(p.id=="DFV Night Star Distribution")c.detail="程序化星空使用球面上的稳定亮点分布；真实星表保留 HYG 恒星位置及 B-V 色彩。两者均随日期系统旋转。";
         if(p.id=="DFV Night Rotation")c.detail="在日期驱动的天球上附加艺术旋转，不移动月亮。Dome Rotation 同时旋转太阳、月亮和星空。";
+        if(p.id=="DFV Night Moon Lighting Gain")c.detail="月光的艺术照明倍率：1 保持原光量。只增强月亮对地面、物体及反射的照明，相机直接看到的月盘亮度、颜色和地形细节保持不变。";
         if(c.read_enabled)c.enabled=c.read_enabled();
       }
-      if(p.id=="SS Time") {c.format=ParameterControl::Format::time;c.label="SS Time（时分秒）";}
+      if(p.id=="SS Time") {c.format=ParameterControl::Format::time;c.label="SS Time（时分）";c.detail="箭头、上下键及选中后的滚轮按半小时调整，23:30 与 00:00 循环；可直接输入时分。";}
+      if(p.id=="SS UTC Offset"){c.label="SS UTC Offset";c.step=.5;if(c.settings)c.settings->step=.5;c.detail="当地时间相对 UTC 的小时偏移，默认每次调整 0.5 小时。Map 确认时按经度 / 15 自动选取最近的半小时时区，不考虑行政区划或夏令时。";}
+      if(p.id=="SS Day"||p.id=="SS Time"||p.id=="SS UTC Offset"||p.id=="SS Latitude"||p.id=="SS Longitude")c.alternate_groups={"/Environment/Dome/夜景"};
+      if(p.id=="SS Latitude"||p.id=="SS Longitude"){
+        const auto latitude=std::find_if(node->parameters.begin(),node->parameters.end(),[](const auto &v){return v.id=="SS Latitude"&&!v.value.empty();});
+        const auto longitude=std::find_if(node->parameters.begin(),node->parameters.end(),[](const auto &v){return v.id=="SS Longitude"&&!v.value.empty();});
+        const auto timezone=std::find_if(node->parameters.begin(),node->parameters.end(),[](const auto &v){return v.id=="SS UTC Offset"&&!v.value.empty();});
+        if(latitude!=node->parameters.end()&&longitude!=node->parameters.end()&&timezone!=node->parameters.end()){
+          const size_t lat=latitude-node->parameters.begin(),lon=longitude-node->parameters.begin(),zone=timezone-node->parameters.begin();
+          c.read_location=[node,lat,lon]{return std::array<double,2>{node->parameters.at(lat).value[0],node->parameters.at(lon).value[0]};};
+          c.write_location=[this,callback,location_callback,node,lat,lon,zone](const auto &v){const std::array<size_t,3> indices{lat,lon,zone};const std::array<double,3> values{v[0],v[1],ir::longitude_utc_offset(v[1])};bool changed=false;for(size_t k=0;k<3;++k)changed|=node->parameters.at(indices[k]).value[0]!=values[k];if(!changed)return;if(location_callback)location_callback(indices,values);else for(size_t k=0;k<3;++k)callback(indices[k],0,values[k]);update_rows();};
+          c.slider_minimum=p.id=="SS Latitude"?-90:-180;c.slider_maximum=-c.slider_minimum;
+        }
+      }
       c.read=[node,i,k]{return node->parameters.at(i).value.at(k);};c.write=[this,callback,i,k](double v){callback(i,k,v);update_rows();};controls_.push_back(std::move(c));
       if(color) {
         auto &control=controls_.back();control.format=ParameterControl::Format::color;
@@ -227,6 +243,11 @@ void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t
       }
     }
   }
+  // 旧 DUFEX 的存储顺序不决定面板顺序；回调仍引用原通道，日期不会复制成两份。
+  const std::vector<std::string> night_order={"Enabled","Sky Intensity","Stars Intensity","Star Distribution","Limiting Magnitude","Star Density","Milky Way Intensity","Milky Way Detail","Rotation","Moon Intensity","Moon Lighting Gain","Moon Scale","Moon Physical","Moon Color","Lighting Intensity"};
+  auto rank=[&](const ParameterControl &c){for(size_t i=0;i<night_order.size();++i)if(node&&c.id==node->id+"/DFV Night "+night_order[i]+"0")return i+1;return size_t(0);};
+  std::stable_sort(controls_.begin(),controls_.end(),[&](const auto &a,const auto &b){return rank(a)<rank(b);});
+  if(node){auto zone=std::find_if(controls_.begin(),controls_.end(),[&](const auto &c){return c.id==node->id+"/SS UTC Offset0";});if(zone!=controls_.end()){auto control=std::move(*zone);controls_.erase(zone);auto time=std::find_if(controls_.begin(),controls_.end(),[&](const auto &c){return c.id==node->id+"/SS Time0";});controls_.insert(time==controls_.end()?time:std::next(time),std::move(control));}}
   rebuild();
   if(same&&!selected.empty())for(size_t i=0;i<controls_.size();++i)if(controls_[i].id==selected&&!items_[i]->isHidden()) {wheel_selection(int(i));tree_->setCurrentItem(items_[i]);break;}
   if(node&&!same) for(QTreeWidgetItemIterator it(groups_);*it;++it) {
@@ -246,7 +267,7 @@ void ParameterPanel::rebuild() {
     for(const auto &part:text(c.group).split('/',Qt::SkipEmptyParts)) {
       path+="/"+part;auto &item=paths[path];if(!item) {item=parent?new QTreeWidgetItem(parent,{part}):new QTreeWidgetItem(groups_,{part});item->setData(0,Qt::UserRole,path);}parent=item;
     }
-    auto *item=new QTreeWidgetItem(tree_);item->setData(0,Qt::UserRole,int(i));item->setSizeHint(0,QSize(180,58));items_.push_back(item);
+    auto *item=new QTreeWidgetItem(tree_);item->setData(0,Qt::UserRole,int(i));item->setData(0,Qt::UserRole+1,text(c.id));item->setSizeHint(0,QSize(180,58));items_.push_back(item);
   }
   groups_->setCurrentItem(all);
   for(QTreeWidgetItemIterator it(groups_);*it;++it) if((*it)->data(0,Qt::UserRole).toString()==selected_group) {groups_->setCurrentItem(*it);break;}
@@ -258,7 +279,8 @@ void ParameterPanel::filter() {
   for(size_t i=0;i<controls_.size();++i) {
     const auto &c=controls_[i];const auto path=text(c.group);
     const bool used=c.read_color?hdr_color::peak(c.read_color())>1e-6:std::abs(c.read())>1e-6;
-    const bool category=group=="*"||(group=="@favorites"&&is_favorite(c))||(group=="@used"&&used)||(path==group||path.startsWith(group+"/"));
+    const bool alias=std::any_of(c.alternate_groups.begin(),c.alternate_groups.end(),[&](const auto &p){return text(p)==group||text(p).startsWith(group+"/");});
+    const bool category=group=="*"||(group=="@favorites"&&is_favorite(c))||(group=="@used"&&used)||(path==group||path.startsWith(group+"/"))||alias;
     const bool shown=category&&(hidden_->isChecked()||c.visible)&&text(c.label+" "+c.id+" "+c.group).contains(q,Qt::CaseInsensitive);items_[i]->setHidden(!shown);if(shown) ++count;
   }
   if(wheel_selected_>=0&&items_[size_t(wheel_selected_)]->isHidden()) wheel_selection(-1);
@@ -290,8 +312,8 @@ void ParameterPanel::mount() {
       auto *date=new QDateEdit;date->setObjectName("valueDate");date->setProperty("historyInput",true);date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setDateRange(QDate(1,1,1),QDate(9999,12,31));date->setDate(QDate::fromJulianDay(qRound64(c.read())));date->setKeyboardTracking(false);date->setEnabled(c.enabled);line->addWidget(date);
       connect(date,&QDateEdit::dateChanged,this,[this,i](QDate value){current_=i;controls_[i].write(double(value.toJulianDay()));update_rows();});
     } else if(c.format==ParameterControl::Format::time) {
-      auto *time=new QTimeEdit;time->setObjectName("valueTime");time->setProperty("historyInput",true);time->setDisplayFormat("HH:mm:ss");time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)));time->setKeyboardTracking(false);time->setEnabled(c.enabled);line->addWidget(time);
-      connect(time,&QTimeEdit::timeChanged,this,[this,i](QTime value){current_=i;controls_[i].write(QTime(0,0).secsTo(value));update_rows();});
+      auto *time=new SolarTimeEdit;time->setObjectName("valueTime");time->setProperty("historyInput",true);time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)/60*60));time->setEnabled(c.enabled);line->addWidget(time);
+      connect(time,&QTimeEdit::timeChanged,this,[this,i](QTime value){current_=i;controls_[i].write(value.hour()*3600+value.minute()*60);update_rows();});
     } else if(!c.choices.empty()) {
       auto *combo=new QComboBox;combo->setObjectName("valueChoice");for(const auto &choice:c.choices) combo->addItem(text(choice));combo->setCurrentIndex(int(c.read()));combo->setEnabled(c.enabled);line->addWidget(combo);
       if(auto *model=qobject_cast<QStandardItemModel *>(combo->model())) for(int index:c.disabled_choices) if(auto *item=model->item(index)) item->setEnabled(false);
@@ -305,8 +327,13 @@ void ParameterPanel::mount() {
       spin->setProperty("parameterId",text(c.id));
       line->addWidget(slider,1);line->addWidget(spin);spin->sync(c.read());
       const auto key="parameters/"+node_+"/"+(c.favorite_id.empty()?c.id:c.favorite_id);
-      auto *settings=new parameter_widgets::SettingsButtons(parameter_widgets::context(this),key,spin,c.settings.value_or(runtime::ParameterSettings{false,0,1,c.float_backed?decimal_float(float(c.step)):c.step}),slider,c.slider_minimum,c.slider_maximum,widget);
-      settings->setEnabled(c.enabled);title->insertWidget(title->count()-1,settings);
+      if(c.read_location){
+        auto *map=new SolarLocationButton(c.read_location,c.write_location,widget);map->setEnabled(c.enabled);title->insertWidget(title->count()-1,map);
+        slider->sync(spin->value(),c.slider_minimum,c.slider_maximum,c.step,false);
+      }else{
+        auto *settings=new parameter_widgets::SettingsButtons(parameter_widgets::context(this),key,spin,c.settings.value_or(runtime::ParameterSettings{false,0,1,c.float_backed?decimal_float(float(c.step)):c.step}),slider,c.slider_minimum,c.slider_maximum,widget);
+        settings->setEnabled(c.enabled);title->insertWidget(title->count()-1,settings);
+      }
       slider->wheeled=[spin](QWheelEvent *event){forward_wheel(spin,event);};
       slider->edited=[spin](double value){spin->setValue(value);};
       connect(spin,&QDoubleSpinBox::valueChanged,this,[this,i](double value){current_=i;controls_[i].write(value);update_rows();});
@@ -343,9 +370,10 @@ void ParameterPanel::update_rows() {
       if(!(spin->hasFocus()&&line&&line->isModified())&&spin->value()!=c.read()) {QSignalBlocker block(spin);static_cast<NumericSpinBox *>(spin)->sync(c.read());}
     }
     for(auto *child:w->findChildren<QWidget *>())if(auto *settings=dynamic_cast<parameter_widgets::SettingsButtons *>(child))settings->sync_slider();
+    if(c.read_location)if(auto *slider=w->findChild<QSlider *>("valueSlider"))static_cast<NumericSlider *>(slider)->sync(c.read(),c.slider_minimum,c.slider_maximum,c.step,false);
     if(auto *combo=w->findChild<QComboBox *>("valueChoice")) {QSignalBlocker block(combo);combo->setCurrentIndex(int(c.read()));}
     if(auto *date=w->findChild<QDateEdit *>("valueDate");date&&!date->hasFocus()) {QSignalBlocker block(date);date->setDate(QDate::fromJulianDay(qRound64(c.read())));}
-    if(auto *time=w->findChild<QTimeEdit *>("valueTime");time&&!time->hasFocus()) {QSignalBlocker block(time);time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)));}
+    if(auto *time=w->findChild<QTimeEdit *>("valueTime");time&&!time->hasFocus()) {QSignalBlocker block(time);time->setTime(QTime(0,0).addSecs(std::clamp(qRound(c.read()),0,86399)/60*60));}
   }
 }
 void ParameterPanel::refresh(size_t) {update_rows();}

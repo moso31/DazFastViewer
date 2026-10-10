@@ -315,14 +315,19 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
 }
 #include "cycles/graft_geometry.inl"
 #include "cycles/synchronize.inl"
-void CyclesAdapter::rebase(const ir::Camera &camera) {
+void CyclesAdapter::rebase(const ir::Camera &camera,float navigation_radius) {
+  // 导航预览期间原点保持稳定，避免每跨 1 米就更新所有实例/BVH。
+  // 大距离跳转仍立即重定位；导航结束后在完整采样前恢复原有半米精度。
+  const auto &v=camera.transform.value;
+  if(navigation_radius>0&&std::max({std::abs(v[3]-render_origin_.x),std::abs(v[7]-render_origin_.y),std::abs(v[11]-render_origin_.z)})<=navigation_radius)return;
   if(!set_render_origin(camera))return;
+  ++stats_.origin_updates;
   for(size_t i=0;i<objects_.size();++i)for(auto *object:objects_[i]){object->set_tfm(transform(source_.instances[i].transform,render_origin_));object->tag_update(&scene_);}
   for(auto &render:graft_renders_){render.object->set_tfm(transform(graft_transform(grafts_[render.group],source_,render.parts),render_origin_));render.object->tag_update(&scene_);}
   for(size_t i=0;i<light_objects_.size();++i){light_objects_[i]->set_tfm(transform(source_.lights[i].transform,render_origin_));light_objects_[i]->tag_update(&scene_);}
   const auto fog=ir::matte_fog(options_);scene_.background->set_dfv_fog_distances(ccl::make_float3(fog.start,fog.base_height-render_origin_.z,fog.scale_height));scene_.background->tag_update(&scene_);
 }
-void CyclesAdapter::apply(const ir::Delta &delta) {
+void CyclesAdapter::apply(const ir::Delta &delta,bool navigating,float navigation_distance) {
   if(!loaded_) throw std::runtime_error("CyclesAdapter 尚未加载场景");
   // 先校验整个变更，避免索引错误导致只应用一部分。
   if(delta.camera) ir::validate(*delta.camera);
@@ -364,9 +369,10 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     synchronize(next);return;
   }
   if(delta.options) {environment(*delta.options);source_.options=*delta.options;}
-  if(delta.camera) {
-    const auto &c=*delta.camera;auto &camera=*scene_.camera;
-    rebase(c);
+  if(delta.camera||(camera_navigation_&&!navigating)) {
+    const auto c=delta.camera?*delta.camera:source_.camera;auto &camera=*scene_.camera;
+    // 特写仍使用小原点范围，避免透明眼层等细小间隙在导航中丢失。
+    rebase(c,navigating?std::clamp(navigation_distance*16.f,.5f,64.f):0.f);
     camera.set_camera_type(ccl::CAMERA_PERSPECTIVE);camera.set_full_width(c.width);camera.set_full_height(c.height);
     camera.set_fov(c.fov);camera.set_matrix(transform(c.transform,render_origin_));camera.compute_auto_viewplane();
     // Cycles 的 FLT_MAX 表示无限远裁剪；大地形聚焦后可远超默认 100 千米。
@@ -374,6 +380,7 @@ void CyclesAdapter::apply(const ir::Delta &delta) {
     camera.need_device_update=true;camera.need_flags_update=true;++stats_.camera_updates;
     source_.camera=c;
   }
+  camera_navigation_=navigating;
   for(const auto &edit:delta.materials) {
     auto *shader=shaders_.at(edit.index);
     // Cycles 的置换是原地写入位置；材质重算前恢复未置换的位置，避免反复编辑累加高度。

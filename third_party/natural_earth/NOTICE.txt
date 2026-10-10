@@ -1,0 +1,9 @@
+Natural Earth 1:110m land outlines (public domain).
+Authors: Tom Patterson, Nathaniel Vaughn Kelso and Natural Earth contributors.
+Source: https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson
+Retrieved: 2026-10-09
+Terms: https://www.naturalearthdata.com/about/terms-of-use/
+
+mercator_land.inl is derived from ne_110m_land.geojson with
+tools/generate_world_map.py. The application embeds this offline map;
+no network service or map tiles are used at runtime.

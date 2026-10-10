@@ -6,10 +6,31 @@
 #include "editor/node_properties.h"
 #include "editor/physics_service.h"
 #include "editor/mesh_diagnostics.h"
+#include "water/lod_worker.h"
 #include <iostream>
 #include <chrono>
 using namespace dfv;namespace fs=std::filesystem;
 static void check(bool v,const char *why){if(!v)throw std::runtime_error(why);}
+static void lod_cache_test(){
+  water::Water w;w.id="lod";w.config.width=w.config.length=64;water::MeshCache cache;
+  auto a=water::cached_mesh(w,{0,0,10},cache),b=water::cached_mesh(w,{0,0,10.00001f},cache);check(a==b&&cache.hits>0,"unchanged LOD regenerated");
+  for(auto eye:std::array<ir::Vec3,4>{{{0,0,10},{12,3,1},{0,0,1000},{0,0,10}}}){const auto actual=water::cached_mesh(w,eye,cache);const auto expected=water::mesh(w,eye);check(actual->positions==expected.positions&&actual->triangles==expected.triangles&&actual->water_foam==expected.water_foam,"LOD cache changed precision");}
+  w.config.time=3;auto c=water::cached_mesh(w,{0,0,10},cache);check(c->positions!=a->positions,"time edit reused stale waves");
+  w.config.manual_lod=true;const auto fine=water::cached_mesh(w,{0,0,10},cache);
+  check(fine->triangles.size()==4096&&fine->positions.size()==2113,"LOD 0 is not the full finest grid");
+  {auto sparse=w;sparse.config.density=.25;check(water::mesh(sparse).triangles.size()==1024,"Fractional density over-coarsened manual LOD 0");}
+  check(water::cached_mesh(w,{0,0,10000},cache)==fine,"Manual water changed with camera position");
+  w.config.lod_level=1;const auto coarse=water::cached_mesh(w,{0,0,10000},cache);check(coarse->triangles.size()*4==fine->triangles.size(),"LOD level did not halve grid resolution");
+  const auto saved=water::from_json(water::json(w));check(saved->config==w.config&&water::mesh(*saved,{-100,200,300}).positions==coarse->positions,"Manual LOD did not survive save/reopen");
+  auto legacy=water::json(w);legacy.erase("manual_lod");legacy.erase("lod_level");check(!water::from_json(legacy)->config.manual_lod&&water::from_json(legacy)->config.lod_level==0,"Legacy water defaults changed");
+  w.config.time+=1;check(water::cached_mesh(w,{0,0,10},cache)->positions!=coarse->positions,"Manual LOD ignored wave edits");
+  w.config.lod_level=water::lod_layout(w.config).maximum_level;check(water::mesh(w).triangles.size()==4,"Coarsest LOD lost coverage");
+  w.config.manual_lod=false;check(water::cached_mesh(w,{0,0,10000},cache)->triangles.size()<coarse->triangles.size(),"Automatic LOD was not restored");
+  water::LodWorker worker;uint64_t ticket=0;for(int k=0;k<8;++k){w.config.time=k;ticket=worker.request({{std::make_shared<water::Water>(w),3,{0,0,10}}});}
+  const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);std::unique_ptr<water::LodWorker::Result> result;
+  while(std::chrono::steady_clock::now()<deadline){result=worker.take();if(result)break;std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+  check(result&&result->ticket==ticket&&result->error.empty()&&result->meshes.size()==1,"water worker did not publish latest request");check(result->meshes[0].first==3&&result->meshes[0].second->positions==water::mesh(w,{0,0,10}).positions,"water worker published stale geometry");
+}
 template<class F>static void rejects(F f){bool rejected=false;try{f();}catch(const std::exception &){rejected=true;}check(rejected,"invalid water accepted");}
 static bool covers(const ir::Mesh &m,double x,double y){for(const auto &t:m.triangles){const auto a=m.positions[t.vertices[0]],b=m.positions[t.vertices[1]],c=m.positions[t.vertices[2]];const double det=(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);if(std::abs(det)<1e-12)continue;double u=((x-a.x)*(c.y-a.y)-(y-a.y)*(c.x-a.x))/det,v=((b.x-a.x)*(y-a.y)-(b.y-a.y)*(x-a.x))/det;if(u>=-1e-7&&v>=-1e-7&&u+v<=1+1e-7)return true;}return false;}
 static void physics_exclusion(){
@@ -22,12 +43,14 @@ static void physics_exclusion(){
   check(passed,"water physics exclusion timed out");
 }
 int main(){try{
+  lod_cache_test();
   const auto started=std::chrono::steady_clock::now();water::Water w;w.id="water-test";w.config.width=w.config.length=128;w.config.precision=.5;w.config.coast=true;w.config.scan_scene=false;
   const auto a=water::wave(w.config,12.34,-56.78);auto c=w.config;c.time=19.75;const auto b=water::wave(c,12.34,-56.78);check(a.z!=b.z,"time did not affect waves");check(water::wave(w.config,12.34,-56.78).z==a.z,"wave sample not deterministic");
   auto invalid=c;invalid.depth=0;rejects([&]{water::validate(invalid);});invalid=c;invalid.time=std::numeric_limits<double>::infinity();rejects([&]{water::validate(invalid);});
   water::Obstacle column{"column",water_fixture::cylinder(),{},true};w.cache=water::calculate(w,{column},123);
   check(!w.cache->cells.empty(),"missing contact cells");const auto near=water::mesh(w,{0,-15,8}),far=water::mesh(w,{2000,-2000,1000});
   check(!covers(near,0,0)&&!covers(far,0,0),"water covers interior of column");check(covers(near,7,0)&&covers(far,7,0),"water was removed outside column");
+  {auto manual=w;manual.config.manual_lod=true;for(int level:{0,2,6}){manual.config.lod_level=level;const auto m=water::mesh(manual,{0,0,10000});check(!covers(m,0,0)&&covers(m,7,0),"Manual LOD lost coast clipping");const auto n=water::mesh(manual,{12,24,5});check(m.positions==n.positions&&m.triangles==n.triangles,"Manual coast mesh depends on camera");}}
   double penetration=0;for(const auto &t:near.triangles){auto a=near.positions[t.vertices[0]],b=near.positions[t.vertices[1]],c=near.positions[t.vertices[2]];for(auto p:{a,b,c,ir::Vec3{(a.x+b.x+c.x)/3,(a.y+b.y+c.y)/3,(a.z+b.z+c.z)/3}})penetration=std::max(penetration,3.-std::hypot(p.x,p.y));}
   {auto dense=w;dense.config.density=8;dense.config.foam_uv_scale=2.5;check(water::same_shape(w.config,dense.config),"display detail invalidated coast cache");
     const auto m=water::mesh(dense,{0,-15,8}),base=water::mesh(w,{0,-15,8});check(m.positions.size()<=base.positions.size()*8&&!covers(m,0,0)&&covers(m,7,0),"density changed coast clipping or exceeded 8x");
@@ -66,7 +89,7 @@ int main(){try{
   auto changed=opened.snapshot;changed.values[0].transform.translation_cm.x+=500;check(water::input_stamp(*opened.document,changed)!=stamp,"object motion did not invalidate coast");auto new_cache=water::recalculate(*opened.document,changed,*opened.document->waters[0]);check(new_cache->stamp!=stamp,"rebuild did not consume edited transforms");
   auto geometry_edit=*opened.document;geometry_edit.loaded.scene.meshes[0].positions[0].z+=1;check(water::input_stamp(geometry_edit,opened.snapshot)!=stamp,"same-size geometry edit did not invalidate coast");
   auto opacity_edit=opened.snapshot;const auto &obstacle=opened.document->loaded.scene.instances[0];opacity_edit.material_overrides[obstacle.id][opened.document->loaded.scene.meshes[obstacle.mesh].material_slots[0]]["opacity"]=0;check(water::input_stamp(*opened.document,opacity_edit)!=stamp,"hidden material did not invalidate coast");
-  auto edited=std::make_shared<water::Water>(*opened.document->waters[0]);edited->config.time=23;edited->cache.reset();auto water_snapshot=opened.snapshot;water_snapshot.water_overrides={edited};
+  auto edited=std::make_shared<water::Water>(*opened.document->waters[0]);edited->config.time=23;edited->config.manual_lod=true;edited->config.lod_level=2;edited->cache.reset();auto water_snapshot=opened.snapshot;water_snapshot.water_overrides={edited};
   check(water::effective(*opened.document,water_snapshot)[0]->config.time==23&&opened.document->waters[0]->config.time!=23,"water parameter snapshot mutated shared document");
   auto replayed=opened.snapshot;editor::apply_snapshot_json(*opened.document,replayed,editor::snapshot_json(*opened.document,water_snapshot));check(water::json(*replayed.water_overrides.at(0))==water::json(*edited),"water snapshot did not roundtrip");
   editor::save_scene_extension(folder/"water-parameter-edit.dufex",*opened.document,water_snapshot);auto edit_loaded=editor::load_scene_extension(folder/"water-parameter-edit.dufex",{},47);check(edit_loaded.document->waters[0]->config.time==23&&!edit_loaded.document->waters[0]->cache,"saved water parameter edit lost on reopen");

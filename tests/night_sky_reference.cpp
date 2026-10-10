@@ -12,10 +12,13 @@ static float original_sphere(float3 p,float seed,float radius,float entropy,floa
   for(int z=-1;z<=1;++z)for(int y=-1;y<=1;++y)for(int x=-1;x<=1;++x){const float3 n=make_float3(float(x),float(y),float(z));const auto offset=dfv_night_hash(cell+n,dfv_night_madd(seed,2,.15f))-make_float3(.5f,.5f,.5f);const float id=dfv_night_hash(offset,13.17f+seed).x;const float r=(dfv_night_hash(cell+n,seed+13.17f).y-.5f)*entropy+radius;result=ccl::fmaxf(result,dfv_night_smooth(r+softness,r-softness,len(n+offset-local))*id);}return result;
 }
 int main(int argc,char **argv){try{
-  const std::filesystem::path dir=argc>1?argv[1]:"artifacts/night-sky/web-reference";std::filesystem::create_directories(dir);
+  const std::filesystem::path dir=argc>1?argv[1]:"artifacts/night-sky/reference";std::filesystem::create_directories(dir);
   float max_error=0;
   for(int i=0;i<256;++i){const float3 p=make_float3(i*.1837f-21,i*.9123f-70,i*.237f-32);for(int k=0;k<3;++k){const float r=k==0?.5f:.44642857f,e=k==0?.5f:.25f,s=k==0?.235f:k==1?.05f:.3f;const float seed=398.432f+i*.37f;max_error=ccl::fmaxf(max_error,fabsf(original_sphere(p,seed,r,e,s)-dfv_night_sphere(p,seed,r,e,s)));}}
   if(max_error>1e-6f)throw std::runtime_error("球支持区优化改变了网页球状噪声");
+  const float seed=435.34f+254.564f;const auto center=dfv_night_hash(make_float3(3,5,7),dfv_night_madd(seed,2,.15f))+make_float3(3,5,7);float rank;
+  const float core=dfv_night_point(center,seed,&rank),edge=dfv_night_point(center+make_float3(.2f,0,0),seed,&rank);
+  if(core<.999f||edge>.001f)throw std::runtime_error("程序化星点不是紧凑亮核");
   constexpr int width=800,height=450;std::vector<unsigned char> pixels(width*height*3);std::vector<float> raw_rgb(width*height*3);
   const float a=.2f,b=.25f;const float3 position=make_float3(-10*cosf(a)*sinf(b),10*sinf(a),-10*cosf(a)*cosf(b));const float3 forward=normalize(-position),right=normalize(cross(forward,make_float3(0,1,0))),up=normalize(cross(right,forward));
   const auto start=std::chrono::steady_clock::now();

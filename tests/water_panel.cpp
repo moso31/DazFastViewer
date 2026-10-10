@@ -31,7 +31,8 @@ int main(int argc,char **argv){QApplication app(argc,argv);try{
   x->setFocus();wheel(x);check(x->value()==0,"focus without click permitted wheel edit");check(outer.verticalScrollBar()->value()>0,"unselected spin swallowed outer scrolling");
   QTest::mouseClick(x,Qt::LeftButton);wheel(x,120);check(x->value()==.1,"selected spin rejected wheel edit");
   check(arrows(x)==arrows(reference),"selected water arrows differ from GroundPanel");
-  auto *density=panel->findChild<QDoubleSpinBox *>("density"),*foam=panel->findChild<QDoubleSpinBox *>("foam_uv_scale");water::Config edited;panel->changed=[&](water::Config c,bool){edited=c;};density->setValue(12);foam->setValue(2.5);check(edited.density==8&&edited.foam_uv_scale==2.5,"new parameters did not submit or density exceeded 8x");panel->changed={};
+  auto *density=panel->findChild<QDoubleSpinBox *>("density"),*foam=panel->findChild<QDoubleSpinBox *>("foam_uv_scale");water::Config edited;panel->changed=[&](water::Config c,bool){edited=c;};density->setValue(12);foam->setValue(2.5);check(edited.density==8&&edited.foam_uv_scale==2.5,"new parameters did not submit or density exceeded 8x");
+  panel->changed={};
   panel->bind(&water,objects);wheel(x,120);check(x->value()==.1,"same-object refresh lost selected row");
   wheel(y);check(y->value()==0,"wheel over another row changed value");
   panel->hide();panel->show();wheel(x);check(x->value()==.1,"hidden panel retained selection");
@@ -42,5 +43,12 @@ int main(int argc,char **argv){QApplication app(argc,argv);try{
   check(tree->visualItemRect(tree->topLevelItem(79)).bottom()<=tree->viewport()->height(),"table clips last candidate");
   const auto before=outer.verticalScrollBar()->value();wheel(tree->viewport());check(outer.verticalScrollBar()->value()>before,"table swallowed outer scrolling");
   outer.ensureWidgetVisible(panel->findChild<QPushButton *>("WaterRecalculate"));QApplication::processEvents();check(outer.verticalScrollBar()->value()>0,"outer scrollbar cannot reach table end");
+  auto *manual=panel->findChild<QCheckBox *>("WaterManualLod");auto *level=panel->findChild<QDoubleSpinBox *>("lod_level");
+  check(manual&&!manual->isChecked()&&level&&level->value()==0&&level->isEnabled(),"Missing automatic/manual LOD defaults");
+  panel->changed=[&](water::Config c,bool){edited=c;};outer.ensureWidgetVisible(manual);QApplication::processEvents();QTest::mouseClick(manual,Qt::LeftButton,Qt::NoModifier,QPoint(8,manual->height()/2));check(edited.manual_lod&&level->isEnabled(),"Manual LOD checkbox did not submit");
+  const auto scroll=outer.verticalScrollBar()->value();level->setFocus();wheel(level);check(level->value()==0&&outer.verticalScrollBar()->value()>scroll,"Unselected LOD consumed wheel edit");
+  QTest::mouseClick(level,Qt::LeftButton);wheel(level,120);check(edited.lod_level==1&&arrows(level)==arrows(reference),"Selected LOD failed native wheel edit");
+  panel->busy(true);check(!manual->isEnabled()&&!level->isEnabled(),"Busy panel permits LOD edit");panel->busy(false);check(level->isEnabled(),"Manual LOD did not restore after work");
+  auto small=water;small.id="small";small.config.width=small.config.length=32;panel->bind(&small,{});water.config.manual_lod=true;water.config.lod_level=10;panel->bind(&water,{});std::cout<<"Restored LOD "<<level->value()<<" / "<<level->maximum()<<" manual="<<manual->isChecked()<<'\n';check(level->value()==10&&manual->isChecked(),"Switching water clamped saved LOD to previous object's range");
   std::cout<<"PASS: selected wheel, refresh, switch, hide, combo, expanded 80-row table\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -89,6 +89,12 @@ static void mesh_collision() {
   std::vector<Target> targets={a,b};CollisionRuntime runtime(scene,targets);auto d=runtime.evaluate({});
   require(d.meshes.size()==1,"初始碰撞未输出服装更新");for(auto p:scene.meshes[1].positions) require(p.z>=.00049f,"穿入平面的服装未推出");
   const auto baseline=scene.meshes[1].positions;
+  // 微型角色经 ERC 缩小后，碰撞间隙也应同比缩小。
+  for(float scale:{.01f,.1f,10.f}){
+    auto scaled=scene;scaled.meshes[1]=cloth;CollisionRuntime small(scaled,targets);ir::Delta edit;
+    for(uint32_t i=0;i<scaled.meshes.size();++i){for(auto &p:scaled.meshes[i].positions){p.x*=scale;p.y*=scale;p.z*=scale;}edit.meshes.push_back({i,scaled.meshes[i].positions});}
+    small.evaluate(edit);for(size_t v=0;v<baseline.size();++v){auto p=scaled.meshes[1].positions[v];p.x/=scale;p.y/=scale;p.z/=scale;require(distance({p},{baseline[v]})<1e-5,"微型角色碰撞间隙未随 ERC 缩放");}
+  }
   {
     auto grid=scene;auto &surface=grid.meshes[1];surface.positions.clear();surface.triangles.clear();
     for(int y=0;y<33;++y) for(int x=0;x<33;++x) surface.positions.push_back({(x-16)*.03f,(y-16)*.03f,-.01f});

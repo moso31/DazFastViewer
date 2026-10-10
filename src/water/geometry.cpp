@@ -6,6 +6,14 @@
 #include <set>
 #include <stdexcept>
 #include <tuple>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#undef near
+#undef far
+#endif
 
 namespace dfv::water {
 namespace {
@@ -96,21 +104,59 @@ std::shared_ptr<const Cache> calculate(const Water &w,const std::vector<Obstacle
   if(progress)progress("交界计算完成");return cache;
 }
 struct MeshBudget:std::runtime_error {MeshBudget():std::runtime_error("水面网格超出预算，请降低顶点密度或减少交界区域"){};};
-static ir::Mesh mesh_at_density(const Water &water,ir::Vec3 eye,const Progress &progress,double density){
+void check_manual_lod_budget(const Water &water){
+  if(!water.config.manual_lod)return;
+  const auto layout=lod_layout(water.config);
+  if(layout.vertices>uint64_t(INT32_MAX)||layout.triangles>uint64_t(INT32_MAX)/3)
+    throw std::runtime_error("该 LOD 网格超过渲染器索引容量，请选择更大的 LOD 等级或缩小水面范围。");
+#ifdef _WIN32
+  MEMORYSTATUSEX memory{};memory.dwLength=sizeof(memory);
+  // 包含 IR、场景副本、法线、加速结构和上传缓冲；不隐式降低用户指定的等级。
+  const bool coast=water.config.coast&&water.cache&&!water.cache->cells.empty();
+  const auto estimate=layout.bytes*(coast?10:6)+(coast?water.cache->cells.size()*4096ull:0);
+  if(GlobalMemoryStatusEx(&memory)&&estimate>std::min(memory.ullAvailPhys,memory.ullAvailPageFile)*.8)
+    throw std::runtime_error("该 LOD 的水面约有 "+std::to_string(layout.triangles/10000)+" 万三角形，预计需预留约 "+std::to_string((estimate+(1ull<<30)-1)>>30)+" GiB 内存；当前可用内存不足，请选择更大的 LOD 等级或缩小水面范围。");
+#endif
+}
+static std::shared_ptr<const ir::Mesh> regular_mesh(const Water &water,const Progress &progress){
+  const auto &c=water.config;const auto layout=lod_layout(c);const auto n=uint32_t(layout.side),corners=uint32_t((layout.side+1)*(layout.side+1));
+  auto out=std::make_shared<ir::Mesh>();out->id=water.id+"/mesh";out->material_slots={"Water"};out->smooth=true;
+  out->positions.resize(size_t(layout.vertices));out->water_foam.resize(size_t(layout.vertices));out->triangles.resize(size_t(layout.triangles));
+  auto vertex=[&](uint32_t index,double x,double y){const auto p=wave(c,(x/n-.5)*c.width,(y/n-.5)*c.length);out->positions[index]={float(p.x),float(p.y),float(p.z)};out->water_foam[index]=float(p.foam);};
+  for(uint32_t y=0;y<=n;++y){
+    if(progress)progress("生成固定 LOD 水面："+std::to_string(y)+" / "+std::to_string(n));
+    for(uint32_t x=0;x<=n;++x)vertex(y*(n+1)+x,x,y);
+  }
+  for(uint32_t y=0;y<n;++y){
+    if(progress)progress("连接固定 LOD 水面："+std::to_string(y)+" / "+std::to_string(n));
+    for(uint32_t x=0;x<n;++x){
+      const uint32_t cell=y*n+x,center=corners+cell;vertex(center,x+.5,y+.5);
+      const uint32_t ring[]={y*(n+1)+x,y*(n+1)+x+1,(y+1)*(n+1)+x+1,(y+1)*(n+1)+x};
+      for(uint32_t k=0;k<4;++k){auto &t=out->triangles[cell*4+k];t.vertices={center,ring[k],ring[(k+1)%4]};t.source_polygon=cell*4+k;for(int j=0;j<3;++j){const auto p=out->positions[t.vertices[j]];t.uv[j]={p.x,p.y};}}
+    }
+  }
+  out->source_polygon_count=uint32_t(out->triangles.size());return out;
+}
+static std::shared_ptr<const ir::Mesh> mesh_at_density(const Water &water,ir::Vec3 eye,const Progress &progress,double density,MeshCache &cache){
   const auto &c=water.config;validate(c);std::map<Key,const Cell *> locked;std::set<Key> ancestors;
   if(c.coast&&water.cache)for(const auto &v:water.cache->cells){locked.emplace(key(v),&v);auto a=v;while(a.level>0){a.x/=2;a.y/=2;--a.level;ancestors.insert(key(a));}}
   // Reject overlapping serialized cells; otherwise an ancestor could hide a hole.
   for(const auto &[k,v]:locked)if(ancestors.contains(k))throw std::runtime_error("海岸线缓存存在重叠网格");
+  const auto layout=lod_layout(c);size_t visited=0;
+  const uint64_t leaf_limit=c.manual_lod?layout.side*layout.side+ancestors.size()*4+locked.size():160000;
   std::vector<Cell> leaves;std::function<void(Cell)> visit=[&](Cell v){
-    if(leaves.size()>160000)throw MeshBudget{};
+    if((++visited%4096)==0&&progress)progress("划分水面网格");
+    if(leaves.size()>leaf_limit)throw MeshBudget{};
     if(auto found=locked.find(key(v));found!=locked.end()){leaves.push_back(*found->second);return;}
     auto r=rect(c,v);double dx=std::max({r.x-double(eye.x),0.,double(eye.x)-r.x-r.w}),dy=std::max({r.y-double(eye.y),0.,double(eye.y)-r.y-r.h});
     const double distance=std::sqrt(dx*dx+dy*dy+double(eye.z)*eye.z),spacing=std::max({c.precision,c.wavelength/8.,distance*.10})/std::sqrt(density);
-    if(v.level<26&&(ancestors.contains(key(v))||std::max(r.w,r.h)>spacing)){for(uint32_t y=0;y<2;++y)for(uint32_t x=0;x<2;++x)visit({v.x*2+x,v.y*2+y,v.level+1,{}});}
+    if(v.level<26&&(ancestors.contains(key(v))||(c.manual_lod?v.level<layout.depth:std::max(r.w,r.h)>spacing))){for(uint32_t y=0;y<2;++y)for(uint32_t x=0;x<2;++x)visit({v.x*2+x,v.y*2+y,v.level+1,{}});}
     else{v.clearance.fill(c.foam_width*2);leaves.push_back(v);}
-  };visit({});if(progress)progress("连接水面分块边界");
+  };visit({});
+  auto &cached=cache.entries[c.manual_lod?-1:density];if(cached.mesh&&cached.leaves==leaves){++cache.hits;return cached.mesh;}
+  if(progress)progress("连接水面分块边界");
   constexpr int64_t scale=int64_t(1)<<26;std::map<int64_t,std::set<int64_t>> horizontal,verticals;
-  for(const auto &v:leaves){const auto s=scale>>v.level,x=int64_t(v.x)*s,y=int64_t(v.y)*s;for(auto yy:{y,y+s}){horizontal[yy].insert(x);horizontal[yy].insert(x+s);}for(auto xx:{x,x+s}){verticals[xx].insert(y);verticals[xx].insert(y+s);}}
+  for(const auto &v:leaves){if((++visited%4096)==0&&progress)progress("连接水面分块边界");const auto s=scale>>v.level,x=int64_t(v.x)*s,y=int64_t(v.y)*s;for(auto yy:{y,y+s}){horizontal[yy].insert(x);horizontal[yy].insert(x+s);}for(auto xx:{x,x+s}){verticals[xx].insert(y);verticals[xx].insert(y+s);}}
   ir::Mesh out;out.id=water.id+"/mesh";out.material_slots={"Water"};out.smooth=true;
   struct Vertex {V p;double clearance,foam;};
   auto vertex=[&](double gx,double gy,double clearance){const auto p=wave(c,(gx/scale-.5)*c.width,(gy/scale-.5)*c.length);const double contact=std::clamp(1-std::max(0.,clearance)/c.foam_width,0.,1.);return Vertex{{p.x,p.y,p.z},clearance,std::max(p.foam,contact)};};
@@ -126,22 +172,33 @@ static ir::Mesh mesh_at_density(const Water &water,ir::Vec3 eye,const Progress &
   }
   // Weld identical positions so Cycles' smooth normals remain continuous across tiles.
   std::map<std::tuple<float,float,float>,uint32_t> unique;std::vector<ir::Vec3> positions;std::vector<float> foam;
-  for(auto &t:out.triangles)for(auto &i:t.vertices){auto p=out.positions[i];auto [it,inserted]=unique.try_emplace({p.x,p.y,p.z},uint32_t(positions.size()));if(inserted){positions.push_back(p);foam.push_back(out.water_foam[i]);}else foam[it->second]=std::max(foam[it->second],out.water_foam[i]);i=it->second;}
-  out.positions=std::move(positions);out.water_foam=std::move(foam);if(out.positions.empty()){out.positions.push_back({});out.water_foam.push_back(0);}out.source_polygon_count=uint32_t(out.triangles.size());return out;
+  for(auto &t:out.triangles){if((++visited%65536)==0&&progress)progress("合并水面边界顶点");for(auto &i:t.vertices){auto p=out.positions[i];auto [it,inserted]=unique.try_emplace({p.x,p.y,p.z},uint32_t(positions.size()));if(inserted){positions.push_back(p);foam.push_back(out.water_foam[i]);}else foam[it->second]=std::max(foam[it->second],out.water_foam[i]);i=it->second;}}
+  out.positions=std::move(positions);out.water_foam=std::move(foam);if(out.positions.empty()){out.positions.push_back({});out.water_foam.push_back(0);}out.source_polygon_count=uint32_t(out.triangles.size());
+  cached.leaves=std::move(leaves);cached.mesh=std::make_shared<ir::Mesh>(std::move(out));++cache.builds;return cached.mesh;
 }
-ir::Mesh mesh(const Water &water,ir::Vec3 eye,const Progress &progress){
+std::shared_ptr<const ir::Mesh> cached_mesh(const Water &water,ir::Vec3 eye,MeshCache &cache,const Progress &progress){
+  if(cache.id!=water.id||cache.config!=water.config||cache.coast!=water.cache){cache.entries.clear();cache.id=water.id;cache.config=water.config;cache.coast=water.cache;}
+  if(water.config.manual_lod){
+    auto &entry=cache.entries[-1];if(entry.mesh){++cache.hits;return entry.mesh;}
+    check_manual_lod_budget(water);
+    if(water.config.coast&&water.cache&&!water.cache->cells.empty())return mesh_at_density(water,eye,progress,water.config.density,cache);
+    entry.mesh=regular_mesh(water,progress);++cache.builds;return entry.mesh;
+  }
+  // 高密度预算最多尝试五次，限制跨视角保留的候选数量。
+  if(cache.entries.size()>6)cache.entries.clear();
   const auto density=water.config.density;
-  if(density<=1)return mesh_at_density(water,eye,progress,density);
-  auto baseline=mesh_at_density(water,eye,progress,1);
-  const auto limit=size_t(std::floor(baseline.positions.size()*density));
+  if(density<=1)return mesh_at_density(water,eye,progress,density,cache);
+  auto baseline=mesh_at_density(water,eye,progress,1,cache);
+  const auto limit=size_t(std::floor(baseline->positions.size()*density));
   // Quadtree refinement is discrete. Enforce the requested vertex-count ceiling
   // after stitching/clipping as well, with a bounded retry and a safe baseline.
   double actual=density;
   for(int attempt=0;attempt<5&&actual>1.001;++attempt){
-    try {auto result=mesh_at_density(water,eye,progress,actual);if(result.positions.size()<=limit)return result;
-      actual*=std::min(.9,.95*double(limit)/result.positions.size());
+    try {auto result=mesh_at_density(water,eye,progress,actual,cache);if(result->positions.size()<=limit)return result;
+      actual*=std::min(.9,.95*double(limit)/result->positions.size());
     }catch(const MeshBudget &){actual*=.5;}
   }
   return baseline;
 }
+ir::Mesh mesh(const Water &water,ir::Vec3 eye,const Progress &progress){MeshCache cache;return *cached_mesh(water,eye,cache,progress);}
 }

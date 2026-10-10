@@ -275,6 +275,14 @@ int main() {
       require(std::abs(pivot.x-1.1f)<1e-6&&std::abs(pivot.y+.3f)<1e-6&&std::abs(pivot.z-.7f)<1e-6&&std::abs(parent.x-1)<1e-6,"Group 轴心或父坐标框架错误");
       const auto origin=n.world.point({});require(std::abs(origin.x-1.34f)<1e-6&&std::abs(origin.y-.06f)<1e-6&&std::abs(origin.z-.46f)<1e-6,"Group 已加载世界矩阵错误");
     }
+    auto procedural=duf;procedural["node_library"]={{{"id","hair-def"},{"type","node"},{"extra",{{{"type","studio/node/strand_hair"}}}}}};
+    procedural["scene"]["nodes"].push_back({{"id","hair"},{"url","#hair-def"},{"parent","#one"},{"geometries",{{{"id","generated-hair"}}}}});
+    write(path,procedural);const auto partial_hair=dfv::daz::load(path);
+    require(partial_hair.scene.instances.size()==2&&partial_hair.nodes.size()==3,"程序化毛发占位节点阻断常规对象导入或丢失层次");
+    size_t hair_warnings=0;for(const auto &warning:partial_hair.report.at("warnings"))hair_warnings+=warning.value("code","")=="strand_procedural_geometry";
+    require(hair_warnings==1,"未明确报告不支持的程序化毛发");
+    procedural["node_library"][0]["extra"]=Json::array();write(path,procedural);
+    rejected=false;try {(void)dfv::daz::load(path);} catch(const std::exception &) {rejected=true;}require(rejected,"普通几何缺失 URL 被静默跳过");
     write(path,duf);
     asset["geometry_library"][0]["vertices"]["count"]=5;write(asset_path,asset);
     rejected=false;try {(void)dfv::daz::load(path);} catch(const std::exception &) {rejected=true;}require(rejected,"无效 DSON count 没有拒绝");

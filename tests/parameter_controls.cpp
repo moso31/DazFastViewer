@@ -32,11 +32,13 @@ static void require(bool value,const char *message) {if(!value) throw std::runti
 #include "night_sky_panel.inl"
 #include "parameter_settings.inl"
 int main(int argc,char **argv) {
+  std::cout<<std::unitbuf;
   QApplication app(argc,argv);
   try {
     QTemporaryDir settings;require(settings.isValid(),"测试设置目录创建失败");
     QCoreApplication::setOrganizationName("DazFastViewerTests");QCoreApplication::setApplicationName("ParameterControls");
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settings.path());
+    if(argc>1&&std::string(argv[1])=="--night-only"){night_sky_panel(app);return 0;}
     double value=.5;dfv::editor::ParameterControl c;c.id="test";c.label="数值";c.minimum=0;c.maximum=1;c.read=[&]{return value;};c.write=[&](double v){value=v;};
     dfv::editor::ParameterPanel panel;panel.resize(380,480);panel.bind_controls({c});panel.show();app.processEvents();QTest::qWait(180);
     auto *spin=panel.findChild<QDoubleSpinBox *>("valueSpin");auto *slider=panel.findChild<QSlider *>("valueSlider");require(spin&&slider,"参数行未创建");
@@ -80,6 +82,7 @@ int main(int argc,char **argv) {
     require(dfv::editor::tree_selection(&hierarchy)==fingers,"跨角色切换丢失同一角色的骨骼多选");
     dfv::editor::choose_item(&hierarchy,left,true);
     require(dfv::editor::tree_selection(&hierarchy)==std::vector<dfv::editor::Selection>{{0,2,-1}}&&dfv::editor::active_selection(&hierarchy)==right,"取消左手指尖没有保留右手指尖和活动项");
+    std::cout<<"Numeric / hierarchy controls: PASS\n";
     dfv::ir::OptionNode options;options.id="environment";
     dfv::ir::Option mode;mode.id=mode.label="Environment Mode";mode.type="enum";mode.value={2};mode.maximum=3;mode.supported=true;mode.choices={"Dome and Scene","Dome Only","Sun-Sky Only","Scene Only"};
     auto day=mode;day.id=day.label="SS Day";day.type="float";day.value={double(QDate(2024,2,29).toJulianDay())};day.choices.clear();
@@ -88,8 +91,14 @@ int main(int argc,char **argv) {
     auto *choice=panel.findChild<QComboBox *>("valueChoice");auto *date=panel.findChild<QDateEdit *>("valueDate");auto *clock=panel.findChild<QTimeEdit *>("valueTime");
     require(choice&&date&&clock,"太阳天空没有建立日期 / 时间控件");
     require(qobject_cast<QStandardItemModel *>(choice->model())->item(2)->isEnabled()&&!choice->itemText(2).contains(QStringLiteral("待支持")),"Sun-Sky Only 仍被禁用");
-    require(date->date()==QDate(2024,2,29)&&clock->time()==QTime(13,24,56),"儒略日或当地秒数转换错误");
-    date->setDate(QDate(2026,9,23));clock->setTime(QTime(23,59,59));require(options.parameters[1].value[0]==QDate(2026,9,23).toJulianDay()&&options.parameters[2].value[0]==86399,"年月日 / 时分秒没有写回原通道");
+    require(date->date()==QDate(2024,2,29)&&clock->time()==QTime(13,24)&&clock->displayFormat()=="HH:mm"&&options.parameters[2].value[0]==13*3600+24*60+56,"日期/时分显示错误或打开面板改写了旧秒值");
+    date->setDate(QDate(2026,9,23));clock->setTime(QTime(23,30));QTest::keyClick(clock,Qt::Key_Up);require(options.parameters[2].value[0]==0&&clock->time()==QTime(0,0),"半小时步进未从 23:30 循环到 00:00");
+    QTest::keyClick(clock,Qt::Key_Down);require(clock->time()==QTime(23,30)&&options.parameters[2].value[0]==84600,"00:00 反向循环未回到 23:30");
+    clock->setCurrentSection(QDateTimeEdit::HourSection);clock->setTime(QTime(13,0));QTest::keyClick(clock,Qt::Key_Up);require(clock->time()==QTime(13,30),"选择小时段后步长不再是半小时");
+    QStyleOptionSpinBox time_style;time_style.initFrom(clock);time_style.rect=clock->rect();time_style.buttonSymbols=clock->buttonSymbols();const auto up=clock->style()->subControlRect(QStyle::CC_SpinBox,&time_style,QStyle::SC_SpinBoxUp,clock);
+    QTest::mouseClick(clock,Qt::LeftButton,Qt::NoModifier,up.center());require(clock->time()==QTime(14,0),"原生时间箭头没有按半小时调参");
+    require(options.parameters[1].value[0]==QDate(2026,9,23).toJulianDay(),"时间循环误改日期");
+    std::cout<<"Solar date / half-hour arrows / midnight wrap: PASS\n";
     {
       QScrollArea outer;outer.resize(520,400);outer.setWidgetResizable(true);auto *body=new QWidget;auto *layout=new QVBoxLayout(body);auto *header=new QLabel("shared scroll");layout->addWidget(header);auto *parameters=new dfv::editor::ParameterPanel;parameters->shared_scroll(&outer);layout->addWidget(parameters);outer.setWidget(body);
       std::vector<dfv::editor::ParameterControl> many(2000);for(size_t i=0;i<many.size();++i){many[i].id=std::to_string(i);many[i].label="Parameter "+many[i].id;many[i].group="/Group";many[i].read=[]{return 0.;};many[i].write=[](double){};}

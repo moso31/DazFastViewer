@@ -723,9 +723,15 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     }
     fitting.erase(id);fitted[id]=result;return result;
   };
+  auto procedural_hair=[](const Json &node,const Json &geometry) {
+    if(geometry.contains("url")) return false;
+    const auto &extras=array_member(node,"extra");
+    return std::any_of(extras.begin(),extras.end(),[](const auto &e){return e.value("type","")=="studio/node/strand_hair";});
+  };
   {
     std::vector<fs::path> files;std::set<fs::path> queued;
     for(const auto &node:array_member(source,"nodes"))if(!collapsed(node.at("id").get<std::string>()))for(const auto &geometry:array_member(node,"geometries")) {
+      if(procedural_hair(nodes.at(node.at("id").get<std::string>()),geometry)) continue;
       const auto [owner,g]=repo.asset(geometry.at("url"),file,"geometry_library");
       if(!g->contains("polygon_material_groups"))continue;
       for(const auto &group:values(g->at("polygon_material_groups"))) {
@@ -759,6 +765,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       if(std::abs(r.x)+std::abs(r.y)+std::abs(r.z)+std::abs(t.x)+std::abs(t.y)+std::abs(t.z)>1e-6f) warn("bone_pose",id,"本阶段显示静态基础网格，未应用骨骼变形");
     }
     for(const auto &geometry_instance:array_member(instance,"geometries")) {
+      if(procedural_hair(node,geometry_instance)) {warn("strand_procedural_geometry",id,"程序化毛发未保存可导入的几何，跳过此占位节点；其余对象正常导入");continue;}
       diagnostics::Scope scope("geometry_build");
       const auto uri=geometry_instance.at("url").get<std::string>();const auto [geometry_file,gptr]=repo.asset(uri,file,"geometry_library");const auto &g=*gptr;
       auto shell_geometry=[](const Json &v){const auto &extras=array_member(v,"extra");return std::any_of(extras.begin(),extras.end(),[](const auto &e){return e.value("type","")=="studio/geometry/shell";});};

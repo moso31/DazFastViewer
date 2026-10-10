@@ -1,7 +1,16 @@
 #include "viewport/overlay.h"
+#include "runtime/geometry_key.h"
 #include <set>
 
 namespace dfv {
+static uint64_t overlay_key(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i,bool preview){
+  const auto &instance=scene.instances[i];const auto &mesh=scene.meshes[instance.mesh];runtime::GeometryKey key;key.points(mesh.positions);key.topology(mesh);
+  for(const auto &face:mesh.triangles)key.add(uint64_t(face.material_slot));for(auto face:mesh.hidden_polygons)key.add(uint64_t(face));
+  key.add(uint64_t(mesh.curves.size()));for(const auto &curve:mesh.curves){key.add(uint64_t(curve.material_slot));key.add(uint64_t(curve.vertices.size()));for(auto v:curve.vertices)key.add(uint64_t(v));}
+  key.add(uint64_t(preview));key.add(uint64_t(std::any_of(instance.materials.begin(),instance.materials.end(),[&](auto m){return m<scene.materials.size()&&scene.materials[m].cloud.has_value();})));
+  if(i<regions.size())for(const auto *values:{&regions[i].detail,&regions[i].body,&regions[i].parents}){key.add(uint64_t(values->size()));for(auto v:*values)key.add(uint64_t(v));}
+  return key.value;
+}
 void HoverOverlay::draw_gizmo(const editor::GizmoShape &shape,int width,int height,int active,float dpi) {
   if(shape.lines.empty()) return;
   glPushAttrib(GL_ALL_ATTRIB_BITS);glUseProgram(0);glDisable(GL_TEXTURE_2D);glDisable(GL_LIGHTING);glDisable(GL_DEPTH_TEST);glDisable(GL_CULL_FACE);glEnable(GL_BLEND);glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
@@ -41,20 +50,30 @@ void HoverOverlay::draw_pose(const CameraState &camera,int width,int height,cons
   if(!proxy.positions.empty()||!bones.empty()){glPointSize(9);glColor3f(.25f,1,.45f);glBegin(GL_POINTS);glVertex3f(goal.x,goal.y,goal.z);glEnd();}
   glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
 }
-void HoverOverlay::release() {std::set<GLuint> unique;for(auto id:lists_) if(id) unique.insert(id);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) unique.insert(part.first);for(auto id:unique) glDeleteLists(id,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();bounds_.clear();}
+void HoverOverlay::release() {std::set<GLuint> unique;for(auto id:lists_) if(id) unique.insert(id);for(const auto &instance:parts_) for(const auto &[joint,part]:instance) unique.insert(part.first);for(auto id:unique) glDeleteLists(id,1);lists_.clear();parts_.clear();triangle_counts_.clear();transforms_.clear();visible_.clear();bounds_.clear();identities_.clear();geometry_keys_.clear();detail_pending_.clear();}
 void HoverOverlay::update(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions) {
-  release();
+  // 追加或删除物体时只编译改变的基础网格，保留已有 OpenGL 缓存。
+  auto previous=std::move(*this);*this=HoverOverlay{};geometry_builds_=previous.geometry_builds_;
   const auto size=scene.instances.size();lists_.resize(size);parts_.resize(size);triangle_counts_.resize(size);transforms_.resize(size);visible_.resize(size);bounds_.resize(size);
-  for(size_t i=0;i<size;++i) {transforms_[i]=scene.instances[i].transform;visible_[i]=scene.instances[i].visible;rebuild(scene,regions,i);}
+  identities_.resize(size);geometry_keys_.resize(size);detail_pending_.resize(size);
+  std::map<std::string,size_t> by_id;for(size_t i=0;i<previous.identities_.size();++i)if(!previous.identities_[i].empty())by_id.emplace(previous.identities_[i],i);
+  for(size_t i=0;i<size;++i) {const auto &instance=scene.instances[i];transforms_[i]=instance.transform;visible_[i]=instance.visible;identities_[i]=instance.id;geometry_keys_[i]=overlay_key(scene,regions,i,false);
+    auto found=by_id.find(instance.id);if(instance.prototype<0&&found!=by_id.end()&&found->second<previous.geometry_keys_.size()&&previous.geometry_keys_[found->second]==geometry_keys_[i]){
+      const auto old=found->second;lists_[i]=previous.lists_[old];parts_[i]=previous.parts_[old];triangle_counts_[i]=previous.triangle_counts_[old];bounds_[i]=previous.bounds_[old];
+    }else rebuild(scene,regions,i);
+  }
+  std::set<GLuint> retained;for(auto id:lists_)retained.insert(id);for(const auto &parts:parts_)for(const auto &[key,part]:parts)retained.insert(part.first);
+  for(auto &id:previous.lists_)if(retained.contains(id))id=0;for(auto &parts:previous.parts_)std::erase_if(parts,[&](const auto &part){return retained.contains(part.second.first);});previous.release();
 }
 void HoverOverlay::rebuild(const ir::Scene &scene,const std::vector<runtime::JointRegions> &regions,size_t i,bool preview) {
+    identities_.resize(scene.instances.size());geometry_keys_.resize(scene.instances.size());identities_[i]=scene.instances[i].id;geometry_keys_[i]=overlay_key(scene,regions,i,preview);
     detail_pending_.resize(scene.instances.size());detail_pending_[i]=preview;
     const auto &instance=scene.instances[i];
     bounds_[i]={};for(auto p:scene.meshes[instance.mesh].positions)bounds_[i].add(p);
     if(instance.prototype>=0) {const auto p=size_t(instance.prototype);lists_[i]=lists_[p];parts_[i]=parts_[p];triangle_counts_[i]=triangle_counts_[p];return;}
     if(lists_[i]) glDeleteLists(lists_[i],1);
     for(const auto &[joint,part]:parts_[i]) glDeleteLists(part.first,1);parts_[i].clear();
-    const auto id=glGenLists(1);lists_[i]=id;glNewList(id,GL_COMPILE);glBegin(GL_TRIANGLES);
+    ++geometry_builds_;const auto id=glGenLists(1);lists_[i]=id;glNewList(id,GL_COMPILE);glBegin(GL_TRIANGLES);
     const auto &mesh=scene.meshes[instance.mesh];
     auto triangle=[&](const ir::Triangle &face) {const auto a=mesh.positions[face.vertices[0]],b=mesh.positions[face.vertices[1]],c=mesh.positions[face.vertices[2]];const auto n=normalized(cross({b.x-a.x,b.y-a.y,b.z-a.z},{c.x-a.x,c.y-a.y,c.z-a.z}));glNormal3f(n.x,n.y,n.z);for(auto v:face.vertices) {const auto p=mesh.positions[v];glVertex3f(p.x,p.y,p.z);}};
     const bool volume=std::any_of(instance.materials.begin(),instance.materials.end(),[&](auto m){return m<scene.materials.size()&&scene.materials[m].cloud.has_value();});
@@ -98,7 +117,8 @@ void HoverOverlay::prepare_delta(const ir::Scene &scene,const std::vector<runtim
 }
 void HoverOverlay::swap_delta(HoverOverlay &p,const ir::Scene &scene,const ir::Delta &delta) {
   for(const auto &e:delta.meshes)for(size_t i=0;i<scene.instances.size();++i)if(scene.instances[i].mesh==e.index){
-    std::swap(lists_[i],p.lists_[i]);parts_[i].swap(p.parts_[i]);std::swap(triangle_counts_[i],p.triangle_counts_[i]);std::swap(bounds_[i],p.bounds_[i]);
+      std::swap(lists_[i],p.lists_[i]);parts_[i].swap(p.parts_[i]);std::swap(triangle_counts_[i],p.triangle_counts_[i]);std::swap(bounds_[i],p.bounds_[i]);
+      geometry_keys_.resize(scene.instances.size());p.geometry_keys_.resize(scene.instances.size());std::swap(geometry_keys_[i],p.geometry_keys_[i]);
   }
   for(const auto &e:delta.instances)transforms_[e.index]=e.transform;
 }

@@ -992,7 +992,8 @@ class Editor final:public EditorWindow {
       auto *node=index==-2?&snapshot_.options.environment:&snapshot_.options.tonemapper;selection_->setText(text(node->label));
       parameters_->bind_favorites(&*snapshot_.control_favorites,index==-2?"options/environment":"options/tonemapper");
       parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){auto edit=history_edit(QStringLiteral("修改环境与色调：")+text(node->parameters.at(p).label));try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}},
-        [this,node](size_t p,const std::array<double,3> &v){try {auto next=*node;for(size_t c=0;c<3;++c)ir::set_option(next,p,c,v[c]);auto edit=history_edit(QStringLiteral("修改环境与色调颜色：")+text(node->parameters.at(p).label));*node=std::move(next);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
+        [this,node](size_t p,const std::array<double,3> &v){try {auto next=*node;for(size_t c=0;c<3;++c)ir::set_option(next,p,c,v[c]);auto edit=history_edit(QStringLiteral("修改环境与色调颜色：")+text(node->parameters.at(p).label));*node=std::move(next);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}},
+        [this,node](const std::array<size_t,3> &indices,const std::array<double,3> &v){try {auto next=*node;for(size_t k=0;k<3;++k)ir::set_option(next,indices[k],0,v[k]);auto edit=history_edit(QStringLiteral("地图设置经纬度与 UTC 时区"));*node=std::move(next);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
     }
     if(!selected_group_.empty()){bind_group();return;}
     if(index<0 || !document_) {auto *item=active_selection(hierarchy_);selection_->setText(index<=-4&&item?item->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
@@ -1769,6 +1770,8 @@ class Editor final:public EditorWindow {
     }
     if(capture_test_) {
       if(QDateTime::currentMSecsSinceEpoch()-test_started_>900000) {finish_test(false,"场景显示验证超时");return;}
+      // 切换镜头后不能用上一视角的完成状态通过截图验收。
+      if(state.camera.epoch!=renderer_->input_camera().epoch||state.preview)return;
       if(document_&&state.generation==document_->generation&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&state.samples>=(capture_seconds_>0?1:capture_samples_)) {
         if(test_stage_==0&&capture_view_) {choose(-1);renderer_->camera_view(*capture_view_);capture_started_=QDateTime::currentMSecsSinceEpoch();test_stage_=1;return;}
         if(test_stage_==0&&!capture_targets_.empty()) {

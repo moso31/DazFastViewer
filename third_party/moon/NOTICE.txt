@@ -1,0 +1,10 @@
+月球表面数据：NASA's Scientific Visualization Studio / CGI Moon Kit
+https://svs.gsfc.nasa.gov/4720/
+
+lroc_color_2k.jpg：2025 年月表颜色图，LRO / LROC WAC 数据，2048 × 1024，sRGB。
+ldem_4_uint.tif：LRO / LOLA 高程，1440 × 720，无符号 16 位；每单位 0.5 米，相对半径 1727400 米。
+下载日期：2026-10-09。保留原始文件；程序运行时读取并计算地形法线。
+
+署名：NASA's Scientific Visualization Studio；Ernie Wright (USRA)。
+来源数据：LROC camera team / Arizona State University，LOLA instrument team。
+使用说明：https://svs.gsfc.nasa.gov/help/

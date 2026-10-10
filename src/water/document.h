@@ -13,4 +13,10 @@ Inputs inputs(const editor::Document &,const ir::Scene &evaluated,const Water &,
 std::shared_ptr<const Cache> calculate(const Water &,const Inputs &,uint64_t stamp,const Progress &progress={});
 std::shared_ptr<const Cache> recalculate(const editor::Document &,const editor::Snapshot &,const Water &,const Progress &progress={});
 bool adapt(const Waters &,ir::Scene &,ir::Vec3 world_eye,const Progress &progress={});
+class Runtime {
+  std::map<std::string,MeshCache> meshes_;
+public:
+  void clear(){meshes_.clear();}
+  bool adapt(const Waters &,ir::Scene &,ir::Vec3 world_eye,const Progress &progress={});
+};
 }

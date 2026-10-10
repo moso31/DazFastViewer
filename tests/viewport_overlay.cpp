@@ -14,6 +14,9 @@ int main(){
     glViewport(0,0,400,240);glDrawBuffer(GL_BACK);GLint bits=0;glGetIntegerv(GL_STENCIL_BITS,&bits);check(bits>=8,"选择遮罩缺少 stencil 缓冲");
     auto picture=[&](const char *name){QImage image(400,240,QImage::Format_RGBA8888);glReadPixels(0,0,400,240,GL_RGBA,GL_UNSIGNED_BYTE,image.bits());image=image.flipped(Qt::Vertical);image.save(QString("artifacts/experience-feedback/overlay/")+name+".png");return image;};
     CameraState camera;camera.target={0,0,0};camera.yaw=camera.pitch=0;camera.distance=3;
+    {ir::Scene cache_scene;cache_scene.meshes={plane(-1,1)};cache_scene.instances.resize(1);cache_scene.instances[0].id="kept";HoverOverlay cache;cache.update(cache_scene,{});check(cache.geometry_builds()==1,"initial overlay cache not compiled");
+      auto added=cache_scene.instances[0];added.id="added";cache_scene.instances.push_back(added);cache.update(cache_scene,{});check(cache.geometry_builds()==2,"append recompiled existing overlay");cache_scene.instances.erase(cache_scene.instances.begin());cache.update(cache_scene,{});check(cache.geometry_builds()==2,"delete recompiled surviving overlay");
+      cache_scene.meshes[0].positions[0].z+=.1f;cache.update(cache_scene,{});check(cache.geometry_builds()==3,"changed geometry reused stale overlay");cache_scene.meshes[0].hidden_polygons={0};cache.update(cache_scene,{});check(cache.geometry_builds()==4&&cache.triangle_count(0)==0,"mask edit reused stale overlay");cache.release();cache.update(cache_scene,{});check(cache.geometry_builds()==5,"released overlay reused deleted GL handles");cache.release();}
     ir::Scene scene;scene.meshes={plane(-1,-.1f),plane(.1f,1)};scene.instances.resize(2);scene.instances[1].mesh=1;
     HoverOverlay overlay;overlay.update(scene,{});overlay.draw_pose(camera,400,240,scene.meshes[0],{}, {},{100,100,100},{0});
     auto white=picture("all-proxies");check(white.pixelColor(150,120).red()>40&&white.pixelColor(250,120).red()>40,"拖动代理没有同时显示活动模型及另一模型");

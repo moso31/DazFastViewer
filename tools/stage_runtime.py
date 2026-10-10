@@ -142,6 +142,8 @@ def main():
             stage(source, out / source.name)
     for source in kernels:
         stage(source, out / 'lib' / source.name)
+    for source in (ROOT / 'third_party/moon').iterdir():
+        stage(source, out / 'data/moon' / source.name)
     # Ship the Release CRT app-locally; debug CRT is development-only and not redistributable.
     if configuration != 'Debug':
         vs = Path(cache['CMAKE_GENERATOR_INSTANCE'].split(',')[0])

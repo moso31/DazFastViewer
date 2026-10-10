@@ -41,6 +41,7 @@
           water->cache=water::calculate(*water,input,water::input_stamp(*source,saved),progress);
           renderer_->trace("water_coast",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count());
         }
+        water::check_manual_lod_budget(*water);
         if(stop.stop_requested())throw std::runtime_error("水体计算已取消");progress("生成静态水面");
         const auto *base=water::find(source->waters,id);const bool parameter_edit=base&&base->config.x==config.x&&base->config.y==config.y&&base->config.level==config.level;
         auto next=source;std::erase_if(saved.water_overrides,[&](const auto &w){return w->id==id;});

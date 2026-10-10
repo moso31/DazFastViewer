@@ -3,8 +3,11 @@
 #include "cycles/night_sky_model.h"
 #include <cstring>
 #include <mutex>
+#include <OpenImageIO/imageio.h>
+#include "util/path.h"
 
 namespace {
+#include "cycles/moon_surface.inl"
 class NightImageLoader final:public ccl::ImageLoader {
   std::shared_ptr<const dfv::ir::NightAssets> assets_;
   int channel_;
@@ -29,14 +32,14 @@ struct NightGraph {
   Out *clamp(Out *x,float low,float high){return math(ccl::NODE_MATH_MINIMUM,math(ccl::NODE_MATH_MAXIMUM,x,nullptr,0,low),nullptr,0,high);}
   Out *background(Out *color,Out *strength=nullptr,float gain=1){auto *n=g.create_node<ccl::BackgroundNode>();g.connect(color,n->input("Color"));n->set_strength(gain);if(strength)g.connect(strength,n->input("Strength"));return n->output("Background");}
 };
-#include "cycles/night_galaxy.inl"
+
 ccl::ShaderOutput *night_background(ccl::Scene &scene,ccl::ShaderGraph &graph,const dfv::ir::OptionNode &n) {
   using namespace ccl;using namespace dfv;NightGraph g{graph};
   const auto astronomy=ir::night_astronomy(n);
   auto value=[&](const char *id,float fallback){return float(ir::number(n,id,fallback));};
   const bool catalog=value("DFV Night Star Distribution",0)==1;
   const float stars_intensity=std::max(0.f,value("DFV Night Stars Intensity",1)),galaxy_intensity=std::max(0.f,value("DFV Night Milky Way Intensity",1));
-  const auto assets=catalog?ir::night_assets(int(value("DFV Night Quality",1))):nullptr;
+  const auto assets=catalog?ir::night_assets(2):nullptr;
   const auto environment_tint=ir::color(n,"Environment Tint");
   auto tint=[&](ShaderOutput *rgb){return g.vector(NODE_VECTOR_MATH_MULTIPLY,rgb,nullptr,make_float3(environment_tint.x,environment_tint.y,environment_tint.z));};
   auto *coord=graph.create_node<TextureCoordinateNode>();auto *world=coord->output("Generated");
@@ -75,7 +78,7 @@ ccl::ShaderOutput *night_background(ccl::Scene &scene,ccl::ShaderGraph &graph,co
     auto *color=g.vector(NODE_VECTOR_MATH_ADD,g.vector(NODE_VECTOR_MATH_ADD,g.rgb({1,.32f,.08f}),g.rgb({0,.68f,.92f},cool)),g.rgb({-.48f,-.28f,0},hot));
     return g.scale(color,strength);
   };
-  auto *web=graph.create_node<DfvNightSkyNode>();web->set_quality(int(value("DFV Night Quality",1)));web->set_contrast(value("DFV Night Milky Way Detail",1));web->set_density(catalog?0:value("DFV Night Star Density",1));graph.connect(eq,web->input("Vector"));
+  auto *web=graph.create_node<DfvNightSkyNode>();web->set_quality(2);web->set_contrast(value("DFV Night Milky Way Detail",1));web->set_density(catalog?0:value("DFV Night Star Density",1));graph.connect(eq,web->input("Vector"));
   auto *star_rgb=g.scale(catalog?g.vector(NODE_VECTOR_MATH_ADD,star(0),star(1)):web->output("Stars"),nullptr,stars_intensity);
   auto *galaxy_rgb=g.scale(web->output("Galaxy"),nullptr,galaxy_intensity);
   auto *full=g.vector(NODE_VECTOR_MATH_ADD,star_rgb,galaxy_rgb);
@@ -88,38 +91,44 @@ ccl::ShaderOutput *night_background(ccl::Scene &scene,ccl::ShaderGraph &graph,co
   gain=g.math(NODE_MATH_MULTIPLY,gain,nullptr,0,float(astronomy.darkness)*std::max(0.f,value("Environment Intensity",1)));
   auto *sky=g.rgb({.0011f,.0017f,.0034f});sky=g.scale(sky,nullptr,std::max(0.f,value("DFV Night Sky Intensity",1)));
   auto *camera=g.background(tint(g.vector(NODE_VECTOR_MATH_ADD,sky,full)),gain);
-  const int lighting=int(value("DFV Night Lighting",1));
   auto *illumination=full;
-  if(lighting!=2){
-    const auto sh=procedural_night_sh(int(value("DFV Night Quality",1)),value("DFV Night Milky Way Detail",1),catalog?0:value("DFV Night Star Density",1));
-    auto coefficients=catalog?ir::night_star_sh(limit):sh.stars;
-    const auto &galaxy_sh=sh.galaxy;
-    for(int i=0;i<9;++i){auto &c=coefficients[i];const auto m=galaxy_sh[i];c={c.x*stars_intensity+m.x*galaxy_intensity,c.y*stars_intensity+m.y*galaxy_intensity,c.z*stars_intensity+m.z*galaxy_intensity};}
-    auto *separate=graph.create_node<SeparateXYZNode>();graph.connect(eq,separate->input("Vector"));auto *x=separate->output("X"),*y=separate->output("Y"),*z=separate->output("Z");
-    const auto c0=coefficients[0];illumination=g.rgb({c0.x*.2820947918f,c0.y*.2820947918f,c0.z*.2820947918f});
-    if(lighting==1){
-      std::array<ShaderOutput *,9> sh={nullptr,y,z,x,g.math(NODE_MATH_MULTIPLY,x,y),g.math(NODE_MATH_MULTIPLY,y,z),g.math(NODE_MATH_SUBTRACT,g.math(NODE_MATH_MULTIPLY,g.math(NODE_MATH_MULTIPLY,z,z),nullptr,0,3),nullptr,0,1),g.math(NODE_MATH_MULTIPLY,x,z),g.math(NODE_MATH_SUBTRACT,g.math(NODE_MATH_MULTIPLY,x,x),g.math(NODE_MATH_MULTIPLY,y,y))};
-      constexpr float scales[]={0,.4886025119f,.4886025119f,.4886025119f,1.0925484306f,1.0925484306f,.3153915653f,1.0925484306f,.5462742153f};
-      for(int i=1;i<9;++i){const auto c=coefficients[i];illumination=g.vector(NODE_VECTOR_MATH_ADD,illumination,g.rgb({c.x*scales[i],c.y*scales[i],c.z*scales[i]},sh[i]));}
-      illumination=g.vector(NODE_VECTOR_MATH_MAXIMUM,illumination);
-    }
-  }
   auto *lit=g.background(tint(g.scale(g.vector(NODE_VECTOR_MATH_ADD,sky,illumination),nullptr,std::max(0.f,value("DFV Night Lighting Intensity",1)))),gain);
   auto *path=graph.create_node<LightPathNode>();auto *mix=graph.create_node<MixClosureNode>();graph.connect(path->output("Is Camera Ray"),mix->input("Fac"));graph.connect(lit,mix->input("Closure1"));graph.connect(camera,mix->input("Closure2"));
-  // 月盘用解析球面法线和太阳方向产生正确朝向的月相；不受星空补光档位影响。
-  const auto moon=astronomy.moon,sun=astronomy.sun;const float moon_scale=std::max(0.f,value("DFV Night Moon Scale",1));const float radius=std::clamp(float(astronomy.moon_radius)*moon_scale,1e-6f,float(M_PI_2)-1e-5f);
+  // 月表颜色与高程法线随月球朝向采样，太阳方向决定月相和环形山明暗。
+  const auto moon=astronomy.moon,sun=astronomy.sun;const float moon_scale=std::max(0.f,value("DFV Night Moon Scale",6));const float radius=std::clamp(float(astronomy.moon_radius)*moon_scale,1e-6f,float(M_PI_2)-1e-5f);
   auto *dot=g.vector(NODE_VECTOR_MATH_DOT_PRODUCT,world,nullptr,make_float3(moon.x,moon.y,moon.z));
   auto *disc=g.math(NODE_MATH_GREATER_THAN,dot,nullptr,0,std::cos(radius));
   auto *tangent=g.scale(g.vector(NODE_VECTOR_MATH_SUBTRACT,world,g.rgb(moon,dot)),nullptr,1/std::sin(radius));
   auto *r2=g.vector(NODE_VECTOR_MATH_DOT_PRODUCT,tangent,tangent);
   auto *depth=g.math(NODE_MATH_SQRT,g.math(NODE_MATH_MAXIMUM,g.math(NODE_MATH_SUBTRACT,nullptr,r2,1),nullptr,0,0));
   auto *normal=g.vector(NODE_VECTOR_MATH_SUBTRACT,tangent,g.rgb(moon,depth));
-  auto *phase=g.math(NODE_MATH_MAXIMUM,g.vector(NODE_VECTOR_MATH_DOT_PRODUCT,normal,nullptr,make_float3(sun.x,sun.y,sun.z)),nullptr,0,0);
+  const auto front=make_float3(-moon.x,-moon.y,-moon.z);
+  const auto pole_ir=astronomy.equatorial_to_world({-.000035f,-.398749f,.91706f},false);
+  const auto pole=make_float3(pole_ir.x,pole_ir.y,pole_ir.z);
+  const auto north=normalize(pole-front*ccl::dot(pole,front)),east=cross(north,front);
+  auto *lunar_coord=graph.create_node<CombineXYZNode>();
+  graph.connect(g.vector(NODE_VECTOR_MATH_DOT_PRODUCT,normal,nullptr,front),lunar_coord->input("X"));
+  graph.connect(g.vector(NODE_VECTOR_MATH_DOT_PRODUCT,normal,nullptr,-east),lunar_coord->input("Y"));
+  graph.connect(g.vector(NODE_VECTOR_MATH_DOT_PRODUCT,normal,nullptr,north),lunar_coord->input("Z"));
+  auto surface=[&](bool normal_map){auto *t=graph.create_node<EnvironmentTextureNode>();t->set_colorspace(u_colorspace_data);t->set_alpha_type(IMAGE_ALPHA_CHANNEL_PACKED);t->set_interpolation(INTERPOLATION_LINEAR);t->handle=scene.image_manager->add_image(make_unique<MoonImageLoader>(normal_map),t->image_params());graph.connect(lunar_coord->output("Vector"),t->input("Vector"));return t->output("Color");};
+  auto *albedo=surface(false),*relief=g.vector(NODE_VECTOR_MATH_NORMALIZE,surface(true));
+  const auto sunlight=make_float3(sun.x,sun.y,sun.z);
+  auto *phase=g.math(NODE_MATH_MAXIMUM,g.vector(NODE_VECTOR_MATH_DOT_PRODUCT,relief,nullptr,make_float3(ccl::dot(sunlight,front),ccl::dot(sunlight,east),ccl::dot(sunlight,north))),nullptr,0,0);
+  // 月壤回散射近似：保留满月月海对比和弦月终止线的地形起伏。
+  auto *scatter=g.math(NODE_MATH_DIVIDE,phase,g.math(NODE_MATH_MAXIMUM,g.math(NODE_MATH_ADD,phase,depth),nullptr,0,.001f));
+  phase=g.math(NODE_MATH_ADD,g.math(NODE_MATH_MULTIPLY,scatter,nullptr,0,.7f),g.math(NODE_MATH_MULTIPLY,phase,nullptr,0,.3f));
   auto *moon_strength=g.math(NODE_MATH_MULTIPLY,g.math(NODE_MATH_MULTIPLY,phase,disc),g.math(NODE_MATH_MULTIPLY,horizon,extinction));
   float energy=moon_scale>0?80*std::max(0.f,value("DFV Night Moon Intensity",1))*std::max(0.f,value("Environment Intensity",1)):0;
   if(value("DFV Night Moon Physical",1)!=0)energy/=std::max(1e-12f,moon_scale*moon_scale);
   moon_strength=g.math(NODE_MATH_MULTIPLY,moon_strength,nullptr,0,energy);
-  auto *lunar=g.background(tint(g.rgb(ir::color(n,"DFV Night Moon Color",{1,.94f,.82f}))),moon_strength);
+  // 只改变非相机光线的月光能量；倍率 1 完全保留原着色图和物理基准。
+  const float moon_lighting=std::max(0.f,value("DFV Night Moon Lighting Gain",1));
+  if(moon_lighting!=1){
+    auto *camera_ray=path->output("Is Camera Ray");
+    auto *camera_gain=g.math(NODE_MATH_ADD,camera_ray,g.math(NODE_MATH_MULTIPLY,g.math(NODE_MATH_SUBTRACT,nullptr,camera_ray,1),nullptr,0,moon_lighting));
+    moon_strength=g.math(NODE_MATH_MULTIPLY,moon_strength,camera_gain);
+  }
+  auto *lunar=g.background(tint(g.vector(NODE_VECTOR_MATH_MULTIPLY,albedo,g.rgb(ir::color(n,"DFV Night Moon Color",{1,1,1})))),moon_strength);
   auto *sum=graph.create_node<MixClosureNode>();graph.connect(mix->output("Closure"),sum->input("Closure1"));graph.connect(lunar,sum->input("Closure2"));graph.connect(disc,sum->input("Fac"));return sum->output("Closure");
 }
 }

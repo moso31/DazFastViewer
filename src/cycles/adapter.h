@@ -8,7 +8,7 @@
 
 namespace ccl {class Scene;class Shader;class Mesh;class Hair;class Object;class Light;class BackgroundLight;}
 namespace dfv {
-struct AdapterStats {size_t meshes=0,instances=0,materials=0,textures=0,unique_triangles=0,triangles=0,camera_updates=0,material_updates=0,geometry_updates=0,instance_updates=0,curves=0,topology_updates=0,scene_updates=0;};
+struct AdapterStats {size_t meshes=0,instances=0,materials=0,textures=0,unique_triangles=0,triangles=0,camera_updates=0,material_updates=0,geometry_updates=0,instance_updates=0,curves=0,topology_updates=0,scene_updates=0,origin_updates=0;};
 class CyclesAdapter {
   ccl::Scene &scene_;
   std::vector<ccl::Shader *> shaders_;
@@ -45,8 +45,9 @@ class CyclesAdapter {
   ir::Vec3 environment_;
   // Render near the camera; retain authored world coordinates in source_.
   ir::Vec3 render_origin_;
+  bool camera_navigation_=false;
   bool set_render_origin(const ir::Camera &camera);
-  void rebase(const ir::Camera &camera);
+  void rebase(const ir::Camera &camera,float navigation_radius=0);
   std::vector<ir::Vec3> light_power_;
   void environment(const ir::RenderOptions &options);
   bool loaded_=false;
@@ -66,7 +67,7 @@ public:
   // Camera LOD changes only native water topology; preserve every unrelated mesh/cache.
   bool update_water_meshes(const ir::Scene &,const std::vector<uint32_t> &indices);
   // 调用者持有 Cycles Scene 锁；只同步 Delta 中声明的对象。
-  void apply(const ir::Delta &delta);
+  void apply(const ir::Delta &delta,bool navigating=false,float navigation_distance=0);
   const AdapterStats &stats() const {return stats_;}
 };
 }

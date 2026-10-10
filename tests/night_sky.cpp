@@ -1,6 +1,7 @@
 #include "render_ir/night_sky.h"
 #include "render_ir/default_options.h"
 #include "render_ir/options_json.h"
+#include "render_ir/sun_sky.h"
 #include <chrono>
 #include <iostream>
 #include <numbers>
@@ -11,11 +12,19 @@ static void set(ir::OptionNode &n,const char *id,double v){for(size_t i=0;i<n.pa
 static double distance(ir::Vec3 a,ir::Vec3 b){return std::hypot(std::hypot(a.x-b.x,a.y-b.y),a.z-b.z);}
 int main(){try{
   auto n=ir::default_options(true);check(!ir::night_enabled(n),"新场景默认开启了夜景");
-  check(ir::number(n,"DFV Night Star Distribution",-1)==0,"默认没有使用网页式星空");
+  check(ir::number(n,"DFV Night Star Distribution",-1)==0,"默认没有使用程序化星空");
+  check(ir::number(n,"DFV Night Moon Scale",0)==6,"月亮默认大小不是 6");
+  check(ir::option(n,"SS UTC Offset")->step==.5,"UTC 默认精度不是 0.5");
+  {auto imported=n;for(auto &p:imported.parameters)if(p.id=="SS UTC Offset"){p.type="int";p.step=1;p.visible=false;}ir::ensure_night_options(imported);set(imported,"SS UTC Offset",5.5);check(ir::number(imported,"SS UTC Offset",0)==5.5&&ir::option(imported,"SS UTC Offset")->visible&&ir::option(imported,"SS UTC Offset")->step==.5,"旧时区通道未支持半小时或仍被隐藏");}
+  for(const auto &[lon,offset]:std::array<std::pair<double,double>,7>{{{0,0},{120,8},{-111.8972,-7.5},{151,10},{82.5,5.5},{180,12},{-180,-12}}})check(ir::longitude_utc_offset(lon)==offset,"地图经度对应时区错误");
+  check(ir::number(n,"DFV Night Moon Lighting Gain",0)==1,"月光照明增益默认改变了原光量");
+  check(!ir::option(n,"DFV Night Lighting")&&!ir::option(n,"DFV Night Quality"),"已移除的档位仍出现在参数中");
   const auto count=n.parameters.size();ir::ensure_night_options(n);check(count==n.parameters.size(),"夜景选项重复追加");
+  auto legacy=n;ir::Option removed;removed.id="DFV Night Quality";removed.value={0};legacy.parameters.push_back(removed);removed.id="DFV Night Lighting";legacy.parameters.push_back(removed);set(legacy,"DFV Night Moon Scale",4);
+  ir::ensure_night_options(legacy);check(!ir::option(legacy,"DFV Night Quality")&&!ir::option(legacy,"DFV Night Lighting")&&ir::number(legacy,"DFV Night Moon Scale",0)==4,"旧档位未移除或覆盖了已保存的月亮大小");
   set(n,"DFV Night Enabled",1);set(n,"DFV Night Moon Intensity",3);set(n,"DFV Night Stars Intensity",2);set(n,"DFV Night Limiting Magnitude",4.2);
   ir::RenderOptions o;o.environment=n;ir::ensure_matte_fog_options(o.environment);check(ir::options_from_json(ir::options_json(o))==o,"夜景设置未完整往返");
-  auto unbounded=o;set(unbounded.environment,"DFV Night Moon Intensity",500);set(unbounded.environment,"DFV Night Milky Way Detail",5);set(unbounded.environment,"DFV Night Rotation",1080);set(unbounded.environment,"DFV Night Moon Scale",40);
+  auto unbounded=o;set(unbounded.environment,"SS UTC Offset",-7.5);set(unbounded.environment,"DFV Night Moon Intensity",500);set(unbounded.environment,"DFV Night Moon Lighting Gain",250);set(unbounded.environment,"DFV Night Milky Way Detail",5);set(unbounded.environment,"DFV Night Rotation",1080);set(unbounded.environment,"DFV Night Moon Scale",40);
   ir::ensure_night_options(unbounded.environment);const auto restored=ir::options_from_json(ir::options_json(unbounded));check(restored==unbounded&&ir::number(restored.environment,"DFV Night Moon Intensity",0)==500&&ir::number(restored.environment,"DFV Night Moon Scale",0)==40,"夜景建议范围在写入或加载时被重复强制限制");
   auto old=ir::options_json(o);auto &parameters=old["environment"]["parameters"];for(auto it=parameters.begin();it!=parameters.end();)if(it->at("id").get<std::string>().starts_with("DFV Night "))it=parameters.erase(it);else ++it;check(!ir::night_enabled(ir::options_from_json(old).environment),"旧文件迁移开启了夜景");
   set(n,"Environment Mode",3);check(!ir::night_enabled(n),"Scene Only 仍启用天空");set(n,"Environment Mode",2);
@@ -26,6 +35,8 @@ int main(){try{
   check(std::abs(ra-310.0017)<.025&&std::abs(dec+19.8790)<.025,"月球摄动/观测视差与参考星历不符");
   for(auto v:{ir::Vec3{1,0,0},ir::Vec3{0,1,0},ir::Vec3{0,0,1}})check(distance(a.world_to_equatorial(a.equatorial_to_world(v)),v)<1e-6,"J2000/世界变换不正交");
   set(n,"SS Time",8*3600);set(n,"SS UTC Offset",8);check(distance(ir::night_astronomy(n).moon,a.moon)<1e-6,"时区没有还原同一 UTC 时刻");
+  set(n,"SS Time",5.5*3600);set(n,"SS UTC Offset",5.5);check(distance(ir::night_astronomy(n).moon,a.moon)<1e-6,"半小时时区改变了同一 UTC 时刻的月亮");
+  set(n,"SS Day",2448000);set(n,"SS Time",22.5*3600);set(n,"SS UTC Offset",-1.5);check(distance(ir::night_astronomy(n).moon,a.moon)<1e-6,"时区跨日改变了月亮位置");set(n,"SS Day",2448001);set(n,"SS Time",8*3600);set(n,"SS UTC Offset",8);
   set(n,"Dome Rotation",90);const auto rotated=ir::night_astronomy(n);check(distance(rotated.moon,{-a.moon.y,a.moon.x,a.moon.z})<1e-6,"穹顶旋转未同步月亮");
   set(n,"SS Day",2460409);set(n,"SS Time",18*3600);set(n,"SS UTC Offset",0);check(ir::night_astronomy(n).illuminated<.005,"2024-04-08 新月错误");
   set(n,"SS Day",2460335);set(n,"SS Time",18*3600);check(ir::night_astronomy(n).illuminated>.995,"2024-01-25 满月错误");

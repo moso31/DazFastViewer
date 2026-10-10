@@ -31,6 +31,7 @@ struct SamplingSettings : RenderQuality {
 struct RenderProbe {
   uint64_t serial=0;
   bool disable_sss=false,disable_bump=false;
+  bool freeze_water_lod=false,matte_water=false;
   int transparent_bounces=32;
   std::vector<std::string> hidden;
 };
@@ -143,7 +144,7 @@ class Renderer {
   runtime::PowerPoseInput powerpose_input_;
   GizmoSettings gizmo_settings_;
   uint64_t interaction_revision_=0;
-  double edit_preview_until_=0,resize_preview_until_=0;
+  double edit_preview_until_=0,resize_preview_until_=0,cloud_edit_until_=0;
   int selected_target_=-1,selected_joint_=-1;
   std::string selected_group_;
   std::vector<Selection> selections_;
