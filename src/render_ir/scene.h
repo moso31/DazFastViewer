@@ -214,6 +214,7 @@ struct Instance {
   // 一个 DAZ Instance / 散布条目的所有渲染零件共用此键。
   std::string instance_group,instance_label;
   bool graft_enabled=true;
+  bool local_shadow=false;
 };
 enum class LightKind {area,point,spot,distant};
 struct AreaLight {
@@ -269,6 +270,7 @@ struct MeshEdit {uint32_t index=0;std::vector<Vec3> positions;};
 struct InstanceEdit {uint32_t index=0;Transform transform;};
 struct VisibilityEdit {uint32_t index=0;bool visible=true;};
 struct GraftEdit {uint32_t index=0;bool enabled=true;};
+struct LocalShadowEdit {uint32_t index=0;bool enabled=false;};
 struct PolygonMaskEdit {uint32_t index=0;std::vector<uint32_t> hidden_polygons;};
 struct LightEdit {uint32_t index=0;AreaLight value;};
 struct Delta {
@@ -280,6 +282,7 @@ struct Delta {
   std::vector<LightEdit> lights;
   std::vector<VisibilityEdit> visibility;
   std::vector<GraftEdit> grafts;
+  std::vector<LocalShadowEdit> local_shadows;
   std::vector<PolygonMaskEdit> masks;
 };
 void validate(const Camera &camera);

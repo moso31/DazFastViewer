@@ -12,7 +12,7 @@ class PickingScene {
   struct Face {ir::Vec3 a,b,c;int instance,triangle;};
   struct Branch {ir::Bounds bounds;int begin=0,end=0,left=-1,right=-1;};
   struct MeshTree {std::vector<Face> faces;std::vector<Branch> branches;};
-  struct Instance {uint32_t mesh=0;ir::Transform inverse;ir::Bounds bounds;bool visible=false,pickable=true;};
+  struct Instance {uint32_t mesh=0;std::array<double,9> inverse{};ir::Vec3 translation;ir::Bounds bounds;bool visible=false,pickable=true;};
   std::vector<MeshTree> meshes_;
   std::vector<Instance> instances_;
   std::vector<uint8_t> used_meshes_;

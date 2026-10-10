@@ -30,6 +30,23 @@ static void unit(){
   check(remove_selection(d,s,{}, {"clone-node"})==1&&d.catalog.targets.size()==3,"删除 Instance 误删原型");
   d=fixture();s=initial_snapshot(d);s.lights.resize(2);s.lights[0].id="a";s.lights[1].id="b";remove_selection(d,s,{2},{},{0,1});check(s.lights.empty()&&d.catalog.targets.size()==2,"模型与灯光混合多选删除失败");
 }
+static void local_shadows(){
+  auto d=fixture();auto s=initial_snapshot(d);auto &scene=d.loaded.scene;
+  // 子节点、Fit To、Shell、GeoGraft 与实例均继承，旁边的独立角色不继承。
+  d.catalog.targets[0].character=true;
+  for(int kind=0;kind<4;++kind){auto object=scene.instances[2];object.id="linked-"+std::to_string(kind);const auto index=uint32_t(scene.instances.size());
+    if(kind==0)object.shell_source=0;if(kind==1)object.graft_source=0;if(kind==2)object.prototype=0;
+    scene.instances.push_back(object);
+    if(kind==3){runtime::Target t;t.id=object.id;t.instance=index;t.conform_target="#parent";d.catalog.targets.push_back(t);d.formulas.graphs.push_back({});}
+  }
+  s=initial_snapshot(d);s.values[0].local_shadow=true;ir::Delta delta;apply_local_shadow_groups(d,s,scene,&delta);
+  for(size_t i=0;i<scene.instances.size();++i)check(scene.instances[i].local_shadow==(i!=2),"局部阴影所有权继承错误");
+  check(delta.local_shadows.size()==scene.instances.size()-1,"局部阴影增量遗漏");
+  delta={};apply_local_shadow_groups(d,s,scene,&delta);check(delta.local_shadows.empty(),"未修改的局部阴影重复生成增量");
+  auto encoded=snapshot_json(d,s);auto restored=initial_snapshot(d);apply_snapshot_json(d,restored,encoded);check(restored.values[0].local_shadow&&!restored.values[1].local_shadow,"局部阴影保存了继承结果而非原始开关");
+  for(auto &[id,v]:encoded["objects"].items())v.erase("local_shadow");apply_snapshot_json(d,restored,encoded);check(!restored.values[0].local_shadow,"旧快照意外开启局部阴影");
+  s.values[0].local_shadow=false;s.values[1].local_shadow=true;apply_local_shadow_groups(d,s,scene);check(!scene.instances[0].local_shadow&&scene.instances[1].local_shadow&&!scene.instances[3].local_shadow,"父开关关闭后残留继承状态");
+}
 static void actual_preset(const std::filesystem::path &file,const std::filesystem::path &preset_file){
   const std::vector<std::filesystem::path> roots={"H:/G1","H:/G3"};Document d;d.generation=1;d.source_file=file;std::cout<<"加载模型"<<std::endl;d.loaded=daz::load(file,{roots,false,true});
   d.catalog=daz::discover_morphs(d.loaded,roots,{},true);d.skeletons=daz::load_skeletons(d.loaded);d.formulas=daz::enable_formulas(d.catalog,d.skeletons);
@@ -43,4 +60,4 @@ static void actual_preset(const std::filesystem::path &file,const std::filesyste
   s=initial_snapshot(d);const auto original_character=character.materials;check(apply_materials(d,host,preset,&s)==3,"选中角色后未给其 Loafers 赋值");check(d.loaded.scene.instances[ci].materials==original_character,"Loafers 预设修改了角色本体");
   auto restored=initial_snapshot(d);apply_snapshot_json(d,restored,snapshot_json(d,s));check(restored.values==s.values,"材质赋值后的参数快照无法恢复");
 }
-int wmain(int argc,wchar_t **argv){try{if(argc==4&&std::wstring(argv[1])==L"--preset")actual_preset(argv[2],argv[3]);else unit();std::cout<<"Scene node properties: PASS"<<std::endl;return 0;}catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}}
+int wmain(int argc,wchar_t **argv){try{if(argc==4&&std::wstring(argv[1])==L"--preset")actual_preset(argv[2],argv[3]);else {unit();local_shadows();}std::cout<<"Scene node properties: PASS"<<std::endl;return 0;}catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}}

@@ -255,10 +255,12 @@ KERNEL_STRUCT_MEMBER(background, float4, dfv_fog_settings)""")
     # Dome and camera atmosphere. Constant worlds use adapter's value.
     replace("src/scene/light.cpp", "  const float map_average_radiance = cdf_total * M_PI_2_F;", """  const float map_average_radiance = cdf_total * M_PI_2_F;
   kbackground->dfv_fog_settings.w = map_average_radiance;""")
+    from cycles_local_shadow import apply as apply_local_shadow
+    apply_local_shadow(ROOT, files, replace)
     for name, data in files.items():
         write_changed(destination / name, data)
     manifest = {"standalone_commit": STANDALONE, "blender_commit": BLENDER, "adopted_files": adopted,
-                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry", "object-space displacement bump projection", "analytic shared surface and sky height atmosphere", "procedural cellular night sky SVM node"]}
+                "build_adaptations": ["explicit library root", "project dependency targets", "benchmark target", "fmt linkage", "C++20", "actual render epoch and scene sync telemetry", "render stage telemetry", "atomic cross-thread display state", "configurable viewport update interval", "GPU allocation and host mapping telemetry", "object-space displacement bump projection", "analytic shared surface and sky height atmosphere", "procedural cellular night sky SVM node", "opt-in hierarchical local shadow queries with cached identity IAS"]}
     write_changed(destination / "dfv-source-manifest.json", json.dumps(manifest, indent=2) + "\n")
     print(f"Cycles 构建树已生成：{destination}；接入 {len(adopted)} 个 Blender 5.2.2 文件")
 

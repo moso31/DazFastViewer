@@ -341,7 +341,7 @@ void Renderer::run(std::stop_token stop) {
           });continue;
         }
         state.pending_payloads=0;state.resource_error.clear();
-        apply_instance_node_visibility(*document,desired,*pending_scene);
+        apply_instance_node_visibility(*document,desired,*pending_scene);apply_local_shadow_groups(*document,desired,*pending_scene);
         pending_scene->lights=group_lights(*group_source,*pending_scene,group_frames->hierarchy,desired.lights,pending_runtime->effective_poses(),&*group_frames);pending_scene->options=desired.options;apply_subdivision_levels(*pending_scene,desired.subdivision_levels);
         apply_material_overrides(*pending_scene,document->loaded.scene,desired.material_overrides);
         if(!desired.instance_ground.empty()||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,*pending_scene,group_frames->hierarchy,pending_runtime->effective_poses(),&*group_frames);apply_instance_ground(*pending_scene,document->loaded.scene,desired.instance_ground,nullptr,&bases);}
@@ -652,7 +652,7 @@ void Renderer::run(std::stop_token stop) {
             for(const auto &mesh:render_scene.meshes) previous_subdivision.push_back(mesh.subdivision);
             subdivision_edit=apply_subdivision_levels(render_scene,desired.subdivision_levels);
             diagnostics::LoadProfile profile;diagnostics::active=&profile;
-            try {delta=runtime->evaluate(scene_properties(*current,desired),desired.poses);apply_instance_node_visibility(*current,desired,render_scene,&delta);} catch(...) {diagnostics::active=nullptr;throw;}
+            try {delta=runtime->evaluate(scene_properties(*current,desired),desired.poses);apply_instance_node_visibility(*current,desired,render_scene,&delta);apply_local_shadow_groups(*current,desired,render_scene,&delta);} catch(...) {diagnostics::active=nullptr;throw;}
             diagnostics::active=nullptr;timing("edit_evaluate",evaluate_begin,desired.revision);
             if(refine_enabled&&(refine_pending||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.grafts.empty()||!delta.masks.empty())) {
               refine_ticket=refiner.request(runtime_document,desired,refine_frames);refine_revision=desired.revision;refine_pending=true;
@@ -675,7 +675,7 @@ void Renderer::run(std::stop_token stop) {
             water::materials(water::effective(*current,desired),render_scene,&delta);
             if(desired.instance_ground!=applied_instance_ground||!group_frames->hierarchy.groups.empty()){const auto bases=group_instance_bases(*group_source,render_scene,group_frames->hierarchy,runtime->effective_poses(),&*group_frames);apply_instance_ground(render_scene,current->loaded.scene,desired.instance_ground,&delta,&bases);applied_instance_ground=desired.instance_ground;}
             cloud_runtime.apply(*current,cloud::effective(*current,desired),render_scene,&delta);
-            new_render_edit=material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty()||!delta.grafts.empty()||!delta.masks.empty();
+            new_render_edit=!delta.local_shadows.empty()||material_layout_edit||!delta.materials.empty()||subdivision_edit||delta.options||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.lights.empty()||!delta.grafts.empty()||!delta.masks.empty();
             edit_affects_render=new_render_edit;applied_revision=desired.revision;if(!new_render_edit&&!queued.pending)gpu_revision=applied_revision;state.edit_error.clear();}
           }
           catch(const std::exception &e) {

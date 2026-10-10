@@ -200,6 +200,7 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
       Object *object=nullptr;if(auto old=old_objects.find(instance.id);old!=old_objects.end()) for(auto *o:old->second) if(o->get_geometry()==g&&retired_objects.contains(o)) {object=o;break;}
       if(!object) {object=scene_.create_node<Object>();object->name=ustring(instance.id);object->set_geometry(g);changed=true;}
       const auto matrix=transform(instance.transform,render_origin_);const auto visibility=instance.visible?PATH_RAY_VISIBILITY_ALL:0;
+      if(object->get_dfv_local_shadow()!=instance.local_shadow) {object->set_dfv_local_shadow(instance.local_shadow);object->tag_update(&scene_);changed=true;}
       if(object->get_tfm()!=matrix||object->get_visibility()!=visibility) {object->set_tfm(matrix);object->set_visibility(visibility);object->tag_update(&scene_);if(loaded_) ++stats_.instance_updates;changed=true;}
       objects.back().push_back(object);retired_objects.erase(object);
     }
@@ -232,6 +233,8 @@ bool CyclesAdapter::synchronize(const ir::Scene &source) {
     render.mesh=geometry->second;retired_geometry.erase(render.mesh);
     auto old=std::find_if(graft_renders_.begin(),graft_renders_.end(),[&](const auto &r){return r.id==id;});
     render.object=old==graft_renders_.end()?scene_.create_node<Object>():old->object;
+    bool local_shadow=false;for(size_t p=0;p<render.parts.size();++p) local_shadow|=source.instances[render.parts[p]<0?surface.members()[p]:uint32_t(render.parts[p])].local_shadow;
+    if(render.object->get_dfv_local_shadow()!=local_shadow) {render.object->set_dfv_local_shadow(local_shadow);render.object->tag_update(&scene_);changed=true;}
     if(old==graft_renders_.end()||render.object->get_geometry()!=render.mesh) {render.object->name=ustring(id);render.object->set_geometry(render.mesh);changed=true;}
     const auto matrix=transform(graft_transform(surface,source,render.parts),render_origin_);const auto visible=std::any_of(render.visible.begin(),render.visible.end(),[](bool v){return v;})?PATH_RAY_VISIBILITY_ALL:0;
     if(render.object->get_tfm()!=matrix||render.object->get_visibility()!=visible) {render.object->set_tfm(matrix);render.object->set_visibility(visible);render.object->tag_update(&scene_);if(loaded_) ++stats_.instance_updates;changed=true;}

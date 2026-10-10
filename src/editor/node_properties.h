@@ -53,4 +53,16 @@ inline void apply_instance_node_visibility(const Document &d,const Snapshot &s,i
     auto &instance=scene.instances[i];if(instance.visible!=visible){instance.visible=visible;if(delta)delta->visibility.push_back({uint32_t(i),visible});}
   }
 }
+// 开关属于可编辑对象；求值时沿角色所有权扩展到衣物、毛发、Shell 和 GeoGraft。
+inline void apply_local_shadow_groups(const Document &d,const Snapshot &s,ir::Scene &scene,ir::Delta *delta=nullptr) {
+  const auto children=runtime::visibility_children(scene,d.catalog.targets);
+  std::vector<bool> selected(s.values.size()),enabled(scene.instances.size());std::vector<size_t> pending;
+  for(size_t t=0;t<s.values.size();++t)if(s.values[t].local_shadow){selected[t]=true;pending.push_back(t);}
+  while(!pending.empty()){const auto t=pending.back();pending.pop_back();for(auto child:children[t])if(!selected[child]){selected[child]=true;pending.push_back(child);}}
+  for(size_t t=0;t<selected.size();++t)enabled.at(d.catalog.targets[t].instance)=selected[t];
+  bool changed=true;while(changed){changed=false;for(size_t i=0;i<enabled.size();++i)if(!enabled[i]){
+    const auto &object=scene.instances[i];for(int owner:{object.prototype,object.graft_source,object.shell_source,object.shell_root})if(owner>=0&&enabled.at(size_t(owner))){enabled[i]=changed=true;break;}
+  }}
+  for(size_t i=0;i<enabled.size();++i)if(scene.instances[i].local_shadow!=enabled[i]){scene.instances[i].local_shadow=enabled[i];if(delta)delta->local_shadows.push_back({uint32_t(i),enabled[i]});}
+}
 }

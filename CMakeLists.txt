@@ -45,6 +45,9 @@ endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
   "${DFV_ROOT}/tools/prepare_cycles.py" "${DFV_ROOT}/src/cycles/matte_fog_kernel.h" "${DFV_ROOT}/src/render_ir/fog_column.h" "${DFV_ROOT}/tools/dependencies.lock.json"
   "${DFV_ROOT}/src/cycles/night_sky_kernel.h" "${DFV_ROOT}/src/cycles/night_sky_model.h" "${DFV_ROOT}/src/cycles/night_sky_node.inl"
+  "${DFV_ROOT}/tools/cycles_local_shadow.py" "${DFV_ROOT}/src/cycles/local_shadow_types.h"
+  "${DFV_ROOT}/src/cycles/local_shadow_kernel.h" "${DFV_ROOT}/src/cycles/local_shadow_host.inl"
+  "${DFV_ROOT}/src/cycles/local_shadow_tree.h"
   "${DFV_ROOT}/specs/001-cycles-static-camera/evidence/source-differences.json")
 execute_process(COMMAND "${CMAKE_COMMAND}" -E env PYTHONUTF8=1 "${Python3_EXECUTABLE}" "${DFV_ROOT}/tools/prepare_cycles.py"
   --blender "${DFV_BLENDER_SOURCE}" --standalone "${DFV_STANDALONE_SOURCE}"
@@ -156,6 +159,10 @@ add_executable(CameraMailboxTest tests/camera_mailbox.cpp)
 target_include_directories(CameraMailboxTest PRIVATE src)
 target_compile_options(CameraMailboxTest PRIVATE /utf-8)
 add_test(NAME camera_mailbox COMMAND CameraMailboxTest)
+add_executable(LocalShadowTreeTest tests/local_shadow_tree.cpp)
+target_include_directories(LocalShadowTreeTest PRIVATE src)
+target_compile_options(LocalShadowTreeTest PRIVATE /utf-8)
+add_test(NAME local_shadow_tree COMMAND LocalShadowTreeTest)
 add_executable(SceneIRTest tests/scene_ir.cpp)
 target_link_libraries(SceneIRTest PRIVATE dfv_scene bf::dependencies::zlib)
 target_compile_options(SceneIRTest PRIVATE /utf-8)
@@ -204,6 +211,10 @@ add_executable(SceneWorkflowTest tests/scene_workflow.cpp)
 target_link_libraries(SceneWorkflowTest PRIVATE dfv_scene bf::dependencies::zlib)
 target_compile_options(SceneWorkflowTest PRIVATE /utf-8)
 add_test(NAME scene_workflow COMMAND SceneWorkflowTest)
+add_executable(PickingPrecisionTest tests/picking_precision.cpp)
+target_link_libraries(PickingPrecisionTest PRIVATE dfv_scene bf::dependencies::zlib)
+target_compile_options(PickingPrecisionTest PRIVATE /utf-8)
+add_test(NAME picking_precision COMMAND PickingPrecisionTest)
 add_executable(SceneNodePropertiesTest tests/scene_node_properties.cpp)
 target_link_libraries(SceneNodePropertiesTest PRIVATE dfv_scene)
 target_compile_options(SceneNodePropertiesTest PRIVATE /utf-8)

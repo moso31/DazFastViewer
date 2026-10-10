@@ -352,11 +352,12 @@ void CyclesAdapter::apply(const ir::Delta &delta,bool navigating,float navigatio
   }
   for(const auto &edit:delta.visibility) if(edit.index>=objects_.size()) throw std::runtime_error("可见性实例索引越界");
   for(const auto &edit:delta.grafts)if(edit.index>=source_.instances.size())throw std::runtime_error("GeoGraft 实例索引越界");
+  for(const auto &edit:delta.local_shadows)if(edit.index>=source_.instances.size())throw std::runtime_error("局部阴影实例索引越界");
   for(const auto &edit:delta.masks) {
     if(edit.index>=source_.meshes.size()||!std::is_sorted(edit.hidden_polygons.begin(),edit.hidden_polygons.end()))throw std::runtime_error("多边形遮罩索引或顺序无效");
     for(auto p:edit.hidden_polygons)if(p>=source_.meshes[edit.index].source_polygon_count)throw std::runtime_error("多边形遮罩越界");
   }
-  if(!delta.grafts.empty()||!delta.masks.empty()||(!delta.visibility.empty()&&(!graft_renders_.empty()||prune_hidden_))||(prune_hidden_&&std::any_of(delta.materials.begin(),delta.materials.end(),[](const auto &e){return !e.value.water&&!e.value.cloud;}))) {
+  if(!delta.local_shadows.empty()||!delta.grafts.empty()||!delta.masks.empty()||(!delta.visibility.empty()&&(!graft_renders_.empty()||prune_hidden_))||(prune_hidden_&&std::any_of(delta.materials.begin(),delta.materials.end(),[](const auto &e){return !e.value.water&&!e.value.cloud;}))) {
     // 保留旧快照用于比较；显隐与 Morph 同时提交时不能漏掉其他组合的几何更新。
     auto next=source_;if(delta.options) next.options=*delta.options;if(delta.camera) next.camera=*delta.camera;
     for(const auto &e:delta.meshes) next.meshes[e.index].positions=e.positions;
@@ -365,6 +366,7 @@ void CyclesAdapter::apply(const ir::Delta &delta,bool navigating,float navigatio
     for(const auto &e:delta.lights) next.lights[e.index]=e.value;
     for(const auto &e:delta.visibility) next.instances[e.index].visible=e.visible;
     for(const auto &e:delta.grafts) next.instances[e.index].graft_enabled=e.enabled;
+    for(const auto &e:delta.local_shadows) next.instances[e.index].local_shadow=e.enabled;
     for(const auto &e:delta.masks) next.meshes[e.index].hidden_polygons=e.hidden_polygons;
     synchronize(next);return;
   }

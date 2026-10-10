@@ -69,6 +69,7 @@ struct Properties {
   double ground_alignment_offset_cm=0;
   bool ground_alignment_body_only=false;
   bool graft_enabled=true;
+  bool local_shadow=false;
   bool operator==(const Properties &) const = default;
 };
 void validate_transform(const TransformValues &value);

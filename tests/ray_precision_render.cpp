@@ -37,7 +37,8 @@ int main(int argc,char **argv){const auto output=fs::absolute(argc>1?argv[1]:"ar
   ccl::SessionParams params;params.device=devices.front();params.background=params.headless=true;params.samples=256;params.threads=4;params.use_resolution_divider=false;params.use_auto_tile=false;
   ccl::SceneParams sp;sp.background=true;sp.bvh_type=ccl::BVH_TYPE_DYNAMIC;sp.use_texture_cache=false;sp.auto_texture_cache=false;ccl::Session session(params,sp);auto &scene=*session.scene;auto *pass=scene.create_node<ccl::Pass>();pass->set_name(ccl::ustring("combined"));pass->set_type(ccl::PASS_COMBINED);scene.integrator->set_use_denoise(false);scene.integrator->set_use_adaptive_sampling(false);scene.integrator->set_max_bounce(12);
   const auto initial=fixture();auto source=initial;CyclesAdapter adapter(scene);adapter.load(source);ccl::BufferParams buffers;buffers.width=buffers.full_width=buffers.height=buffers.full_height=256;std::vector<float> reference;J stages=J::array();bool passed=true;
-  auto render=[&](const char *name){const auto folder=output/name;fs::create_directories(folder);auto driver=std::make_unique<Output>(folder);auto *result=driver.get();session.set_output_driver(std::move(driver));session.reset(params,buffers);session.start();session.wait();check(!session.progress.get_error(),session.progress.get_error_message().c_str());check(result->written&&result->error.empty(),"Render failed");if(reference.empty())reference=result->linear_pixels;
+  auto render=[&](const char *name){
+    const auto folder=output/name;fs::create_directories(folder);auto driver=std::make_unique<Output>(folder);auto *result=driver.get();session.set_output_driver(std::move(driver));session.reset(params,buffers);session.start();session.wait();check(!session.progress.get_error(),session.progress.get_error_message().c_str());check(result->written&&result->error.empty(),"Render failed");if(reference.empty())reference=result->linear_pixels;
     double error=0,energy=0;size_t seams=0;for(int y=32;y<224;++y)for(int x=32;x<224;++x){const size_t p=(y*256+x)*4;double diff=0;for(size_t c=0;c<3;++c){check(std::isfinite(result->linear_pixels[p+c]),"Nonfinite radiance");const double d=std::abs(double(reference[p+c])-result->linear_pixels[p+c]);error+=d;diff+=d;energy+=reference[p+c];}seams+=diff>.18;}
     const double relative=error/std::max(energy,1e-12);passed&=relative<.01;stages.push_back({{"stage",name},{"relative_l1",relative},{"seam_pixels",seams}});std::cout<<stages.back().dump()<<std::endl;return result->linear_pixels;};
   render("origin");source=initial;translate(source,{-106,-497,60});{ccl::thread_scoped_lock lock(scene.mutex);adapter.synchronize(source);}render("far-synchronized");
@@ -69,8 +70,18 @@ int main(int argc,char **argv){const auto output=fs::absolute(argc>1?argv[1]:"ar
     // 在预览状态回到眼球特写，再用空增量结束导航。
     move.camera=source.camera;adapter.apply(move,true,.0039f);const auto close=scene.camera->get_matrix();check(std::max({std::abs(close.x.w),std::abs(close.y.w),std::abs(close.z.w)})<=.50001f,"Close-up navigation lost precise origin");adapter.apply({});
   }
-  render("navigation-restored-eye");check(adapter.stats().geometry_updates==geometry_updates,"Navigation rebuilt eye meshes");
+  render("navigation-restored-eye");check(adapter.stats().geometry_updates==geometry_updates,"Navigation rebuilt eye geometry");
   source.materials[0].base_color={.05f,.09f,.3f};{ccl::thread_scoped_lock lock(scene.mutex);ir::Delta delta;delta.materials={{0,source.materials[0]}};adapter.apply(delta);}reference.clear();render("material-delta");
-  {ccl::thread_scoped_lock lock(scene.mutex);adapter.synchronize(source);}render("material-synchronized");
+  {ccl::thread_scoped_lock lock(scene.mutex);adapter.synchronize(source);}const auto unchanged=render("material-synchronized");
+  // 顶点编辑后还原必须恢复相同画面，避免继续使用过期的加速结构。
+  const auto original_points=source.meshes[0].positions;
+  for(auto &p:source.meshes[0].positions)p.z+=.002f;
+  {ccl::thread_scoped_lock lock(scene.mutex);ir::Delta delta;delta.meshes={{0,source.meshes[0].positions}};adapter.apply(delta);}
+  reference.clear();const auto deformed=render("geometry-delta");double difference=0;
+  for(size_t i=0;i<unchanged.size();++i)difference+=std::abs(double(unchanged[i])-deformed[i]);
+  check(difference>1.0,"Vertex edits did not update the rendered geometry");
+  source.meshes[0].positions=original_points;
+  {ccl::thread_scoped_lock lock(scene.mutex);ir::Delta delta;delta.meshes={{0,original_points}};adapter.apply(delta);}
+  reference=unchanged;render("geometry-restored");
   std::ofstream(output/"checks.json")<<J{{"result",passed?"PASS":"FAIL"},{"device",devices.front().description},{"samples",params.samples},{"stages",stages}}.dump(2);check(passed,"Distant transparent surfaces acquired triangle seams");return 0;
 }catch(const std::exception &e){std::ofstream(output/"error.txt")<<e.what();std::cerr<<e.what()<<std::endl;return 1;}}
