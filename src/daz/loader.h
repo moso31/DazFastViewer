@@ -1,6 +1,7 @@
 #pragma once
 #include "render_ir/scene.h"
 #include "runtime/rigid_follow.h"
+#include "runtime/mesh_push.h"
 #include "runtime/parameter_settings.h"
 #include <nlohmann/json.hpp>
 #include <memory>
@@ -42,6 +43,8 @@ struct AssetObject {
   std::vector<MaterialSelectionSet> material_selection_sets;
   std::shared_ptr<SourceArchive> archive;
   std::array<std::optional<runtime::ParameterSettings>,10> numeric_settings;
+  std::vector<runtime::MeshPush> push_modifiers;
+  bool dynamic_cloth=false;
 };
 struct AssetNode {
   std::string id,parent,label;bool group=false;

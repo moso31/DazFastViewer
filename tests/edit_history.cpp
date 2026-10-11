@@ -130,6 +130,7 @@ static void commands(){
   roundtrip("transform",[&]{current.snapshot.values[0].transform.translation_cm={1,2,3};current.snapshot.values[0].transform.general_scale=1.123456789;});
   roundtrip("group transform",[&]{current.snapshot.group_transforms["group"].translation_cm={10,20,30};current.snapshot.group_transforms["nested"].rotation_degrees.y=35;current.context.selection={{"group","","",-4}};current.context.active=current.context.selection.front();});
   roundtrip("visibility",[&]{current.snapshot.values[1].visible=false;});
+  roundtrip("服装部位形变",[&]{current.snapshot.values[1].disabled_deformation_regions={"Foot","Toes"};});
   roundtrip("morph",[&]{current.snapshot.values[0].morphs[0]=1.7f;current.snapshot.values[0].unlimited_morphs.insert("morph");});
   roundtrip("IK / FK / PowerPose",[&]{for(size_t i=0;i<3;++i)current.snapshot.poses[0][i].rotation_degrees.z=float(i+2);});
   roundtrip("pins",[&]{current.snapshot.pose_pins.push_back({0,1,{.1f,.2f,.3f},true,true,ir::Transform::translate({1,2,3})});});

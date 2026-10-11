@@ -5,6 +5,8 @@
 #include "runtime/growth.h"
 #include "runtime/favorites.h"
 #include "runtime/physics_settings.h"
+#include "runtime/garment_deformation.h"
+#include "runtime/mesh_push.h"
 #include <set>
 #include <map>
 
@@ -54,6 +56,8 @@ struct Target {
   bool has_edit_frame=false;
   RigidFollow rigid_follow;
   bool attachment_bind_rest=false;
+  std::vector<MeshPush> push_modifiers;
+  bool dynamic_cloth=false;
 };
 struct TransformValues {
   ir::Vec3 translation_cm{},rotation_degrees{},scale{1,1,1};
@@ -70,6 +74,7 @@ struct Properties {
   bool ground_alignment_body_only=false;
   bool graft_enabled=true;
   bool local_shadow=false;
+  std::set<std::string> disabled_deformation_regions;
   bool operator==(const Properties &) const = default;
 };
 void validate_transform(const TransformValues &value);
@@ -83,6 +88,10 @@ class MorphRuntime {
   std::vector<Properties> values_;
   std::vector<std::vector<ir::Vec3>> bases_;
   std::vector<std::vector<ir::Vec3>> follow_offsets_;
+  std::vector<std::unique_ptr<GarmentDeformation>> garment_deformation_;
+  std::vector<std::vector<float>> followed_weights_;
+  std::vector<std::vector<ir::Vec3>> garment_references_;
+  std::vector<uint64_t> follow_revisions_;
   std::vector<ir::Transform> transforms_;
   std::vector<ir::Transform> attachments_;
   std::vector<ir::Transform> reference_frames_,attachment_frames_;
@@ -103,6 +112,13 @@ public:
   void set_attachment(size_t target,const ir::Transform &delta);
   void set_reference_frames(const std::vector<ir::Transform> &frames,const std::vector<ir::Transform> &attachment_frames);
   bool set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets);
+  void set_deformation_regions(size_t target,const std::set<std::string> &disabled,const std::vector<float> &followed);
+  void constrain_follow_offsets(size_t target,std::vector<ir::Vec3> &offsets);
+  void constrain_skinned(size_t target,std::vector<ir::Vec3> &positions) const;
+  void constrain_collision(size_t target,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions) const;
+  uint64_t follow_revision(size_t target) const {return follow_revisions_.at(target);}
+  uint64_t garment_revision(size_t target) const {return values_.at(target).disabled_deformation_regions.empty()?0:follow_revision(target);}
+  const auto &base_positions(size_t target) const {return bases_.at(target);}
   ir::Delta evaluate();
   // 先消去共同祖先，再求相对矩阵；共同刚性移动不会制造浮点差异。
   ir::Transform relative_transform(uint32_t source,uint32_t follower) const;

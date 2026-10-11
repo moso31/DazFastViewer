@@ -45,7 +45,9 @@ void set_parameter(const Target &target,Properties &values,size_t index,float va
   values.morphs.at(resolved)=value;if(p.value_type!="bool") values.unlimited_morphs.insert(target.morphs[resolved].id);sync_aliases(target,values);
 }
 DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse)
-  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs,reuse?&reuse->conform_:nullptr),collision_(scene,targets,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);}),scene_(scene) {
+  :targets_(targets),skins_(skins),graphs_(graphs),morph_(scene,targets),skin_(scene,skins),conform_(scene,targets,skins,graphs,reuse?&reuse->conform_:nullptr),collision_(scene,targets,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);},
+      [this](uint32_t instance,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance){morph_.constrain_collision(t,input,positions);break;}},
+      [this](uint32_t instance){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance)return morph_.garment_revision(t);return uint64_t(0);}),scene_(scene) {
   if(reuse) collision_.reuse(reuse->collision_);
   if(graphs.size()!=targets.size()) throw std::runtime_error("角色和公式图数量不一致");
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
@@ -95,23 +97,30 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
     }
   }
 }
-void DeformationRuntime::feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved) {
+void DeformationRuntime::feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved,std::vector<std::vector<float>> *followed) {
   diagnostics::Scope scope("formula_feed");
   if(values.size()!=targets_.size()||poses.size()!=skins_.size()) throw std::runtime_error("变形快照数量不一致");
   weights.resize(targets_.size());resolved=poses;
+  if(followed)followed->resize(targets_.size());
   for(size_t s=0;s<skins_.size();++s) validate_pose(skins_[s],poses[s]);
   for(size_t t:conform_.order()) {
     if(values[t].morphs.size()!=targets_[t].morphs.size()) throw std::runtime_error("Morph 快照数量不一致");const auto &g=graphs_[t];auto &runtime=*formulas_[t];
     const auto *link=conform_.link(t);std::vector<JointPose> inherited;
     if(link&&g.skin>=0) {inherited=conform_pose(*link,skins_,resolved,poses.at(size_t(g.skin)));resolved[size_t(g.skin)]=inherited;}
+    // 在相同姿势下去掉宿主 Morph 输入，保留衣物自己的基础适配、调整及 JCM。
+    // 二次公式求值仅发生在启用局部约束的衣物上，不执行额外蒙皮。
+    std::unique_ptr<FormulaRuntime> local;
+    if(followed&&link&&!values[t].disabled_deformation_regions.empty())local=std::make_unique<FormulaRuntime>(g);
     for(uint32_t c=0;c<g.channels.size();++c) {const auto &binding=g.channels[c].binding;
       if(binding.property==Property::morph) {if(g.morph_channels[binding.index]!=int(c)) continue;double input=values[t].morphs[binding.index];
         runtime.set_unlimited(c,values[t].unlimited_morphs.contains(targets_[t].morphs[binding.index].id));
+        if(local){local->set_unlimited(c,values[t].unlimited_morphs.contains(targets_[t].morphs[binding.index].id));local->set(c,input);}
         if(link&&link->morph_sources.at(binding.index)>=0) input+=weights.at(link->source).at(size_t(link->morph_sources[binding.index]));runtime.set(c,input);}
-      else runtime.set(c,bone_input(binding,skins_.at(size_t(g.skin)),resolved.at(size_t(g.skin))));}
+      else {const auto input=bone_input(binding,skins_.at(size_t(g.skin)),resolved.at(size_t(g.skin)));runtime.set(c,input);if(local)local->set(c,input);}}
     runtime.evaluate();
     const auto &result=runtime.values();auto &value=weights[t];value.resize(targets_[t].morphs.size());
     for(size_t m=0;m<value.size();++m) {const int c=g.morph_channels[m];if(c>=0&&targets_[t].morphs[m].evaluable) value[m]=float(result[size_t(c)]);if(!std::isfinite(value[m])) throw std::runtime_error("Morph 求值超出有效数值范围");}
+    if(local){local->evaluate();auto &transfer=followed->at(t);transfer.resize(value.size());for(size_t m=0;m<value.size();++m){const int c=g.morph_channels[m];if(c>=0&&targets_[t].morphs[m].evaluable)transfer[m]=value[m]-float(local->values()[size_t(c)]);}}
     for(size_t c=0;c<g.channels.size();++c) if(g.channels[c].binding.property!=Property::morph) bone_output(g.channels[c].binding,skins_.at(size_t(g.skin)),resolved.at(size_t(g.skin)),result[c]);
     // 目标 ERC 已包含体型骨长 / 中心调整，服装不能再次叠加相同公式。
     if(link&&g.skin>=0) for(size_t j=0;j<link->joints.size();++j) if(link->joints[j]>=0) resolved[size_t(g.skin)][j]=inherited[j];
@@ -119,7 +128,7 @@ void DeformationRuntime::feed(const std::vector<Properties> &values,const std::v
 }
 bool DeformationRuntime::same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const {
   if(!evaluated_||values.size()!=previous_.size()||poses!=previous_poses_) return false;
-  for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs) return false;
+  for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs||values[t].disabled_deformation_regions!=previous_[t].disabled_deformation_regions) return false;
   return true;
 }
 bool DeformationRuntime::reframe(const std::vector<ir::Transform> &frames) {
@@ -135,11 +144,11 @@ std::vector<std::vector<JointPose>> DeformationRuntime::resolve_poses(const std:
 }
 PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry) {
   if(same_shape(values,poses)) return {};
-  std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> resolved;
-  try {feed(values,poses,weights,resolved);}
+  std::vector<std::vector<float>> weights,followed;std::vector<std::vector<JointPose>> resolved;
+  try {feed(values,poses,weights,resolved,&followed);}
   catch(...) {std::vector<std::vector<float>> rollback_weights;std::vector<std::vector<JointPose>> rollback_poses;feed(previous_,previous_poses_,rollback_weights,rollback_poses);throw;}
   PayloadProgress progress;std::vector<std::shared_ptr<const OffsetBuffer>> leases;std::set<MorphPayload *> seen;
-  for(size_t t=0;t<weights.size();++t) for(size_t m=0;m<weights[t].size();++m) if(weights[t][m]!=0) {
+  for(size_t t=0;t<weights.size();++t) for(size_t m=0;m<weights[t].size();++m) if(weights[t][m]!=0||(!followed[t].empty()&&followed[t][m]!=0)) {
     const auto &p=targets_[t].morphs[m].payload;if(!p||!seen.insert(p.get()).second) continue;
     p->request(retry);if(auto data=p->acquire()) leases.push_back(std::move(data));
     else if(p->state()==PayloadState::failed) {if(progress.error.empty()) progress.error=targets_[t].morphs[m].label+"："+p->error();}
@@ -147,7 +156,45 @@ PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &value
   }
   payload_leases_=std::move(leases);trim_morph_cache();return progress;
 }
-ir::Delta DeformationRuntime::collide(ir::Delta delta) {return collision_enabled_?collision_.evaluate(std::move(delta)):std::move(delta);}
+void DeformationRuntime::update_garment_collision(const std::vector<Properties> &values) {
+  // dForce 衣物的基础网格可以穿入身体；没有显式平滑碰撞时，仍在当前姿势下
+  // 对 Fit To 宿主执行静态避让。这不重建 dForce 的时间线模拟或布料褶皱。
+  std::vector<bool> active(targets_.size());
+  for(size_t t=0;t<targets_.size();++t){const auto &target=targets_[t];const auto &instance=scene_.instances[target.instance];const auto &mesh=scene_.meshes[instance.mesh];
+    active[t]=(target.dynamic_cloth||!values[t].disabled_deformation_regions.empty())&&!target.conform_target.empty()&&graphs_[t].skin>=0&&mesh.graft_vertex_pairs.empty()&&instance.shell_source<0&&!(target.smoothing.enabled&&target.smoothing.collision_iterations>0&&!target.smoothing.collision_target.empty());}
+  for(size_t t=0;t<active.size();++t)if(active[t]&&!targets_[t].dynamic_cloth){const auto regions=deformation_regions(scene_.meshes[scene_.instances[targets_[t].instance].mesh]);active[t]=std::any_of(regions.begin(),regions.end(),[&](const auto &r){return values[t].disabled_deformation_regions.contains(r.id);});}
+  if(active==garment_collision_active_)return;
+  if(std::none_of(active.begin(),active.end(),[](bool value){return value;})){garment_collision_active_=active;garment_collision_.reset();return;}
+  // 复用现有防穿插，不改写资产的碰撞设置；普通服装仅在关闭局部形变时启用。
+  auto targets=targets_;
+  for(size_t t=0;t<targets.size();++t){auto &s=targets[t].smoothing;s.enabled=active[t];if(active[t]){s.collision_target=targets[t].conform_target;if(!s.collision_target.starts_with('#'))s.collision_target.insert(s.collision_target.begin(),'#');s.collision_iterations=6;s.smoothing_iterations=8;s.weight=.5f;}}
+  auto collision=std::make_unique<CollisionRuntime>(scene_,targets,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);},
+      [this](uint32_t instance,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance){morph_.constrain_collision(t,input,positions);break;}},
+      [this](uint32_t instance){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance)return morph_.garment_revision(t);return uint64_t(0);});
+  for(size_t t=0;t<targets_.size();++t)collision->reference_positions(targets_[t].instance,morph_.base_positions(t));
+  if(garment_collision_)collision->reuse(*garment_collision_);
+  garment_collision_=std::move(collision);garment_collision_active_=active;
+}
+ir::Delta DeformationRuntime::collide(ir::Delta delta) {
+  delta=push(std::move(delta),false);
+  if(collision_enabled_){delta=collision_.evaluate(std::move(delta));if(garment_collision_)delta=garment_collision_->evaluate(std::move(delta));}
+  return push(std::move(delta),true);
+}
+ir::Delta DeformationRuntime::push(ir::Delta delta,bool post_smooth) {
+  auto &caches=post_smooth?push_after_:push_before_;
+  for(const auto &target:targets_) {
+    if(std::none_of(target.push_modifiers.begin(),target.push_modifiers.end(),[&](const auto &p){return p.post_smooth==post_smooth&&p.offset_m!=0;}))continue;
+    const auto index=scene_.instances[target.instance].mesh;auto &mesh=scene_.meshes[index];auto &cache=caches[index];
+    auto edit=std::find_if(delta.meshes.begin(),delta.meshes.end(),[&](const auto &d){return d.index==index;});
+    if(edit==delta.meshes.end()&&cache.initialized)continue;
+    const auto &input=edit==delta.meshes.end()?mesh.positions:edit->positions;auto output=input;
+    if(cache.initialized&&cache.input==input)output=cache.output;else apply_mesh_push(mesh,output,target.push_modifiers,post_smooth);
+    const bool changed=!cache.initialized||cache.output!=output;cache.input=input;cache.output=std::move(output);cache.initialized=true;mesh.positions=cache.output;
+    if(changed){if(edit==delta.meshes.end())delta.meshes.push_back({index,cache.output});else edit->positions=cache.output;}
+    else if(edit!=delta.meshes.end())delta.meshes.erase(edit);
+  }
+  return delta;
+}
 ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
   if(same_shape(values,poses)) {
     diagnostics::Scope scope("transform_only");
@@ -156,18 +203,20 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     for(size_t t=0;t<values.size();++t) {morph_.set_transform(t,values[t].transform);morph_.set_visible(t,values[t].visible);morph_.set_graft_enabled(t,values[t].graft_enabled);}
     auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(activate_grafts(values,morph_.evaluate()))),effective_poses_)));previous_=values;return delta;
   }
-  std::vector<std::vector<float>> weights;auto resolved=poses;
+  std::vector<std::vector<float>> weights,followed;auto resolved=poses;
   try {
     for(const auto &p:values) validate_transform(p.transform);
-    feed(values,poses,weights,resolved);
+    feed(values,poses,weights,resolved,&followed);
     // 命令行调用保持同步语义；编辑器先调用 prepare，资源就绪后才提交形变。
     std::vector<std::shared_ptr<const OffsetBuffer>> leases;
-    for(size_t t=0;t<weights.size();++t) for(size_t m=0;m<weights[t].size();++m) if(weights[t][m]!=0&&targets_[t].morphs[m].payload) leases.push_back(targets_[t].morphs[m].payload->ensure());
+    for(size_t t=0;t<weights.size();++t) for(size_t m=0;m<weights[t].size();++m) if((weights[t][m]!=0||(!followed[t].empty()&&followed[t][m]!=0))&&targets_[t].morphs[m].payload) leases.push_back(targets_[t].morphs[m].payload->ensure());
     payload_leases_=std::move(leases);
     trim_morph_cache();
     for(size_t s=0;s<skins_.size();++s) validate_pose(skins_[s],resolved[s]);
   } catch(...) {std::vector<std::vector<float>> rollback_weights;std::vector<std::vector<JointPose>> rollback_poses;feed(previous_,previous_poses_,rollback_weights,rollback_poses);throw;}
+  update_garment_collision(values);
   for(size_t t=0;t<weights.size();++t) {
+    morph_.set_deformation_regions(t,values[t].disabled_deformation_regions,followed[t]);
     for(size_t m=0;m<weights[t].size();++m) if(targets_[t].morphs[m].evaluable||targets_[t].morphs[m].unsupported.empty()) morph_.set_morph(t,m,weights[t][m],false);
     morph_.set_transform(t,values[t].transform);
     morph_.set_visible(t,values[t].visible);
@@ -183,9 +232,14 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*moved*a.inverse_bind);
   }
   conform_.project(weights,morph_);
+  auto skinned=skin_.evaluate(morph_.evaluate());
+  for(size_t t=0;t<values.size();++t)if(!values[t].disabled_deformation_regions.empty()) {
+    const auto mesh=scene_.instances[targets_[t].instance].mesh;
+    for(auto &edit:skinned.meshes)if(edit.index==mesh){morph_.constrain_skinned(t,edit.positions);scene_.meshes[mesh].positions=edit.positions;}
+  }
   // 碰撞必须看当前姿势的 GeoGraft 接缝，不能读取上一帧在末尾焊接的边界。
   // 最后的焊接仍保留，用于刚性跟随或插件自身碰撞之后的边界一致性。
-  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(activate_grafts(values,skin_.evaluate(morph_.evaluate())))),resolved)),!evaluated_);
+  auto delta=update_geometry_shells(scene_,weld_grafts(follow_surfaces(collide(weld_grafts(activate_grafts(values,std::move(skinned)))),resolved)),!evaluated_);
   effective_=std::move(weights);effective_poses_=std::move(resolved);previous_=values;previous_poses_=poses;evaluated_=true;return delta;
 }
 void DeformationRuntime::bind_graft_masks() {

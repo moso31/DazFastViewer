@@ -63,6 +63,17 @@ static void surface_cache_checks() {
   changed=scene;for(auto &p:changed.meshes[1].positions)p.z+=.2f;ConformRuntime follower(changed,targets,skins,graphs);require(hits()==1&&std::abs(follower.link(1)->surface[0].distance-before[0].distance-.2f)<1e-5,"附件顶点变化错误复用绑定");
   auto invalid=targets;invalid[0].conform_target="#cache-cloth";rejects([&]{ConformRuntime cyclic(scene,invalid,skins,graphs);},"缓存绕过 Fit To 循环检查");
 }
+static void continuous_follow_gap() {
+  ir::Scene scene;ir::Mesh body;body.positions={{0,0,0},{1,0,0},{0,1,0},{1,1,0}};body.triangles={{{0,1,2}},{{1,3,2}}};
+  // 两个几乎重合的衣物顶点分别投到公共边两侧，原始单面法线外推会拉开约 5 cm。
+  ir::Mesh cloth;constexpr float e=.000001f;cloth.positions={{.5f-e,.5f-e,.1f},{.5f+e,.5f+e,.1f},{.6f,.6f,.1f}};cloth.triangles={{{0,1,2}}};
+  scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target source;source.id="body/mesh";source.morphs={morph("bend",{{3,{0,0,.4f}}})};Target follower;follower.id="cloth/mesh";follower.instance=1;follower.conform_target="#body";
+  std::vector<Target> targets={source,follower};std::vector<FormulaGraph> graphs={graph(source,-1),graph(follower,-1)};std::vector<Skin> skins;
+  std::vector<Properties> values(2);values[0].morphs={1};DeformationRuntime runtime(scene,targets,skins,graphs);runtime.evaluate(values,{});
+  const auto &p=scene.meshes[1].positions;require(distance({p[0]},{p[1]})<.00001,"最近面切换撕开了服装顶点");
+  const auto baseline=p;require(runtime.evaluate(values,{}).meshes.empty(),"连续投射重复求值漂移");values[0].morphs[0]=0;runtime.evaluate(values,{});require(distance(scene.meshes[1].positions,cloth.positions)<1e-6,"连续投射关闭 Morph 后没有恢复");values[0].morphs[0]=1;runtime.evaluate(values,{});require(scene.meshes[1].positions==baseline,"连续投射切换缓存不一致");
+}
 static void rigid_root_scaling(){
   ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,1},{1,0,1},{0,1,1},{1,1,1}};mesh.triangles={{{0,1,2}},{{1,3,2}}};scene.meshes={mesh,mesh,mesh};scene.instances.resize(3);
   for(uint32_t i=0;i<3;++i){scene.instances[i].mesh=i;auto &m=scene.instances[i].transform;m.value[0]=m.value[5]=m.value[10]=.291f;m.value[3]=2;}
@@ -233,7 +244,7 @@ static void graft_collision_restore() {
   require(distance(scene.meshes[2].positions,cloth.positions)<1e-6,"服装碰撞没有使用当前接缝位置");
 }
 static void unit() {
-  asynchronous_refinement();surface_cache_checks();
+  asynchronous_refinement();surface_cache_checks();continuous_follow_gap();
   graft_collision_restore();
   {
     // 共同祖先的平移 / 旋转 / 缩放应完全保留碰撞缓存，包括 GeoGraft。

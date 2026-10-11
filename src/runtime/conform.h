@@ -3,6 +3,7 @@
 #include "runtime/morph.h"
 #include "runtime/skeleton.h"
 #include <functional>
+#include <map>
 
 namespace dfv::runtime {
 struct SurfaceBinding {
@@ -33,6 +34,9 @@ class ConformRuntime {
   std::vector<std::vector<float>> previous_weights_;
   std::vector<std::vector<ir::Vec3>> offsets_;
   std::vector<uint64_t> revisions_,source_revisions_;
+  std::vector<uint64_t> follow_revisions_;
+  struct SurfaceFrames {std::vector<ir::Vec3> reference;std::vector<std::vector<uint32_t>> neighborhoods;};
+  std::map<size_t,SurfaceFrames> surface_frames_;
   ConformStats stats_;
 public:
   ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse=nullptr);
@@ -57,6 +61,7 @@ class CollisionRuntime {
     std::vector<ir::Transform> graft_relatives;
     bool initialized=false;
     uint64_t cache_key=0;
+    uint64_t constraint_revision=0;
     double reference_edges=0;
     std::vector<ir::Vec3> output;
   };
@@ -64,10 +69,14 @@ class CollisionRuntime {
   std::vector<Binding> bindings_;
   CollisionStats stats_;
   std::function<ir::Transform(uint32_t,uint32_t)> relative_;
+  std::function<void(uint32_t,const std::vector<ir::Vec3> &,std::vector<ir::Vec3> &)> constrain_;
+  std::function<uint64_t(uint32_t)> constraint_revision_;
 public:
-  CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets,std::function<ir::Transform(uint32_t,uint32_t)> relative={});
+  CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets,std::function<ir::Transform(uint32_t,uint32_t)> relative={},
+      std::function<void(uint32_t,const std::vector<ir::Vec3> &,std::vector<ir::Vec3> &)> constrain={},std::function<uint64_t(uint32_t)> revision={});
   ir::Delta evaluate(ir::Delta delta,bool parallel=true);
   void reuse(const CollisionRuntime &previous);
+  void reference_positions(uint32_t source,const std::vector<ir::Vec3> &positions);
   const auto &stats() const {return stats_;}
 };
 }

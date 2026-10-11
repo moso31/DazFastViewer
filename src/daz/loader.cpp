@@ -976,7 +976,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   std::map<fs::path,std::map<std::string,Json>> modifier_settings;
   {
     diagnostics::Scope scope("modifier_settings_index");std::vector<fs::path> files;
-    for(const auto &instance:array_member(source,"modifiers")) if(!instance.contains("channel")&&!instance.contains("skin")&&instance.contains("url")) {
+    for(const auto &instance:array_member(source,"modifiers")) if(!instance.contains("skin")&&instance.contains("url")) {
       const auto path=repo.path(instance.at("url").get<std::string>(),file);
       if(modifier_settings.try_emplace(path).second)files.push_back(path);
     }
@@ -985,7 +985,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       for(size_t i=0;i<batch.size();++i) {
         const auto handle=batch[i].get();auto &index=modifier_settings.at(files[start+i]);
         for(const auto &entry:array_member(*handle,"modifier_library")) {
-          Json settings=Json::object();if(entry.contains("extra"))settings["extra"]=entry.at("extra");
+          Json settings=Json::object();if(entry.contains("extra"))settings["extra"]=entry.at("extra");if(entry.contains("channel"))settings["channel"]=entry.at("channel");
           index.try_emplace(entry.value("id",""),std::move(settings));
         }
       }
@@ -993,7 +993,7 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
   }
   for(const auto &instance:array_member(source,"modifiers")) {
     diagnostics::Scope scope("modifier_settings");
-    if(instance.contains("channel")||instance.contains("skin")) continue;
+    if(instance.contains("skin")) continue;
     Json modifier=instance;
     if(instance.contains("url")) {
       const auto uri=instance.at("url").get<std::string>();const auto hash=uri.find('#');if(hash==std::string::npos) fail("Modifier 引用缺少 fragment");
@@ -1001,18 +1001,35 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       if(base==index.end()) fail("Modifier ID 不存在："+uri);
       modifier=merge_node(base->second,instance);
     }
-    bool smoothing=false;std::map<std::string,Json> channels;
+    bool smoothing=false,dynamic=false;const Json *push=nullptr;std::map<std::string,Json> channels;
     for(const auto &extra:array_member(modifier,"extra")) {
       smoothing|=extra.value("type","")=="studio/modifier/smoothing";
+      dynamic|=extra.value("type","")=="studio/modifier/dynamic_simulation";
+      if(extra.value("type","")=="studio/modifier/push")push=&extra;
       for(const auto &entry:array_member(extra,"channels")) if(entry.contains("channel")) {const auto &c=entry["channel"];channels[c.at("id").get<std::string>()]=c;}
     }
-    if(!smoothing) continue;
     auto value=[&](const char *id,float fallback) {auto c=channels.find(id);return c==channels.end()?fallback:number(c->second,fallback);};
+    const auto parent=decode(instance.value("parent",""));
+    for(auto &object:out.objects)if(parent=="#"+object.id||parent=="#"+object.geometry_instance_id) {
+      if(dynamic&&value("Simulation Object Type",1)==1&&object_member(nodes.at(object.id),"presentation").value("type",std::string{}).starts_with("Follower/Wardrobe")) {
+        object.dynamic_cloth=true;warn("dforce_static_collision",object.id,"dForce 服装按当前姿势执行 Fit To 宿主静态避让，不重放布料模拟时间线");
+      }
+      if(push&&scene.instances[object.instance].shell_source<0) {
+        runtime::MeshPush settings;settings.offset_m=value("Value",number(object_member(modifier,"channel"),0))*.01f;settings.post_smooth=push->value("push_post_smooth",false);
+        if(!std::isfinite(settings.offset_m))fail("Push 修改器偏移无效："+object.id);
+        if(push->contains("influence_weights")) {
+          const auto vertices=scene.meshes[scene.instances[object.instance].mesh].positions.size();if(push->value("vertex_count",vertices)!=vertices)fail("Push 修改器顶点数不一致："+object.id);
+          const auto &weights=push->at("influence_weights");settings.weights.resize(vertices);std::vector<bool> seen(vertices);
+          for(const auto &row:values(weights)){const auto v=row.at(0).get<size_t>();const float w=row.at(1).get<float>();if(v>=vertices||seen[v]||!std::isfinite(w)||w<0||w>1)fail("Push 修改器顶点权重无效："+object.id);seen[v]=true;settings.weights[v]=w;}
+        }
+        object.push_modifiers.push_back(std::move(settings));
+      }
+    }
+    if(!smoothing)continue;
     ir::MeshSmoothing settings;settings.enabled=value("Enable Smoothing",1)!=0;
     settings.smoothing_iterations=int(std::clamp(value("Smoothing Iterations",2),0.f,200.f));
     settings.collision_iterations=int(std::clamp(value("Collision Iterations",3),0.f,100.f));settings.weight=std::clamp(value("Weight",.5f),0.f,1.f);
     if(auto c=channels.find("Collision Item");c!=channels.end()&&c->second.contains("node")&&c->second["node"].is_string()) settings.collision_target=decode(c->second["node"].get<std::string>());
-    const auto parent=decode(instance.value("parent",""));
     for(auto &object:out.objects) if(parent=="#"+object.id||parent=="#"+object.geometry_instance_id) object.smoothing=settings;
     if(settings.enabled) warn("mesh_collision_approximation",parent,"蒙皮后执行表面碰撞与修正位移平滑；不是 DAZ Pyramid Coordinates 或 dForce 的等价实现");
   }

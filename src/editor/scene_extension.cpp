@@ -79,7 +79,7 @@ J snapshot_json(const Document &d,const Snapshot &s,bool water_state){
   if(s.view){for(float v:*s.view)if(!std::isfinite(v))throw std::runtime_error("观察相机数值无效");if((*s.view)[3]<=0)throw std::runtime_error("观察相机距离无效");j["view"]=*s.view;}
   for(size_t t=0;t<s.values.size();++t){const auto &v=s.values[t];const auto &target=d.catalog.targets[t];runtime::validate_transform(v.transform);J m=J::object();
     for(size_t i=0;i<target.morphs.size();++i){const auto &p=target.morphs[i];if(p.alias_morph>=0||runtime::legacy_extension_channel(p.label)||(!p.evaluable&&!p.unsupported.empty()))continue;const auto value=v.morphs.at(i);if(!std::isfinite(value))throw std::runtime_error("Morph 值无效");if(value!=p.initial)m[p.id]=value;}
-    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"selectable",v.selectable},{"graft_enabled",v.graft_enabled},{"local_shadow",v.local_shadow},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"ground_offset_cm",v.ground_alignment_offset_cm},{"ground_body_only",v.ground_alignment_body_only},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
+    j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"selectable",v.selectable},{"graft_enabled",v.graft_enabled},{"local_shadow",v.local_shadow},{"disabled_deformation_regions",v.disabled_deformation_regions},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"ground_offset_cm",v.ground_alignment_offset_cm},{"ground_body_only",v.ground_alignment_body_only},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
   }
   for(size_t i=0;i<s.poses.size();++i){const auto &skin=d.skeletons.skins[i];runtime::validate_pose(skin,s.poses[i]);J poses=J::object();for(size_t b=0;b<skin.joints.size();++b){const auto &p=s.poses[i][b];auto v=transform(p);v["center_offset_cm"]=vec(p.center_offset_cm);v["end_offset_cm"]=vec(p.end_offset_cm);v["orientation_offset_degrees"]=vec(p.orientation_offset_degrees);poses[skin.joints[b].id]=v;}j["poses"][skin.id]=poses;}
   for(const auto &l:s.lights)j["lights"].push_back({{"id",l.id},{"transform",l.transform.value},{"power",vec(l.power)},{"width",l.width},{"height",l.height},{"kind",int(l.kind)},{"angle",l.angle}});
@@ -103,6 +103,7 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
     v.ground_alignment_offset_cm=o.value("ground_offset_cm",0.);v.ground_alignment_body_only=o.value("ground_body_only",false);if(!std::isfinite(v.ground_alignment_offset_cm))throw std::runtime_error("地面对齐偏移无效");
     v.graft_enabled=o.value("graft_enabled",true);
     v.local_shadow=o.value("local_shadow",false);
+    v.disabled_deformation_regions=o.value("disabled_deformation_regions",std::set<std::string>{});
     v.selectable=o.value("selectable",true);
     v.physics=runtime::physics_object_from_json(o.value("physics",J{}));
     v.favorites=read_favorites(o.value("favorites",J{}));v.unlimited_morphs=o.at("unlimited").get<std::set<std::string>>();

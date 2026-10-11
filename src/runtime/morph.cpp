@@ -17,6 +17,8 @@ MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):
   visibility_children_=visibility_children(scene,targets);
   parents_.resize(targets.size(),-1);follow_offsets_.resize(targets.size());attachments_.resize(targets.size());
   reference_frames_.resize(targets.size());attachment_frames_.resize(targets.size());
+  garment_deformation_.resize(targets.size());followed_weights_.resize(targets.size());follow_revisions_.resize(targets.size());
+  garment_references_.resize(targets.size());
   for(size_t i=0;i<targets.size();++i) {
     auto ancestors=targets[i].ancestors;if(ancestors.empty()) ancestors.push_back(targets[i].parent);
     for(const auto &parent:ancestors) {for(size_t j=0;j<targets.size();++j) if(i!=j&&parent=="#"+targets[j].id.substr(0,targets[j].id.rfind('/'))) {parents_[i]=int(j);break;}if(parents_[i]>=0) break;}
@@ -52,6 +54,7 @@ bool MorphRuntime::set_morph(size_t target,size_t index,float value,bool enforce
   if(enforce_limits&&m.clamped) value=std::clamp(value,m.minimum,m.maximum);
   if(current==value) return false;
   current=value;
+  if(!values_[target].disabled_deformation_regions.empty())++follow_revisions_[target];
   if(value==0) active_[target].erase(index);else active_[target].insert(index);
   if(m.has_offsets()) dirty_meshes_.insert(target);return true;
 }
@@ -103,6 +106,47 @@ bool MorphRuntime::set_follow_offsets(size_t target,const std::vector<ir::Vec3> 
   // 初次绑定的全零位移不使静止网格变脏。
   const bool changed=!old.empty()||std::any_of(offsets.begin(),offsets.end(),[](ir::Vec3 p) {return !same(p,{});});
   old=offsets;if(changed) dirty_meshes_.insert(target);return changed;
+}
+void MorphRuntime::set_deformation_regions(size_t target,const std::set<std::string> &disabled,const std::vector<float> &followed) {
+  auto &old=values_.at(target).disabled_deformation_regions;
+  if(old==disabled&&followed_weights_[target]==followed)return;
+  old=disabled;followed_weights_[target]=followed;++follow_revisions_[target];dirty_meshes_.insert(target);
+  if(!disabled.empty()&&!garment_deformation_[target]) {
+    auto mesh=scene_.meshes.at(scene_.instances.at(targets_[target].instance).mesh);mesh.positions=bases_[target];
+    garment_deformation_[target]=std::make_unique<GarmentDeformation>(mesh);
+  }
+}
+void MorphRuntime::constrain_follow_offsets(size_t target,std::vector<ir::Vec3> &offsets) {
+  const auto &disabled=values_[target].disabled_deformation_regions;if(disabled.empty())return;
+  auto reference=bases_[target];std::vector<ir::Vec3> authored(reference.size());
+  const auto &followed=followed_weights_[target];
+  for(size_t m=0;m<targets_[target].morphs.size();++m) {
+    const float transfer=followed.empty()?0:followed.at(m),local=values_[target].morphs[m]-transfer;
+    if(local==0&&transfer==0)continue;
+    for(const auto &d:targets_[target].morphs[m].data()) {
+      auto &p=reference[d.vertex];p.x+=local*d.delta.x;p.y+=local*d.delta.y;p.z+=local*d.delta.z;
+      auto &a=authored[d.vertex];a.x+=transfer*d.delta.x;a.y+=transfer*d.delta.y;a.z+=transfer*d.delta.z;
+    }
+  }
+  for(size_t v=0;v<offsets.size();++v){offsets[v].x+=authored[v].x;offsets[v].y+=authored[v].y;offsets[v].z+=authored[v].z;}
+  garment_deformation_[target]->constrain(disabled,reference,offsets);
+  garment_references_[target]=std::move(reference);
+  // MorphRuntime 仍使用完整 ERC 权重；这里只写回相对于这些权重的修正。
+  for(size_t v=0;v<offsets.size();++v){offsets[v].x-=authored[v].x;offsets[v].y-=authored[v].y;offsets[v].z-=authored[v].z;}
+}
+void MorphRuntime::constrain_skinned(size_t target,std::vector<ir::Vec3> &positions) const {
+  const auto &disabled=values_[target].disabled_deformation_regions;const auto &reference=garment_references_[target];
+  if(disabled.empty()||reference.empty())return;
+  std::vector<ir::Vec3> offsets(positions.size());for(size_t v=0;v<positions.size();++v)offsets[v]={positions[v].x-reference[v].x,positions[v].y-reference[v].y,positions[v].z-reference[v].z};
+  garment_deformation_[target]->constrain(disabled,reference,offsets,true);
+  for(size_t v=0;v<positions.size();++v)positions[v]={reference[v].x+offsets[v].x,reference[v].y+offsets[v].y,reference[v].z+offsets[v].z};
+}
+void MorphRuntime::constrain_collision(size_t target,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions) const {
+  const auto &disabled=values_[target].disabled_deformation_regions;if(disabled.empty()||!garment_deformation_[target])return;
+  std::vector<ir::Vec3> offsets(positions.size());for(size_t v=0;v<positions.size();++v)offsets[v]={positions[v].x-input[v].x,positions[v].y-input[v].y,positions[v].z-input[v].z};
+  // 过渡已在蒙皮后完成；碰撞中只对关闭部位保形，开启部位必须保留完整避让量。
+  garment_deformation_[target]->constrain(disabled,input,offsets,true,false);
+  for(size_t v=0;v<positions.size();++v)positions[v]={input[v].x+offsets[v].x,input[v].y+offsets[v].y,input[v].z+offsets[v].z};
 }
 ir::Transform parameter_transform(const TransformValues &v,const Target &t,const ir::Transform &loaded_transform) {
   ir::Transform result;

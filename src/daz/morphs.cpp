@@ -157,6 +157,7 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
     target.edit_frame=object.edit_frame;target.translation_frame=object.translation_frame;target.base_rotation_degrees=object.rotation_degrees;target.rotation_order=object.rotation_order;target.has_edit_frame=true;
     target.rigid_follow=object.rigid_follow;
     target.attachment_bind_rest=object.attachment_bind_rest;
+    target.push_modifiers=object.push_modifiers;target.dynamic_cloth=object.dynamic_cloth;
     for(auto parent=object.parent;!parent.empty();) {
       if(std::find(target.ancestors.begin(),target.ancestors.end(),parent)!=target.ancestors.end()) throw std::runtime_error("附件父节点链形成循环");
       target.ancestors.push_back(parent);auto found=std::find_if(loaded.nodes.begin(),loaded.nodes.end(),[&](const auto &node){return "#"+node.id==parent;});

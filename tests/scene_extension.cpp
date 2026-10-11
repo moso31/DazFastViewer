@@ -44,6 +44,7 @@ static void roundtrip(const fs::path &folder){
   write(file,native);auto d=load(file,folder);check(d.catalog.targets.size()==1&&d.skeletons.skins.size()==1,"fixture identities changed");
   ir::add_studio(d.loaded.scene);d.operations.push_back({{"op","studio"}});
   auto s=initial_snapshot(d);s.values[0].transform.translation_cm={11,22,33};s.values[0].morphs[0]=.7f;s.poses[0][1].rotation_degrees.z=42;
+  s.values[0].disabled_deformation_regions={"Toes"};
   s.view=std::array<float,6>{1,2,3,4,.5f,.2f};s.group_transforms["group"].translation_cm.x=7;s.material_overrides[d.loaded.scene.instances[0].id]["Skin"]["roughness"]=.63;
   s.parameter_settings[d.catalog.targets[0].id]["parameters//Raise"]={true,-2,3,.025};s.parameter_settings["@environment"]["exposure"]={false,0,1,.2};s.parameter_settings[d.catalog.targets[0].id]["ground/GroundAlignmentOffset"]={true,-20,40,.5};
   s.subdivision_levels[subdivision_mesh(d,0).id]=2;for(const auto &i:d.loaded.scene.instances)if(i.prototype>=0)s.instance_ground[i.id].offset_m=.24;

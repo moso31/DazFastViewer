@@ -17,6 +17,10 @@ class DeformationRuntime {
   SkinningRuntime skin_;
   ConformRuntime conform_;
   CollisionRuntime collision_;
+  std::unique_ptr<CollisionRuntime> garment_collision_;
+  std::vector<bool> garment_collision_active_;
+  struct PushCache {std::vector<ir::Vec3> input,output;bool initialized=false;};
+  std::map<uint32_t,PushCache> push_before_,push_after_;
   std::vector<std::unique_ptr<FormulaRuntime>> formulas_;
   std::vector<Properties> previous_;
   std::vector<std::vector<JointPose>> previous_poses_;
@@ -37,12 +41,14 @@ class DeformationRuntime {
   bool evaluated_=false;
   bool collision_enabled_=true;
   ir::Delta collide(ir::Delta delta);
+  ir::Delta push(ir::Delta delta,bool post_smooth);
+  void update_garment_collision(const std::vector<Properties> &values);
   bool same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const;
   ir::Delta follow_surfaces(ir::Delta delta,const std::vector<std::vector<JointPose>> &resolved);
   ir::Delta weld_grafts(ir::Delta delta);
   void bind_graft_masks();
   ir::Delta activate_grafts(const std::vector<Properties> &values,ir::Delta delta);
-  void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved);
+  void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved,std::vector<std::vector<float>> *followed=nullptr);
 public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
@@ -59,7 +65,7 @@ public:
   const auto &skin_stats() const {return skin_.stats();}
   FormulaStats formula_stats() const;
   const auto &conform_stats() const {return conform_.stats();}
-  const auto &collision_stats() const {return collision_.stats();}
+  CollisionStats collision_stats() const {auto s=collision_.stats();if(garment_collision_){const auto &g=garment_collision_->stats();s.evaluations+=g.evaluations;s.corrected_vertices+=g.corrected_vertices;s.cache_hits+=g.cache_hits;}return s;}
   const auto &conform_links() const {return conform_.links();}
   const auto &effective() const {return effective_;}
   const auto &effective_poses() const {return effective_poses_;}

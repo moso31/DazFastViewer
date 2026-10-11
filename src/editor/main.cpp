@@ -24,6 +24,7 @@
 #include "editor/node_properties.h"
 #include "editor/object_extension.h"
 #include "editor/scene_extension.h"
+#include "editor/garment_controls.h"
 #include "editor/edit_history.h"
 #include "editor/history_input.h"
 #include "editor/recovery.h"
@@ -185,6 +186,7 @@ class Editor final:public EditorWindow {
   }
   uint64_t focus_requests_=0;
   GroundPanel *ground_panel_=nullptr;
+  GarmentPanel *garment_panel_=nullptr;
   uint64_t ground_requests_=0,ground_generation_=0;
   std::string ground_pending_;
   GroundSelection ground_pending_selection_;
@@ -975,6 +977,14 @@ class Editor final:public EditorWindow {
     for(auto *control:std::initializer_list<QWidget *>{refresh_parameters_,retry_parameters_,manual_morph_,apply_parameters_})if(control)control->setVisible(!selected_water()&&!selected_cloud());
     if(materials_){auto *item=active_selection(hierarchy_);materials_->bind(document_,&snapshot_,index,index==-4&&item?item->data(0,Qt::UserRole+3).toString().toStdString():std::string{});}
     bind_extension();bind_physics();bind_geograft();
+    if(garment_panel_) {
+      std::vector<runtime::DeformationRegion> regions;
+      if(document_&&index>=0&&light<0&&joint<0) {
+        const auto &target=document_->catalog.targets.at(size_t(index));const auto &instance=document_->loaded.scene.instances.at(target.instance);const auto &mesh=document_->loaded.scene.meshes.at(instance.mesh);
+        if(!target.conform_target.empty()&&mesh.graft_vertex_pairs.empty()&&instance.shell_source<0)regions=runtime::deformation_regions(mesh);
+      }
+      garment_panel_->bind(regions,regions.empty()?std::set<std::string>{}:snapshot_.values.at(size_t(index)).disabled_deformation_regions);
+    }
     pose_status_->setVisible(!selected_water()&&!selected_cloud());
     if(chrome) {const int target=ground_target();chrome->bind_ground(target!=-1);if(ground_panel_)ground_panel_->bind(target!=-1,ground_ratio(target),ground_offset(target),ground_body_only(target),target==-4,selected_water()&&target>=0);}
     if(delete_) delete_->setEnabled(!loading_&&document_&&!tree_deletion_selection(hierarchy_).empty());
@@ -1045,7 +1055,7 @@ class Editor final:public EditorWindow {
     if(!selected_group_.empty()){set_group_value(selected_group_,{});bind_group();return;}
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};value.unlimited_morphs.clear();
-    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};value.graft_enabled=true;value.local_shadow=false;
+    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};value.graft_enabled=true;value.local_shadow=false;value.disabled_deformation_regions.clear();
     const auto &target=document_->catalog.targets[size_t(selected_)];
     std::erase_if(pending_parameters_,[&](const auto &p){return p.first.first==target.id;});apply_parameters_->setEnabled(!pending_parameters_.empty());
     for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].evaluable||target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
@@ -2026,6 +2036,8 @@ public:
       if(loading_||!document_||target>=snapshot_.values.size())return;auto &value=snapshot_.values[target];if(value.graft_enabled==enabled)return;
       auto edit=history_edit(enabled?QStringLiteral("启用 Geograft"):QStringLiteral("停用 Geograft"));value.graft_enabled=enabled;send();
     };
+    garment_panel_=new GarmentPanel;properties->addWidget(garment_panel_);
+    garment_panel_->changed=[this](const std::string &region,bool enabled){if(loading_||!document_||selected_<0)return;auto edit=history_edit(QStringLiteral("修改服装部位形变"));auto &disabled=snapshot_.values.at(size_t(selected_)).disabled_deformation_regions;if(enabled)disabled.erase(region);else disabled.insert(region);send();};
     auto *morph_header=new QToolButton;morph_header->setObjectName("MorphCollapse");morph_header->setText(QStringLiteral("参数"));morph_header->setCheckable(true);morph_header->setChecked(true);morph_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);morph_header->setArrowType(Qt::DownArrow);properties->addWidget(morph_header);
     auto *morph_body=new QWidget;auto *morph_layout=new QVBoxLayout(morph_body);morph_layout->setContentsMargins(0,0,0,0);properties->addWidget(morph_body);
     parameters_=new ParameterPanel;parameters_->shared_scroll(property_scroll);parameters_->changed=[this](size_t index,double value) {set_morph(index,value);};morph_layout->addWidget(parameters_);
@@ -2302,7 +2314,7 @@ public:
           for(const auto &target:document_->catalog.targets) {
             auto values=loaded_snapshot.values.at(snapshot_.values.size());
             if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
-              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.graft_enabled=previous.values[t].graft_enabled;values.local_shadow=previous.values[t].local_shadow;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;values.ground_alignment_offset_cm=previous.values[t].ground_alignment_offset_cm;values.ground_alignment_body_only=previous.values[t].ground_alignment_body_only;std::map<std::string,float> weights;
+              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.graft_enabled=previous.values[t].graft_enabled;values.local_shadow=previous.values[t].local_shadow;values.disabled_deformation_regions=previous.values[t].disabled_deformation_regions;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;values.ground_alignment_offset_cm=previous.values[t].ground_alignment_offset_cm;values.ground_alignment_body_only=previous.values[t].ground_alignment_body_only;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if((target.morphs[m].evaluable||target.morphs[m].unsupported.empty())&&weights.contains(target.morphs[m].id)) values.morphs[m]=weights[target.morphs[m].id];
             }
