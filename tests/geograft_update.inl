@@ -18,7 +18,9 @@ static void update_unit(const fs::path &folder){
   check(update_material(d,s,1,0)==update_material(d,s,0,0)&&update_material(d,s,5,0)==other&&update_material(d,s,3,0)==hd&&update_material(d,s,6,0)==other,"GP 更新串改角色或同类附件");
   const auto skin=update_geograft_materials(d,s,3,{}, {},"烘焙资源缺失");
   check(skin.updated==5&&skin.fallback==5&&skin.unresolved.empty(),"HD 通用回退没有覆盖五个表面");
-  for(size_t slot:{0,2,3,4})check(update_material(d,s,3,slot)==update_material(d,s,0,0),"HD 身体映射错误");
+  for(size_t slot:{0,2,3})check(update_material(d,s,3,slot)==update_material(d,s,0,0),"HD 身体映射错误");
+  auto inner=update_material(d,s,0,0);inner["opacity"]=0;inner["opacity_texture"]=nullptr;
+  check(update_material(d,s,3,4)==inner,"HD 回退把隐藏的 Inner 变成可见皮肤");
   check(update_material(d,s,3,1)==update_material(d,s,0,1),"HD Arms 未匹配当前手臂皮肤");
   d.loaded.scene.meshes[1].material_slots={"Genitalia","Unknown region"};d.loaded.objects[1].geometry_file=folder/"data/DAZ 3D/Genesis 8/Female Genitalia/mesh.dsf";
   const auto untouched=update_material(d,s,1,1);s.material_overrides["object0"]["Body"]["roughness"]=.23;
@@ -33,11 +35,23 @@ static void update_unit(const fs::path &folder){
   auto &left=hd_scene.loaded.scene.materials.at(hd_scene.loaded.scene.instances[3].materials[2]);check(daz::material_uv_set(left).label=="HD UVs","HD 更新没有应用局部 UV");
   const auto local_uv=hd_scene.loaded.scene.meshes.at(hd_scene.loaded.scene.instances[3].mesh).triangles[2].uv;
   check(local_uv[0]==ir::Vec2{.2f,.2f},"HD 更新没有改变实际顶点 UV");
+  check(update_material(hd_scene,hd_state,3,4).at("opacity")==0,"HD 专用策略把 Inner 变成可见皮肤");
+  const auto base=folder/"data/3feetwolf/HD Nipples for G8F - 2.0/HD Nipples - 2.0/UV Sets/3feetwolf/Base/default.dsf";
+  const auto hd_file=base.parent_path()/"HD UVs.dsf";
+  change_material_uv(hd_scene,{hd_file.generic_string()+"#HD%20UVs",hd_file.generic_string(),"HD UVs"},{{3,0},{3,1},{3,4}});
+  hd_state.material_overrides["object3"]["Inner"]["opacity"]=1;
+  const auto corrected=update_geograft_materials(hd_scene,hd_state,3,{folder},baked);
+  check(corrected.updated==5&&corrected.fallback==0&&corrected.unresolved.empty(),"纠正手动误设 UV 时未完成专用策略");
+  for(size_t slot:{0,1,4}){
+    const auto &scene=hd_scene.loaded.scene;const auto &instance=scene.instances[3];
+    check(daz::material_uv_set(scene.materials.at(instance.materials[slot])).label=="default"&&scene.meshes.at(instance.mesh).triangles[slot].uv[0]==ir::Vec2{0,0},"外围表面未恢复实际基础 UV");
+  }
+  check(update_material(hd_scene,hd_state,3,4).at("opacity")==0&&hd_scene.loaded.scene.meshes.at(hd_scene.loaded.scene.instances[3].mesh).triangles[2].uv==local_uv,"修复 Inner 没有隐藏或破坏了左右 HD 坐标");
+  fs::remove(base);
   const auto partial_uv=update_geograft_materials(hd_scene,hd_state,3,{}, {},"测试缺失基础 UV");
   check(partial_uv.updated==3&&partial_uv.unresolved.size()==2,"UV 恢复失败时没有保留其余三个成功表面");
   check(hd_scene.loaded.scene.meshes.at(hd_scene.loaded.scene.instances[3].mesh).triangles[2].uv==local_uv,"失败表面的 UV 被部分修改");
   // 即使原场景没有保存 UV baseline，也要用产品基础 UV 恢复整身纹理。
-  const auto base=folder/"data/3feetwolf/HD Nipples for G8F - 2.0/HD Nipples - 2.0/UV Sets/3feetwolf/Base/default.dsf";
   std::ofstream(base)<<J{{"uv_set_library",J::array({{{"id","default"},{"vertex_count",3},{"uvs",{{"count",3},{"values",{{0,0},{1,0},{0,1}}}}}}})}};
   const auto fallback=update_geograft_materials(hd_scene,hd_state,3,{}, {},"测试回退");
   check(fallback.updated==5&&fallback.unresolved.empty(),"已应用 HD UV 后无法回退");

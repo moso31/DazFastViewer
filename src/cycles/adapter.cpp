@@ -192,6 +192,12 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
     };
     auto *rough=scalar(m.roughness_texture,m.roughness,m.roughness_from_glossiness);
     surface=principled(rough,m.weighted_glossy?scalar(-1,0):scalar(m.specular_texture,m.specular),m.specular_color,m.specular_color_texture);
+    if(m.translucency>0) {
+      // Iray 的薄壁透光属于底层漫反射；外层高光和 Top Coat 不应再乘 (1 - 透光权重)。
+      auto *translucent=graph->create_node<TranslucentBsdfNode>();graph->connect(color(m.translucency_color_texture,m.translucency_color),translucent->input("Color"));
+      if(surface_normal) graph->connect(surface_normal,translucent->input("Normal"));
+      surface=mix(surface,translucent->output("BSDF"),scalar(m.translucency_texture,m.translucency));
+    }
     if(m.weighted_glossy&&m.specular>0) {
       auto *gloss=graph->create_node<GlossyBsdfNode>();gloss->set_color(vector(m.specular_color));gloss->set_anisotropy(m.anisotropy);gloss->set_rotation(m.anisotropy_rotation);
       graph->connect(color(m.specular_color_texture,m.specular_color),gloss->input("Color"));
@@ -222,11 +228,6 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
         auto *bias=graph->create_node<MathNode>();bias->set_math_type(NODE_MATH_ADD);bias->set_value2(m.coat_normal);graph->connect(scale->output("Value"),bias->input("Value1"));fresnel=bias->output("Value");
       }
       auto *weight=graph->create_node<MathNode>();weight->set_math_type(NODE_MATH_MULTIPLY);graph->connect(coat,weight->input("Value1"));graph->connect(fresnel,weight->input("Value2"));surface=mix(surface,gloss->output("BSDF"),weight->output("Value"));
-    }
-    if(m.translucency>0) {
-      auto *translucent=graph->create_node<TranslucentBsdfNode>();graph->connect(color(m.translucency_color_texture,m.translucency_color),translucent->input("Color"));
-      if(surface_normal) graph->connect(surface_normal,translucent->input("Normal"));
-      surface=mix(surface,translucent->output("BSDF"),scalar(m.translucency_texture,m.translucency));
     }
   }
   if(emission_strength>0) {

@@ -132,6 +132,8 @@ GeograftMaterialUpdate update_geograft_materials(Document &d,Snapshot &s,size_t 
     try{
       const auto source=source_slot(host_slots,slots[slot]);
       auto material=copy_material(d.loaded.scene,s.material_overrides,{host_instance,source});material.erase("uv_topology");
+      // HD 产品的内部支撑面始终隐藏；专用策略失败后的皮肤复制也必须遵守。
+      if(strategy==GeograftMaterialStrategy::hd_nipples&&slots[slot]=="Inner"){material["parameters"]["opacity"]=0;material["parameters"]["opacity_texture"]=nullptr;}
       if(!uv_catalog)uv_catalog=skin_uv_catalog(d,instance,roots);
       auto next=d;auto state=s;const MaterialSurface destination{instance,slot};
       apply_skin_uv(next,destination,*uv_catalog,material);paste_material(next,state,material,{destination});

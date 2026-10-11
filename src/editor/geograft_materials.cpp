@@ -107,11 +107,17 @@ size_t copy_golden_palace_materials(Document &d,Snapshot &s,size_t selected,std:
 size_t apply_hd_textures(Document &d,Snapshot &s,size_t selected,const fs::path &directory,const std::vector<fs::path> &roots,std::optional<size_t> only_instance){
   const auto c=context(d,selected);const auto surfaces=hd_surfaces(d,c,only_instance);const auto body=copy(d,s,{c.instance,c.body});standard_uv(body);require(complete(directory),"HD 纹理不完整：需要左右各 7 张贴图");
   const auto root=hd_product_root(roots);const auto file=root/hd_uv;const daz::MaterialUVSet uv{utf8(file)+"#HD%20UVs",utf8(file),"HD UVs"};
-  // 先复制所有皮肤表面，保留附件 UV；左右局部随后切换为 HD UV。
+  const auto base_file=file.parent_path()/"default.dsf";const daz::MaterialUVSet base_uv{utf8(base_file)+"#default",utf8(base_file),"Default UVs"};
+  // 外围使用整身皮肤与基础 UV；左右局部随后切换为 HD UV。
   std::set<size_t> instances;for(auto surface:surfaces)instances.insert(surface.instance);
   for(auto i:instances){const auto slots=d.loaded.scene.meshes.at(d.loaded.scene.instances.at(i).mesh).material_slots;
-    for(size_t n=0;n<slots.size();++n){if(slots[n]=="Arms"){const auto &host_slots=d.loaded.scene.meshes.at(d.loaded.scene.instances.at(c.instance).mesh).material_slots;auto arm=std::find(host_slots.begin(),host_slots.end(),"Arms");if(arm!=host_slots.end())install(d,s,copy(d,s,{c.instance,size_t(arm-host_slots.begin())}),{i,n});}
-      else if(slots[n]=="Inner"||slots[n]=="Breast"||slots[n]=="HD Nipples L"||slots[n]=="HD Nipples R")install(d,s,body,{i,n});}
+    for(size_t n=0;n<slots.size();++n){
+      if(slots[n]=="Inner"||slots[n]=="Breast"||slots[n]=="Arms")change_material_uv(d,base_uv,{{i,n}});
+      if(slots[n]=="Arms"){const auto &host_slots=d.loaded.scene.meshes.at(d.loaded.scene.instances.at(c.instance).mesh).material_slots;auto arm=std::find(host_slots.begin(),host_slots.end(),"Arms");if(arm!=host_slots.end())install(d,s,copy(d,s,{c.instance,size_t(arm-host_slots.begin())}),{i,n});}
+      else if(slots[n]=="Inner"){
+        // 产品原始 DUF 的 Inner 是隐藏内部网格，不能用 Body 的不透明度使其显露。
+        auto inner=body;inner["parameters"]["opacity"]=0;inner["parameters"]["opacity_texture"]=nullptr;install(d,s,inner,{i,n});
+      }else if(slots[n]=="Breast"||slots[n]=="HD Nipples L"||slots[n]=="HD Nipples R")install(d,s,body,{i,n});}
   }
   change_material_uv(d,uv,surfaces);
   for(auto surface:surfaces){auto m=copy(d,s,surface);auto &p=m["parameters"];const auto &slot=d.loaded.scene.meshes.at(d.loaded.scene.instances.at(surface.instance).mesh).material_slots.at(surface.slot);const char side=slot.back();
