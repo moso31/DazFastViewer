@@ -177,7 +177,7 @@ struct ContentBrowser::Impl {
     directories.setMaxThreadCount(1);locator.setMaxThreadCount(1);
     auto *layout=new QVBoxLayout(o);layout->setContentsMargins(1,1,1,1);layout->setSpacing(2);
     auto *bar=new QHBoxLayout;bar->setSpacing(2);
-    tabs=new QComboBox;tabs->setObjectName("contentTabs");tabs->addItems({QStringLiteral("内容库"),QStringLiteral("近期使用")});tabs->setFixedWidth(96);bar->addWidget(tabs);
+    tabs=new QComboBox;tabs->setObjectName("contentTabs");tabs->addItems({QStringLiteral("内容库"),QStringLiteral("近期使用"),QStringLiteral("搜索")});tabs->setFixedWidth(96);bar->addWidget(tabs);
     libraries=new QComboBox;libraries->setObjectName("contentLibraries");libraries->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);libraries->setMinimumContentsLength(2);libraries->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);libraries->setMinimumWidth(48);libraries->setMaximumWidth(240);bar->addWidget(libraries,1);
     breadcrumbs=new Breadcrumbs;bar->addWidget(breadcrumbs,3);breadcrumbs->navigate=[this](const QString &path){owner->locate(path);};
     search=new QComboBox;search->setObjectName("contentSearch");search->setEditable(true);search->setInsertPolicy(QComboBox::NoInsert);search->setCompleter(nullptr);search->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);search->setMaxVisibleItems(10);search->addItems(history.searches());search->setCurrentIndex(-1);
@@ -203,9 +203,9 @@ struct ContentBrowser::Impl {
     QObject::connect(&history_timer,&QTimer::timeout,o,[this]{remember_search();});
     QObject::connect(&folder_timer,&QTimer::timeout,o,[this]{if(!recent()&&active_query().isEmpty()) show_items();});
     QObject::connect(&watcher,&QFileSystemWatcher::directoryChanged,o,[this]{thumbnails.clear();folder_timer.start();});
-    QObject::connect(search,&QComboBox::editTextChanged,o,[this]{if(restoring||recent())return;resume_search();index.cancel_search();++directory_generation;query_timer.start();history_timer.start();});
-    QObject::connect(search->lineEdit(),&QLineEdit::returnPressed,o,[this]{if(recent())return;resume_search();query_timer.stop();remember_search();show_items();});
-    QObject::connect(search,&QComboBox::activated,o,[this]{if(recent())return;resume_search();remember_search();show_items();});
+    QObject::connect(search,&QComboBox::editTextChanged,o,[this]{if(restoring)return;begin_search();index.cancel_search();++directory_generation;query_timer.start();history_timer.start();});
+    QObject::connect(search->lineEdit(),&QLineEdit::returnPressed,o,[this]{begin_search();query_timer.stop();remember_search();show_items();});
+    QObject::connect(search,&QComboBox::activated,o,[this]{begin_search();remember_search();show_items();});
     QObject::connect(scope,&QComboBox::currentIndexChanged,o,[this]{resume_search();show_items();});
     QObject::connect(libraries,&QComboBox::currentIndexChanged,o,[this](int row){if(restoring||row<0)return;resume_search();navigate(roots.value(row));});
     QObject::connect(tree->selectionModel(),&QItemSelectionModel::currentChanged,o,[this](const QModelIndex &item){if(restoring)return;const auto path=files->filePath(item);if(files->isDir(item)){resume_search();navigate(path,false);}});
@@ -240,7 +240,9 @@ struct ContentBrowser::Impl {
   }
   ~Impl() {++locate_generation;locator.clear();locator.waitForDone();++directory_generation;directories.clear();directories.waitForDone();index.changed={};index.progress={};thumbnails.ready={};}
   bool recent() const {return tabs->currentIndex()==1;}
-  QString active_query() const {return recent()||location_view?QString{}:search->currentText().trimmed();}
+  bool searching() const {return tabs->currentIndex()==2;}
+  QString active_query() const {return !searching()||location_view?QString{}:search->currentText().trimmed();}
+  void begin_search(){resume_search();const QSignalBlocker block(tabs);tabs->setCurrentIndex(search->currentText().trimmed().isEmpty()?0:2);update_visibility();}
   void resume_search(){location_view=false;pending_item.clear();pending_tree.clear();notice->hide();++locate_generation;locator.clear();locating.reset();locate_running=false;}
   void try_locate(){
     if(!locating||locate_running||(index.size()==0&&index.scanning()))return;
@@ -313,7 +315,7 @@ struct ContentBrowser::Impl {
     update_visibility();
     if(anchor.isValid()) QTimer::singleShot(0,owner,[this,anchor]{if(anchor.isValid()&&view->isVisible()) view->scrollTo(anchor,QAbstractItemView::PositionAtCenter);});
   }
-  void update_visibility() {const bool is_recent=recent(),searching=!active_query().isEmpty();left->setCurrentWidget(is_recent?static_cast<QWidget *>(categories):tree);view->setVisible(is_recent||searching||location_view||zoom->value()>0);breadcrumbs->setEnabled(!is_recent);libraries->setEnabled(!is_recent);libraries->setToolTip(directory);scope->setEnabled(!is_recent);if(view->isHidden()) empty->hide();}
+  void update_visibility() {const bool is_recent=recent();left->setCurrentWidget(is_recent?static_cast<QWidget *>(categories):tree);view->setVisible(is_recent||searching()||location_view||zoom->value()>0);breadcrumbs->setEnabled(!is_recent);libraries->setEnabled(!is_recent);libraries->setToolTip(directory);scope->setEnabled(!is_recent);if(view->isHidden()) empty->hide();}
   void display(std::vector<Item> items) {
     hide_preview();model->replace(std::move(items));empty->setText(recent()?QStringLiteral("暂无近期使用记录"):roots.empty()?QStringLiteral("请在项目设置中添加内容库"):QStringLiteral("没有匹配的资源"));empty->setGeometry(view->viewport()->rect().adjusted(8,8,-8,-8));empty->setVisible(model->items.empty()&&view->isVisible());
     if(!pending_item.isEmpty()){for(size_t i=0;i<model->items.size();++i)if(content_path(model->items[i].path).compare(pending_item,Qt::CaseInsensitive)==0){const QPersistentModelIndex index=model->index(int(i),0);view->setCurrentIndex(index);view->doItemsLayout();view->scrollTo(index,QAbstractItemView::PositionAtCenter);for(int delay:{0,100})QTimer::singleShot(delay,owner,[this,index]{if(index.isValid()&&view->currentIndex()==index)view->scrollTo(index,QAbstractItemView::PositionAtCenter);});pending_item.clear();break;}}
@@ -329,6 +331,7 @@ struct ContentBrowser::Impl {
         display(std::move(items));
       });return;
     }
+    if(searching()){display({});empty->setText(QStringLiteral("输入关键词搜索内容库"));empty->show();return;}
     if(directory.isEmpty()) {display({});return;}
     if(zoom->value()==0&&!location_view) {empty->hide();return;}
     const auto folder=directory;const auto located=pending_item;directories.start([this,folder,generation,located] {

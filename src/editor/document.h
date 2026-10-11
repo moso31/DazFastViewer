@@ -92,4 +92,5 @@ void release_load_data(Document &document);
 size_t remove_target(Document &document,Snapshot &snapshot,size_t target);
 size_t remove_light(Document &document,Snapshot &snapshot,size_t light);
 size_t remove_selection(Document &document,Snapshot &snapshot,const std::vector<size_t> &targets,const std::vector<std::string> &nodes,const std::vector<size_t> &lights={});
+std::vector<size_t> copy_selection(Document &document,Snapshot &snapshot,const std::vector<size_t> &targets,const std::vector<std::string> &nodes,const std::vector<size_t> &lights,bool children,const std::string &identity_prefix={});
 }

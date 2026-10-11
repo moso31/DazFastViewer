@@ -8,9 +8,9 @@ class QDoubleSpinBox;
 class QLabel;
 namespace dfv::editor {
 class ExtensionPanel final:public QWidget {
-  QToolButton *header_,*details_;
+  QToolButton *header_,*details_,*round_;
   QWidget *body_,*growth_,*density_row_;
-  QDoubleSpinBox *age_,*step_,*sense_,*strength_,*density_;
+  QDoubleSpinBox *age_,*step_,*sense_,*strength_,*density_,*multiplier_;
   QLabel *summary_,*status_,*parts_;
   QWidget *parts_scroll_;
   runtime::ObjectExtension value_;
@@ -21,6 +21,7 @@ class ExtensionPanel final:public QWidget {
 public:
   explicit ExtensionPanel(QWidget *parent=nullptr);
   std::function<void(runtime::ObjectExtension,bool,double)> changed;
+  std::function<void(bool)> multiply_scale;
   void bind(const runtime::ObjectExtension &value,bool new_selection=false);
   void expand();
   void pending();

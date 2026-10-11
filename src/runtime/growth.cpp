@@ -10,6 +10,7 @@ void validate_extension(const ObjectExtension &v) {
   if(v.kind!=ExtensionKind::none&&v.kind!=ExtensionKind::growth&&v.kind!=ExtensionKind::density) throw std::runtime_error("未知对象扩展类型");
   if(!std::isfinite(v.age)||v.age<1||v.age>20||!std::isfinite(v.age_step)||
      !std::isfinite(v.sensitivity)||!std::isfinite(v.strength)||
+     !std::isfinite(v.scale_multiplier)||v.scale_multiplier<=0||v.scale_round_exponent < -9||
      !std::isfinite(v.density)||v.density<0||v.density>100000) throw std::runtime_error("生长或密度参数超出范围");
 }
 bool legacy_extension_channel(const std::string &name) {

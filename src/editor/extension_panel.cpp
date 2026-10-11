@@ -12,9 +12,40 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QLineEdit>
+#include <QSpinBox>
 
 namespace dfv::editor {
-namespace {QString text(const std::string &s){return QString::fromUtf8(s.data(),qsizetype(s.size()));}}
+namespace {
+QString text(const std::string &s){return QString::fromUtf8(s.data(),qsizetype(s.size()));}
+class RoundButton final:public QToolButton {
+  QPointer<QWidget> popup_;
+  bool entered_=false;
+  void leave_later(){QTimer::singleShot(100,this,[this]{if(popup_&&!popup_->frameGeometry().contains(QCursor::pos())&&(entered_||!underMouse()))cancel();});}
+  void show_editor(){
+    if(popup_)return;entered_=false;
+    auto *popup=new QFrame(this,Qt::Tool|Qt::FramelessWindowHint);popup_=popup;popup->setObjectName("GrowthRoundPopup");popup->setProperty("parameterSettingsPopup",true);popup->setFrameShape(QFrame::StyledPanel);popup->setAttribute(Qt::WA_ShowWithoutActivating);popup->setAutoFillBackground(true);
+    auto *layout=new QVBoxLayout(popup);auto *row=new QHBoxLayout;auto *label=new QLabel(QStringLiteral("对齐到 10 的幂"));auto *exponent=new QSpinBox;exponent->setObjectName("GrowthRoundExponent");exponent->setRange(-9,std::numeric_limits<int>::max());exponent->setValue(digits);exponent->setKeyboardTracking(false);row->addWidget(label);row->addWidget(exponent);layout->addLayout(row);
+    for(auto *w:std::vector<QWidget *>{label,exponent}){w->setProperty("numericRow","roundExponent");w->setProperty("numericLabel",QVariant::fromValue<QObject *>(label));}parameter_widgets::context(popup)->wheel_selection();
+    auto *hint=new QLabel(QStringLiteral("1：十位（175 → 180）\n0：整数；−4：小数点后 4 位\n支持 −9 及以上整数，正方向不设业务上限。"));layout->addWidget(hint);
+    auto *ok=new QPushButton(QStringLiteral("OK"));ok->setObjectName("GrowthRoundOK");layout->addWidget(ok);
+    connect(ok,&QPushButton::clicked,this,[this,exponent]{exponent->interpretText();digits=exponent->value();if(edited)edited(digits);cancel();});
+    popup->installEventFilter(this);popup->adjustSize();const auto area=screen()->availableGeometry();const auto top=mapToGlobal(QPoint());int x=std::clamp(top.x()+width()-popup->width(),area.left(),std::max(area.left(),area.right()-popup->width()+1));int y=top.y()+height()-1;if(y+popup->height()>area.bottom()+1)y=top.y()-popup->height()+1;popup->move(x,std::clamp(y,area.top(),std::max(area.top(),area.bottom()-popup->height()+1)));popup->show();
+  }
+protected:
+  bool eventFilter(QObject *o,QEvent *e) override {
+    if(o==this&&e->type()==QEvent::Enter)QTimer::singleShot(260,this,[this]{if(underMouse()&&isEnabled())show_editor();});
+    if((o==this||o==popup_)&&e->type()==QEvent::Leave)leave_later();
+    if(o==popup_&&e->type()==QEvent::Enter)entered_=true;
+    if(o==popup_&&e->type()==QEvent::WindowDeactivate)cancel();
+    return QToolButton::eventFilter(o,e);
+  }
+  void hideEvent(QHideEvent *e) override {cancel();QToolButton::hideEvent(e);}
+public:
+  int digits=1;std::function<void(int)> edited;
+  RoundButton(){setObjectName("GrowthRound");setText("round");setCheckable(true);setAutoRaise(true);setToolTip(QStringLiteral("点击启用／禁用 Scale 四舍五入；悬停设置取整位数"));installEventFilter(this);}
+  void cancel(){auto p=popup_;popup_.clear();if(p){p->setObjectName({});p->hide();p->deleteLater();}}
+};
+}
 ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   setObjectName("ObjectExtensionPanel");setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Maximum);auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);layout->setSpacing(4);
   header_=new QToolButton;header_->setObjectName("ExtensionCollapse");header_->setCheckable(true);header_->setChecked(true);header_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);header_->setArrowType(Qt::DownArrow);layout->addWidget(header_);
@@ -30,7 +61,13 @@ ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   sense_->setToolTip(QStringLiteral("每增加一岁，实际等比缩放增加的百分点"));
   auto *smaller=new QPushButton(QStringLiteral("−"));auto *larger=new QPushButton(QStringLiteral("+"));smaller->setObjectName("GrowthScaleDown");larger->setObjectName("GrowthScaleUp");
   for(auto *button:{smaller,larger}){button->setFixedWidth(24);shape_row->addWidget(button);button->setToolTip(QStringLiteral("按步长 × 每年增长调整缩放，年龄保持当前值"));}form->addLayout(shape_row);
+  multiplier_=spin("GrowthMultiplier",1e-9,unlimited,.05);multiplier_->setProperty("fixedParameterSettings",true);multiplier_->setToolTip(QStringLiteral("仅在点击 ×／÷ 时乘除当前 Scale；不随其他参数联动"));
+  auto *multiplier_row=new QHBoxLayout;multiplier_row->setSpacing(4);multiplier_row->addWidget(new QLabel(QStringLiteral("倍率")));multiplier_row->addWidget(multiplier_,1);
+  auto *round=new RoundButton;round_=round;multiplier_row->addWidget(round_);auto *times=new QPushButton(QStringLiteral("×"));auto *divide=new QPushButton(QStringLiteral("÷"));times->setObjectName("GrowthMultiply");divide->setObjectName("GrowthDivide");for(auto *b:{times,divide}){b->setFixedWidth(24);multiplier_row->addWidget(b);}form->addLayout(multiplier_row);
   auto notify=[this](bool shape,double scale=0){if(changed)changed(value_,shape,scale);};
+  connect(multiplier_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.scale_multiplier=v;notify(false);});
+  connect(round_,&QToolButton::clicked,this,[this,notify](bool on){value_.scale_round=on;notify(false);});round->edited=[this,notify](int digits){value_.scale_round_exponent=digits;notify(false);};
+  connect(times,&QPushButton::clicked,this,[this]{if(multiply_scale)multiply_scale(false);});connect(divide,&QPushButton::clicked,this,[this]{if(multiply_scale)multiply_scale(true);});
   connect(age_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.age=v;notify(true);});
   connect(step_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.age_step=v;age_->setSingleStep(std::abs(v));notify(false);});
   connect(sense_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.sensitivity=v;notify(false);});
@@ -50,7 +87,8 @@ void ExtensionPanel::bind(const runtime::ObjectExtension &v,bool selection){
   if(reset){has_result_=false;summary_->setText(QStringLiteral("等待测量…"));summary_->setToolTip({});status_->clear();status_->hide();parts_->clear();details_->setChecked(false);}
   setVisible(v.kind!=runtime::ExtensionKind::none);if(v.kind==runtime::ExtensionKind::none)return;
   const bool character=v.kind==runtime::ExtensionKind::growth;header_->setText(character?QStringLiteral("生长与体重"):QStringLiteral("密度与重量"));growth_->setVisible(character);density_row_->setVisible(!character);details_->setVisible(character);
-  for(const auto &[s,x]:std::vector<std::pair<QDoubleSpinBox *,double>>{{age_,v.age},{step_,v.age_step},{sense_,v.sensitivity},{strength_,v.strength},{density_,v.density}}){QSignalBlocker block(s);s->setValue(x);}
+  for(const auto &[s,x]:std::vector<std::pair<QDoubleSpinBox *,double>>{{age_,v.age},{step_,v.age_step},{sense_,v.sensitivity},{strength_,v.strength},{density_,v.density},{multiplier_,v.scale_multiplier}}){QSignalBlocker block(s);s->setValue(x);}
+  round_->setChecked(v.scale_round);auto *round=static_cast<RoundButton *>(round_);if(reset||round->digits!=v.scale_round_exponent)round->cancel();round->digits=v.scale_round_exponent;
   age_->setSingleStep(std::abs(v.age_step));
   parts_scroll_->setVisible(character&&details_->isChecked());
 }

@@ -94,12 +94,12 @@ static void checks() {
   {
     ContentHistory history(settings);for(int i=0;i<15;++i) history.searched(QString::number(i));history.searched("10");history.searched("  ");require(history.searches().size()==10&&history.searches().front()=="10","搜索历史上限 / 最近置顶失败");
     history.searched("STAND");history.searched("stand");require(history.searches().front()=="stand"&&history.searches().count("STAND")==0,"搜索历史大小写去重失败");
-    for(const auto &category:content_categories()) if(category!="all") for(int i=0;i<25;++i) history.used(root+"/"+category+QString::number(i)+".duf",category,100+i);
+    for(const auto &category:content_categories()) if(category!="all") for(int i=0;i<65;++i) history.used(root+"/"+category+QString::number(i)+".duf",category,100+i);
     for(int i=0;i<130;++i) history.used(root+"/material-new"+QString::number(i)+".duf","material");
-    require(history.recent().size()==100,"全局近期记录上限失败");for(const auto &category:content_categories()) if(category!="all") require(history.recent(category).size()==20,"各分类最近 20 个被热门分类挤掉");
-    history.used(pose,"pose");history.used(QDir::toNativeSeparators(pose.toUpper()),"shape");require(history.recent().front().category=="shape"&&history.recent("pose").size()==19,"跨分类重开 / 规范路径去重失败");
+    require(history.recent().size()==100,"全局近期记录上限失败");for(const auto &category:content_categories()) if(category!="all") require(history.recent(category).size()==50,"各分类最近 50 个被热门分类挤掉");
+    history.used(pose,"pose");history.used(QDir::toNativeSeparators(pose.toUpper()),"shape");require(history.recent().front().category=="shape"&&history.recent("pose").size()==49,"跨分类重开 / 规范路径去重失败");
   }
-  {ContentHistory loaded(settings);require(loaded.recent().size()==100&&loaded.recent("scene").size()==20&&loaded.searches().front()=="stand","历史重启持久化失败");}
+  {ContentHistory loaded(settings);require(loaded.recent().size()==100&&loaded.recent("scene").size()==50&&loaded.searches().front()=="stand","历史重启持久化失败");}
   for(const auto &[type,category]:std::vector<std::pair<std::string,QString>>{{"scene","scene"},{"preset_shape","shape"},{"preset_pose","pose"},{"preset_material","material"},{"preset_hierarchical_material","material"},{"preset_character","character"},{"preset_wearables","wearable"},{"preset_properties","properties"},{"preset_light","light"},{"preset_camera","camera"}}) require(content_category(nlohmann::json{{"asset_info",{{"type",type}}}})==category,"DUF 类型分类错误");
   require(content_category(nlohmann::json{{"scene",{{"nodes",nlohmann::json::array({{{"geometries",nlohmann::json::array({1})}}})}}}})=="scene","无类型场景回退错误");
   require(preview_candidates(pose).front()==pose+".png"&&preview_candidates(pose,true).front()==root+"/Poses/Standing [01].tip.png","预览图命名优先级错误");
@@ -150,11 +150,11 @@ static void checks() {
     for(int i=0;i<25;++i) browser.record_use(root+"/pose"+QString::number(i)+".duf","pose");browser.record_use(pose,"pose");browser.record_use(root+"/scene.duf","scene");browser.show_recent();
     require(search->currentText()=="standing [01]","切换近期使用清空了搜索文本");
     search->setEditText("not a recent resource");QTest::keyClick(search->lineEdit(),Qt::Key_Return);QTest::qWait(200);
-    require(view->model()->rowCount()==27,"近期使用错误应用了搜索过滤");
-    auto *tabs=browser.findChild<QComboBox *>("contentTabs");search->setEditText("standing [01]");tabs->setCurrentIndex(0);
+    auto *tabs=browser.findChild<QComboBox *>("contentTabs");require(tabs->count()==3&&tabs->currentIndex()==2&&view->model()->rowCount()==0,"近期输入关键词没有跳转搜索模式");
+    browser.show_recent();require(view->model()->rowCount()==27,"返回近期使用没有恢复历史记录");search->setEditText("standing [01]");
     until([&]{return view->model()->rowCount()==1&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose;});
     require(search->currentText()=="standing [01]","切回内容库丢失搜索文本");browser.show_recent();
-    require(categories->currentRow()==0&&view->model()->rowCount()==27,"ALL 默认分类或全局记录错误");categories->setCurrentRow(3);require(view->model()->rowCount()==20&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose,"近期分类上限或时间排序错误");
+    require(categories->currentRow()==0&&view->model()->rowCount()==27,"ALL 默认分类或全局记录错误");categories->setCurrentRow(3);require(view->model()->rowCount()==26&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose,"近期分类容量或时间排序错误");
     browser.apply_pose=[&](const QString &path,bool partial){require(path==pose,"近期姿势路径错误");if(partial)++partial_pose;else ++full_pose;};
     for(int level:{0,2}){zoom->setValue(level);check_pose_clicks(view,view->model()->index(0,0));}browser.apply_pose={};
     zoom->setValue(21);require(view->iconSize().width()==224,"最大图标尺寸发生变化");browser.save();

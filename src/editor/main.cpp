@@ -656,6 +656,17 @@ class Editor final:public EditorWindow {
       statusBar()->showMessage(removed?QStringLiteral("已删除 %1 个对象及其关联资源").arg(removed):QStringLiteral("已删除灯光"));
     } catch(const std::exception &e) {QMessageBox::warning(this,QStringLiteral("无法删除对象"),text(e.what()));}
   }
+  void duplicate_selection(bool children){
+    if(loading_||!document_)return;const auto selection=tree_deletion_selection(hierarchy_);if(selection.empty())return;
+    auto edit=history_edit(children?QStringLiteral("复制选中对象及其子对象"):QStringLiteral("复制选中对象"));
+    try{accept_pose_commit(renderer_->status());apply_parameters();auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;snapshot.pose_pins=pose_pins_;
+      const auto copied=copy_selection(*next,snapshot,selection.targets,selection.nodes,selection.lights,children);next->generation=++generation_;snapshot.generation=next->generation;
+      parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);pose_pins_=snapshot_.pose_pins;snapshot_.revision=next_revision();select(-1);rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);
+      const auto &operation=document_->operations.back();const auto prefix=operation.at("prefix").get<std::string>();bool chosen=false;
+      for(QTreeWidgetItemIterator it(hierarchy_);*it&&!chosen;++it){auto *item=*it;const auto id=item->data(0,Qt::UserRole+3).toString().toStdString();const int light=item->data(0,Qt::UserRole+2).toInt();for(const auto &root:operation.at("nodes"))if(id==prefix+root.get<std::string>()||(light>=0&&snapshot_.lights.at(light).id==prefix+root.get<std::string>())){hierarchy_->setCurrentItem(item);chosen=true;break;}}
+      if(!chosen&&!copied.empty())choose(int(copied.front()));statusBar()->showMessage(QStringLiteral("已在原位置创建独立副本，可移动或继续编辑。"));
+    }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("无法复制对象"),text(e.what()));}
+  }
   void clear_scene() {
     if(loading_) return;
     auto edit=history_edit(QStringLiteral("新建空场景"));
@@ -2027,7 +2038,7 @@ public:
     pose_status_=new QLabel(QStringLiteral("双击加载姿势、形态或材质；单选骨骼后 Ctrl+左键双击姿势，仅应用该部位及其后代。"));pose_status_->setWordWrap(true);properties->addWidget(pose_status_);
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column!=0)return;if(target>=0&&item->data(0,Qt::UserRole+1).toInt()<0)set_visible(size_t(target),item->checkState(0)==Qt::Checked);else if(target==-4)set_node_property(item->data(0,Qt::UserRole+3).toString().toStdString(),false,item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
-    extension_panel_=new ExtensionPanel;properties->addWidget(extension_panel_);extension_panel_->changed=[this](runtime::ObjectExtension v,bool shape,double step){change_extension(v,shape,step);};
+    extension_panel_=new ExtensionPanel;properties->addWidget(extension_panel_);extension_panel_->changed=[this](runtime::ObjectExtension v,bool shape,double step){change_extension(v,shape,step);};extension_panel_->multiply_scale=[this](bool divide){multiply_extension(divide);};
     physics_panel_=new PhysicsPanel;properties->addWidget(physics_panel_);physics_panel_->changed=[this](runtime::PhysicsObjectSettings value){change_physics(std::move(value));};
     physics_panel_->simulate=[this](bool reset){simulate_physics(reset);};physics_panel_->hovered=[this](int slot){std::vector<MaterialSurface> surfaces;if(document_&&selected_>=0&&slot>=0)surfaces.push_back({document_->catalog.targets[size_t(selected_)].instance,size_t(slot)});if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
     ground_panel_=new GroundPanel;properties->addWidget(ground_panel_);ground_panel_->align=[this]{request_ground();};
@@ -2107,6 +2118,8 @@ public:
     connect(file_menu->addAction(QStringLiteral("退出")),&QAction::triggered,this,&QWidget::close);
     auto *focus_action=new QAction(QStringLiteral("聚焦选中对象（F）"),this);hierarchy_->addAction(focus_action);focus_action->setShortcut(QKeySequence(Qt::Key_F));focus_action->setShortcutContext(Qt::WidgetWithChildrenShortcut);connect(focus_action,&QAction::triggered,this,[this]{focus_selection();});
     auto *edit=chrome->menus()->addMenu(QStringLiteral("编辑"));initialize_history(edit);edit->addAction(focus_action);connect(edit->addAction(QStringLiteral("重置选中对象")),&QAction::triggered,this,[this] {reset_selected();});
+    auto *copy_object=edit->addAction(QStringLiteral("复制选中对象"));copy_object->setObjectName("CopySelectedObject");connect(copy_object,&QAction::triggered,this,[this]{duplicate_selection(false);});
+    auto *copy_children=edit->addAction(QStringLiteral("复制选中对象及其子对象"));copy_children->setObjectName("CopySelectedObjectWithChildren");connect(copy_children,&QAction::triggered,this,[this]{duplicate_selection(true);});
     edit->addAction(chrome->ground_action());edit->addAction(chrome->weight_action());
     auto *units=edit->addAction(QStringLiteral("测量单位…"));units->setObjectName("MeasurementUnits");connect(units,&QAction::triggered,this,[this]{measurement_units();});
     auto *attachment_menu=chrome->menus()->addMenu(QStringLiteral("穿戴与附件"));

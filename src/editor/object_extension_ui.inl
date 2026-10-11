@@ -50,6 +50,11 @@
       if(!missing.empty()){QStringList names;for(const auto &m:missing)names<<text(m);statusBar()->showMessage(QStringLiteral("部分生长参数不可用：")+names.join(QStringLiteral("、")),10000);}
     }catch(const std::exception &e){bind_extension();statusBar()->showMessage(text(e.what()),8000);}
   }
+  void multiply_extension(bool divide){
+    auto edit=history_edit(divide?QStringLiteral("除以角色倍率"):QStringLiteral("乘以角色倍率"));const int t=extension_target();if(t<0)return;
+    try{multiply_growth_scale(*document_,snapshot_,size_t(t),divide);send();parameters_->refresh(0);bind_extension();}
+    catch(const std::exception &e){statusBar()->showMessage(text(e.what()),8000);}
+  }
   void update_measurement() {
     const int t=extension_target();if(t<0||snapshot_.values[t].extension.kind==runtime::ExtensionKind::none){if(measurement_target_>=0)measurements_.request(++measurement_serial_,{}, {},0);measurement_target_=-1;return;}
     if(measurement_document_!=document_.get()||measurement_generation_!=document_->generation||measurement_revision_!=snapshot_.revision||measurement_target_!=t){

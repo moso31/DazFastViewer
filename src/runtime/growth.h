@@ -8,6 +8,9 @@ enum class ExtensionKind {none,growth,density};
 struct ObjectExtension {
   ExtensionKind kind=ExtensionKind::none;
   double age=3,age_step=1,sensitivity=5,strength=.5,density=1000;
+  double scale_multiplier=1;
+  bool scale_round=false;
+  int scale_round_exponent=1;
   bool operator==(const ObjectExtension &) const = default;
 };
 void validate_extension(const ObjectExtension &value);

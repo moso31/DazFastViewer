@@ -49,7 +49,7 @@ static void forward_wheel(QWidget *target,QWheelEvent *event) {
 }
 ParameterPanel::ParameterPanel(QWidget *parent):QWidget(parent) {
   auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);
-  search_=new QLineEdit;search_->setPlaceholderText(QStringLiteral("搜索参数名称、分组或 ID…"));layout->addWidget(search_);
+  search_=new QLineEdit;search_->setObjectName("parameterSearch");search_->setPlaceholderText(QStringLiteral("搜索参数名称、分组或 ID…"));search_->setClearButtonEnabled(true);layout->addWidget(search_);
   auto *line=new QHBoxLayout;hidden_=new QCheckBox(QStringLiteral("显示隐藏参数"));line->addWidget(hidden_);count_=new QLabel;line->addWidget(count_,1);layout->addLayout(line);
   auto *split=new QSplitter;groups_=new QTreeWidget;groups_->setHeaderHidden(true);groups_->setIndentation(12);groups_->setMinimumWidth(115);
   tree_=new QTreeWidget;tree_->setHeaderHidden(true);tree_->setRootIsDecorated(false);tree_->setUniformRowHeights(true);tree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);tree_->setMinimumWidth(185);

@@ -26,7 +26,7 @@ double root_scale(const Document &d,const Snapshot &snapshot,size_t t,const runt
   return runtime::decimal_derived_float(skin.root_general_scale*poses.at(0).general_scale);
 }
 class MeasurementContext {
-  const Document *document_=nullptr;size_t target_=0;
+  const Document *document_=nullptr;size_t target_=0;bool character_=false;
   ir::Scene scene_;std::vector<runtime::Target> targets_;std::vector<runtime::Skin> skins_;std::vector<runtime::FormulaGraph> graphs_;
   std::unique_ptr<runtime::DeformationRuntime> runtime_;std::unique_ptr<runtime::WeightTopology> topology_;
   runtime::Properties previous_;std::vector<std::vector<runtime::JointPose>> previous_poses_;
@@ -36,14 +36,15 @@ class MeasurementContext {
 public:
   runtime::WeightResult measure(const Document &d,const Snapshot &snapshot,size_t target,std::optional<ir::Transform> world={},std::shared_ptr<const std::vector<ir::Vec3>> positions={}){
     const bool character=snapshot.values.at(target).extension.kind==runtime::ExtensionKind::growth;
-    if(document_!=&d||target_!=target){
+    if(document_!=&d||target_!=target||character_!=character){
       runtime_.reset();topology_.reset();cached_valid_=false;scene_={};targets_={d.catalog.targets.at(target)};auto &t=targets_[0];
       const auto &instance=d.loaded.scene.instances.at(t.instance);scene_.meshes={d.loaded.scene.meshes.at(instance.mesh)};scene_.meshes[0].subdivision={};scene_.meshes[0].graft_vertex_pairs.clear();scene_.meshes[0].graft_hidden_polygons.clear();scene_.meshes[0].graft_target_vertices=0;
       scene_.instances={instance};scene_.instances[0].mesh=0;scene_.instances[0].graft_source=-1;scene_.instances[0].shell_source=-1;scene_.instances[0].shell_root=-1;scene_.instances[0].prototype=-1;
       t.instance=0;t.parent.clear();t.ancestors.clear();t.conform_target.clear();t.rigid_follow={};t.smoothing.enabled=false;t.attachment_bind_rest=false;
+      if(character){t.push_modifiers.clear();scene_.meshes[0].hidden_polygons.clear();}
       skins_.clear();const auto s=skin_index(d,target);if(s>=0){skins_={d.skeletons.skins[size_t(s)]};skins_[0].instance=0;}
       graphs_={d.formulas.graphs.at(target)};graphs_[0].skin=s>=0?0:-1;
-      topology_=std::make_unique<runtime::WeightTopology>(scene_.meshes[0]);runtime_=std::make_unique<runtime::DeformationRuntime>(scene_,targets_,skins_,graphs_);document_=&d;target_=target;
+      topology_=std::make_unique<runtime::WeightTopology>(scene_.meshes[0]);runtime_=std::make_unique<runtime::DeformationRuntime>(scene_,targets_,skins_,graphs_);document_=&d;target_=target;character_=character;
     }
     auto value=snapshot.values.at(target);runtime::validate_extension(value.extension);
     // 普通物体直接使用渲染工作线程发布的基础网格副本，包含服装跟随、骨骼与刚性附件结果。
@@ -63,14 +64,17 @@ public:
       if(s<0)throw std::runtime_error("当前角色缺少可测量骨架");
       const auto actual=runtime_->resolve_poses({value},poses).at(0).at(0);
       poses[0].assign(skins_[0].joints.size(),{});poses[0][0]=snapshot.poses.at(s).at(0);poses[0][0].translation_cm={};poses[0][0].rotation_degrees={};
-      missing=runtime::apply_growth(targets_[0],value);
+      // 测量当前 Morph 的原皮；生长预设只在编辑年龄／体格时应用，不能在测量时覆盖。
       const auto measured=runtime_->resolve_poses({value},poses).at(0).at(0);
       if(actual.general_scale<=0||measured.general_scale<=0||actual.scale.x<=0||actual.scale.y<=0||actual.scale.z<=0||measured.scale.x<=0||measured.scale.y<=0||measured.scale.z<=0)throw std::runtime_error("测量需要正数根节点缩放");
       value.transform.general_scale*=actual.general_scale/measured.general_scale;
       value.transform.scale.x*=actual.scale.x/measured.scale.x;value.transform.scale.y*=actual.scale.y/measured.scale.y;value.transform.scale.z*=actual.scale.z/measured.scale.z;
     }
     runtime_->evaluate({value},poses);const auto measurement_world=world?*world*ir::inverse(unparented)*scene_.instances[0].transform:scene_.instances[0].transform;
-    auto result=topology_->measure(scene_.meshes[0].positions,measurement_world,character,value.extension.density);
+    std::vector<ir::Vec3> rest_positions;
+    if(character){auto rest=runtime_->effective_poses().at(0);for(auto &joint:rest)joint.rotation_degrees={};rest[0].translation_cm={};rest_positions=runtime::deform(skins_[0],rest,runtime_->skin_source(0));}
+    // Pose Control 的 ERC 也可能重新写入旋转；最终测量使用归零旋转的骨架，保留体型缩放与骨长调整。
+    auto result=topology_->measure(character?rest_positions:scene_.meshes[0].positions,measurement_world,character,value.extension.density);
     result.missing_morphs=std::move(missing);
     cached_=result;cached_valid_=true;return result;
   }
@@ -106,6 +110,23 @@ std::vector<std::string> edit_growth(const Document &d,Snapshot &snapshot,size_t
   double origin_y=0;for(const auto &o:d.loaded.objects)if(o.instance==d.catalog.targets[t].instance){origin_y=o.translation_cm.y;break;}
   value.transform.translation_cm.y=float((origin_y+old.transform.translation_cm.y)*after/before-origin_y);
   runtime::validate_transform(value.transform);snapshot.values[t]=std::move(value);return missing;
+}
+void multiply_growth_scale(const Document &d,Snapshot &snapshot,size_t t,bool divide){
+  if(!growth_character(d,t))throw std::runtime_error("请选择角色本体或其骨骼");
+  auto value=snapshot.values.at(t);const auto &settings=value.extension;runtime::validate_extension(settings);
+  const double base=root_scale(d,snapshot,t,value);
+  double percent=base*value.transform.general_scale*100;
+  percent=divide?percent/settings.scale_multiplier:percent*settings.scale_multiplier;
+  if(settings.scale_round){
+    const double unit=std::pow(10.0,settings.scale_round_exponent);
+    if(!std::isfinite(unit))throw std::runtime_error("取整位数超出当前 Scale 的有效范围，已保留原值");
+    const double quotient=percent/unit;
+    // 十进制输入在二进制乘除后可能略低于 .5，补偿舍入边界的浮点误差。
+    percent=std::round(quotient+std::abs(quotient)*std::numeric_limits<double>::epsilon()*2)*unit;
+  }
+  if(!std::isfinite(percent)||percent<=0||base<=0)throw std::runtime_error("本次倍率或取整会产生无效 Scale，已保留原值");
+  value.transform.general_scale=percent/(base*100);runtime::validate_transform(value.transform);
+  snapshot.values[t]=std::move(value);
 }
 runtime::WeightResult measure_object(const Document &d,const Snapshot &s,size_t t,std::optional<ir::Transform> world){MeasurementContext c;return c.measure(d,s,t,world);}
 MeasurementService::MeasurementService():worker_([this](std::stop_token stop){

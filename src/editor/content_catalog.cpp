@@ -74,9 +74,9 @@ void ContentHistory::used(const QString &path,const QString &category,qint64 tim
   const auto p=content_path(path);auto c=category;if(c=="all"||!content_categories().contains(c)) c="other";
   if(!time) time=QDateTime::currentMSecsSinceEpoch();if(!recent_.empty()) time=std::max(time,recent_.front().used+1);
   std::erase_if(recent_,[&](const auto &r){return r.path.compare(p,Qt::CaseInsensitive)==0;});recent_.insert(recent_.begin(),{p,c,time});
-  // 保留全局最近 100 项与每类最近 20 项的并集，避免热门分类挤掉其他分类。
+  // 保留全局最近 100 项与每类最近 50 项的并集，避免热门分类挤掉其他分类。
   std::map<QString,int> counts;size_t rank=0;
-  std::erase_if(recent_,[&](const auto &r){const int in_category=++counts[r.category];return rank++>=100&&in_category>20;});save_recent();
+  std::erase_if(recent_,[&](const auto &r){const int in_category=++counts[r.category];return rank++>=100&&in_category>50;});save_recent();
 }
 void ContentHistory::remove(const QString &path) {
   const auto p=content_path(path);std::erase_if(recent_,[&](const auto &r){return r.path.compare(p,Qt::CaseInsensitive)==0;});save_recent();
@@ -86,7 +86,7 @@ void ContentHistory::save_recent() {
   settings_->setValue("content/recent",QJsonDocument(array).toJson(QJsonDocument::Compact));settings_->sync();
 }
 std::vector<RecentContent> ContentHistory::recent(const QString &category) const {
-  std::vector<RecentContent> result;for(const auto &r:recent_) if(category=="all"||r.category==category) {result.push_back(r);if(result.size()==(category=="all"?100:20)) break;}return result;
+  std::vector<RecentContent> result;for(const auto &r:recent_) if(category=="all"||r.category==category) {result.push_back(r);if(result.size()==(category=="all"?100:50)) break;}return result;
 }
 
 ContentIndex::ContentIndex(const QString &cache,QObject *parent):QObject(parent),cache_directory_(cache) {scanner_.setMaxThreadCount(1);queries_.setMaxThreadCount(1);}

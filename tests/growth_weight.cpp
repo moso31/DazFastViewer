@@ -62,6 +62,23 @@ static editor::Document growth_document(){
   runtime::Expression e;e.owner=0;e.output=uint32_t(graph.channels.size()-1);e.code={{runtime::Op::constant,-.01}};graph.expressions.push_back(e);graph.prepare();d.formulas.graphs={graph};return d;
 }
 static void growth(){
+  {auto d=growth_document();auto &skin=d.skeletons.skins[0];skin.weights.resize(8,{{0,1}});
+    auto &m=d.catalog.targets[0].morphs[0];for(uint32_t i=4;i<8;++i)m.offsets.push_back({i,{0,0,1}});
+    auto state=editor::initial_snapshot(d);state.values[0].extension.kind=runtime::ExtensionKind::growth;state.values[0].morphs[0]=.2f;
+    const auto before=state;const auto height=editor::measure_object(d,state,0).height_cm;near(height,118.8,1e-4,"测量未使用当前 Morph 的基础顶点");require(state.values==before.values,"测量修改了场景参数");
+    state.values[0].extension.age=18;state.values[0].extension.strength=.875;state.poses[0][0].rotation_degrees={90,0,0};state.poses[0][1].rotation_degrees={0,70,0};
+    d.loaded.scene.meshes[0].subdivision.level=2;
+    near(editor::measure_object(d,state,0).height_cm,height,1e-4,"身高随姿势、细分或未应用的生长设置变化");
+    auto &graph=d.formulas.graphs[0];runtime::Channel rotated;rotated.binding={runtime::Property::rotation,0,0};graph.channels.push_back(rotated);runtime::Expression pose_control;pose_control.owner=0;pose_control.output=uint32_t(graph.channels.size()-1);pose_control.code={{runtime::Op::constant,90}};graph.expressions.push_back(pose_control);graph.prepare();
+    near(editor::measure_object(d,state,0).height_cm,height,1e-4,"ERC 姿势控制器破坏了初始站姿测量");
+    state.values[0].transform.general_scale=2;near(editor::measure_object(d,state,0).height_cm,height*2,1e-4,"身高遗漏对象 Scale");
+  }
+  {auto d=growth_document();auto state=editor::initial_snapshot(d);auto &v=state.values[0];v.extension.kind=runtime::ExtensionKind::growth;v.extension.scale_multiplier=1.05;v.transform.general_scale=1.75/.99;const auto original=v;
+    editor::multiply_growth_scale(d,state,0,false);near(v.transform.general_scale*.99*100,183.75,1e-10,"倍率乘法错误");editor::multiply_growth_scale(d,state,0,true);near(v.transform.general_scale,original.transform.general_scale,1e-12,"倍率除法未恢复");require(v.morphs==original.morphs&&v.extension==original.extension&&v.transform.translation_cm==original.transform.translation_cm,"倍率联动修改其他参数");
+    v.extension.scale_multiplier=1;v.extension.scale_round=true;editor::multiply_growth_scale(d,state,0,false);near(v.transform.general_scale*.99*100,180,1e-10,"175 未对齐到 180");
+    v.extension.scale_round_exponent=-4;v.transform.general_scale=1.23456789/.99;editor::multiply_growth_scale(d,state,0,false);near(v.transform.general_scale*.99*100,123.4568,1e-9,"小数点后四位取整错误");
+    v.extension.scale_round_exponent=100000;const auto saved=v;bool rejected=false;try{editor::multiply_growth_scale(d,state,0,false);}catch(...){rejected=true;}require(rejected&&v==saved,"超大取整未原子拒绝");
+  }
   {auto d=growth_document();for(auto &j:d.skeletons.skins[0].joints){if(j.id=="lHand")j.id="l_hand";if(j.id=="rHand")j.id="r_hand";if(j.id=="lFoot")j.id="l_foot";if(j.id=="rFoot")j.id="r_foot";}require(editor::growth_character(d,0),"Genesis 9 的骨骼命名未被识别");}
   {auto d=growth_document();require(editor::growth_character(d,0),"角色元数据未被识别");d.loaded.objects[0].content_type="Prop";require(!editor::growth_character(d,0),"带骨架道具被误判角色");d.loaded.objects[0].content_type="Actor";d.skeletons.skins[0].joints.resize(2);d.skeletons.skins[0].joints[0].id="Hull";d.skeletons.skins[0].joints[1].id="Oars";require(!editor::growth_character(d,0),"Rowboat 的 Actor 标签覆盖了道具骨架");auto s=editor::initial_snapshot(d);s.values[0].extension.kind=runtime::ExtensionKind::growth;editor::normalize_object_extensions(d,s);require(s.values[0].extension.kind==runtime::ExtensionKind::density,"旧道具生长模块未迁移为密度");d.loaded.objects[0].content_type.clear();require(!editor::growth_character(d,0),"单链骨架被误判角色");d.loaded.objects[0].content_type="Follower/Hair";require(!editor::growth_character(d,0),"头发被误判角色");}
   auto d=growth_document();auto s=editor::initial_snapshot(d);s.values[0].extension.kind=runtime::ExtensionKind::growth;s.values[0].transform.translation_cm.y=23;
@@ -105,6 +122,7 @@ static void serialization(const fs::path &folder){
     require(result.serial==2&&result.error.empty(),"后台测量未返回最新输入");near(result.weight.kg,isolated.kg*4,.01,"普通物体没有使用当前形变网格或新密度");
     worker.request(3,{}, {},0);
   }
+  s.values[0].extension.scale_multiplier=1.25;s.values[0].extension.scale_round=true;s.values[0].extension.scale_round_exponent=-4;
   s.values[0].favorites.emplace();s.values[1].favorites.emplace();s.control_favorites.emplace();
   s.values[0].favorites->nodes[""]["transform/general_scale"]=false;s.values[1].favorites->nodes[""]["transform/general_scale"]=true;
   s.values[0].favorites->nodes["head"]["joint/3"]=true;s.values[0].favorites->nodes["head"]["joint/4"]=false;
@@ -120,6 +138,8 @@ static void serialization(const fs::path &folder){
   auto second=load(file);d.generation=2;const auto first=d.catalog.targets.size();editor::append_document(d,std::move(second));auto merged=editor::initial_snapshot(d);merged.values[first].favorites=s.values[0].favorites;merged.values[first+1].favorites=s.values[1].favorites;merged.values[first].extension.kind=runtime::ExtensionKind::density;merged.values[first].extension.density=4567;editor::remove_target(d,merged,0);
   editor::save_scene_extension(sidecar,d,merged);restored=editor::load_scene_extension(sidecar,{folder},88);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,merged),"追加删除的身份或编辑值未恢复");
   const auto prior=daz::read_document_file(sidecar);auto invalid=merged;invalid.values[0].extension.density=-1;rejected=false;try{editor::save_scene_extension(sidecar,d,invalid);}catch(...){rejected=true;}require(rejected&&daz::read_document_file(sidecar)==prior,"失败保存损坏已有文件");
+  const auto copies=editor::copy_selection(d,merged,{0},{},{},false);require(copies.size()==1&&merged.values[copies[0]]==merged.values[0],"复制未保留对象参数");merged.values[copies[0]].transform.general_scale=2;
+  editor::save_scene_extension(sidecar,d,merged);restored=editor::load_scene_extension(sidecar,{folder},89);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,merged),"复制对象保存重载不一致");
 }
 int main(int argc,char **argv){
   try{rules();volume();growth();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
@@ -129,7 +149,7 @@ int main(int argc,char **argv){
       require(!report.empty(),"场景中未找到 Rowboat");std::cout<<report.dump(2)<<'\n';return 0;
     }
     if(argc>1){const auto file=fs::u8path(argv[1]);auto d=load(file);auto s=editor::initial_snapshot(d);J report=J::array();
-      for(size_t t=0;t<d.catalog.targets.size();++t){const bool character=editor::growth_character(d,t);if(!character)continue;s.values[t].extension.kind=runtime::ExtensionKind::growth;const auto start=std::chrono::steady_clock::now();auto missing=editor::edit_growth(d,s,t,s.values[t].extension);const auto measured=editor::measure_object(d,s,t);report.push_back({{"id",d.catalog.targets[t].id},{"height_cm",measured.height_cm},{"kg",measured.kg},{"liters",measured.liters},{"missing",missing},{"notes",measured.notes},{"ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()}});}
+      for(size_t t=0;t<d.catalog.targets.size();++t){const bool character=editor::growth_character(d,t);if(!character)continue;s.values[t].extension.kind=runtime::ExtensionKind::growth;const auto start=std::chrono::steady_clock::now();const auto measured=editor::measure_object(d,s,t);auto previous=s;auto missing=editor::edit_growth(d,previous,t,previous.values[t].extension);const auto legacy=editor::measure_object(d,previous,t);report.push_back({{"id",d.catalog.targets[t].id},{"height_cm",measured.height_cm},{"previous_height_cm",legacy.height_cm},{"difference_cm",measured.height_cm-legacy.height_cm},{"kg",measured.kg},{"liters",measured.liters},{"missing",missing},{"notes",measured.notes},{"ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()}});}
       std::cout<<report.dump(2)<<'\n';
     }
     std::cout<<"PASS growth, volume, calibration, isolation, atomic overlay, replay\n";return 0;
