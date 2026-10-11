@@ -14,6 +14,9 @@ QString content_path(const QString &path);
 QString content_category(const nlohmann::json &document);
 QStringList content_categories();
 QString category_label(const QString &category);
+// 浏览器中的资源类型；能显示、定位与拷贝，不表示已支持执行所有脚本。
+const QStringList &content_file_filters();
+bool is_content_file(const QString &path);
 QStringList preview_candidates(const QString &asset,bool tooltip=false);
 
 struct RecentContent {QString path,category;qint64 used=0;};

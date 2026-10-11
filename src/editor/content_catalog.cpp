@@ -1,5 +1,4 @@
 #include "editor/content_catalog.h"
-#include "daz/content_entry.h"
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDateTime>
@@ -18,6 +17,11 @@
 
 namespace dfv::editor {
 QString content_path(const QString &path) {return QDir::cleanPath(QDir::fromNativeSeparators(QFileInfo(path).absoluteFilePath()));}
+const QStringList &content_file_filters() {
+  static const QStringList filters={"*.duf","*.dufex","*.djl","*.dsf","*.dsa","*.dsb","*.dse","*.ds","*.daz"};
+  return filters;
+}
+bool is_content_file(const QString &path) {return content_file_filters().contains("*."+QFileInfo(path).suffix().toLower());}
 QStringList content_categories() {return {"all","scene","shape","pose","material","character","wearable","light","camera","properties","other"};}
 QString category_label(const QString &category) {
   static const QMap<QString,QString> labels={{"all",QStringLiteral("所有（ALL）")},{"scene",QStringLiteral("场景（Scene）")},{"shape",QStringLiteral("形态（Shape）")},{"pose",QStringLiteral("姿势（Pose）")},{"material",QStringLiteral("材质（Material）")},{"character",QStringLiteral("角色（Character）")},{"wearable",QStringLiteral("穿戴（Wearable）")},{"light",QStringLiteral("灯光（Light）")},{"camera",QStringLiteral("相机（Camera）")},{"properties",QStringLiteral("参数（Properties）")},{"other",QStringLiteral("其他（Other）")}};
@@ -120,7 +124,7 @@ void ContentIndex::refresh(const QStringList &input,bool read_cache) {
     if(read_cache) {
       QFile file(cache);if(file.size()<256*1024*1024&&file.open(QIODevice::ReadOnly)) {
         QDataStream stream(&file);stream.setVersion(QDataStream::Qt_6_10);quint32 magic=0,count=0;QStringList saved_roots;stream>>magic>>saved_roots>>count;
-        if(magic==0x44465631&&saved_roots==roots&&count<2000000) {auto cached=std::make_shared<ContentEntries>();cached->reserve(count);
+        if(magic==0x44465632&&saved_roots==roots&&count<2000000) {auto cached=std::make_shared<ContentEntries>();cached->reserve(count);
           for(quint32 i=0;i<count&&!cancelled()&&stream.status()==QDataStream::Ok;++i) {QString p;stream>>p;cached->push_back({p,p.toCaseFolded()});}
           if(!cancelled()&&stream.status()==QDataStream::Ok&&cached->size()==count) publish(cached,false,QStringLiteral("已载入 %1 个资源，正在检查目录变化…").arg(count));
         }
@@ -135,7 +139,7 @@ void ContentIndex::refresh(const QStringList &input,bool read_cache) {
       while(it!=end&&!cancelled()) {
         const auto item=*it;const auto qpath=QString::fromStdWString(item.path().wstring());
         if(item.is_directory(error)) {if(QFileInfo(qpath).isSymbolicLink()||QFileInfo(qpath).isJunction()) it.disable_recursion_pending();}
-        else if(daz::supported_content_entry(item.path())&&item.is_regular_file(error)) {
+        else if(is_content_file(qpath)&&item.is_regular_file(error)) {
           auto p=QDir::fromNativeSeparators(qpath),folded=p.toCaseFolded();if(!seen.contains(folded)) {seen.insert(folded);entries->push_back({std::move(p),std::move(folded)});}
         }
         error.clear();it.increment(error);if(error) {unavailable.append(root);break;}
@@ -146,7 +150,7 @@ void ContentIndex::refresh(const QStringList &input,bool read_cache) {
     std::sort(entries->begin(),entries->end(),[](const auto &a,const auto &b){return a.folded<b.folded;});
     if(cancelled()) return;
     QDir().mkpath(QFileInfo(cache).path());QSaveFile file(cache);
-    if(file.open(QIODevice::WriteOnly)) {QDataStream stream(&file);stream.setVersion(QDataStream::Qt_6_10);stream<<quint32(0x44465631)<<roots<<quint32(entries->size());for(const auto &e:*entries) {if(cancelled()) {file.cancelWriting();return;}stream<<e.path;}if(stream.status()==QDataStream::Ok) file.commit();}
+    if(file.open(QIODevice::WriteOnly)) {QDataStream stream(&file);stream.setVersion(QDataStream::Qt_6_10);stream<<quint32(0x44465632)<<roots<<quint32(entries->size());for(const auto &e:*entries) {if(cancelled()) {file.cancelWriting();return;}stream<<e.path;}if(stream.status()==QDataStream::Ok) file.commit();}
     auto message=QStringLiteral("%1 个资源 · 索引已更新").arg(entries->size());if(!unavailable.empty()) message+=QStringLiteral(" · 部分目录不可访问：")+unavailable.join("；");
     publish(entries,true,message);
   });

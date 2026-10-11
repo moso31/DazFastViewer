@@ -15,7 +15,15 @@ inline std::string entry_key(const std::filesystem::path &path) {
 inline bool hd_nipples_entry(const std::filesystem::path &path) {
   return entry_key(path).ends_with("/people/genesis 8 female/anatomy/3feetwolf/hd nipples - 2.0/hd nipples for g8f - 2.0.dse");
 }
-inline bool supported_content_entry(const std::filesystem::path &path) {const auto ext=entry_key(path.extension());return ext==".duf"||ext==".dufex"||ext==".djl"||hd_nipples_entry(path);}
+enum class NativeMaterialAction {none,hd_create,hd_apply,golden_palace_copy};
+inline NativeMaterialAction native_material_action(const std::filesystem::path &path) {
+  const auto key=entry_key(path);
+  if(key.ends_with("/people/genesis 8 female/anatomy/3feetwolf/hd nipples - 2.0/hd textures/create hd nipples textures for current character.dse"))return NativeMaterialAction::hd_create;
+  if(key.ends_with("/people/genesis 8 female/anatomy/3feetwolf/hd nipples - 2.0/hd textures/apply hd textures.dse"))return NativeMaterialAction::hd_apply;
+  if(key.ends_with("/people/genesis 8 female/anatomy/golden palace v2/9-genesis 8_1/goldenpalace_material copy_v2-g8f 8_1.dse")||key.ends_with("/people/genesis 8 female/anatomy/golden palace v2/9-genesis 8_1/3-goldenpalace_material copy_v2-g8f 8_1.dse"))return NativeMaterialAction::golden_palace_copy;
+  return NativeMaterialAction::none;
+}
+inline bool supported_content_entry(const std::filesystem::path &path) {const auto ext=entry_key(path.extension());return ext==".duf"||ext==".dufex"||ext==".djl"||hd_nipples_entry(path)||native_material_action(path)!=NativeMaterialAction::none;}
 inline std::filesystem::path content_asset(const std::filesystem::path &entry,const std::vector<std::filesystem::path> &roots) {
   if(entry_key(entry.extension())==".djl") {
     auto current=entry;std::set<std::string> visited;
@@ -36,7 +44,7 @@ inline std::filesystem::path content_asset(const std::filesystem::path &entry,co
     }
     throw std::runtime_error("内容链接层级过深");
   }
-  if(entry_key(entry.extension())==".duf"||entry_key(entry.extension())==".dufex") return entry;
+  if(entry_key(entry.extension())==".duf"||entry_key(entry.extension())==".dufex"||native_material_action(entry)!=NativeMaterialAction::none) return entry;
   if(!hd_nipples_entry(entry)) throw std::runtime_error("此 DAZ 脚本尚未支持，请选择对应的 DUF 资产或保存后的场景");
   auto libraries=roots;
   for(auto p=entry.parent_path();!p.empty()&&p!=p.parent_path();p=p.parent_path()) if(std::filesystem::is_directory(p/"data")) {libraries.insert(libraries.begin(),p);break;}

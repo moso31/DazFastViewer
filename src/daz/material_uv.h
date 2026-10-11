@@ -9,6 +9,7 @@ struct MaterialUVSet {
 struct MaterialUVCatalog {
   std::vector<MaterialUVSet> sets;
   std::vector<std::string> warnings;
+  std::optional<MaterialUVSet> default_set;
 };
 MaterialUVSet material_uv_set(const ir::Material &material);
 std::optional<MaterialUVSet> material_uv_baseline(const ir::Material &material);

@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QLabel>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QToolButton>
@@ -28,6 +29,7 @@ protected:
   }
 public:
   std::function<void(size_t,bool)> changed;
+  std::function<void(size_t)> update_materials;
   explicit GeograftPanel(QWidget *parent=nullptr):QWidget(parent) {
     setObjectName("GeograftPanel");setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Maximum);
     auto *layout=new QVBoxLayout(this);layout->setContentsMargins(0,0,0,0);
@@ -42,7 +44,10 @@ public:
     if(targets!=targets_) {
       while(auto *item=rows_->takeAt(0)){delete item->widget();delete item;}switches_.clear();targets_=std::move(targets);
       for(const auto &item:items) {
-        auto *box=new QCheckBox;box->setObjectName("GeograftEnabled/"+QString::number(qulonglong(item.target)));box->setToolTip(QStringLiteral("勾选启用；取消勾选停用并恢复宿主对应部位。"));rows_->addWidget(box);switches_.push_back(box);
+        auto *row=new QWidget;auto *line=new QHBoxLayout(row);line->setContentsMargins(0,0,0,0);rows_->addWidget(row);row->installEventFilter(this);
+        auto *box=new QCheckBox;box->setObjectName("GeograftEnabled/"+QString::number(qulonglong(item.target)));box->setToolTip(QStringLiteral("勾选启用；取消勾选停用并恢复宿主对应部位。"));line->addWidget(box,1);switches_.push_back(box);
+        auto *update=new QPushButton(QStringLiteral("更新"));update->setObjectName("GeograftUpdate/"+QString::number(qulonglong(item.target)));update->setToolTip(QStringLiteral("根据所属角色当前皮肤更新此附件材质；无法匹配的部位会单独提示。"));line->addWidget(update);update->installEventFilter(this);
+        connect(update,&QPushButton::clicked,this,[this,target=item.target]{if(update_materials)update_materials(target);});
         box->installEventFilter(this);
         connect(box,&QCheckBox::toggled,this,[this,target=item.target](bool enabled){if(changed)changed(target,enabled);});
       }

@@ -179,7 +179,7 @@ struct ContentBrowser::Impl {
     auto *bar=new QHBoxLayout;bar->setSpacing(2);
     tabs=new QComboBox;tabs->setObjectName("contentTabs");tabs->addItems({QStringLiteral("内容库"),QStringLiteral("近期使用"),QStringLiteral("搜索")});tabs->setFixedWidth(96);bar->addWidget(tabs);
     libraries=new QComboBox;libraries->setObjectName("contentLibraries");libraries->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);libraries->setMinimumContentsLength(2);libraries->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);libraries->setMinimumWidth(48);libraries->setMaximumWidth(240);bar->addWidget(libraries,1);
-    breadcrumbs=new Breadcrumbs;bar->addWidget(breadcrumbs,3);breadcrumbs->navigate=[this](const QString &path){owner->locate(path);};
+    breadcrumbs=new Breadcrumbs;bar->addWidget(breadcrumbs,3);breadcrumbs->navigate=[this](const QString &path){browse_directory(path);};
     search=new QComboBox;search->setObjectName("contentSearch");search->setEditable(true);search->setInsertPolicy(QComboBox::NoInsert);search->setCompleter(nullptr);search->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);search->setMaxVisibleItems(10);search->addItems(history.searches());search->setCurrentIndex(-1);
     search->setMinimumWidth(80);search->lineEdit()->setPlaceholderText(QStringLiteral("搜索…"));search->lineEdit()->setClearButtonEnabled(true);search->lineEdit()->setToolTip(QStringLiteral("按文件名或路径包含匹配；Enter 保存搜索记录，Esc 清空"));search->lineEdit()->installEventFilter(o);bar->addWidget(search,3);
     auto *options=button(QStringLiteral("⋯"),QStringLiteral("搜索范围、图标大小与刷新"),o);options->setObjectName("contentOptions");options->setFixedWidth(24);options->setPopupMode(QToolButton::InstantPopup);auto *menu=new QMenu(options);options->setMenu(menu);bar->addWidget(options);layout->addLayout(bar);
@@ -189,12 +189,12 @@ struct ContentBrowser::Impl {
     menu->addSection(QStringLiteral("搜索范围"));scope=new QComboBox;scope->setObjectName("contentScope");scope->addItems({QStringLiteral("全部内容库"),QStringLiteral("当前内容库"),QStringLiteral("当前目录及子目录")});auto *scope_action=new QWidgetAction(menu);scope_action->setDefaultWidget(scope);menu->addAction(scope_action);
     menu->addSection(QStringLiteral("图标大小（Ctrl＋滚轮）"));zoom=new QSlider(Qt::Horizontal);zoom->setObjectName("contentZoom");zoom->setRange(0,maximum_zoom);zoom->setMinimumWidth(180);zoom->setToolTip(QStringLiteral("列表，或 64–224 像素图标，每档 8 像素"));auto *zoom_action=new QWidgetAction(menu);zoom_action->setDefaultWidget(zoom);menu->addAction(zoom_action);
     splitter=new QSplitter;splitter->setObjectName("contentSplitter");left=new QStackedWidget;
-    files=new ContentFiles(thumbnails,o);files->setReadOnly(true);files->setOption(QFileSystemModel::DontUseCustomDirectoryIcons);files->setNameFilters({"*.duf","*.dufex","*.djl","HD Nipples for G8F - 2.0.dse"});files->setNameFilterDisables(false);
+    files=new ContentFiles(thumbnails,o);files->setReadOnly(true);files->setOption(QFileSystemModel::DontUseCustomDirectoryIcons);files->setNameFilters(content_file_filters());files->setNameFilterDisables(false);
     tree=new QTreeView;tree->setObjectName("contentTree");tree->setModel(files);tree->setHeaderHidden(true);tree->header()->setStretchLastSection(false);tree->header()->setSectionResizeMode(0,QHeaderView::ResizeToContents);tree->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);tree->setUniformRowHeights(true);tree->setMinimumWidth(85);for(int i=1;i<4;++i) tree->hideColumn(i);tree->viewport()->installEventFilter(o);left->addWidget(tree);
     categories=new QListWidget;categories->setObjectName("contentCategories");categories->setMinimumWidth(105);for(const auto &c:content_categories()) {auto *item=new QListWidgetItem(category_label(c),categories);item->setData(Qt::UserRole,c);}categories->setCurrentRow(0);categories->viewport()->installEventFilter(o);left->addWidget(categories);splitter->addWidget(left);
     view=new QListView;view->setObjectName("contentItems");model=new ContentModel(thumbnails,o);view->setModel(model);view->setUniformItemSizes(true);view->setLayoutMode(QListView::Batched);view->setBatchSize(100);view->setResizeMode(QListView::Adjust);view->setSelectionMode(QAbstractItemView::SingleSelection);view->setEditTriggers(QAbstractItemView::NoEditTriggers);view->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);view->setMouseTracking(true);view->viewport()->installEventFilter(o);view->setContextMenuPolicy(Qt::CustomContextMenu);splitter->addWidget(view);splitter->setStretchFactor(1,1);layout->addWidget(splitter,1);
     empty=new QLabel(view->viewport());empty->setObjectName("contentEmpty");empty->setAlignment(Qt::AlignCenter);empty->setWordWrap(true);empty->setAttribute(Qt::WA_TransparentForMouseEvents);empty->hide();
-    preview=new QFrame(o,Qt::ToolTip);preview->setObjectName("contentPreview");preview->setFrameShape(QFrame::StyledPanel);auto *preview_layout=new QVBoxLayout(preview);preview_image=new QLabel;preview_image->setObjectName("contentPreviewImage");preview_image->setAlignment(Qt::AlignCenter);preview_text=new QLabel;preview_text->setWordWrap(true);preview_text->setMaximumWidth(420);preview_text->setTextFormat(Qt::PlainText);preview_layout->addWidget(preview_image);preview_layout->addWidget(preview_text);
+    preview=new QFrame(o,Qt::ToolTip);preview->setObjectName("contentPreview");preview->setFrameShape(QFrame::StyledPanel);auto *preview_layout=new QVBoxLayout(preview);preview_image=new QLabel;preview_image->setObjectName("contentPreviewImage");preview_image->setAlignment(Qt::AlignCenter);preview_text=new QLabel;preview_text->setObjectName("contentPreviewText");preview_text->setWordWrap(true);preview_text->setMaximumWidth(420);preview_text->setTextFormat(Qt::PlainText);preview_layout->addWidget(preview_image);preview_layout->addWidget(preview_text);
     query_timer.setSingleShot(true);query_timer.setInterval(140);history_timer.setSingleShot(true);history_timer.setInterval(900);folder_timer.setSingleShot(true);folder_timer.setInterval(180);repaint_timer.setSingleShot(true);repaint_timer.setInterval(25);
     QObject::connect(&repaint_timer,&QTimer::timeout,o,[this]{view->viewport()->update();tree->viewport()->update();});
     thumbnails.ready=[this](const QString &path,bool tip) {if(tip&&hovered==path) show_preview(path);if(!repaint_timer.isActive()) repaint_timer.start();};
@@ -207,8 +207,10 @@ struct ContentBrowser::Impl {
     QObject::connect(search->lineEdit(),&QLineEdit::returnPressed,o,[this]{begin_search();query_timer.stop();remember_search();show_items();});
     QObject::connect(search,&QComboBox::activated,o,[this]{begin_search();remember_search();show_items();});
     QObject::connect(scope,&QComboBox::currentIndexChanged,o,[this]{resume_search();show_items();});
-    QObject::connect(libraries,&QComboBox::currentIndexChanged,o,[this](int row){if(restoring||row<0)return;resume_search();navigate(roots.value(row));});
-    QObject::connect(tree->selectionModel(),&QItemSelectionModel::currentChanged,o,[this](const QModelIndex &item){if(restoring)return;const auto path=files->filePath(item);if(files->isDir(item)){resume_search();navigate(path,false);}});
+    QObject::connect(libraries,&QComboBox::currentIndexChanged,o,[this](int row){if(restoring||row<0)return;browse_directory(roots.value(row));});
+    QObject::connect(tree->selectionModel(),&QItemSelectionModel::currentChanged,o,[this](const QModelIndex &item){if(restoring)return;const auto path=files->filePath(item);if(files->isDir(item))browse_directory(path,false);});
+    // 搜索时重复点击已选中的目录也要返回内容库；currentChanged 不会收到这种点击。
+    QObject::connect(tree,&QTreeView::clicked,o,[this](const QModelIndex &item){if(restoring||!files->isDir(item))return;const auto path=files->filePath(item);if(searching()||recent()||location_view||directory.compare(path,Qt::CaseInsensitive)!=0)browse_directory(path,false);});
     QObject::connect(files,&QFileSystemModel::directoryLoaded,o,[this](const QString &folder){const auto path=content_path(folder);if(!pending_tree.isEmpty()&&(pending_tree.compare(path,Qt::CaseInsensitive)==0||pending_tree.startsWith(path+"/",Qt::CaseInsensitive)))QTimer::singleShot(0,owner,[this]{reveal_tree();});});
     // Ctrl 单击只选择资源，局部姿势等待双击，避免双击的第一次单击提前应用。
     QObject::connect(tree,&QTreeView::doubleClicked,o,[this](const QModelIndex &item){if(files->isDir(item))return;const auto path=files->filePath(item);if(owner->apply_pose&&pose_file(path)){hide_preview();owner->apply_pose(path,QApplication::keyboardModifiers().testFlag(Qt::ControlModifier));return;}activate(path);});
@@ -223,7 +225,7 @@ struct ContentBrowser::Impl {
     QObject::connect(tree,&QWidget::customContextMenuRequested,o,[this](const QPoint &point){
       const auto i=tree->indexAt(point);if(!i.isValid())return;hide_preview();context_menu({files->filePath(i),{},files->isDir(i)},tree->viewport()->mapToGlobal(point),false);
     });
-    QObject::connect(up,&QAction::triggered,o,[this]{if(recent()) return;const auto root=libraries->currentText();if(directory.compare(root,Qt::CaseInsensitive)!=0){resume_search();navigate(QFileInfo(directory).path());}});
+    QObject::connect(up,&QAction::triggered,o,[this]{if(recent()) return;const auto root=libraries->currentText();if(directory.compare(root,Qt::CaseInsensitive)!=0){browse_directory(QFileInfo(directory).path());}});
     QObject::connect(refresh,&QAction::triggered,o,[this]{thumbnails.clear();show_items();index.refresh(roots);});
     QObject::connect(tabs,&QComboBox::currentIndexChanged,o,[this]{
       query_timer.stop();history_timer.stop();
@@ -261,12 +263,12 @@ struct ContentBrowser::Impl {
   }
   void hide_preview() {hovered.clear();hover_row=-1;preview->hide();}
   void context_menu(const Item &item,const QPoint &position,bool history_menu) {
-    QMenu menu(owner);auto *open=menu.addAction(item.directory?QStringLiteral("打开目录"):QStringLiteral("添加 / 应用 DUF"));
+    QMenu menu(owner);auto *open=menu.addAction(item.directory?QStringLiteral("打开目录"):QStringLiteral("添加 / 应用内容"));
     auto *locate=menu.addAction(QStringLiteral("在内容库中定位"));auto *system=menu.addAction(QStringLiteral("在资源管理器中打开所在目录"));
     auto *copy=menu.addAction(QStringLiteral("拷贝实际路径"));copy->setObjectName("CopyActualContentPath");
     QAction *remove=nullptr;if(history_menu){menu.addSeparator();remove=menu.addAction(QStringLiteral("从近期使用中移除"));remove->setObjectName("RemoveRecentContent");}
     const auto *selected=menu.exec(position);
-    if(selected==open){if(item.directory){resume_search();navigate(item.path);}else activate(item.path);}
+    if(selected==open){if(item.directory){browse_directory(item.path);}else activate(item.path);}
     else if(selected==locate)owner->locate(item.path);
     else if(selected==system)QDesktopServices::openUrl(QUrl::fromLocalFile(item.directory?item.path:QFileInfo(item.path).path()));
     else if(selected==copy) {
@@ -299,7 +301,12 @@ struct ContentBrowser::Impl {
     try{std::vector<std::filesystem::path> libraries;for(const auto &root:roots)libraries.emplace_back(root.toStdWString());const auto file=daz::content_asset(std::filesystem::path(path.toStdWString()),libraries);return content_category(*daz::document_view(file))=="pose";}catch(const std::exception &){return false;}
   }
   void activate(const QString &path) {hide_preview();if(owner->open_asset) owner->open_asset(path);}
-  void activate_item(const QModelIndex &i) {if(!i.isValid()) return;const auto item=model->items[size_t(i.row())];if(item.directory){resume_search();navigate(item.path);}else activate(item.path);}
+  void activate_item(const QModelIndex &i) {if(!i.isValid()) return;const auto item=model->items[size_t(i.row())];if(item.directory){browse_directory(item.path);}else activate(item.path);}
+  void browse_directory(const QString &path,bool select_tree=true) {
+    if(path.isEmpty())return;query_timer.stop();history_timer.stop();resume_search();
+    {const QSignalBlocker block(tabs);tabs->setCurrentIndex(0);}
+    navigate(path,select_tree);
+  }
   void navigate(const QString &path,bool select_tree=true) {
     if(path.isEmpty()) return;pending_tree.clear();directory=content_path(path);restoring=true;bool in_library=false;
     for(int i=0;i<roots.size();++i) if(directory.compare(roots[i],Qt::CaseInsensitive)==0||directory.startsWith(roots[i]+"/",Qt::CaseInsensitive)) {libraries->setCurrentIndex(i);in_library=true;break;}
@@ -336,7 +343,8 @@ struct ContentBrowser::Impl {
     if(zoom->value()==0&&!location_view) {empty->hide();return;}
     const auto folder=directory;const auto located=pending_item;directories.start([this,folder,generation,located] {
       const QDir dir(folder);const auto entries=dir.entryInfoList(QDir::Dirs|QDir::Files|QDir::NoDotAndDotDot,QDir::DirsFirst|QDir::Name|QDir::IgnoreCase);std::vector<Item> items;
-      for(const auto &entry:entries) {if(generation!=directory_generation) return;if(entry.isDir()||entry.absoluteFilePath().compare(located,Qt::CaseInsensitive)==0||daz::supported_content_entry(std::filesystem::path(entry.absoluteFilePath().toStdWString()))||(!entry.fileName().contains(".tip.",Qt::CaseInsensitive)&&QImageReader::supportedImageFormats().contains(entry.suffix().toLower().toLatin1())&&!QFileInfo(entry.absoluteFilePath().left(entry.absoluteFilePath().lastIndexOf('.'))).exists()&&!QFileInfo(entry.path()+"/"+entry.completeBaseName()+".duf").exists())) items.push_back({entry.absoluteFilePath(),{},entry.isDir()});}
+      // PNG / tip 仅用于资源预览，列表身份始终来自功能文件。显式定位纹理仍可显示该文件。
+      for(const auto &entry:entries) {if(generation!=directory_generation) return;if(entry.isDir()||entry.absoluteFilePath().compare(located,Qt::CaseInsensitive)==0||is_content_file(entry.absoluteFilePath())) items.push_back({entry.absoluteFilePath(),{},entry.isDir()});}
       QMetaObject::invokeMethod(owner,[this,generation,items=std::move(items)]() mutable {if(generation!=directory_generation) return;display(std::move(items));},Qt::QueuedConnection);
     });
   }

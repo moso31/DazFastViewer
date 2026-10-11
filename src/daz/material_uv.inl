@@ -79,7 +79,7 @@ MaterialUVCatalog discover_material_uv_sets(const LoadedScene &loaded,size_t ins
   MaterialUVCatalog result;Repository repo;repo.roots=options.content_roots;
   const auto &i=loaded.scene.instances.at(instance);const auto &mesh=loaded.scene.meshes.at(i.mesh);
   std::set<fs::path> files,directories;std::set<std::string> ids;
-  auto add=[&](const fs::path &file,const Json &asset){read_uv_coordinates(asset,mesh);auto ref=uv_reference(file,asset);if(ids.insert(ref.uri).second)result.sets.push_back(std::move(ref));};
+  auto add=[&](const fs::path &file,const Json &asset){read_uv_coordinates(asset,mesh);auto ref=uv_reference(file,asset);if(ids.insert(ref.uri).second)result.sets.push_back(ref);return ref;};
   // Saved per-surface references may live outside the model's UV Sets directory.
   for(size_t slot=0;slot<i.materials.size();++slot){const auto ref=material_uv_set(loaded.scene.materials.at(i.materials[slot]));if(ref.uri.empty())continue;
     try{DocumentScope surface_scope(slot<surface_archives.size()&&surface_archives[slot]?surface_archives[slot]:current_archive());Repository material_repo;material_repo.roots=repo.roots;const auto [file,asset]=material_repo.asset(ref.uri,fs::u8path(ref.owner),"uv_set_library");add(file,*asset);}
@@ -90,6 +90,10 @@ MaterialUVCatalog discover_material_uv_sets(const LoadedScene &loaded,size_t ins
     const auto &doc=repo.document(file);if(!doc.contains("geometry_library"))return;
     for(const auto &g:doc.at("geometry_library"))if(g.value("id","")==id&&geometry_matches_uv_mesh(g,mesh)){
       files.insert(file);const auto directory=file.parent_path()/"UV Sets";directories.insert(directory);
+      // 默认值来自附件几何声明，不能把名称相似的第三方 UV 当成默认值。
+      if(!result.default_set&&!g.value("default_uv_set",std::string{}).empty())try{
+        const auto [uv_file,asset]=repo.asset(g.at("default_uv_set"),file,"uv_set_library");result.default_set=add(uv_file,*asset);
+      }catch(const std::exception &e){result.warnings.push_back(e.what());}
       // Each configured library may contribute additional sets for the same asset.
       for(const auto &root:repo.roots){auto relative=directory.lexically_relative(root);if(relative.empty()||relative.is_absolute()||*relative.begin()=="..")continue;for(const auto &other:repo.roots)directories.insert(other/relative);}
     }

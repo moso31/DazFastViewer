@@ -15,6 +15,7 @@
 #include "editor/physics_panel.h"
 #include "editor/ground_panel.h"
 #include "editor/geograft_panel.h"
+#include "editor/geograft_material_ui.h"
 #include "editor/geograft_visibility.h"
 #include "editor/outfit_dialog.h"
 #include "editor/dialog_layout.h"
@@ -740,9 +741,55 @@ class Editor final:public EditorWindow {
     snapshot_.poses[size_t(index)]=document_->skeletons.skins[size_t(index)].initial;send();frame_pending_=true;
     pose_status_->setText(QStringLiteral("已恢复载入时的骨骼姿势；Morph 保持当前值。"));pose_report_=nullptr;
   }
+  void apply_native_material_action(daz::NativeMaterialAction action,const std::filesystem::path &entry) {
+    if(!document_||selected_<0)throw std::runtime_error("请先选中角色或其已绑定附件");
+    const auto selected=size_t(selected_);auto libraries=roots_;for(auto p=entry.parent_path();!p.empty()&&p!=p.parent_path();p=p.parent_path())if(std::filesystem::is_directory(p/"data")){libraries.insert(libraries.begin(),p);break;}
+    if(action==daz::NativeMaterialAction::hd_create){
+      hd_texture_identity(*document_,snapshot_,selected);auto options=hd_bake_options(this,hd_product_root(libraries));if(!options)return;const auto directory=hd_cache_directory()/QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString();const auto job=prepare_hd_bake(*document_,snapshot_,selected,libraries,directory,*options);
+      if(run_hd_bake(this,job)){statusBar()->showMessage(QStringLiteral("HD 纹理已生成，请双击 Apply HD Textures 应用。"),15000);if(!self_test_)browser_->record_use(QString::fromStdWString(entry.wstring()),"material");}return;
+    }
+    std::filesystem::path directory;
+    if(action==daz::NativeMaterialAction::hd_apply){auto matches=find_hd_textures(*document_,snapshot_,selected,libraries,hd_cache_directory());
+      if(matches.empty())throw std::runtime_error("没有找到当前皮肤的完整 HD 纹理，请先运行 Create HD Nipples Textures for Current Character");
+      directory=matches.front();if(matches.size()>1){QStringList names;for(const auto &p:matches)names.push_back(QString::fromStdWString(p.wstring()));bool ok=false;auto chosen=QInputDialog::getItem(this,QStringLiteral("选择 HD 纹理"),QStringLiteral("当前皮肤的纹理组"),names,0,false,&ok);if(!ok)return;directory=file_path(chosen);}
+      if(!std::filesystem::is_regular_file(directory/"dfv-hd-textures.json")){
+        const auto job=prepare_hd_bake(*document_,snapshot_,selected,libraries,hd_cache_directory()/(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString()+"-import"),{},false);
+        for(const auto &item:std::filesystem::directory_iterator(directory))if(item.path().filename().string().starts_with("NipplesMap")&&item.path().extension()==".jpg")std::filesystem::copy_file(item.path(),job.directory/item.path().filename());
+        QProgressDialog progress(QStringLiteral("正在转换附加皮肤贴图…"),QStringLiteral("取消"),0,0,this);progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);
+        if(!write_hd_auxiliary_maps(job,[&]{QApplication::processEvents();return !progress.wasCanceled();}))return;finish_hd_bake(job);directory=job.directory;
+      }
+    }
+    auto edit=history_edit(action==daz::NativeMaterialAction::hd_apply?QStringLiteral("应用 HD 纹理"):QStringLiteral("复制 GoldenPalace 材质"));auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;
+    const auto count=action==daz::NativeMaterialAction::hd_apply?apply_hd_textures(*next,snapshot,selected,directory,libraries):copy_golden_palace_materials(*next,snapshot,selected);
+    next->generation=++generation_;snapshot.generation=next->generation;snapshot.revision=next_revision();next->loaded.scene.lights=snapshot.lights;parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(snapshot);
+    select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);statusBar()->showMessage(QStringLiteral("已更新 %1 个附件表面的材质。").arg(count),10000);if(!self_test_)browser_->record_use(QString::fromStdWString(entry.wstring()),"material");
+  }
+  void update_geograft(size_t target) {
+    if(loading_||!document_||target>=document_->catalog.targets.size())return;
+    try{
+      const auto source=document_;const auto revision=snapshot_.revision;auto state=snapshot_;std::filesystem::path directory;std::string preparation_error;
+      if(geograft_material_strategy(*source,target)==GeograftMaterialStrategy::hd_nipples)try{
+        const auto prepared=prepare_hd_update(this,*source,state,target,roots_);if(!prepared)return;directory=*prepared;
+      }catch(const std::exception &e){preparation_error=e.what();}
+      if(document_!=source||snapshot_.revision!=revision)throw std::runtime_error("准备材质期间场景已改变，请重新点击更新");
+      auto next=std::make_shared<Document>(*source);const auto result=update_geograft_materials(*next,state,target,roots_,directory,preparation_error);
+      if(result.updated){
+        auto edit=history_edit(QStringLiteral("更新 Geograft 材质"));next->generation=++generation_;state.generation=next->generation;state.revision=next_revision();next->loaded.scene.lights=state.lights;
+        parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(state);select(selected_,selected_joint_);renderer_->set_document(document_,submitted_snapshot(),false);
+      }
+      const auto summary=QStringLiteral("%1：已更新 %2 个表面，其中 %3 个使用角色皮肤复制。")
+        .arg(text(source->catalog.targets[target].label)).arg(result.updated).arg(result.fallback);
+      statusBar()->showMessage(summary,15000);
+      if(!result.unresolved.empty()){
+        QStringList parts;for(const auto &part:result.unresolved)parts.push_back(text(part));
+        QMessageBox message(QMessageBox::Warning,QStringLiteral("Geograft 材质更新未全部完成"),summary+QStringLiteral("\n\n以下部位未更新：\n")+parts.join('\n'),QMessageBox::Ok,this);
+        if(!result.strategy_error.empty())message.setDetailedText(QStringLiteral("专用材质策略未完成：\n")+text(result.strategy_error));message.exec();
+      }
+    }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("更新 Geograft 材质"),text(e.what()));}
+  }
   void open_asset(const std::filesystem::path &entry,bool partial=false) {
     if(loading_) {statusBar()->showMessage(QStringLiteral("正在加载，请稍候…"));return;}
-    try {const auto file=daz::content_asset(entry,roots_);if(daz::entry_key(file.extension())==".dufex"){load(file,false,false,{},entry);return;}const auto data=daz::read_document_file(file);
+    try {const auto file=daz::content_asset(entry,roots_);if(const auto action=daz::native_material_action(file);action!=daz::NativeMaterialAction::none){apply_native_material_action(action,file);return;}if(daz::entry_key(file.extension())==".dufex"){load(file,false,false,{},entry);return;}const auto data=daz::read_document_file(file);
       const auto contents=daz::inspect_contents(data);
       if(contents.instantiate) {
         const bool wear=contents.requires_selection||data.value("asset_info",nlohmann::json::object()).value("type","")=="wearable";
@@ -768,7 +815,7 @@ class Editor final:public EditorWindow {
       else if(contents.properties) apply_pose_file(file,partial);
       else if(contents.materials) apply_material_file(file);
       else throw std::runtime_error("DUF 中没有当前可实例化或应用的内容；资产定义需要 scene 实例引用");
-    } catch(const std::exception &e) {if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法打开 DUF"),text(e.what()));}
+    } catch(const std::exception &e) {if(self_test_) finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("无法应用内容"),text(e.what()));}
   }
   void change_attachment(bool detach,int requested_host=-1) {
     if(loading_||!document_||selected_<0) return;
@@ -2047,6 +2094,7 @@ public:
       if(loading_||!document_||target>=snapshot_.values.size())return;auto &value=snapshot_.values[target];if(value.graft_enabled==enabled)return;
       auto edit=history_edit(enabled?QStringLiteral("启用 Geograft"):QStringLiteral("停用 Geograft"));value.graft_enabled=enabled;send();
     };
+    geograft_panel_->update_materials=[this](size_t target){update_geograft(target);};
     garment_panel_=new GarmentPanel;properties->addWidget(garment_panel_);
     garment_panel_->changed=[this](const std::string &region,bool enabled){if(loading_||!document_||selected_<0)return;auto edit=history_edit(QStringLiteral("修改服装部位形变"));auto &disabled=snapshot_.values.at(size_t(selected_)).disabled_deformation_regions;if(enabled)disabled.erase(region);else disabled.insert(region);send();};
     auto *morph_header=new QToolButton;morph_header->setObjectName("MorphCollapse");morph_header->setText(QStringLiteral("参数"));morph_header->setCheckable(true);morph_header->setChecked(true);morph_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);morph_header->setArrowType(Qt::DownArrow);properties->addWidget(morph_header);
@@ -2108,7 +2156,7 @@ public:
     chrome->changed=[this](GizmoSettings settings){if(renderer_) renderer_->gizmo(settings);};
     connect(chrome->ground_action(),&QAction::triggered,this,[this]{request_ground();});
     connect(chrome->weight_action(),&QAction::triggered,this,[this]{enable_extension();});
-    auto *file_menu=chrome->menus()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用 DUF…"));open_->setShortcut(QKeySequence::Open);
+    auto *file_menu=chrome->menus()->addMenu(QStringLiteral("文件"));open_=file_menu->addAction(QStringLiteral("添加 / 应用内容…"));open_->setShortcut(QKeySequence::Open);
     connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 资源 (*.duf *.dufex *.djl *.dse)"));if(!file.isEmpty()) open_asset(file_path(file));});
     auto *save=file_menu->addAction(QStringLiteral("保存场景修改"));save->setObjectName("SaveScene");save->setShortcut(QKeySequence::Save);save->setAutoRepeat(false);addAction(save);connect(save,&QAction::triggered,this,[this]{save_extension();});
     connect(file_menu->addAction(QStringLiteral("场景修改另存为…")),&QAction::triggered,this,[this]{save_extension(true);});
@@ -2343,7 +2391,7 @@ public:
           if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
           if(!self_test_&&!preserve) browser_->record_use(QString::fromStdWString((entry.empty()?file:entry).wstring()),category);
           if(!entry.empty()&&entry!=file) {
-            pose_status_->setText(QStringLiteral("已挂接 HD Nipples 基础附件。皮肤纹理生成、碰撞优化和 dForce 配套脚本尚未支持；可应用已准备的材质预设。"));
+            pose_status_->setText(QStringLiteral("已挂接 HD Nipples 基础附件。可在 HD Textures 目录创建并应用当前角色的 HD 纹理。"));
           }
           if(!pose_file_.empty()&&!pose_test_) {const auto file=pose_file_;pose_file_.clear();apply_pose_file(file);}
         },Qt::QueuedConnection);

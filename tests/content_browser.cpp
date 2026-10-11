@@ -248,8 +248,9 @@ static void dufex_checks(){
   ContentHistory history(settings);require(history.recent("scene").size()==2,"同名场景近期记录被合并");
 }
 #include "content_actual_path.inl"
+#include "content_navigation_resources.inl"
 int main(int argc,char **argv) {
   QApplication app(argc,argv);app.setApplicationName("DazFastViewerContentTest");app.setOrganizationName("DazFastViewerTests");app.setFont(QFont(QStringLiteral("Microsoft YaHei UI"),9));
-  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else {source_checks();checks();navigation_checks();dufex_checks();actual_path_checks();}return 0;}
+  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else if(args.contains("--icons-real"))resource_thumbnail_real();else {source_checks();checks();navigation_checks();dufex_checks();actual_path_checks();search_navigation_checks();resource_thumbnail_checks();}return 0;}
   catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}
 }
