@@ -202,7 +202,7 @@ int main() {
       {"channel":{"id":"Share Glossy Inputs","value":false}}
     ]}])");
     write(path,fidelity);const auto glass=dfv::daz::load(path).scene.materials[0];
-    require(glass.thin_walled&&glass.transmission==1&&glass.base_color.x==1&&glass.roughness==0,"薄壁眼部材质被当成深色实体玻璃");
+    require(glass.thin_walled&&glass.transmission==1&&glass.refraction_color.x==1&&glass.refraction_roughness==0&&glass.separate_refraction,"薄壁眼部材质被当成深色实体玻璃");
     fidelity["material_library"][0]["extra"][0]["channels"]=Json::parse(R"([
       {"channel":{"id":"Thin Walled","value":false}},
       {"channel":{"id":"Translucency Weight","value":0.6,"image_file":"height.png"}},

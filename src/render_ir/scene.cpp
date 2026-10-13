@@ -62,12 +62,12 @@ void validate(const Material &m,size_t texture_count) {
     if(!std::isfinite(f)||f<0) throw std::runtime_error("IR: 自发光参数无效");
   if(m.emission_units<0||m.emission_units>5) throw std::runtime_error("IR: 自发光亮度单位无效");
   for(float f:{m.displacement_strength,m.displacement_min,m.displacement_max}) if(!std::isfinite(f)) throw std::runtime_error("IR: 置换参数含非有限值");
-  for(float f:{m.base_color.x,m.base_color.y,m.base_color.z,m.roughness,m.metallic,m.opacity,m.transmission,m.ior,m.normal_strength,m.bump_strength,m.bump_distance})
+  for(float f:{m.base_color.x,m.base_color.y,m.base_color.z,m.roughness,m.metallic,m.opacity,m.transmission,m.ior,m.normal_strength,m.bump_strength,m.bump_distance,m.refraction_roughness})
     if(!std::isfinite(f)) throw std::runtime_error("IR: 无效材质参数");
   for(float f:{m.specular,m.anisotropy,m.anisotropy_rotation,m.translucency,m.subsurface,m.subsurface_anisotropy,m.coat,m.coat_roughness,m.coat_ior,
       m.dual_weight,m.dual_ratio,m.dual_roughness1,m.dual_roughness2,m.dual_specular,m.hair_root_radius,m.hair_tip_radius,m.hair_radial_roughness,m.hair_melanin,m.hair_redness,m.uv_scale.x,m.uv_scale.y,m.uv_offset.x,m.uv_offset.y})
     if(!std::isfinite(f)) throw std::runtime_error("IR: 扩展材质参数无效");
-  for(auto v:{m.subsurface_radius,m.subsurface_color,m.translucency_color,m.coat_color,m.specular_color,m.hair_tip_color}) for(float f:{v.x,v.y,v.z})
+  for(auto v:{m.subsurface_radius,m.subsurface_color,m.translucency_color,m.coat_color,m.specular_color,m.hair_tip_color,m.refraction_color}) for(float f:{v.x,v.y,v.z})
     if(!std::isfinite(f)||f<0) throw std::runtime_error("IR: 材质颜色或散射半径无效");
   if(m.hair_root_radius<0||m.hair_tip_radius<0) throw std::runtime_error("IR: 发丝半径不能为负");
   if(m.bump_strength<0 || m.bump_distance<0) throw std::runtime_error("IR: 凹凸强度或距离不能为负");

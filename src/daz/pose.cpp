@@ -22,6 +22,12 @@ PosePreset parse_pose(const nlohmann::json &document,const std::string &source) 
     address.erase(0,10);const auto hash=address.find('#');if(hash!=std::string::npos) {c.modifier=address.substr(hash+1);address.resize(hash);}
     if(address.starts_with('/')) address.erase(0,1);c.node=address;preset.channels.push_back(std::move(c));
   }
+  for(const auto &extra:document.at("scene").value("extra",nlohmann::json::array()))if(extra.value("type","")=="dazfastviewer/parameters"){
+    if(extra.at("version")!=1)throw std::runtime_error("不支持的参数预设扩展版本");
+    std::erase_if(preset.channels,[](const PoseChannel &c){return !c.modifier.empty();});std::set<std::pair<std::string,std::string>> identities;
+    for(const auto &value:extra.at("values")){PoseChannel c;c.scheme="name";c.node=value.at("node");c.modifier=value.at("modifier");c.asset=value.at("asset");c.property="value/value";c.value=value.at("value");
+      if(!std::isfinite(c.value)||c.asset.empty()||!identities.emplace(c.node,c.asset).second)throw std::runtime_error("参数预设含无效或重复的资产身份");preset.channels.push_back(std::move(c));}
+  }
   return preset;
 }
 PosePreset read_pose(const std::filesystem::path &file) {const auto u=file.generic_u8string();return parse_pose(read_document_file(file),std::string(u.begin(),u.end()));}
@@ -53,7 +59,7 @@ AppliedPose apply_pose(const PosePreset &preset,const runtime::Skin &skin,const 
         bool owner=false;
         if(c.node.empty()) {owner=m.kind!="alias";for(const auto &joint:skin.joints) if(joint.parent>=0&&joint.id==m.owner) owner=false;}
         else for(const auto &joint:skin.joints) if(m.owner==joint.id) owner=c.scheme=="id"?joint.id==c.node:joint.name==c.node||std::find(joint.aliases.begin(),joint.aliases.end(),c.node)!=joint.aliases.end();
-        if(name==c.modifier&&owner) {found=i;++matches;}
+        if((c.asset.empty()?name==c.modifier:m.id==c.asset)&&owner) {found=i;++matches;}
       }
       if(matches>1) {skip(c,"同一节点下有多个同名参数，无法唯一确定目标");continue;}
       if(c.property=="value/value"&&found<target.morphs.size()&&target.morphs[found].unsupported.empty()) {

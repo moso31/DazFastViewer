@@ -8,6 +8,7 @@
 #include "render_ir/options_json.h"
 #include "runtime/physics_json.h"
 #include "daz/documents.h"
+#include "daz/resource_paths.h"
 #include <fstream>
 #include <chrono>
 #include <cmath>
@@ -156,6 +157,20 @@ RestoredScene restore_scene_extension(const J &j,const fs::path &folder,const st
   auto resolved=roots;for(const auto &r:j.value("content_roots",J::array())){auto p=fs::u8path(r.get<std::string>());if(fs::is_directory(p)&&std::find(resolved.begin(),resolved.end(),p)==resolved.end())resolved.push_back(p);}
   auto d=load_source(source,resolved,progress);d->archives=std::move(archives);d->generation=generation;replay(*d,j.at("operations"),resolved,folder,progress);
   if(version==2&&structure(*d)!=j.at("structure"))throw std::runtime_error("场景结构或依赖资产已变化，无法完整恢复保存的关系");
-  auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));for(const auto &w:s.water_overrides)water::install(*d,w);s.water_overrides.clear();for(const auto &v:s.cloud_overrides)cloud::install(*d,v);s.cloud_overrides.clear();normalize_object_extensions(*d,s);d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
+  auto s=initial_snapshot(*d);apply_snapshot_json(*d,s,j.at("state"));
+  if(!daz::resolve_environment_map(s.options,source.empty()?folder/"scene.dufex":source,resolved)){
+    const auto *map=ir::option(s.options.environment,"Environment Map");
+    const auto message="未找到环境贴图："+(map?map->image_uri:std::string{});
+    d->loaded.report["warnings"].push_back({{"code","environment_map_missing"},{"id",s.options.environment.id},{"message",message}});if(progress)progress(message);
+  }
+  // 复制材质操作和手动覆盖保存的是文件路径，也必须适应内容库盘符迁移。
+  auto relocate=[&](fs::path &path){std::error_code ec;if(path.empty()||fs::is_regular_file(path,ec))return;for(const auto &candidate:daz::relocated_library_paths(path,resolved))if(fs::is_regular_file(candidate,ec)){path=fs::weakly_canonical(candidate);return;}};
+  for(auto &texture:d->loaded.scene.textures){relocate(texture.file);for(auto &layer:texture.layers)relocate(layer.file);}
+  auto relocate_json=[&](J &value){auto p=fs::u8path(value.get<std::string>());relocate(p);value=path_string(p);};
+  for(auto &[instance,surfaces]:s.material_overrides)for(auto &[slot,patch]:surfaces)for(auto &[id,value]:patch)
+    if(material_parameter(id).kind==MaterialParameter::texture&&value.is_object()){
+      relocate_json(value.at("file"));if(value.contains("layers"))for(auto &layer:value.at("layers"))relocate_json(layer.at("file"));
+    }
+  for(const auto &w:s.water_overrides)water::install(*d,w);s.water_overrides.clear();for(const auto &v:s.cloud_overrides)cloud::install(*d,v);s.cloud_overrides.clear();normalize_object_extensions(*d,s);d->loaded.scene.lights=s.lights;release_load_data(*d);return {std::move(d),std::move(s)};
 }
 }

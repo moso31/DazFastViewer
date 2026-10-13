@@ -92,6 +92,14 @@ static void file_roundtrip(const std::filesystem::path &folder){
   apply_materials(rd,0,daz::load(partial_file,{{folder},false}),&rs);check(rs.material_overrides[id]["Skin"].contains("base_color")&&rs.material_overrides[id]["Skin"]["roughness"]==.72,"只换贴图覆盖了颜色或粗糙度");
   save_scene_extension(extension_path(file),rd,rs);auto replayed=load_scene_extension(extension_path(file),{folder},3);auto textures=replayed.document->loaded.scene.textures;auto effective=effective_material(replayed.document->loaded.scene,replayed.snapshot.material_overrides,0,0,textures);
   check(effective.base_color.x==3&&effective.roughness==.72f&&effective.opacity==.65f&&effective.overlay_weight==.5f&&effective.color_texture>=0&&textures[size_t(effective.color_texture)].file==map_file,"局部替换与 HDR 颜色在 DUFEX 重开后不一致");
+  {
+    const auto moved_file=std::filesystem::path(map_file.root_name()==L"Z:"?L"Y:/":L"Z:/")/map_file.relative_path();const auto moved_utf8=moved_file.generic_u8string();const std::string moved(moved_utf8.begin(),moved_utf8.end());
+    auto copy_document=rd;auto copy_snapshot=rs;auto copy=copy_material(rd.loaded.scene,rs.material_overrides,{0,0});copy["parameters"]["color_texture"]={{"file",moved}};
+    paste_material(copy_document,copy_snapshot,copy,{{0,0}});copy_snapshot.material_overrides[id]["Skin"]["normal_texture"]={{"file",moved}};
+    save_scene_extension(folder/"moved-textures.dufex",copy_document,copy_snapshot);const auto relocated=load_scene_extension(folder/"moved-textures.dufex",{folder},4);
+    auto maps=relocated.document->loaded.scene.textures;const auto m=effective_material(relocated.document->loaded.scene,relocated.snapshot.material_overrides,0,0,maps);
+    check(maps.at(m.color_texture).file==std::filesystem::weakly_canonical(map_file)&&maps.at(m.normal_texture).file==std::filesystem::weakly_canonical(map_file),"DUFEX 复制材质或手动覆盖保留了失效的内容库盘符");
+  }
   partial["scene"]["materials"][0]["diffuse"]["channel"]={{"id","diffuse"},{"value",{.1,.3,.8}},{"image_file",""}};const auto cleared_file=folder/"clear.duf";std::ofstream(cleared_file)<<partial.dump();
   apply_materials(rd,0,daz::load(cleared_file,{{folder},false}),&rs);check(!rs.material_overrides[id]["Skin"].contains("base_color")&&rs.material_overrides[id]["Skin"].contains("roughness")&&rd.loaded.scene.materials.at(rd.loaded.scene.instances[0].materials[0]).color_texture<0,"显式改色 / 清图未覆盖对应参数");
   auto edited=replayed.snapshot;remove_target(*replayed.document,edited,0);check(edited.material_overrides.empty(),"删除对象遗留材质覆盖");

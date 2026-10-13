@@ -385,12 +385,14 @@ ir::Material convert_material(const Json &instance,Channels channels,const fs::p
     material.transmission_texture=texture(channel("Refraction Weight"),ir::ColorSpace::linear,material_file);
     material.uv_scale={scalar("Horizontal Tiles",1),scalar("Vertical Tiles",1)};
     material.uv_offset={scalar("Horizontal Offset",0),scalar("Vertical Offset",0)};
-    if(material.transmission>0) {
-      // 透射层使用折射颜色，不能把视口漫反射颜色乘进角膜和泪膜。
+    material.separate_refraction=true;
+    {
+      // 只把折射输入交给透射层；低权重透射仍保留皮肤和趾甲的漫反射贴图。
       const bool share=scalar("Share Glossy Inputs",0)!=0;
-      material.base_color=color_value(share?"Glossy Color":"Refraction Color",{1,1,1});
-      material.color_texture=texture(channel(share?"Glossy Color":"Refraction Color"),ir::ColorSpace::srgb,material_file);
-      if(!share) {material.roughness=unit("Refraction Roughness");material.roughness_texture=texture(channel("Refraction Roughness"),ir::ColorSpace::linear,material_file);material.roughness_from_glossiness=false;}
+      material.refraction_color=color_value(share?"Glossy Color":"Refraction Color",{1,1,1});
+      material.refraction_color_texture=texture(channel(share?"Glossy Color":"Refraction Color"),ir::ColorSpace::srgb,material_file);
+      material.refraction_roughness=share?(material.roughness_from_glossiness?1-material.roughness:material.roughness):unit("Refraction Roughness");
+      material.refraction_roughness_texture=share?material.roughness_texture:texture(channel("Refraction Roughness"),ir::ColorSpace::linear,material_file);
     }
     material.hair=channels.contains("Hair Root Color")||channels.contains("Root Transmission Color");
     material.hair_root_radius=.0005f*std::max(0.f,scalar("Line Start Width",.1f));
@@ -438,6 +440,23 @@ ir::Material convert_material(const Json &instance,Channels channels,const fs::p
 }
 
 Json read_document_file(const fs::path &file) {return read_document(file);}
+bool resolve_environment_map(ir::RenderOptions &options,const fs::path &owner,const std::vector<fs::path> &roots) {
+  auto entry=std::find_if(options.environment.parameters.begin(),options.environment.parameters.end(),[](const auto &p){return p.id=="Environment Map";});
+  const auto saved=options.environment_file;std::error_code ec;
+  if(!saved.empty()&&fs::is_regular_file(saved,ec))return true;
+  auto candidates=relocated_library_paths(saved,roots);
+  if(!saved.empty()&&saved.is_relative())candidates.insert(candidates.begin(),owner.parent_path()/saved);
+  for(const auto &p:candidates)if(fs::is_regular_file(p,ec)){options.environment_file=fs::weakly_canonical(p);return true;}
+  if(entry!=options.environment.parameters.end()&&!entry->image_uri.empty()) {
+    try {Repository repo;repo.roots=roots;const auto path=repo.path(entry->image_uri,owner);if(fs::is_regular_file(path,ec)){options.environment_file=path;return true;}}catch(const std::exception &) {}
+  }
+  // 用户主动清除时，路径与 URI 均为空，不能从源场景重新带回旧贴图。
+  if(saved.empty()&&(entry==options.environment.parameters.end()||entry->image_uri.empty()))return true;
+  if(entry!=options.environment.parameters.end()&&entry->image_uri.empty()) {
+    for(char c:utf8(saved))entry->image_uri+=c=='%'?"%25":c=='#'?"%23":std::string(1,c);
+  }
+  options.environment_file.clear();return false;
+}
 ir::Material merge_material_preset(const ir::Material &base,const ir::Material &preset,std::vector<ir::Texture> &textures,const LoadOptions &options){
   if(preset.source_definition.empty())return preset;
   const auto patch=Json::parse(preset.source_definition);const auto original=base.source_definition.empty()?Json::object():Json::parse(base.source_definition);
@@ -450,6 +469,22 @@ ir::Material merge_material_preset(const ir::Material &base,const ir::Material &
   auto result=convert_material(Json{{"id",preset.id},{"groups",Json::array()}},std::move(channels),fs::u8path(patch.value("owner",std::string{})),repo,scene,warnings,reports,legacy);textures=std::move(scene.textures);set_material_uv_set(result,material_uv_set(preset).uri.empty()?material_uv_set(base):material_uv_set(preset));return result;
 }
 #include "daz/material_uv.inl"
+Json export_material_source(const ir::Material &material,const LoadOptions &options){
+  auto result=material.source_definition.empty()?Json{{"channels",Json::object()}}:Json::parse(material.source_definition);
+  Repository repo;repo.roots=options.content_roots;const auto owner=fs::u8path(result.value("owner",std::string{}));
+  for(auto &c:result["channels"]){
+    const auto channel_owner=fs::u8path(c.value("_dfv_owner",utf8(owner)));
+    if(c.contains("image")&&c["image"].is_string()&&!c["image"].get<std::string>().empty()){
+      const auto [file,asset]=repo.asset(c.at("image"),channel_owner,"image_library");auto image=*asset;
+      for(auto &map:image["map"])if(map.contains("url")&&!map.at("url").get<std::string>().empty())map["url"]=encode_uv_uri(utf8(repo.path(map.at("url"),file)));
+      c["_dfv_export_image"]=std::move(image);c.erase("image");
+    }
+    if(c.contains("image_file")&&c["image_file"].is_string()&&!c["image_file"].get<std::string>().empty())c["image_file"]=encode_uv_uri(utf8(repo.path(c.at("image_file"),channel_owner)));
+    c.erase("_dfv_owner");
+  }
+  const auto uv=material_uv_set(material);if(!uv.uri.empty()){const auto [file,asset]=repo.asset(uv.uri,fs::u8path(uv.owner),"uv_set_library");result["uv_asset"]=*asset;}
+  return result;
+}
 std::string decode_uri(const std::string &uri) {return decode(uri);}
 void sync_instance_meshes(ir::Scene &scene) {
   for(auto &instance:scene.instances) if(instance.prototype>=0) {
@@ -593,7 +628,12 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
     if(shader_preset&&authored.empty())authored=channels;
     if(instance.contains("uv_set")&&!instance.contains("_dfv_uv_owner"))instance["_dfv_uv_owner"]=utf8(file);
     auto material=convert_material(instance,channels,material_file,repo,scene,warnings,material_reports);
-    normalize_material_channels(authored);auto definition=Json::parse(material.source_definition);definition["authored"]=authored;if(!owner.empty()){definition["target_node"]=owner.value("id","");definition["target_uri"]=decode(owner.value("url",""));definition["target_root"]=owner.value("parent","").empty();}material.source_definition=definition.dump();
+    normalize_material_channels(authored);auto definition=Json::parse(material.source_definition);definition["authored"]=authored;
+    for(const auto &extra:array_member(instance,"extra")){
+      const auto type=extra.value("type","");if(type.starts_with("studio/material/"))definition["shader"]=extra;
+      if(type=="dazfastviewer/material"){if(extra.at("version")!=1)fail("不支持的材质预设扩展版本");definition["dfv_parameters"]=extra.at("parameters");}
+    }
+    if(!owner.empty()){definition["target_node"]=owner.value("id","");definition["target_uri"]=decode(owner.value("url",""));definition["target_root"]=owner.value("parent","").empty();}material.source_definition=definition.dump();
     const uint32_t index=uint32_t(scene.materials.size());scene.materials.push_back(material);
     const auto geometry=decode(instance.value("geometry",""));const auto uv=instance.value("uv_set","");
     for(const auto &group:instance.at("groups")) bindings[{geometry,group.get<std::string>()}]={index,uv};

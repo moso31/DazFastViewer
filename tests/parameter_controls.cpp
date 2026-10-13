@@ -17,6 +17,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QWheelEvent>
+#include <QFile>
+#include <QFileDialog>
+#include <QTimer>
 #include "daz/morphs.h"
 #include <fstream>
 #include "render_ir/options.h"
@@ -32,14 +35,17 @@ static void require(bool value,const char *message) {if(!value) throw std::runti
 #include "matte_fog_panel.inl"
 #include "night_sky_panel.inl"
 #include "parameter_settings.inl"
+#include "environment_texture_panel.inl"
 int main(int argc,char **argv) {
   std::cout<<std::unitbuf;
   QApplication app(argc,argv);
+  QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
   try {
     QTemporaryDir settings;require(settings.isValid(),"测试设置目录创建失败");
     QCoreApplication::setOrganizationName("DazFastViewerTests");QCoreApplication::setApplicationName("ParameterControls");
     QSettings::setDefaultFormat(QSettings::IniFormat);QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,settings.path());
     if(argc>1&&std::string(argv[1])=="--night-only"){night_sky_panel(app);return 0;}
+    if(argc>1&&std::string(argv[1])=="--environment-only"){environment_texture_panel(app);return 0;}
     if(argc>1&&std::string(argv[1])=="--extension-only"){extension_panel(app);return 0;}
     double value=.5;dfv::editor::ParameterControl c;c.id="test";c.label="数值";c.minimum=0;c.maximum=1;c.read=[&]{return value;};c.write=[&](double v){value=v;};
     dfv::editor::ParameterPanel panel;panel.resize(380,480);panel.bind_controls({c});panel.show();app.processEvents();QTest::qWait(180);
@@ -115,6 +121,7 @@ int main(int argc,char **argv) {
     parameter_wheel(app);
     matte_fog_panel(app);
     night_sky_panel(app);
+    environment_texture_panel(app);
     extension_panel(app);
     geograft_panel(app);
     garment_panel(app);

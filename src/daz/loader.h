@@ -63,7 +63,11 @@ inline std::shared_ptr<SourceArchive> instance_archive(const LoadedScene &loaded
 struct DufContents {bool instantiate=false,materials=false,properties=false,requires_selection=false;};
 DufContents inspect_contents(const nlohmann::json &document);
 LoadedScene load(const std::filesystem::path &file,const LoadOptions &options={});
+// 恢复保存的环境设置时重新解析资源；找不到时保留 URI，清空不可用的渲染路径。
+bool resolve_environment_map(ir::RenderOptions &options,const std::filesystem::path &owner,const std::vector<std::filesystem::path> &roots);
 ir::Material merge_material_preset(const ir::Material &base,const ir::Material &preset,std::vector<ir::Texture> &textures,const LoadOptions &options={});
+// 将材质底稿中的相对资源和内嵌 UV 解引用，供独立预设保存。
+nlohmann::json export_material_source(const ir::Material &material,const LoadOptions &options={});
 void apply_graft_masks(LoadedScene &loaded,bool defer_selection=false);
 void sync_instance_meshes(ir::Scene &scene);
 nlohmann::json read_document_file(const std::filesystem::path &file);

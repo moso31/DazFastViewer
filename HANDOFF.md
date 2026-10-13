@@ -8,6 +8,38 @@ Geograft 的启用状态独立于 Visible，在对象属性与 Morph 的 `Geogra
 
 下文的历史二进制摘要仅记录当时验证结果，不能用来判断当前部署。当前版本以运行包中的 `build-manifest.json` 为准。
 
+## DUFEX 环境贴图恢复与路径编辑
+
+2026-10-11：`H:/G1/Scenes/12b.dufex` 的紫色照明来自环境贴图失效：源 DUF 的 `/resources/DTHDR-RuinsB-500.hdr` 已能解析到当前 DAZ 安装，但 DUFEX 快照随后用旧的 `C:/Daz 3D/Applications/64-bit/DAZ 3D/DAZStudio4/...` 绝对路径覆盖了它。现于快照恢复后重新定位 HDRI，优先保留仍然有效的用户选择，再处理内容库盘符迁移及原始 URI；本机恢复到 `C:/Program Files/DAZ 3D/DAZStudio4/shaders/iray/resources/DTHDR-RuinsB-500.hdr`。清除后的空路径和空 URI 不会重新套用源场景贴图。真正缺失时保留 URI、记录警告，并阻止缺失图像的紫色占位参与环境照明。
+
+`Dome and Scene` / `Dome Only` 均支持 HDRI。在 Environment Map 强度行下增加「纹理路径」，支持输入、浏览和清除，保留完整路径提示及缺失提示；沿用参数行选中滚轮规则和外层唯一滚动条。路径与 URI 同步修改，支持撤销／重做、保存重开；原面板底部的环境贴图按钮已移到此处。
+
+真实场景还包含复制材质操作保存的四张旧 `G:/G3` 贴图。恢复 DUFEX 时，对复制材质和手动覆盖的贴图、分层贴图按同一内容库相对路径重定位到 `H:/G3`，不按文件名模糊匹配。用户的 DUF、DUFEX 和纹理资源均未改写。
+
+验证在 `artifacts/environment-12b`：`render_options` 覆盖旧安装、有效自选、主动清除、缺失 URI 以及特殊字符路径；`materials` 覆盖复制和覆盖贴图的盘符迁移；环境 UI 覆盖输入、浏览、取消、清除、搜索、重绑和选中滚轮，原生窗口截图为 `path-panel-native.png`。`gpu-fallback/checks.json` 确认缺失 HDRI 的实际 GPU 出图与无贴图环境一致。部署清单核对见 `deployment.json`。
+
+正式入口只读打开完整 `12b.dufex` 的最终验证为 `actual-verified/editor-check.json`（PASS）和 `environment-map-check.json`（路径、清除、撤销／重做 PASS）；`environment-panel.png` 已目检，路径栏可见且全场景紫色消失，stderr 无贴图缺失。验收使用 32 样本及普通纹理 2048 上限，原 HDRI 为 500 像素，未改场景资产或运行默认采样设置。新版重开旧文件即可恢复，无需重新设置材质。UI 自动化须等待参数行在 Dock 显示后的 150 ms 虚拟挂载，不可在切换后的第一个 50 ms tick 判断控件缺失。
+
+标准构建和部署完成；最终全套检查为 51/52 通过，仅已有 `ui_scale` 的菜单实际字高断言失败，见 `build-release-verified.log`。部署于 2026-10-11 23:32，442 项源码、101 项运行文件哈希全部匹配，正式入口与构建产物一致；EXE SHA-256 为 `99e003464eb75f38bbd583e5c1ad1ca034b2e3ba7d65d4397a3477d88ffce0e6`。
+
+## 角色材质、Pose、Morph 预设与趾甲修正
+
+2026-10-11：选中角色后，通过「文件 → 保存预设 → 保存材质 / 保存 Pose / 保存 Morph」写入 `.duf`。材质保存所选对象的全部表面、当前编辑值、贴图引用和 UV；不自动包含衣服、头发等独立对象。Pose 保存当前骨骼输入和 Pose / Expressions 控制器；Morph 保存可编辑 Morph 的输入值（包含零值），不烘焙新的形变资产。应用时选中目标，通过「添加 / 应用内容」或内容库打开预设。目标仍需原有角色、Morph 和贴图资源；纹理不复制到预设旁。
+
+文件使用原生 DSON 材质、动画通道及内容库相对贴图路径，并内嵌去重的 UV。扩展字段保存本工程的完整材质参数以及重名 Morph 的资产身份；工程内往返保留 HDR 和当前参数。原生 DAZ 忽略这些扩展，使用标准通道，两个渲染器的画面不保证完全一致。保存采用临时文件原子替换，并禁止覆盖当前源场景。
+
+`H:/G1/Scenes/7.dufex` 中的实际标签是 `Seo Hyun G8.1F (2)`。Jasmine 趾甲变白来自旧转换器用折射颜色替换整个基础颜色与贴图，即使折射权重只有 0.1。现将折射独立混合，保留漫反射输入。甲缘黑斑来自法线图负 Z，现按 MDL `tangent_space_normal_texture` 的正半球处理保留 XY 细节。独立折射颜色、粗糙度与贴图沿用共享材质控件；旧 DUFEX 缺失的新字段继续使用兼容默认值。源 DUF / DSF / 贴图均未修改。
+
+后续反馈「黑斑消失但甲缘仍有暗色杂纹」已单独定位：细分 UV 原来使用 `FVAR_LINEAR_ALL`，与 DAZ 的 `FVAR_LINEAR_CORNERS_PLUS2` 不同，导致甲缘采到错误的法线颜色。改为后者后，独立 DAZ 4.24 导出的二级细分 OBJ 与本工程的 7,066 个趾甲 UV 点全部吻合（最大误差 `5.02e-8`，OBJ 文本舍入范围内）；原相机、HDRI、对象变换下的甲缘锯齿暗纹消失。修复没有关闭法线、降低强度或改动贴图。重启新版直接打开旧 DUFEX 即生效，无需重新套材质。增加内部 UV 平滑与独立 UV 岛角点固定的回归断言。皮肤近景的凹凸颗粒属于另一问题，本次用户确认仅关注甲缘，未调整凹凸。
+
+本次对照在 `artifacts/presets/residual`（修复前）、`residual-uv-fixed`（修复后）、`uv-comparison.json`（原生 DAZ UV 数值核对）。`ToenailProbe 场景.dufex 输出目录 --scene-view` 保留原场景相机、环境与对象变换，隔离目标角色输出完整材质及分别关闭法线／凹凸的诊断图；默认近景工具使用均匀白光，不能作为原场景暗纹已消失的证据。
+
+UV 修复后的 Release 已于 2026-10-11 22:35 部署，441 项源码及 101 项运行文件哈希全部一致，记录在 `artifacts/presets/residual-deployment-check.json`。本轮重新执行全套 CTest 仍为 51/52 通过，新增细分断言通过，唯一失败仍是下述已有 `ui_scale`；日志为 `artifacts/presets/residual-release-build.log`。
+
+验证证据在 `artifacts/presets`：`report.json` 与 `saved/smoke.png`、`jasmine/smoke.png` 为真实角色近景；`refraction/checks.json` 验证部分折射、全折射与正负 Z 法线；`menu/preset-menu-checks.json` 验证发布入口的三个菜单动作和真实保存对话框。`daz-check.json` 是独立 DAZ Studio 4.24 实例的实际数值断言：脸部 C.png、趾甲 Legs 贴图、粗糙度、折射权重、hip 角度及脚长 Morph 均通过。`tools/daz_preset_check.dsa` 只在独立测试场景中读取和核对，不保存用户场景。
+
+Release 编译、部署完成。52 项 CTest 中 51 项通过，包括新增 `presets`：整对象材质、UV、HDR、贴图路径、DUFEX 重开、骨骼 / Morph 隔离、零值和重名资产。现有 `ui_scale` 仍在「菜单实际字高与工具图标不协调」断言失败，离屏与原生 Windows 均可复现；本次未修改它的测试或菜单字体实现。记录见 `build-release-final.log` 与 `ui-scale` 截图，不能把此次全套检查记为全部通过。
+
 ## 连续姿态 / Morph 编辑与水体手动排序
 
 2026-10-06：`test6.duf` 的 PowerPose 松手后阻塞主要来自交互线程上的完整衣物 / 头发碰撞。基线每次 CPU 形变约 1.2–1.6 秒。现在预览运行时完成 ERC、Morph、蒙皮、Fit To 和刚性跟随后即可接收下一笔输入；独立的 `DeformationRefiner` 持有自己的场景与完整运行时，在后台完成原有碰撞管线。只保留一个运行任务、一个可替换的最新请求和一个结果，以 ticket 丢弃旧结果。只在场景确有碰撞绑定时启用，不降低最终几何、碰撞或渲染质量。

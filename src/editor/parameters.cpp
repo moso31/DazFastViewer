@@ -18,6 +18,9 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QMessageBox>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QTreeWidget>
@@ -186,7 +189,8 @@ void ParameterPanel::bind(const runtime::Target *target,const runtime::Propertie
 }
 void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
                                   std::function<void(size_t,const std::array<double,3> &)> color_callback,
-                                  std::function<void(const std::array<size_t,3> &,const std::array<double,3> &)> location_callback) {
+                                  std::function<void(const std::array<size_t,3> &,const std::array<double,3> &)> location_callback,
+                                  std::function<std::string()> environment_path,std::function<void(const std::string &)> environment_path_changed) {
   const bool same=node&&node==option_node_&&node->id==option_node_id_;
   const auto selected=same&&wheel_selected_>=0?controls_.at(size_t(wheel_selected_)).id:std::string{};
   node_.clear();option_node_=node;option_node_id_=node?node->id:std::string{};
@@ -241,6 +245,11 @@ void ParameterPanel::bind_options(ir::OptionNode *node,std::function<void(size_t
         if(ir::night_option(p.id))control.maximum=std::numeric_limits<float>::max();
         control.write_color=[this,callback,color_callback,i,minimum=p.minimum,maximum=p.maximum,night=ir::night_option(p.id)](auto v){if(!night)for(auto &c:v)c=std::clamp(c,minimum,maximum);if(color_callback)color_callback(i,v);else for(size_t k=0;k<3;++k)callback(i,k,v[k]);update_rows();};
       }
+      if(p.id=="Environment Map"&&k==0&&environment_path&&environment_path_changed){
+        ParameterControl path;path.id=node->id+"/Environment Map/texture";path.label="纹理路径";path.group=p.group;path.visible=p.visible;
+        path.detail="Dome and Scene / Dome Only 使用此贴图；Environment Map 数值控制贴图强度。太阳天空或夜景启用时保留路径，返回穹顶后继续使用。";
+        path.read_path=environment_path;path.write_path=environment_path_changed;controls_.push_back(std::move(path));
+      }
     }
   }
   // 旧 DUFEX 的存储顺序不决定面板顺序；回调仍引用原通道，日期不会复制成两份。
@@ -278,7 +287,7 @@ void ParameterPanel::filter() {
   const auto q=search_->text().trimmed();const auto group=groups_->currentItem()?groups_->currentItem()->data(0,Qt::UserRole).toString():"*";int count=0;
   for(size_t i=0;i<controls_.size();++i) {
     const auto &c=controls_[i];const auto path=text(c.group);
-    const bool used=c.read_color?hdr_color::peak(c.read_color())>1e-6:std::abs(c.read())>1e-6;
+    const bool used=c.read_path?!c.read_path().empty():c.read_color?hdr_color::peak(c.read_color())>1e-6:std::abs(c.read())>1e-6;
     const bool alias=std::any_of(c.alternate_groups.begin(),c.alternate_groups.end(),[&](const auto &p){return text(p)==group||text(p).startsWith(group+"/");});
     const bool category=group=="*"||(group=="@favorites"&&is_favorite(c))||(group=="@used"&&used)||(path==group||path.startsWith(group+"/"))||alias;
     const bool shown=category&&(hidden_->isChecked()||c.visible)&&text(c.label+" "+c.id+" "+c.group).contains(q,Qt::CaseInsensitive);items_[i]->setHidden(!shown);if(shown) ++count;
@@ -297,7 +306,17 @@ void ParameterPanel::mount() {
     auto *favorite=new QToolButton;favorite->setObjectName("favoriteButton");favorite->setText(is_favorite(c)?QStringLiteral("★"):QStringLiteral("☆"));favorite->setAutoRaise(true);favorite->setToolTip(QStringLiteral("收藏参数"));title->addWidget(favorite);layout->addLayout(title);
     connect(favorite,&QToolButton::clicked,this,[this,i]{toggle_favorite(size_t(i));});
     auto *line=new QHBoxLayout;line->setSpacing(4);layout->addLayout(line);
-    if(c.format==ParameterControl::Format::color) {
+    if(c.read_path) {
+      auto *path=new QLineEdit(text(c.read_path()));path->setObjectName("environmentTexturePath");path->setPlaceholderText(QStringLiteral("未设置环境贴图"));path->setProperty("parameterId",text(c.id));line->addWidget(path,1);
+      auto *browse=new QToolButton;browse->setObjectName("environmentTextureBrowse");browse->setText(QStringLiteral("…"));browse->setToolTip(QStringLiteral("选择环境贴图"));line->addWidget(browse);
+      auto *clear=new QToolButton;clear->setObjectName("environmentTextureClear");clear->setText(QStringLiteral("清除"));line->addWidget(clear);
+      auto refresh=[this,i,path,label]{const auto value=text(controls_[i].read_path());const bool missing=!value.isEmpty()&&!QFileInfo(value).isFile();
+        if(!path->isModified())path->setText(value);path->setToolTip(value);label->setText(QStringLiteral("纹理路径")+(missing?QStringLiteral(" · 文件未找到"):QString{}));};
+      auto commit=[this,i,path,refresh](const QString &value){try{if(value!=text(controls_[i].read_path()))controls_[i].write_path(value.toUtf8().toStdString());path->setModified(false);refresh();}catch(const std::exception &e){path->setModified(false);refresh();QMessageBox::warning(this,QStringLiteral("环境贴图"),QString::fromUtf8(e.what()));}};
+      connect(path,&QLineEdit::editingFinished,this,[path,commit]{if(path->isModified())commit(path->text().trimmed());});
+      connect(browse,&QToolButton::clicked,this,[this,i,commit]{const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("环境贴图"),text(controls_[i].read_path()),QStringLiteral("环境图像 (*.hdr *.exr *.png *.jpg *.jpeg *.tif *.tiff)"));if(!file.isEmpty())commit(file);});
+      connect(clear,&QToolButton::clicked,this,[commit]{commit({});});refresh();
+    } else if(c.format==ParameterControl::Format::color) {
       auto *button=new QPushButton;button->setObjectName("valueColor");button->setProperty("parameterId",text(c.id));button->setEnabled(c.enabled);line->addWidget(button,1);
       hdr_color::swatch(button,c.read_color(),false,true);
       connect(button,&QPushButton::clicked,this,[this,i]{
@@ -354,6 +373,7 @@ void ParameterPanel::update_rows() {
   for(auto &c:controls_)if(c.read_enabled)c.enabled=c.read_enabled();
   if(wheel_selected_>=0&&!controls_[wheel_selected_].enabled)wheel_selection(-1);
   for(const auto &[i,w]:mounted_) {const auto &c=controls_[i];
+    if(c.read_path)if(auto *path=w->findChild<QLineEdit *>("environmentTexturePath")){const auto value=text(c.read_path());if(!path->isModified()&&path->text()!=value)path->setText(value);path->setToolTip(value);if(auto *label=w->findChild<QLabel *>("valueLabel"))label->setText(QStringLiteral("纹理路径")+(!value.isEmpty()&&!QFileInfo(value).isFile()?QStringLiteral(" · 文件未找到"):QString{}));}
     if(c.read_enabled)w->setEnabled(c.enabled);
     if(auto *check=w->findChild<QCheckBox *>("valueCheck")){QSignalBlocker block(check);check->setChecked(c.read()!=0);}
     if(auto *button=w->findChild<QPushButton *>("valueColor"))hdr_color::swatch(button,c.read_color(),false,true);
@@ -387,7 +407,7 @@ bool ParameterPanel::edit_control(const std::string &id,double value) {
 void ParameterPanel::query(const QString &value) {search_->setText(value);}
 void ParameterPanel::select_parameter(size_t index) {if(index<morph_rows_.size()&&morph_rows_[index]>=0) {current_=morph_rows_[index];auto *item=items_[size_t(current_)];tree_->setCurrentItem(item);show_item(item);mount();}}
 void ParameterPanel::set_slider(int value) {if(current_>=0) {
-  const auto &c=controls_.at(size_t(current_));if(c.read_color)return;
+  const auto &c=controls_.at(size_t(current_));if(c.read_color||c.read_path)return;
   const auto key="parameters/"+node_+"/"+(c.favorite_id.empty()?c.id:c.favorite_id);
   const auto settings=parameter_widgets::context(this)->get(key,c.settings.value_or(runtime::ParameterSettings{false,0,1,c.step}));
   const double low=settings.limited?settings.minimum:c.slider_minimum,high=settings.limited?settings.maximum:c.slider_maximum;

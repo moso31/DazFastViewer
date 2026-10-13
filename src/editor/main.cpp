@@ -25,6 +25,7 @@
 #include "editor/node_properties.h"
 #include "editor/object_extension.h"
 #include "editor/scene_extension.h"
+#include "editor/presets.h"
 #include "editor/garment_controls.h"
 #include "editor/edit_history.h"
 #include "editor/history_input.h"
@@ -107,6 +108,7 @@ class Editor final:public EditorWindow {
   #include "editor/physics_ui.inl"
   #include "editor/group_ui.inl"
   #include "editor/history_test.inl"
+  #include "editor/preset_test.inl"
   #include "editor/object_extension_ui.inl"
   #include "editor/object_extension_test.inl"
   #include "editor/powerpose.inl"
@@ -714,6 +716,20 @@ class Editor final:public EditorWindow {
     for(size_t i=0;i<document_->skeletons.skins.size();++i) if(document_->skeletons.skins[i].instance==instance) return int(i);
     return -1;
   }
+  void save_selected_preset(PresetKind kind){
+    try{
+      if(loading_||!document_||selected_<0)throw std::runtime_error("请先选中要保存预设的角色或对象");
+      if(kind==PresetKind::pose&&selected_skin()<0)throw std::runtime_error("请选择带骨骼的角色保存 Pose");
+      accept_pose_commit(renderer_->status());apply_parameters();
+      const auto label=kind==PresetKind::material?QStringLiteral("材质"):kind==PresetKind::pose?QStringLiteral("Pose"):QStringLiteral("Morph");
+      QSettings settings;auto name=text(document_->catalog.targets.at(size_t(selected_)).label);for(auto &c:name)if(QStringLiteral("\\/:*?\"<>|").contains(c))c='_';
+      const auto folder=settings.value("presets/saveDirectory",QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)).toString();
+      auto file=QFileDialog::getSaveFileName(this,QStringLiteral("保存%1预设").arg(label),folder+"/"+name+"-"+label+".duf",QStringLiteral("DAZ 预设 (*.duf)"));if(file.isEmpty())return;
+      if(!file.endsWith(".duf",Qt::CaseInsensitive))file+=".duf";
+      save_preset(file_path(file),*document_,snapshot_,size_t(selected_),kind);if(!self_test_)settings.setValue("presets/saveDirectory",QFileInfo(file).absolutePath());
+      statusBar()->showMessage(QStringLiteral("已保存%1预设：%2；选中目标后可通过“添加 / 应用内容”或内容库应用。").arg(label,file),10000);
+    }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("保存预设失败"),text(e.what()));}
+  }
   bool apply_pose_file(const std::filesystem::path &file,bool partial=false) {
     auto edit=history_edit(partial?QStringLiteral("应用局部姿势"):QStringLiteral("应用姿势与形态预设"));
     try {
@@ -1029,7 +1045,6 @@ class Editor final:public EditorWindow {
     std::string settings_owner;
     if(document_){if(light>=0)settings_owner=snapshot_.lights.at(size_t(light)).id;else if(index>=0)settings_owner=document_->catalog.targets.at(size_t(index)).id;else if(index==-2)settings_owner="@environment";else if(index==-3)settings_owner="@tonemapper";else if(auto *item=active_selection(hierarchy_))settings_owner=item->data(0,Qt::UserRole+3).toString().toStdString();}
     for(auto *p:std::initializer_list<QWidget *>{parameters_,cloud_panel_,water_panel_,ground_panel_,physics_panel_,extension_panel_,light_power_row_})bind_widget_settings(p,settings_owner);
-    if(environment_tools_)environment_tools_->setVisible(index==-2);
     bind_water();bind_cloud();
     parameters_->setVisible(!selected_water()&&!selected_cloud());
     for(auto *control:std::initializer_list<QWidget *>{refresh_parameters_,retry_parameters_,manual_morph_,apply_parameters_})if(control)control->setVisible(!selected_water()&&!selected_cloud());
@@ -1061,7 +1076,15 @@ class Editor final:public EditorWindow {
       parameters_->bind_favorites(&*snapshot_.control_favorites,index==-2?"options/environment":"options/tonemapper");
       parameters_->bind_options(node,[this,node](size_t p,size_t c,double v){auto edit=history_edit(QStringLiteral("修改环境与色调：")+text(node->parameters.at(p).label));try {ir::set_option(*node,p,c,v);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}},
         [this,node](size_t p,const std::array<double,3> &v){try {auto next=*node;for(size_t c=0;c<3;++c)ir::set_option(next,p,c,v[c]);auto edit=history_edit(QStringLiteral("修改环境与色调颜色：")+text(node->parameters.at(p).label));*node=std::move(next);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}},
-        [this,node](const std::array<size_t,3> &indices,const std::array<double,3> &v){try {auto next=*node;for(size_t k=0;k<3;++k)ir::set_option(next,indices[k],0,v[k]);auto edit=history_edit(QStringLiteral("地图设置经纬度与 UTC 时区"));*node=std::move(next);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}});return;
+        [this,node](const std::array<size_t,3> &indices,const std::array<double,3> &v){try {auto next=*node;for(size_t k=0;k<3;++k)ir::set_option(next,indices[k],0,v[k]);auto edit=history_edit(QStringLiteral("地图设置经纬度与 UTC 时区"));*node=std::move(next);send();}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),5000);}},
+        [this]{if(!snapshot_.options.environment_file.empty()){const auto p=snapshot_.options.environment_file.generic_u8string();return std::string(p.begin(),p.end());}const auto *p=ir::option(snapshot_.options.environment,"Environment Map");return p?p->image_uri:std::string{};},
+        [this](const std::string &value){
+          if(loading_||!document_)return;const auto file=std::filesystem::u8path(value);std::error_code ec;
+          if(!file.empty()&&!std::filesystem::is_regular_file(file,ec))throw std::runtime_error("环境贴图文件不存在："+value);
+          auto edit=history_edit(value.empty()?QStringLiteral("清除环境贴图"):QStringLiteral("设置环境贴图"));snapshot_.options.environment_file=file.empty()?file:std::filesystem::weakly_canonical(file);
+          std::string uri;const auto path=snapshot_.options.environment_file.generic_u8string();for(char8_t c:path)uri+=c=='%'?"%25":c=='#'?"%23":std::string(1,char(c));
+          for(auto &p:snapshot_.options.environment.parameters)if(p.id=="Environment Map")p.image_uri=uri;send();
+        });return;
     }
     if(!selected_group_.empty()){bind_group();return;}
     if(index<0 || !document_) {auto *item=active_selection(hierarchy_);selection_->setText(index<=-4&&item?item->text(0):QStringLiteral("请先选择场景对象"));parameters_->bind(nullptr,nullptr);for(auto *spin:transform_) spin->setEnabled(false);return;}
@@ -1603,6 +1626,7 @@ class Editor final:public EditorWindow {
     apply_ground(state);
     refresh_powerpose(state);
     if(history_test_){history_test_tick(state);return;}
+    if(preset_test_){preset_test_tick(state);return;}
     if(city_test_){city_test_tick(state);return;}
     if(water_test_){water_test_tick(state);return;}
     if(cloud_test_){cloud_test_tick(state);return;}
@@ -1660,9 +1684,25 @@ class Editor final:public EditorWindow {
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"tonemapper-panel.png").wstring()));
         auto &node=snapshot_.options.tonemapper;for(size_t i=0;i<node.parameters.size();++i) if(node.parameters[i].id=="Exposure Value") {ir::set_option(node,i,0,node.parameters[i].value[0]+1);break;}send();++test_stage_;return;
       }
-      if(test_stage_==2) {if(state.adapter.geometry_updates!=options_geometry_||state.requested_epoch!=options_epoch_) {finish_test(false,"色调编辑触发了几何更新或重新采样");return;}choose(-2);++test_stage_;return;}
+      if(test_stage_==2) {if(state.adapter.geometry_updates!=options_geometry_||state.requested_epoch!=options_epoch_) {finish_test(false,"色调编辑触发了几何更新或重新采样");return;}choose(-2);for(auto *parent=parameters_->parentWidget();parent;parent=parent->parentWidget())if(auto *dock=qobject_cast<QDockWidget *>(parent)){dock->show();dock->raise();break;}parameters_->query("Environment Map");options_wait_=0;++test_stage_;return;}
       if(test_stage_==3) {
+        // The parameter rows mount on a 150 ms timer after the dock layout becomes visible.
+        if(ir::option(snapshot_.options.environment,"Environment Map")&&++options_wait_<20&&
+           (!parameters_->findChild<QLineEdit *>("environmentTexturePath")||!parameters_->findChild<QToolButton *>("environmentTextureClear")))return;
         screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"environment-panel.png").wstring()));
+        const auto before=snapshot_.options;const auto *map=ir::option(before.environment,"Environment Map");
+        if(map){
+          auto *path=parameters_->findChild<QLineEdit *>("environmentTexturePath");auto *clear=parameters_->findChild<QToolButton *>("environmentTextureClear");
+          if(!path||!clear){finish_test(false,"Environment Map 下没有纹理路径栏");return;}
+          if(!before.environment_file.empty()){
+            if(!std::filesystem::is_regular_file(before.environment_file)||file_path(path->text())!=before.environment_file){finish_test(false,"环境贴图路径未恢复或未显示");return;}
+            clear->click();if(!snapshot_.options.environment_file.empty()||!ir::option(snapshot_.options.environment,"Environment Map")->image_uri.empty()){finish_test(false,"清除环境贴图未同步渲染路径与 URI");return;}
+            history_move(false);if(snapshot_.options!=before){finish_test(false,"撤销没有恢复环境贴图");return;}
+            history_move(true);if(!snapshot_.options.environment_file.empty()){finish_test(false,"重做没有清除环境贴图");return;}
+            history_move(false);if(snapshot_.options!=before){finish_test(false,"重做后再次撤销丢失环境设置");return;}
+          }
+          std::ofstream(output_/"environment-map-check.json")<<nlohmann::json{{"result","PASS"},{"options",ir::options_json(snapshot_.options)},{"path_clear_undo_redo",!before.environment_file.empty()}}.dump(2);
+        }
         auto &node=snapshot_.options.environment;for(size_t i=0;i<node.parameters.size();++i) if(node.parameters[i].id=="Dome Rotation") {ir::set_option(node,i,0,node.parameters[i].value[0]+15);break;}send();++test_stage_;return;
       }
       if(test_stage_==4) {if(state.adapter.geometry_updates!=options_geometry_||state.requested_epoch<=options_epoch_) {finish_test(false,"环境编辑没有正确增量重新采样");return;}choose(0);++test_stage_;return;}
@@ -2027,6 +2067,7 @@ public:
   void render_profile_after_empty(const std::filesystem::path &file) {start_profile_after_empty(file);}
   void edit_regression_test() {edit_regression_test_=self_test_=true;}
   void history_test() {history_test_=self_test_=true;renderer_->automated_pointer();}
+  void preset_test() {preset_test_=self_test_=true;QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);renderer_->automated_pointer();}
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
   void edit_resume_test() {powerpose_test();edit_resume_test_=true;}
   void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
@@ -2104,9 +2145,6 @@ public:
     cloud_panel_=new cloud::Panel;morph_layout->addWidget(cloud_panel_);cloud_panel_->refresh_candidates=[this]{bind_cloud();};cloud_panel_->changed=[this](cloud::Config config){if(const auto *v=selected_cloud())generate_cloud(std::move(config),v->id);};
     water_panel_->refresh_candidates=[this]{bind_water();};
     water_panel_->changed=[this](water::Config config,bool recalculate){if(const auto *w=selected_water())generate_water(std::move(config),w->id,recalculate);};water_panel_->cancel=[this]{loader_.request_stop();};
-    environment_tools_=new QWidget;auto *environment_actions=new QHBoxLayout(environment_tools_);environment_actions->setContentsMargins(0,0,0,0);auto *environment_image=new QPushButton(QStringLiteral("选择环境贴图…"));environment_image->setObjectName("EnvironmentImage");auto *clear_environment_image=new QPushButton(QStringLiteral("清除贴图"));environment_actions->addWidget(environment_image);environment_actions->addWidget(clear_environment_image);morph_layout->addWidget(environment_tools_);environment_tools_->hide();
-    connect(environment_image,&QPushButton::clicked,this,[this]{if(loading_||!document_)return;auto file=QFileDialog::getOpenFileName(this,QStringLiteral("环境贴图"),{},QStringLiteral("环境图像 (*.hdr *.exr *.png *.jpg *.jpeg *.tif *.tiff)"));if(file.isEmpty())return;auto edit=history_edit(QStringLiteral("选择环境贴图"));snapshot_.options.environment_file=file_path(file);for(auto &p:snapshot_.options.environment.parameters)if(p.id=="Environment Map")p.image_uri=file.toStdString();select(-2);send();});
-    connect(clear_environment_image,&QPushButton::clicked,this,[this]{if(loading_||!document_)return;auto edit=history_edit(QStringLiteral("清除环境贴图"));snapshot_.options.environment_file.clear();for(auto &p:snapshot_.options.environment.parameters)if(p.id=="Environment Map")p.image_uri.clear();select(-2);send();});
     parameters_->favorite_changed=[this](const std::string &node,const std::string &id,bool enabled){
       if(loading_||!document_)return;
       auto edit=history_edit(QStringLiteral("修改参数收藏"));
@@ -2160,6 +2198,10 @@ public:
     connect(open_,&QAction::triggered,this,[this] {const auto file=QFileDialog::getOpenFileName(this,QStringLiteral("加载角色、场景或姿势"),{},QStringLiteral("DAZ 资源 (*.duf *.dufex *.djl *.dse)"));if(!file.isEmpty()) open_asset(file_path(file));});
     auto *save=file_menu->addAction(QStringLiteral("保存场景修改"));save->setObjectName("SaveScene");save->setShortcut(QKeySequence::Save);save->setAutoRepeat(false);addAction(save);connect(save,&QAction::triggered,this,[this]{save_extension();});
     connect(file_menu->addAction(QStringLiteral("场景修改另存为…")),&QAction::triggered,this,[this]{save_extension(true);});
+    auto *presets=file_menu->addMenu(QStringLiteral("保存预设"));presets->setObjectName("SavePresetMenu");
+    for(auto [kind,label,name]:{std::tuple{PresetKind::material,QStringLiteral("保存材质…"),"SaveMaterialPreset"},std::tuple{PresetKind::pose,QStringLiteral("保存 Pose…"),"SavePosePreset"},std::tuple{PresetKind::morph,QStringLiteral("保存 Morph…"),"SaveMorphPreset"}}){
+      auto *action=presets->addAction(label);action->setObjectName(name);connect(action,&QAction::triggered,this,[this,kind]{save_selected_preset(kind);});
+    }
     connect(file_menu->addAction(QStringLiteral("近期使用…")),&QAction::triggered,this,[this,explorer_dock]{explorer_dock->show();explorer_dock->raise();browser_->show_recent();});
     auto *project_menu=chrome->menus()->addMenu(QStringLiteral("项目"));project_action_=project_menu->addAction(QStringLiteral("项目设置…"));
     connect(project_action_,&QAction::triggered,this,[this] {project_settings();});
@@ -2410,6 +2452,7 @@ int main(int argc,char **argv) {
   parser.addOption({"project",QStringLiteral("项目设置文件"),"file"});
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
   parser.addOption({"history-test",QStringLiteral("副屏验证撤销、重做、场景替换和原生快捷键")});
+  parser.addOption({"preset-test",QStringLiteral("验证保存材质、Pose 和 Morph 的菜单与文件对话框")});
   parser.addOption({"city-test",QStringLiteral("验证城市生成、LOD、共享材质、撤销和保存重开")});
   parser.addOption({"water-test",QStringLiteral("验证水体菜单、交界、静态时间、撤销和保存重开")});
   parser.addOption({"cloud-test",QStringLiteral("验证体积云菜单、静态时间、撤销和保存重开")});
@@ -2504,6 +2547,7 @@ int main(int argc,char **argv) {
       parser.isSet("pose-test")?file_path(parser.value("pose-test")):parser.isSet("pose")?file_path(parser.value("pose")):std::filesystem::path{},parser.isSet("pose-test"),parser.isSet("formula-test"),sampling);
     editor.test_parameters(parser.values("test-parameter"));
     if(parser.isSet("history-test"))editor.history_test();
+    if(parser.isSet("preset-test"))editor.preset_test();
     if(parser.isSet("city-test"))editor.city_test();
     if(parser.isSet("water-test"))editor.water_test();
     if(parser.isSet("cloud-test"))editor.cloud_test();

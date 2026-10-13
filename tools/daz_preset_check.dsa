@@ -1,0 +1,42 @@
+// 用独立 DAZ Studio 实例验证预设；只写测试报告，不保存用户场景。
+(function(){
+  var folder=App.scriptArgs[0];
+  var report={stages:[]};
+  function save(){var f=new DzFile(folder+"/daz-check.json");if(f.open(DzFile.WriteOnly)){f.write(JSON.stringify(report,null,2));f.close();}}
+  function stage(name,fn){try{report.stages.push({name:name,value:fn()});save();}catch(e){report.error=String(e);save();throw e;}}
+  function require(ok,message){if(!ok)throw Error(message);}
+  function stageValue(name){for(var i=0;i<report.stages.length;i++)if(report.stages[i].name==name)return report.stages[i].value;throw Error("Missing stage: "+name);}
+  try{
+    stage("load",function(){return App.getContentMgr().openFile(folder+"/native-character.duf",false);});
+    var figure=null;report.figures=[];
+    for(var i=0;i<Scene.getNumNodes();i++){var node=Scene.getNode(i);if(node.inherits("DzFigure")){report.figures.push({name:node.getName(),label:node.getLabel()});if(!figure)figure=node;}}
+    save();if(!figure)throw Error("Figure missing");
+    Scene.selectAllNodes(false);figure.select(true);Scene.setPrimarySelection(figure);
+    function materialValues(){var shape=figure.getObject().getCurrentShape(),result={};
+      for(var i=0;i<shape.getNumMaterials();i++){var m=shape.getMaterial(i),values={};if(m.getName()!="Toenails"&&m.getName()!="Face")continue;
+        var properties=m.getPropertyList();for(var p=0;p<properties.length;p++){var property=properties[p];if(property.getLabel()=="Base Color"||property.getName()=="Glossy Roughness"||property.getName()=="Refraction Weight"||property.getName()=="UV Set"){
+          var v=property.getValue();values[property.getName()]=typeof v=="object"?[v.red,v.green,v.blue]:v;
+          if(property.getMapValue){var map=property.getMapValue();values[property.getName()+" map"]=map?map.getFilename():null;}
+        }}result[m.getName()]=values;
+      }return result;
+    }
+    stage("before",materialValues);
+    stage("material-load",function(){return App.getContentMgr().openFile(folder+"/character-material.duf");});stage("material-values",materialValues);
+    var hip=figure.findNodeChild("hip",true);if(hip)hip.getXRotControl().setValue(35);
+    stage("pose-load",function(){return App.getContentMgr().openFile(folder+"/character-pose.duf");});
+    stage("pose-value",function(){return hip?hip.getXRotControl().getValue():null;});
+    var morph=figure.findProperty("CTRLFootLength");if(morph)morph.setValue(0);
+    stage("morph-load",function(){return App.getContentMgr().openFile(folder+"/character-morph.duf");});
+    stage("morph-value",function(){return morph?morph.getValue():null;});
+    for(var i=0;i<report.stages.length;i++)if(report.stages[i].name=="load"||/-load$/.test(report.stages[i].name))require(report.stages[i].value===true,"Load failed: "+report.stages[i].name);
+    var values=stageValue("material-values");
+    require(Math.abs(values.Toenails["Glossy Roughness"]-0.5045871734619141)<0.00001,"Toenail roughness mismatch");
+    require(values.Toenails["Refraction Weight"]===0,"Toenail refraction mismatch");
+    require(/\/C\.png$/i.test(values.Face["Diffuse Color map"]),"Face texture was not applied");
+    require(/PikaArtJasmine_Legs\.jpg$/i.test(values.Toenails["Diffuse Color map"]),"Toenail texture missing");
+    require(Math.abs(stageValue("pose-value")-2.8265380859375)<0.00001,"Pose mismatch");
+    require(Math.abs(stageValue("morph-value")-0.6000000238418579)<0.00001,"Morph mismatch");
+    report.result="PASS";save();
+  }catch(e){report.error=String(e);report.result="FAIL";save();}
+  App.delayedExit();
+})();

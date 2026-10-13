@@ -139,7 +139,12 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
   }
   if(m.normal_texture>=0) {
     auto *normal=graph->create_node<NormalMapNode>();normal->set_strength(m.normal_strength);normal->set_attribute(ustring("UVMap"));
-    graph->connect(texture(m.normal_texture),normal->input("Color"));surface_normal=normal->output("Normal");
+    // MDL tangent_space_normal_texture 对切线 Z 取绝对值；有些 DAZ 烘焙图在甲缘含负 Z。
+    // 保留 XY 细节，将蓝色通道折回正半球，避免 Cycles 把法线指进脚趾内部。
+    auto *split=graph->create_node<SeparateXYZNode>();graph->connect(texture(m.normal_texture),split->input("Vector"));
+    auto *combine=graph->create_node<CombineXYZNode>();graph->connect(split->output("X"),combine->input("X"));graph->connect(split->output("Y"),combine->input("Y"));
+    auto *z=math(NODE_MATH_ADD,math(NODE_MATH_ABSOLUTE,math(NODE_MATH_SUBTRACT,split->output("Z"),.5f),0),.5f);
+    graph->connect(z,combine->input("Z"));graph->connect(combine->output("Vector"),normal->input("Color"));surface_normal=normal->output("Normal");
   }
   if(m.bump_texture>=0&&m.bump_strength>0&&m.bump_distance>0) {
     auto *bump=graph->create_node<BumpNode>();bump->set_strength(std::min(1.f,m.bump_strength));
@@ -170,7 +175,7 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
       sss_color=color(m.translucency_color_texture>=0?m.translucency_color_texture:m.color_texture,tint);
     }
     auto *coat=scalar(m.coat_texture,m.coat),*coat_rough=scalar(m.coat_roughness_texture,m.coat_roughness);
-    auto *metallic=scalar(m.metallic_texture,m.metallic),*transmission=scalar(m.transmission_texture,m.transmission);
+    auto *metallic=scalar(m.metallic_texture,m.metallic),*transmission=scalar(m.separate_refraction?-1:m.transmission_texture,m.separate_refraction?0:m.transmission);
     auto principled=[&](ShaderOutput *rough,ShaderOutput *specular,ir::Vec3 tint,int tint_texture=-1) {
       auto *node=graph->create_node<PrincipledBsdfNode>();node->set_ior(m.ior);node->set_thin_wall(m.thin_walled);
       node->set_subsurface_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);node->set_subsurface_radius(vector(m.subsurface_radius));node->set_subsurface_scale(1);node->set_subsurface_anisotropy(m.subsurface_anisotropy);
@@ -208,6 +213,13 @@ void CyclesAdapter::material(ccl::Shader &shader,const ir::Material &source,floa
       auto *a=principled(scalar(m.dual_roughness1_texture,m.dual_roughness1),scalar(-1,m.dual_specular),{1,1,1});
       auto *b=principled(scalar(m.dual_roughness2_texture,m.dual_roughness2),scalar(-1,m.dual_specular),{1,1,1});
       surface=mix(surface,mix(b,a,scalar(-1,m.dual_ratio)),scalar(m.dual_texture,m.dual_weight));
+    }
+    if(m.separate_refraction&&m.transmission>0){
+      auto *refract=graph->create_node<PrincipledBsdfNode>();refract->set_ior(m.ior);refract->set_thin_wall(m.thin_walled);refract->set_transmission_weight(1);
+      graph->connect(color(m.refraction_color_texture,m.refraction_color),refract->input("Base Color"));
+      graph->connect(scalar(m.refraction_roughness_texture,m.refraction_roughness),refract->input("Roughness"));
+      if(surface_normal)graph->connect(surface_normal,refract->input("Normal"));
+      surface=mix(surface,refract->output("BSDF"),scalar(m.transmission_texture,m.transmission));
     }
     if(m.overlay_weight>0){
       auto *overlay=graph->create_node<DiffuseBsdfNode>();graph->connect(color(m.overlay_color_texture,m.overlay_color),overlay->input("Color"));graph->connect(scalar(m.overlay_roughness_texture,m.overlay_roughness),overlay->input("Roughness"));if(surface_normal)graph->connect(surface_normal,overlay->input("Normal"));
@@ -280,7 +292,8 @@ void CyclesAdapter::environment(const ir::RenderOptions &options) {
     bg->set_strength(float(std::max(0.0,ir::number(n,"Environment Intensity",1)*ir::number(n,"SS Multiplier",.10132)*units))*(night?float(1-astronomy.darkness):1));
   }
   if(night&&astronomy.darkness>=1)bg->set_strength(0);
-  if(!night&&!options.environment_file.empty()&&(mode==0||mode==1)) {
+  std::error_code environment_error;
+  if(!night&&!options.environment_file.empty()&&std::filesystem::is_regular_file(options.environment_file,environment_error)&&(mode==0||mode==1)) {
     auto *tex=graph->create_node<EnvironmentTextureNode>();const auto path=options.environment_file.u8string();tex->set_filename(ustring(std::string(path.begin(),path.end())));tex->set_colorspace(u_colorspace_data);
     auto *coord=graph->create_node<TextureCoordinateNode>();ShaderOutput *direction=coord->output("Generated");
     // 逆向采样穹顶旋转，并转换 DAZ Y 向上坐标。

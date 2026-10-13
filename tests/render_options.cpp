@@ -63,6 +63,24 @@ static void environment_paths(const std::filesystem::path &parent) {
     ~Override(){SetEnvironmentVariableW(L"DFV_DAZ_STUDIO_PATH",previous.empty()?nullptr:previous.c_str());}
   } override(installation);
   const auto automatic=load("/resources/dfv-test-sky.hdr",{library});check(automatic,builtin);
+  // DUFEX 保存的旧绝对路径不能覆盖 DUF 刚解析出的新安装位置（12b.dufex 回归）。
+  editor::Document doc;doc.loaded=automatic;doc.source_file=scene;auto snapshot=editor::initial_snapshot(doc);
+  snapshot.options.environment_file=folder/"removed-install/shaders/iray/resources/dfv-test-sky.hdr";
+  const auto extension=folder/"relocated.dufex";editor::save_scene_extension(extension,doc,snapshot);
+  auto reopened=editor::load_scene_extension(extension,{library},2);
+  require(reopened.snapshot.options.environment_file==fs::weakly_canonical(builtin),"DUFEX overwrote the relocated HDRI with its saved stale path");
+  require(ir::option(reopened.snapshot.options.environment,"Environment Map")->image_uri=="/resources/dfv-test-sky.hdr","DUFEX lost the portable HDRI URI");
+  // 有效的用户贴图优先；两处都清空时，不可从源场景自动恢复旧贴图。
+  snapshot.options.environment_file=hdr;editor::save_scene_extension(extension,doc,snapshot);
+  require(editor::load_scene_extension(extension,{library},3).snapshot.options.environment_file==hdr,"An existing custom HDRI was replaced by the source default");
+  snapshot.options.environment_file.clear();for(auto &p:snapshot.options.environment.parameters)if(p.id=="Environment Map")p.image_uri.clear();
+  editor::save_scene_extension(extension,doc,snapshot);auto cleared=editor::load_scene_extension(extension,{library},4);
+  require(cleared.snapshot.options.environment_file.empty()&&ir::option(cleared.snapshot.options.environment,"Environment Map")->image_uri.empty(),"An explicitly cleared HDRI returned on reopen");
+  snapshot.options.environment_file=folder/"removed-install/missing.hdr";for(auto &p:snapshot.options.environment.parameters)if(p.id=="Environment Map")p.image_uri="/resources/dfv-test-missing.hdr";
+  editor::save_scene_extension(extension,doc,snapshot);auto unresolved=editor::load_scene_extension(extension,{library},5);
+  require(unresolved.snapshot.options.environment_file.empty()&&ir::option(unresolved.snapshot.options.environment,"Environment Map")->image_uri=="/resources/dfv-test-missing.hdr"&&!unresolved.document->loaded.report.at("warnings").empty(),"Missing saved HDRI was sent to the renderer or its diagnostic URI was lost");
+  auto moved_options=snapshot.options;moved_options.environment_file=previous;
+  require(daz::resolve_environment_map(moved_options,scene,{library})&&moved_options.environment_file==fs::weakly_canonical(hdr),"Saved literal path containing percent/hash/Unicode did not relocate");
   require(automatic.report["content_roots"].size()==1&&!automatic.report["iray_resource_roots"].empty(),"Iray roots leaked into the content library list");
   check(load("/resources/dfv-test-sky.hdr",{iray}),builtin);
   const auto custom=library/"resources/dfv-test-sky.hdr";fs::create_directories(custom.parent_path());std::ofstream(custom)<<"custom";

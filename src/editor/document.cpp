@@ -224,6 +224,13 @@ void replace_surface_material(Document &d,Snapshot *snapshot,const daz::LoadedSc
   if(incoming.source_definition.empty()){for(auto *index:ir::texture_indices(material))if(*index>=0)*index+=offset;}
   else {daz::LoadOptions options;for(const auto &root:(d.loaded.report.is_object()?d.loaded.report.value("content_roots",nlohmann::json::array()):nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));for(const auto &root:preset.report.value("content_roots",nlohmann::json::array()))options.content_roots.push_back(std::filesystem::u8path(root.get<std::string>()));daz::apply_material_uv(scene,instance,slot,incoming,options);material=daz::merge_material_preset(base,incoming,scene.textures,options);touched=material_preset_parameters(incoming,&material);for(const auto &p:material_parameters())if(!touched.contains(p.id))p.copy(material,base);}
   const auto actual_uv=daz::material_uv_set(scene.materials.at(i.materials.at(slot)));if(!actual_uv.uri.empty())daz::set_material_uv_set(material,actual_uv);
+  if(!incoming.source_definition.empty()){
+    const auto definition=nlohmann::json::parse(incoming.source_definition);
+    if(definition.contains("dfv_parameters")){
+      auto exact=read_copied_material({{"parameters",definition.at("dfv_parameters")},{"source_definition",material.source_definition},{"source_channels",nlohmann::json::array()}},scene.textures);
+      exact.id=material.id;exact.source_channels=material.source_channels;material=std::move(exact);for(const auto &p:material_parameters())touched.insert(p.id);
+    }
+  }
   ir::validate(material,scene.textures.size());i.materials[slot]=uint32_t(scene.materials.size());scene.materials.push_back(std::move(material));
   if(snapshot)if(auto object=snapshot->material_overrides.find(i.id);object!=snapshot->material_overrides.end())if(auto patch=object->second.find(scene.meshes.at(i.mesh).material_slots.at(slot));patch!=object->second.end())for(const auto &id:touched)patch->second.erase(id);
 }

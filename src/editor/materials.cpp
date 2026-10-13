@@ -60,6 +60,8 @@ const std::vector<P> &material_parameters(){
     group="折射与透光 / Refraction";
     scalar("transmission","折射权重 · Refraction Weight",&M::transmission);texture("transmission_texture","折射权重贴图",&M::transmission_texture);
     scalar("ior","折射率 · Refraction Index",&M::ior,1,4);
+    flag("separate_refraction","独立折射颜色",&M::separate_refraction);color("refraction_color","折射颜色 · Refraction Color",&M::refraction_color);texture("refraction_color_texture","折射颜色贴图",&M::refraction_color_texture,true);
+    scalar("refraction_roughness","折射粗糙度 · Refraction Roughness",&M::refraction_roughness);texture("refraction_roughness_texture","折射粗糙度贴图",&M::refraction_roughness_texture);
     scalar("translucency","薄壁透光权重 · Translucency",&M::translucency);texture("translucency_texture","透光 / SSS 权重贴图",&M::translucency_texture);
     color("translucency_color","透光颜色 · Translucency Color",&M::translucency_color);texture("translucency_color_texture","透光颜色贴图",&M::translucency_color_texture,true);
     group="皮下散射 / SSS";
@@ -106,8 +108,8 @@ std::set<std::string> material_preset_parameters(const M &preset,const M *contex
     {"Diffuse Overlay Weight","overlay_weight","overlay_texture"},{"Diffuse Overlay Color","overlay_color","overlay_color_texture"},{"Diffuse Overlay Roughness","overlay_roughness","overlay_roughness_texture"},{"Diffuse Overlay Weight Squared","overlay_squared",""},
     {"Glossy Roughness","roughness","roughness_texture"},{"Glossiness","roughness roughness_from_glossiness","roughness_texture"},{"Base Mixing","roughness roughness_from_glossiness roughness_texture specular specular_texture weighted_glossy",""},
     {"Glossy Layered Weight","specular","specular_texture"},{"Glossy Weight","specular","specular_texture"},{"Glossy Reflectivity","specular",""},{"Diffuse Weight","specular",""},
-    {"Glossy Color","specular_color base_color","specular_color_texture color_texture"},{"Glossy Anisotropy","anisotropy",""},{"Glossy Anisotropy Rotations","anisotropy_rotation",""},
-    {"Refraction Weight","transmission ior base_color color_texture roughness roughness_texture roughness_from_glossiness","transmission_texture"},{"Refraction Index","ior",""},{"Refraction Color","base_color","color_texture"},{"Refraction Roughness","roughness","roughness_texture"},{"Share Glossy Inputs","base_color color_texture roughness roughness_texture roughness_from_glossiness",""},
+    {"Glossy Color","specular_color refraction_color","specular_color_texture refraction_color_texture"},{"Glossy Anisotropy","anisotropy",""},{"Glossy Anisotropy Rotations","anisotropy_rotation",""},
+    {"Refraction Weight","transmission ior separate_refraction","transmission_texture"},{"Refraction Index","ior",""},{"Refraction Color","refraction_color","refraction_color_texture"},{"Refraction Roughness","refraction_roughness","refraction_roughness_texture"},{"Share Glossy Inputs","separate_refraction refraction_color refraction_color_texture refraction_roughness refraction_roughness_texture",""},
     {"Thin Walled","thin_walled translucency subsurface subsurface_color subsurface_radius separate_subsurface_color subsurface_anisotropy emission_two_sided",""},
     {"Translucency Weight","translucency subsurface","translucency_texture"},{"Translucency Color","translucency_color","translucency_color_texture"},{"SSS Direction","subsurface_anisotropy",""},
     {"Transmitted Color","subsurface_radius subsurface_color separate_subsurface_color",""},{"SSS Color","subsurface_radius subsurface_color separate_subsurface_color",""},{"SSS Mode","subsurface_radius subsurface_color separate_subsurface_color",""},{"SSS Amount","subsurface_radius subsurface_color separate_subsurface_color",""},{"Transmitted Measurement Distance","subsurface_radius subsurface_color",""},{"Scattering Measurement Distance","subsurface_radius subsurface_color",""},{"Base Color Effect","subsurface_color",""},{"SSS Reflectance Tint","subsurface_color",""},
@@ -122,11 +124,13 @@ std::set<std::string> material_preset_parameters(const M &preset,const M *contex
   };
   bool share=false;if(context&&!context->source_definition.empty()){auto raw=J::parse(context->source_definition).at("channels");if(raw.contains("Share Glossy Inputs")){auto c=raw.at("Share Glossy Inputs");auto v=c.value("current_value",c.value("value",J{}));share=v.is_boolean()?v.get<bool>():v.is_number()&&v.get<double>()!=0;}}
   auto add=[&](const Mapping &mapping,const char *fields){std::istringstream stream(fields);std::string id;while(stream>>id){const std::string channel=mapping.channel;
-    if(context&&(id=="base_color"||id=="color_texture")){if(channel=="Glossy Color"&&!(context->transmission>0&&share))continue;if(channel=="Refraction Color"&&!(context->transmission>0&&!share))continue;if(channel=="diffuse"&&(context->transmission>0||context->hair))continue;}
-    if(context&&(id=="roughness"||id=="roughness_texture"||id=="roughness_from_glossiness")){if((channel=="Glossy Roughness"||channel=="Glossiness")&&(context->hair||(context->transmission>0&&!share)))continue;if(channel=="Refraction Roughness"&&!(context->transmission>0&&!share))continue;}
+    if(context&&(id=="base_color"||id=="color_texture")&&channel=="diffuse"&&context->hair)continue;
+    if(context&&(id=="refraction_color"||id=="refraction_color_texture")){if(channel=="Glossy Color"&&!share)continue;if(channel=="Refraction Color"&&share)continue;}
+    if(context&&(id=="roughness"||id=="roughness_texture"||id=="roughness_from_glossiness")&&context->hair&&(channel=="Glossy Roughness"||channel=="Glossiness"))continue;
     result.insert(id);
   }};
   for(const auto &mapping:mappings)if(auto c=channels.find(mapping.channel);c!=channels.end()){if(c->contains("value")||c->contains("current_value"))add(mapping,mapping.values);if(c->contains("image")||c->contains("image_file"))add(mapping,mapping.textures);}
+  if(share)for(const auto *name:{"Glossy Roughness","Glossiness","Base Mixing"})if(channels.contains(name)){result.insert("refraction_roughness");result.insert("refraction_roughness_texture");}
   return result;
 }
 J material_value(const M &m,const std::vector<ir::Texture> &textures,const P &p){if(p.kind!=P::texture)return p.read(m);int t=m.*p.texture_member;return t<0?J{}:texture_json(textures.at(size_t(t)));}
@@ -153,6 +157,7 @@ J copy_material(const ir::Scene &scene,const MaterialOverrides &overrides,Materi
 }
 M read_copied_material(const J &copy,std::vector<ir::Texture> &textures){
   M m;for(const auto &p:material_parameters()){
+    if(!copy.at("parameters").contains(p.id)&&(p.id=="separate_refraction"||p.id.starts_with("refraction_")))continue;
     const auto &value=copy.at("parameters").at(p.id);
     if(p.restore)p.restore(m,value);
     else if(p.kind==P::texture&&!value.is_null()){auto parameter=p;const int space=value.value("colorspace",int(p.colorspace));range(space,0,1);parameter.colorspace=ir::ColorSpace(space);set_material_value(m,textures,parameter,value);}

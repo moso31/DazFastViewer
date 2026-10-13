@@ -4,7 +4,7 @@
 #include "runtime/morph.h"
 
 namespace dfv::daz {
-struct PoseChannel {std::string scheme,node,modifier,property;float value=0;};
+struct PoseChannel {std::string scheme,node,modifier,property;float value=0;std::string asset;};
 struct PosePreset {std::string source;std::vector<PoseChannel> channels;};
 PosePreset read_pose(const std::filesystem::path &file);
 PosePreset parse_pose(const nlohmann::json &document,const std::string &source={});

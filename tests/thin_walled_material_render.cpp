@@ -18,7 +18,7 @@ int main(int argc,char **argv){const auto output=fs::absolute(argc>1?argv[1]:"ar
   const auto devices=ccl::Device::available_devices(ccl::DEVICE_MASK_OPTIX);check(!devices.empty(),"OptiX unavailable");
   ir::Scene source;source.environment={1,1,1};ir::Material material;material.id="thin-card";material.thin_walled=true;material.base_color={0,0,0};material.translucency_color={0,0,0};material.roughness=.3f;source.materials.push_back(material);
   ir::Mesh mesh;mesh.id="card";mesh.material_slots={"thin-card"};mesh.positions={{-1,0,-1},{1,0,-1},{1,0,1},{-1,0,1}};
-  ir::Triangle a,b;a.vertices={0,1,2};b.vertices={0,2,3};mesh.triangles={a,b};source.meshes.push_back(mesh);
+  ir::Triangle a,b;a.vertices={0,1,2};b.vertices={0,2,3};a.uv={ir::Vec2{0,0},ir::Vec2{1,0},ir::Vec2{1,1}};b.uv={ir::Vec2{0,0},ir::Vec2{1,1},ir::Vec2{0,1}};mesh.triangles={a,b};source.meshes.push_back(mesh);
   ir::Instance instance;instance.id="card";instance.materials={0};source.instances.push_back(instance);CameraState camera;camera.target={0,0,0};camera.yaw=camera.pitch=0;camera.distance=3;source.camera=render_camera(camera,128,128);
   ccl::SessionParams params;params.device=devices.front();params.background=params.headless=true;params.samples=128;params.threads=4;params.use_resolution_divider=false;params.use_auto_tile=false;
   ccl::SceneParams sp;sp.background=true;sp.bvh_type=ccl::BVH_TYPE_DYNAMIC;sp.use_texture_cache=false;sp.auto_texture_cache=false;ccl::Session session(params,sp);auto &scene=*session.scene;auto *pass=scene.create_node<ccl::Pass>();pass->set_name(ccl::ustring("combined"));pass->set_type(ccl::PASS_COMBINED);scene.integrator->set_use_denoise(false);scene.integrator->set_use_adaptive_sampling(false);scene.integrator->set_transparent_max_bounce(64);
@@ -38,5 +38,13 @@ int main(int argc,char **argv){const auto output=fs::absolute(argc>1?argv[1]:"ar
   m.coat=m.specular=0;m.translucency=0;const auto black=render("black");m.opacity=0;const auto cutout=render("cutout");
   check(black<.01&&cutout>.95,"最终 Cutout 未作用于整个表面");
   m.opacity=1;m.translucency=1;m.translucency_color={.4f,.4f,.4f};const auto transmitted=render("diffuse-transmission");check(std::abs(transmitted-.4)<.02,"薄壁漫透射被禁用或权重错误");
+  m.translucency=0;m.base_color={.7f,.02f,.01f};m.separate_refraction=true;m.refraction_color={1,1,1};m.transmission=.1f;
+  const auto partial=render("partial-refraction");m.transmission=1;const auto glass=render("full-refraction");
+  check(partial<.5&&glass>.9,"少量白色折射覆盖了整个基础色，或全透射错误染上基础色");
+  auto normal_map=[&](const char *name,unsigned char blue){const auto path=output/name;std::ofstream file(path,std::ios::binary);file<<"P6\n4 4\n255\n";for(int i=0;i<16;++i){const unsigned char pixel[]={128,128,blue};file.write(reinterpret_cast<const char *>(pixel),3);}file.close();ir::Texture t;t.file=path;t.id=path.generic_string();t.colorspace=ir::ColorSpace::linear;source.textures.push_back(t);return int(source.textures.size()-1);};
+  const auto negative=normal_map("negative-normal.ppm",32),positive=normal_map("positive-normal.ppm",223);m.transmission=0;m.base_color={.4f,.4f,.4f};m.normal_texture=negative;const auto folded=render("negative-normal");m.normal_texture=positive;const auto forward=render("positive-normal");
+  check(folded>.35&&std::abs(folded-forward)<.01,"DAZ 法线贴图的负 Z 导致黑斑，或折回半球后丢失细节");
+  source.options.environment_file=output/"missing-environment.hdr";const auto missing_environment=render("missing-environment");
+  check(std::abs(missing_environment-forward)<.01,"不存在的 HDRI 将紫色占位色带入了环境照明");
   std::ofstream(output/"checks.json")<<J{{"result","PASS"},{"device",devices.front().description},{"samples",params.samples},{"stages",stages}}.dump(2);return 0;
 }catch(const std::exception &e){std::ofstream(output/"error.txt")<<e.what();std::cerr<<e.what()<<std::endl;return 1;}}

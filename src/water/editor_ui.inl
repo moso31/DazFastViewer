@@ -6,7 +6,6 @@
   uint64_t water_status_revision_=UINT64_MAX,water_status_generation_=UINT64_MAX,water_stamp_=0;
   bool water_working_=false;
   std::string water_error_;
-  QWidget *environment_tools_=nullptr;
   const water::Water *selected_water()const{
     if(!document_||selected_<0||size_t(selected_)>=document_->catalog.targets.size())return nullptr;const auto &id=document_->catalog.targets[size_t(selected_)].id;if(const auto *w=water::find(snapshot_.water_overrides,id))return w;return water::find(document_->waters,id);
   }

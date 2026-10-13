@@ -80,7 +80,9 @@ Subdivision::Subdivision(const ir::Mesh &mesh,bool final_render,bool capture_bou
   osd::Far::TopologyDescriptor::FVarChannel channel;channel.numValues=int(uv_values.size());channel.valueIndices=uv_indices.data();descriptor.numFVarChannels=1;descriptor.fvarChannels=&channel;
   osd::Sdc::Options options;
   options.SetVtxBoundaryInterpolation(settings.edge_interpolation==1?osd::Sdc::Options::VTX_BOUNDARY_EDGE_AND_CORNER:settings.edge_interpolation==2?osd::Sdc::Options::VTX_BOUNDARY_EDGE_ONLY:osd::Sdc::Options::VTX_BOUNDARY_NONE);
-  options.SetFVarLinearInterpolation(osd::Sdc::Options::FVAR_LINEAR_ALL);
+  // DAZ 平滑面内及接缝边界的 UV，仅保留角点和复杂接缝附近的线性约束。
+  // 全线性插值会让细分后的甲缘采到错误的法线颜色；此模式与 DAZ 的 SubD OBJ 导出逐点一致。
+  options.SetFVarLinearInterpolation(osd::Sdc::Options::FVAR_LINEAR_CORNERS_PLUS2);
   const auto scheme=settings.algorithm==1?osd::Sdc::SCHEME_BILINEAR:settings.algorithm==2?osd::Sdc::SCHEME_LOOP:osd::Sdc::SCHEME_CATMARK;
   using Factory=osd::Far::TopologyRefinerFactory<osd::Far::TopologyDescriptor>;
   Factory::Options factory_options(scheme,options);factory_options.validateFullTopology=true;

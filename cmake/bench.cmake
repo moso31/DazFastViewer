@@ -1,4 +1,9 @@
 # 在 Cycles app 目录作用域定义，继承该版本所需的编译选项和 ABI。
+add_executable(ToenailProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tools/toenail_probe.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp")
+target_include_directories(ToenailProbe PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(ToenailProbe PRIVATE ${LIB} dfv_scene)
+target_compile_definitions(ToenailProbe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(ToenailProbe PRIVATE /utf-8)
 add_executable(HairSurfaceProbe EXCLUDE_FROM_ALL "${DFV_ROOT}/tools/hair_surface_probe.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp")
 target_include_directories(HairSurfaceProbe PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(HairSurfaceProbe PRIVATE ${LIB} dfv_scene)

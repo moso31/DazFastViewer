@@ -12,6 +12,26 @@ static ir::Mesh quad() {
   ir::Polygon p;p.vertices={0,1,2,3};p.uv={{0,0},{1,0},{1,1},{0,1}};p.material_slot=7;m.polygons={p};
   ir::Triangle a,b;a.vertices={0,1,2};b.vertices={0,2,3};m.triangles={a,b};m.subdivision={true,1,2,0,1,0};return m;
 }
+// UV 需要随细分平滑，不能只细分几何后仍在每个控制面中做双线性贴图。
+// 四面内部顶点的 Catmark 权重为中心 9/16、轴向邻点各 3/32、对角各 1/64。
+static void check_smooth_uv() {
+  ir::Mesh m;m.subdivision={true,1,1,0,2,0};
+  for(int y=0;y<3;++y)for(int x=0;x<3;++x)m.positions.push_back({float(x),float(y),0});
+  for(int y=0;y<2;++y)for(int x=0;x<2;++x){
+    ir::Polygon p;const auto a=uint32_t(y*3+x);p.vertices={a,a+1,a+4,a+3};
+    for(auto v:p.vertices)p.uv.push_back(v==4?ir::Vec2{.7f,.6f}:ir::Vec2{float(v%3)*.5f,float(v/3)*.5f});
+    m.polygons.push_back(p);ir::Triangle t;t.vertices={a,a+1,a+4};m.triangles.push_back(t);
+  }
+  runtime::Subdivision s(m);int center_corners=0;
+  for(const auto &t:s.triangles())for(int c=0;c<3;++c)if(t.vertices[c]==4){
+    ++center_corners;require(std::abs(t.uv[c].x-.6125f)<1e-6f&&std::abs(t.uv[c].y-.55625f)<1e-6f,"UV 内部控制点未按 Catmark 平滑，法线图会在细分面边缘错位");
+  }
+  require(center_corners>0,"未检查细分后的 UV 内部顶点");
+  // 独立 UV 岛角点仍固定；平滑不可把贴图岛的四个角收缩进内部。
+  auto island=quad();island.subdivision.edge_interpolation=2;runtime::Subdivision seam(island);
+  for(const auto &t:seam.triangles())for(int c=0;c<3;++c)if(t.vertices[c]<4)
+    require(t.uv[c]==island.polygons[0].uv[t.vertices[c]],"细分错误移动了独立 UV 岛角点");
+}
 // 对照真正可绘制的三角面边界，验证追踪包含孔洞边界，且没有使用基础层索引冒充细分层。
 static void check_boundaries(ir::Mesh mesh) {
   using Edge=std::pair<uint32_t,uint32_t>;
@@ -37,6 +57,7 @@ static void check_boundaries(ir::Mesh mesh) {
 }
 int main() {
  try {
+  check_smooth_uv();
   check_boundaries(quad());
   {auto hole=quad();hole.positions.push_back({2,0,0});hole.positions.push_back({2,1,0});ir::Polygon p;p.vertices={1,4,5,2};p.uv={{1,0},{2,0},{2,1},{1,1}};hole.polygons.push_back(p);hole.hidden_polygons={1};check_boundaries(hole);}
   auto m=quad();runtime::Subdivision s(m);const auto positions=s.evaluate(m.positions);

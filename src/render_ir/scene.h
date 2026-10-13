@@ -98,6 +98,11 @@ struct Material {
   int emission_units=0,emission_color_texture=-1,emission_luminance_texture=-1;
   bool emission_two_sided=false;
   float roughness=.5f,metallic=0,opacity=1,transmission=0,ior=1.5f,normal_strength=1;
+  // Iray 的折射颜色独立于漫反射；部分透射不能抹掉基础贴图。
+  bool separate_refraction=false;
+  Vec3 refraction_color{1,1,1};
+  float refraction_roughness=0;
+  int refraction_color_texture=-1,refraction_roughness_texture=-1;
   // 世界空间高度范围，单位为米；与法线贴图叠加。
   float bump_strength=0,bump_distance=.001f;
   int color_texture=-1,roughness_texture=-1,opacity_texture=-1,normal_texture=-1;
@@ -138,7 +143,7 @@ template<class M> auto texture_indices(M &m) {
     &m.specular_texture,&m.translucency_texture,&m.translucency_color_texture,&m.coat_texture,&m.coat_roughness_texture,
     &m.dual_texture,&m.metallic_texture,&m.transmission_texture,&m.specular_color_texture,&m.coat_color_texture,&m.displacement_texture,
     &m.emission_color_texture,&m.emission_luminance_texture,&m.overlay_texture,&m.overlay_color_texture,&m.overlay_roughness_texture,
-    &m.dual_roughness1_texture,&m.dual_roughness2_texture,&m.hair_tip_texture};
+    &m.dual_roughness1_texture,&m.dual_roughness2_texture,&m.hair_tip_texture,&m.refraction_color_texture,&m.refraction_roughness_texture};
 }
 struct Triangle {
   std::array<uint32_t,3> vertices{};

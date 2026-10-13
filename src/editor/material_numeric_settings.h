@@ -33,7 +33,8 @@ inline std::map<std::string,runtime::ParameterSettings> material_numeric_setting
   for(const auto &[id,name]:mapping)inherit(id,name);
   // 粗糙度字段有多种来源；只沿用实际参与转换的通道。
   bool share=false;if(auto c=channels.find("Share Glossy Inputs");c!=channels.end()){const auto v=c->value("current_value",c->value("value",nlohmann::json{}));share=v.is_boolean()?v.get<bool>():v.is_number()&&v.get<double>()!=0;}
-  inherit("roughness",material.hair?"Roughness":material.transmission>0&&!share?"Refraction Roughness":material.roughness_from_glossiness?"Glossiness":"Glossy Roughness");
+  inherit("roughness",material.hair?"Roughness":material.roughness_from_glossiness?"Glossiness":"Glossy Roughness");
+  if(!share)inherit("refraction_roughness","Refraction Roughness");
   return result;
 }
 }

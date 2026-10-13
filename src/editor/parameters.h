@@ -36,6 +36,8 @@ struct ParameterControl {
   std::function<void(const std::array<double,3> &)> write_color;
   std::function<std::array<double,2>()> read_location;
   std::function<void(const std::array<double,2> &)> write_location;
+  std::function<std::string()> read_path;
+  std::function<void(const std::string &)> write_path;
 };
 class ParameterPanel final:public QWidget {
   const runtime::Target *target_=nullptr;
@@ -83,7 +85,8 @@ public:
   void bind(const runtime::Target *target,const runtime::Properties *values,const std::string &node={});
   void bind_options(ir::OptionNode *node,std::function<void(size_t,size_t,double)> callback,
                     std::function<void(size_t,const std::array<double,3> &)> color_callback={},
-                    std::function<void(const std::array<size_t,3> &,const std::array<double,3> &)> location_callback={});
+                    std::function<void(const std::array<size_t,3> &,const std::array<double,3> &)> location_callback={},
+                    std::function<std::string()> environment_path={},std::function<void(const std::string &)> environment_path_changed={});
   void set_extra(std::vector<ParameterControl> controls) {extra_=std::move(controls);}
   void bind_controls(std::vector<ParameterControl> controls) {node_.clear();option_node_=nullptr;target_=nullptr;values_=nullptr;favorite_scope_.clear();scene_favorites_=false;controls_=std::move(controls);morph_rows_.clear();rebuild();}
   void refresh(size_t index);
