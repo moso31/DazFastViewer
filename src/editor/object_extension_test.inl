@@ -10,10 +10,17 @@
     if(!state.error.empty()||!state.edit_error.empty()||!state.resource_error.empty()){finish_test(false,state.error+state.edit_error+state.resource_error);return;}
     if(loading_||!document_||state.generation!=document_->generation||state.presented_revision!=snapshot_.revision||state.presented_epoch!=state.requested_epoch||state.samples<4)return;
     try{
+      auto files=[this]{std::map<QString,std::pair<QByteArray,qint64>> result;const QDir dir(shutdown_directory_);
+        for(const auto &name:dir.entryList({"temp*.dufex","temp*.dufex.png"},QDir::Files)){QFile file(dir.filePath(name));if(!file.open(QIODevice::ReadOnly))throw std::runtime_error("无法检查自动保存队列");result[name]={file.readAll(),QFileInfo(file).lastModified().toMSecsSinceEpoch()};}return result;};
       if(test_stage_==0){
         if(document_->source_file.parent_path()!=output_||snapshot_.values.empty())throw std::runtime_error("验证需要输出目录内的测试场景");
+        shutdown_directory_=QString::fromStdWString((output_/"autosave").wstring());const auto before=files();
+        if(save_shutdown()||files()!=before)throw std::runtime_error("打开场景但未修改时不应自动保存");
+        auto c=renderer_->input_camera();renderer_->camera_view({c.target.x+.1f,c.target.y,c.target.z,c.distance*.9f,c.yaw+.2f,c.pitch+.1f});
+        choose(-1);if(save_shutdown()||files()!=before)throw std::runtime_error("打开场景后仅导航或选择不应自动保存");
+        choose(0);
         dufex_native_=document_->source_file;dufex_original_transform_=snapshot_.values[0].transform;snapshot_.values[0].transform.translation_cm.x+=12;
-        send();auto c=renderer_->input_camera();renderer_->camera_view({c.target.x,c.target.y,c.target.z,c.distance*.9f,c.yaw+.2f,c.pitch+.1f});++test_stage_;return;
+        send();++test_stage_;return;
       }
       if(test_stage_==1){
         extension_file_=extension_path(dufex_native_);auto *save=findChild<QAction *>("SaveScene");if(!save)throw std::runtime_error("缺少场景保存动作");
@@ -25,10 +32,28 @@
         if(!dufex_save_triggers_)return;if(dufex_save_triggers_!=1)throw std::runtime_error("原生 Ctrl+S 重复触发保存");dufex_expected_=snapshot_json(*document_,snapshot_);
         const QImage png(QString::fromStdWString(extension_file_.wstring())+".png");if(png.size()!=QSize(256,256))throw std::runtime_error("保存未生成 256 平方缩略图");
         auto min=255,max=0;for(int y=0;y<png.height();++y)for(int x=0;x<png.width();++x){const auto v=qGray(png.pixel(x,y));min=std::min(min,v);max=std::max(max,v);}if(max-min<10)throw std::runtime_error("缩略图为空白");
+        const auto before=files();if(save_shutdown()||files()!=before)throw std::runtime_error("手动保存后无修改不应自动保存");
+        auto moved=*snapshot_.view;moved[0]+=.1f;moved[3]*=.9f;moved[4]+=.1f;renderer_->camera_view(moved);choose(-1);
+        if(save_shutdown()||files()!=before)throw std::runtime_error("手动保存后仅导航或选择不应自动保存");
+        const auto saved_transform=snapshot_.values[0].transform;snapshot_.values[0].transform.translation_cm.x+=1;send();
+        if(!save_shutdown())throw std::runtime_error("手动保存后新的场景修改没有自动保存");
+        const QImage automatic(QDir(shutdown_directory_).filePath("temp.dufex.png"));if(automatic.size()!=QSize(256,256))throw std::runtime_error("关闭自动保存没有生成缩略图");
+        min=255;max=0;for(int y=0;y<automatic.height();++y)for(int x=0;x<automatic.width();++x){const auto v=qGray(automatic.pixel(x,y));min=std::min(min,v);max=std::max(max,v);}if(max-min<10)throw std::runtime_error("自动保存截图为空白");
+        if(!save_shutdown()||QImage(QDir(shutdown_directory_).filePath("temp0.dufex.png"))!=automatic)throw std::runtime_error("自动保存轮转没有保留对应截图");
+        auto autosaved=load_scene_extension(output_/"autosave/temp.dufex",roots_,document_->generation);
+        auto expected=snapshot_json(*document_,snapshot_);expected["view"]=moved;
+        if(snapshot_json(*autosaved.document,autosaved.snapshot)!=expected)throw std::runtime_error("自动保存未保留最新场景内容和视口");
+        snapshot_.values[0].transform=saved_transform;send();const auto rotated=files();
+        if(save_shutdown()||files()!=rotated)throw std::runtime_error("还原已保存内容后不应改动已有自动保存队列及截图");
+        choose(0);const auto count=document_->loaded.scene.instances.size();duplicate_selection(false);
+        if(document_->loaded.scene.instances.size()<=count||!save_shutdown())throw std::runtime_error("结构修改没有自动保存");
+        history_move(false);const auto after_structure=files();
+        if(document_->loaded.scene.instances.size()!=count||save_shutdown()||files()!=after_structure)throw std::runtime_error("撤销结构修改后不应自动保存");
         ++test_stage_;open_asset(extension_file_);return;
       }
       if(test_stage_==3){
         if(snapshot_json(*document_,snapshot_)!=dufex_expected_)throw std::runtime_error("界面保存重开参数不一致");
+        const auto before=files();if(save_shutdown()||files()!=before)throw std::runtime_error("重新打开 DUFEX 后未修改不应自动保存");
         const auto c=renderer_->input_camera();const std::array<float,6> view={c.target.x,c.target.y,c.target.z,c.distance,c.yaw,c.pitch};if(!snapshot_.view||view!=*snapshot_.view)throw std::runtime_error("观察相机未恢复");
         snapshot_.values[0].transform.translation_cm.y+=7;send();++test_stage_;return;
       }
@@ -37,11 +62,14 @@
         QApplication::postEvent(hierarchy_,new QKeyEvent(QEvent::KeyPress,Qt::Key_S,Qt::ControlModifier));QApplication::postEvent(hierarchy_,new QKeyEvent(QEvent::KeyRelease,Qt::Key_S,Qt::ControlModifier));++test_stage_;return;
       }
       if(test_stage_==5){
-        if(dufex_save_triggers_<2)return;if(dufex_save_triggers_!=2)throw std::runtime_error("Qt 面板 Ctrl+S 重复触发保存");dufex_expected_=snapshot_json(*document_,snapshot_);++test_stage_;open_asset(extension_file_);return;
+        if(dufex_save_triggers_<2)return;if(dufex_save_triggers_!=2)throw std::runtime_error("Qt 面板 Ctrl+S 重复触发保存");dufex_expected_=snapshot_json(*document_,snapshot_);
+        const auto before=files();if(save_shutdown()||files()!=before)throw std::runtime_error("再次手动保存未更新自动保存基准");++test_stage_;open_asset(extension_file_);return;
       }
       if(test_stage_==6){if(snapshot_json(*document_,snapshot_)!=dufex_expected_)throw std::runtime_error("Qt 面板快捷键保存没有写入最新修改");++test_stage_;load(dufex_native_);return;}
       if(snapshot_.values[0].transform!=dufex_original_transform_||snapshot_.view)throw std::runtime_error("打开原 DUF 错误套用了同名 DUFEX");
-      std::ofstream(output_/"save-shortcut-check.json")<<nlohmann::json{{"native_ctrl_s",true},{"qt_panel_ctrl_s",true},{"save_triggers",dufex_save_triggers_},{"thumbnail",true},{"reopen_latest_changes",true},{"original_duf_unchanged",true}}.dump(2);finish_test(true);
+      const auto before=files();auto c=renderer_->input_camera();renderer_->camera_view({c.target.x,c.target.y+.1f,c.target.z,c.distance*.9f,c.yaw+.2f,c.pitch+.1f});
+      if(save_shutdown()||files()!=before)throw std::runtime_error("切换到另一个场景后仅导航不应自动保存");
+      std::ofstream(output_/"save-shortcut-check.json")<<nlohmann::json{{"native_ctrl_s",true},{"qt_panel_ctrl_s",true},{"save_triggers",dufex_save_triggers_},{"thumbnail",true},{"autosave_thumbnail",true},{"autosave_thumbnail_rotation",true},{"reopen_latest_changes",true},{"original_duf_unchanged",true},{"opened_unchanged_skips_autosave",true},{"saved_unchanged_skips_autosave",true},{"navigation_and_selection_skip_autosave",true},{"scene_changes_after_save_autosave",true},{"autosave_keeps_current_view",true},{"reverted_changes_skip_autosave",true},{"structural_changes_autosave",true},{"structural_undo_skips_autosave",true},{"resave_updates_baseline",true},{"scene_switch_resets_baseline",true},{"skipped_autosave_preserves_queue",true}}.dump(2);finish_test(true);
     }catch(const std::exception &e){finish_test(false,e.what());}
   }
   bool empty_test_=false;

@@ -1,9 +1,12 @@
 #include "editor/content_browser.h"
 #include "editor/content_catalog.h"
+#include "editor/ui_scale.h"
 #include "daz/documents.h"
 #include "daz/loader.h"
 #include <QApplication>
 #include <QComboBox>
+#include <QCryptographicHash>
+#include <QDataStream>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileSystemModel>
@@ -18,6 +21,7 @@
 #include <QListView>
 #include <QListWidget>
 #include <QScreen>
+#include <QStyle>
 #include <QSlider>
 #include <QTabBar>
 #include <QTemporaryDir>
@@ -29,11 +33,12 @@
 #include <QToolButton>
 #include <nlohmann/json.hpp>
 #include <iostream>
+#include <source_location>
 #include <stdexcept>
 
 using namespace dfv::editor;
 static void require(bool ok,const char *why) {if(!ok) throw std::runtime_error(why);}
-template<class F> static void until(F condition,int timeout=5000) {QElapsedTimer timer;timer.start();while(!condition()&&timer.elapsed()<timeout) QTest::qWait(5);require(condition(),"异步操作超时");}
+template<class F> static void until(F condition,int timeout=5000,const std::source_location location=std::source_location::current()) {QElapsedTimer timer;timer.start();while(!condition()&&timer.elapsed()<timeout) QTest::qWait(5);if(!condition())throw std::runtime_error(std::string("异步操作超时：")+location.file_name()+":"+std::to_string(location.line()));}
 static void write(const QString &path,const QByteArray &bytes="{}") {QDir().mkpath(QFileInfo(path).path());QFile f(path);require(f.open(QIODevice::WriteOnly),"临时文件写入失败");f.write(bytes);}
 static ContentSearch query(ContentIndex &index,const QString &text,const QString &scope={}) {bool done=false;ContentSearch result;index.search(text,scope,[&](ContentSearch r){result=std::move(r);done=true;});until([&]{return done;});return result;}
 static void wheel(QWidget *widget,int delta) {const QPointF p(widget->rect().center());QWheelEvent e(p,widget->mapToGlobal(p.toPoint()),{},QPoint(0,delta),Qt::NoButton,Qt::ControlModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(widget,&e);}
@@ -102,11 +107,15 @@ static void checks() {
   {ContentHistory loaded(settings);require(loaded.recent().size()==100&&loaded.recent("scene").size()==50&&loaded.searches().front()=="stand","历史重启持久化失败");}
   for(const auto &[type,category]:std::vector<std::pair<std::string,QString>>{{"scene","scene"},{"preset_shape","shape"},{"preset_pose","pose"},{"preset_material","material"},{"preset_hierarchical_material","material"},{"preset_character","character"},{"preset_wearables","wearable"},{"preset_properties","properties"},{"preset_light","light"},{"preset_camera","camera"}}) require(content_category(nlohmann::json{{"asset_info",{{"type",type}}}})==category,"DUF 类型分类错误");
   require(content_category(nlohmann::json{{"scene",{{"nodes",nlohmann::json::array({{{"geometries",nlohmann::json::array({1})}}})}}}})=="scene","无类型场景回退错误");
+  require(content_category(nlohmann::json{{"asset_info",{{"type","wearable"}}}},{"Follower/Hair"})=="hair","引用节点中的发型类型未覆盖通用 wearable 类型");
+  for(const auto &type:{"preset_material","preset_pose","preset_shape","preset_properties","scene"}){const nlohmann::json doc={{"asset_info",{{"type",type}}}};require(content_category(doc,{"Follower/Hair"})==content_category(doc),"头发相关预设或保存场景被错误归入发型");}
+  require(content_category(nlohmann::json{{"asset_info",{{"type","wearable"}}}},{"Follower/Wardrobe"})=="wearable","普通服装被归入发型");
+  require(content_category(nlohmann::json{{"asset_info",{{"type","preset_wearables"}}}},{"Follower/Hair","Follower/Wardrobe/Shirt"})=="wearable","包含头发的整套穿戴被归入发型");
   require(preview_candidates(pose).front()==pose+".png"&&preview_candidates(pose,true).front()==root+"/Poses/Standing [01].tip.png","预览图命名优先级错误");
   const auto cache=temp.path()+"/cache";
   {ContentIndex index(cache);index.refresh({root,root+"/Poses"});until([&]{return !index.scanning();});require(index.size()==3,"索引扩展名 / 重叠根去重失败");
     require(query(index,"standing [01]").paths==QStringList{pose},"大小写 / 包含匹配错误");require(query(index,".*").paths.empty(),"错误启用正则语义");
-    require(query(index,"",root+"/Poses").paths==QStringList{pose},"路径前缀越过目录边界");require(query(index,QStringLiteral("中文库")).paths.size()==3,"Unicode 路径搜索失败");
+    require(query(index,"",root+"/Poses").paths==QStringList{pose},"路径前缀越过目录边界");require(query(index,QStringLiteral("中文库")).paths.empty(),"父目录不应参与文件名搜索");
     bool stale=false,latest=false;index.search("Standing",{},[&](auto){stale=true;});index.search("Test.DUF",{},[&](auto r){latest=r.paths==QStringList{scene};});until([&]{return latest;});require(!stale,"过期搜索结果覆盖新请求");
     QFile::remove(scene);write(root+"/new.duf");index.refresh({root,root+"/Poses"});until([&]{return !index.scanning();});require(query(index,"test.duf").paths.empty()&&query(index,"new.duf").paths.size()==1,"索引新增 / 删除刷新失败");
   }
@@ -118,6 +127,7 @@ static void checks() {
   {
     ContentBrowser browser(nullptr,ui_settings,cache);browser.resize(780,640);browser.set_roots({root});browser.show();
     auto *zoom=browser.findChild<QSlider *>("contentZoom");auto *view=browser.findChild<QListView *>("contentItems");auto *tree=browser.findChild<QTreeView *>("contentTree");auto *search=browser.findChild<QComboBox *>("contentSearch");auto *categories=browser.findChild<QListWidget *>("contentCategories");
+    const QStringList common{"all","scene","wearable","material","pose","hair"};for(int row=0;row<common.size();++row)require(categories->item(row)->data(Qt::UserRole)==common[row],"近期分类顺序错误");
     require(zoom->value()==7&&view->iconSize().width()==112&&view->viewMode()==QListView::IconMode,"默认不是中等图标");
     wheel(view->viewport(),-840);require(zoom->value()==0&&!view->isVisible()&&tree->isVisible(),"最小档没有恢复列表树");
     wheel(tree->viewport(),120);require(zoom->value()==1&&view->isVisible(),"列表 Ctrl＋滚轮没有恢复图标");
@@ -154,7 +164,7 @@ static void checks() {
     browser.show_recent();require(view->model()->rowCount()==27,"返回近期使用没有恢复历史记录");search->setEditText("standing [01]");
     until([&]{return view->model()->rowCount()==1&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose;});
     require(search->currentText()=="standing [01]","切回内容库丢失搜索文本");browser.show_recent();
-    require(categories->currentRow()==0&&view->model()->rowCount()==27,"ALL 默认分类或全局记录错误");categories->setCurrentRow(3);require(view->model()->rowCount()==26&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose,"近期分类容量或时间排序错误");
+    require(categories->currentRow()==0&&view->model()->rowCount()==27,"ALL 默认分类或全局记录错误");categories->setCurrentRow(content_categories().indexOf("pose"));require(view->model()->rowCount()==26&&view->model()->index(0,0).data(Qt::UserRole).toString()==pose,"近期分类容量或时间排序错误");
     browser.apply_pose=[&](const QString &path,bool partial){require(path==pose,"近期姿势路径错误");if(partial)++partial_pose;else ++full_pose;};
     for(int level:{0,2}){zoom->setValue(level);check_pose_clicks(view,view->model()->index(0,0));}browser.apply_pose={};
     zoom->setValue(21);require(view->iconSize().width()==224,"最大图标尺寸发生变化");browser.save();
@@ -248,9 +258,13 @@ static void dufex_checks(){
   ContentHistory history(settings);require(history.recent("scene").size()==2,"同名场景近期记录被合并");
 }
 #include "content_actual_path.inl"
+#include "content_refresh.inl"
 #include "content_navigation_resources.inl"
+#include "content_multi_select.inl"
+#include "content_autosave_groups.inl"
 int main(int argc,char **argv) {
   QApplication app(argc,argv);app.setApplicationName("DazFastViewerContentTest");app.setOrganizationName("DazFastViewerTests");app.setFont(QFont(QStringLiteral("Microsoft YaHei UI"),9));
-  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--locate-real"))locate_real();else if(args.contains("--icons-real"))resource_thumbnail_real();else {source_checks();checks();navigation_checks();dufex_checks();actual_path_checks();search_navigation_checks();resource_thumbnail_checks();}return 0;}
+  if(app.arguments().size()==1||app.arguments().contains("--refresh-only")){try{refresh_checks();if(app.arguments().contains("--refresh-only"))return 0;}catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}}
+  try {const auto args=app.arguments();if(args.contains("--benchmark")) benchmark(args.mid(args.indexOf("--benchmark")+1));else if(args.contains("--visual")) visual();else if(args.contains("--autosave-visual"))autosave_group_checks(args.value(args.indexOf("--autosave-visual")+1));else if(args.contains("--locate-real"))locate_real();else if(args.contains("--icons-real"))resource_thumbnail_real();else {autosave_group_checks();multi_select_checks();source_checks();checks();navigation_checks();dufex_checks();actual_path_checks();search_navigation_checks();resource_thumbnail_checks();search_filter_checks();recent_hair_checks();}return 0;}
   catch(const std::exception &e) {std::cerr<<e.what()<<std::endl;return 1;}
 }

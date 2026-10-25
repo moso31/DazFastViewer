@@ -389,7 +389,8 @@ void Renderer::run(std::stop_token stop) {
         // 新场景成功准备后才释放旧运行时及其文档；显示驱动继续保留有效帧。
         runtime.reset();render_scene_ptr=std::move(pending_scene);runtime=std::move(pending_runtime);current=document;pending_document.reset();
         refiner.cancel();refine_pending=false;refine_frames.clear();refined_collision=runtime->collision_stats();
-        refine_enabled=refined_collision.evaluations||refined_collision.cache_hits;if(refine_enabled)runtime->defer_collision();
+        refine_enabled=refined_collision.evaluations||refined_collision.cache_hits;
+        if(refine_enabled){const auto begin=now();refiner.seed(document,*render_scene_ptr,*runtime);timing("refiner_seed",begin,desired.revision);runtime->defer_collision();}
         runtime_document=document;runtime_source=group_source;runtime_frames=group_frames;
         regions.clear();regions.resize(render_scene_ptr->instances.size());pickable=scene_pick_mask(*current,desired,*render_scene_ptr);pick_revision=desired.revision;
         for(const auto &skin:current->skeletons.skins) regions.at(skin.instance)=runtime::joint_regions(render_scene_ptr->meshes.at(render_scene_ptr->instances.at(skin.instance).mesh),skin);
@@ -449,8 +450,9 @@ void Renderer::run(std::stop_token stop) {
       auto proxy_excluded=[&](int selected) {
         std::vector<uint32_t> result;if(selected==-4&&!gizmo_group.empty())return gizmo_group_members;if(selected<0||size_t(selected)>=current->catalog.targets.size())return result;
         const auto &targets=current->catalog.targets;auto node=[](const auto &t){return "#"+t.id.substr(0,t.id.rfind('/'));};std::set<std::string> family{node(targets[selected])};
-        bool changed=true;while(changed){const auto before=family.size();for(const auto &t:targets)if(family.contains(t.parent)||family.contains(t.conform_target)||std::any_of(t.ancestors.begin(),t.ancestors.end(),[&](const auto &p){return family.contains(p);}))family.insert(node(t));changed=family.size()!=before;}
-        for(const auto &t:targets)if(family.contains(node(t)))result.push_back(t.instance);return result;
+        bool changed=true;while(changed){const auto before=family.size();for(const auto &t:targets)if(family.contains(t.parent)||family.contains(t.conform_target)||family.contains(t.rigid_follow.target)||std::any_of(t.ancestors.begin(),t.ancestors.end(),[&](const auto &p){return family.contains(p);}))family.insert(node(t));changed=family.size()!=before;}
+        for(const auto &t:targets)if(family.contains(node(t)))result.push_back(t.instance);
+        bool shells=true;while(shells){shells=false;for(size_t i=0;i<render_scene.instances.size();++i){const auto source=render_scene.instances[i].shell_source;if(source>=0&&std::find(result.begin(),result.end(),uint32_t(source))!=result.end()&&std::find(result.begin(),result.end(),uint32_t(i))==result.end()){result.push_back(uint32_t(i));shells=true;}}}return result;
       };
       if(pose_recovery.active&&pose_recovery.generation!=current->generation) pose_recovery.active=false;
       if(pose_recovery.active&&desired.revision>pose_recovery.revision&&applied_revision==desired.revision)pose_recovery.active=false;
@@ -492,6 +494,7 @@ void Renderer::run(std::stop_token stop) {
           pointer.held&&!pointer.cancelled&&pointer.selection==window_->pose_selection&&current==document&&desired.revision==applied_revision&&!input_camera.navigating) {
           ir::Mesh light_proxy;const ir::Mesh *mesh=&light_proxy;const std::vector<ir::Vec3> *source=nullptr;
           if(gizmo_drag.target>=0) {const auto &instance=render_scene.instances[current->catalog.targets[gizmo_drag.target].instance];mesh=&render_scene.meshes[instance.mesh];if(gizmo_drag.joint>=0) source=&runtime->skin_source(gizmo_drag.skin);}
+          if(gizmo_drag.target>=0&&gizmo_drag.joint<0){light_proxy=group_proxy(render_scene,proxy_excluded(gizmo_drag.target),gizmo_drag.world);mesh=&light_proxy;}
           if(!gizmo_group.empty()){light_proxy=group_proxy(render_scene,gizmo_group_members,gizmo_drag.world);mesh=&light_proxy;}
           if(gizmo_drag.begin(pointer,input_camera,window_->width,window_->height,gizmo_settings,gizmo_dpi,*mesh,source)) gizmo_consumed=pointer.serial;
         }
@@ -539,6 +542,7 @@ void Renderer::run(std::stop_token stop) {
             const auto frame=group_target_frame(*group_source,size_t(powerpose.target),*group_frames);const auto loaded=group_frames->delta(group_frames->hierarchy.targets[powerpose.target])*group_source->loaded.scene.instances[skin.instance].transform;
             powerpose_drag.begin(skin,mesh,runtime->skin_source(powerpose.skin),desired.poses[powerpose.skin],runtime->effective_poses()[powerpose.skin],instance.transform,
               desired.values[powerpose.target].transform,runtime::bind_powerpose(skin,point),powerpose,input_camera,window_->width,window_->height,runtime::pin_goals(pose_pins,powerpose.skin,instance.transform),&frame,loaded);
+            if(powerpose_drag.active&&powerpose_drag.bound.figure)powerpose_drag.proxy=group_proxy(render_scene,proxy_excluded(powerpose.target),powerpose_drag.world);
             powerpose_selection=window_->pose_selection;
             if(sampling_.interaction_probe&&powerpose_drag.active) {powerpose_reference.clear();for(const auto &m:render_scene.meshes) powerpose_reference.push_back(m.positions);state.pose_restore_max_error=0;}
           }

@@ -91,11 +91,11 @@ inline std::vector<uint32_t> group_instances(const Document &d,const std::string
   const ObjectHierarchy hierarchy(d,false);std::vector<uint32_t> result;for(size_t i=0;i<hierarchy.instances.size();++i)if(hierarchy.contains(id,hierarchy.instances[i]))result.push_back(uint32_t(i));return result;
 }
 inline ir::Mesh group_proxy(const ir::Scene &scene,const std::vector<uint32_t> &members,const ir::Transform &world) {
-  ir::Mesh result;const auto inverse=ir::inverse(world);size_t triangles=0;
-  for(auto i:members)if(scene.instances.at(i).visible)triangles+=scene.meshes.at(scene.instances[i].mesh).triangles.size();
-  const size_t stride=std::max<size_t>(1,(triangles+39999)/40000);size_t counter=0;
+  ir::Mesh result;const auto inverse=ir::inverse(world);
   for(auto i:members){const auto &instance=scene.instances.at(i);if(!instance.visible)continue;const auto &mesh=scene.meshes.at(instance.mesh);const auto transform=inverse*instance.transform;
-    for(const auto &triangle:mesh.triangles){if(counter++%stride||!mesh.draws(triangle))continue;ir::Triangle t;for(size_t k=0;k<3;++k){t.vertices[k]=uint32_t(result.positions.size());result.positions.push_back(transform.point(mesh.positions.at(triangle.vertices[k])));}result.triangles.push_back(t);}
+    const auto first=uint32_t(result.positions.size());for(auto p:mesh.positions)result.positions.push_back(transform.point(p));
+    for(const auto &triangle:mesh.triangles){if(!mesh.draws(triangle))continue;auto t=triangle;for(auto &v:t.vertices)v+=first;result.triangles.push_back(t);}
+    for(auto curve:mesh.curves){for(auto &v:curve.vertices)v+=first;result.curves.push_back(std::move(curve));}
   }
   return result;
 }

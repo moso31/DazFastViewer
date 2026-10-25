@@ -172,7 +172,15 @@ struct Polygon {
   uint32_t material_slot=0,polygon_group=0;
   bool operator==(const Polygon &) const = default;
 };
+struct BoneRigidityGroup {
+  std::string id;
+  std::vector<uint32_t> reference_vertices,mask_vertices;
+  std::vector<std::string> transform_nodes;
+  std::vector<float> weights;
+};
 struct Mesh {
+  // 由 transform_nodes 承担缩放、rotation_mode=none 的原生刚性区域。
+  std::vector<BoneRigidityGroup> bone_rigidity;
   // Native water's per-vertex contact coverage, independent of texture resolution.
   std::vector<float> water_foam;
   // GeoGraft 的目标基础拓扑；用于把附加表面纳入服装碰撞。

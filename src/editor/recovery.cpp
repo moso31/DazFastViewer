@@ -5,6 +5,8 @@
 #include <QFile>
 #include <QSaveFile>
 #include <QUuid>
+#include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <cmath>
 
 namespace dfv::editor {
@@ -17,6 +19,52 @@ void write(const QString &path,const J &data){
   const auto body=data.dump();QSaveFile output(path);output.setDirectWriteFallback(false);
   if(!output.open(QIODevice::WriteOnly)||output.write(body.data(),qint64(body.size()))!=qint64(body.size())||!output.commit())throw std::runtime_error((QStringLiteral("无法写入恢复文件：")+output.errorString()).toStdString());
 }
+}
+QString shutdown_save_directory(const QString &executable_directory,const QString &fallback_directory) {
+  QStringList candidates;QDir parent(executable_directory);
+  do {
+    if(QFileInfo::exists(parent.filePath("CMakeLists.txt"))&&QFileInfo::exists(parent.filePath("src/editor/main.cpp"))) {candidates.push_back(parent.absolutePath());break;}
+  }while(parent.cdUp());
+  candidates<<QDir(executable_directory).absolutePath()<<fallback_directory;
+  for(const auto &directory:candidates) {
+    if(!QDir().mkpath(directory))continue;
+    QTemporaryFile probe(QDir(directory).filePath(".dfv-write-XXXXXX"));if(probe.open())return directory;
+  }
+  throw std::runtime_error("找不到可写的关闭自动保存目录");
+}
+void save_shutdown_scene(const QString &directory,const Document &document,const Snapshot &snapshot,const QImage &thumbnail) {
+  QDir root(directory);if(!root.exists()&&!QDir().mkpath(directory))throw std::runtime_error("无法创建自动保存目录");
+  QLockFile lock(root.filePath(".temp-dufex.lock"));lock.setStaleLockTime(0);
+  if(!lock.tryLock(5000))throw std::runtime_error("另一编辑器正在保存关闭场景，请稍后重试");
+  QTemporaryDir staging(root.filePath(".temp-dufex-XXXXXX"));if(!staging.isValid())throw std::runtime_error("无法创建自动保存暂存目录");
+  auto name=[](int i){return i<0?QStringLiteral("temp.dufex"):QStringLiteral("temp%1.dufex").arg(i);};
+  save_scene_extension(std::filesystem::path(staging.filePath("new.dufex").toStdWString()),document,snapshot);
+  if(!thumbnail.isNull()&&!thumbnail.save(staging.filePath("new.dufex.png"),"PNG"))throw std::runtime_error("自动保存缩略图写入失败");
+  // 场景与缩略图一起备份、轮转和回滚；旧场景缺图时不能沿用另一份场景的图片。
+  const QStringList suffixes{QString{},QStringLiteral(".png")};
+  for(int i=-1;i<=6;++i)for(const auto &suffix:suffixes){const auto file=name(i)+suffix;if(QFileInfo::exists(root.filePath(file))&&!QFile::copy(root.filePath(file),staging.filePath(file)))throw std::runtime_error("备份旧自动保存文件失败，原文件已保留");}
+  auto replace=[](const QString &source,const QString &destination) {
+    QFile input(source);QSaveFile output(destination);output.setDirectWriteFallback(false);
+    if(!input.open(QIODevice::ReadOnly)||!output.open(QIODevice::WriteOnly))throw std::runtime_error("自动保存文件无法打开");
+    while(!input.atEnd()){const auto data=input.read(1024*1024);if(input.error()!=QFile::NoError||output.write(data)!=data.size())throw std::runtime_error("自动保存文件写入失败");}
+    if(!output.commit())throw std::runtime_error("自动保存文件提交失败");
+  };
+  auto sync=[&](const QString &source,const QString &destination) {
+    if(!source.isEmpty()&&QFileInfo::exists(source))replace(source,destination);
+    else if(QFileInfo::exists(destination)&&!QFile::remove(destination))throw std::runtime_error("旧自动保存文件无法轮转");
+  };
+  try {
+    for(int i=6;i>=0;--i) {
+      const bool previous=QFileInfo::exists(staging.filePath(name(i-1)));
+      for(const auto &suffix:suffixes)sync(previous?staging.filePath(name(i-1)+suffix):QString{},root.filePath(name(i)+suffix));
+    }
+    sync(staging.filePath("new.dufex.png"),root.filePath("temp.dufex.png"));
+    replace(staging.filePath("new.dufex"),root.filePath(name(-1)));
+  }catch(...) {
+    try{for(int i=-1;i<=6;++i)for(const auto &suffix:suffixes)sync(staging.filePath(name(i)+suffix),root.filePath(name(i)+suffix));}
+    catch(...){staging.setAutoRemove(false);throw std::runtime_error((QStringLiteral("轮转失败，原文件保留在：")+staging.path()).toStdString());}
+    throw;
+  }
 }
 J recovery_json(const EditState &s,const std::vector<std::filesystem::path> &roots){
   if(!s.document)throw std::runtime_error("没有可恢复的场景");

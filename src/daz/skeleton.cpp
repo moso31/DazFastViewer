@@ -11,6 +11,21 @@ namespace {
 using Json=nlohmann::json;
 std::string path_string(const std::filesystem::path &p) {const auto u=p.generic_u8string();return {u.begin(),u.end()};}
 std::string fragment(const std::string &uri) {const auto text=decode_uri(uri);const auto hash=text.find('#');return hash==std::string::npos?text:text.substr(hash+1);}
+std::filesystem::path node_file(const std::string &uri,const std::filesystem::path &owner,const Json &report) {
+  const auto decoded=decode_uri(uri);const auto hash=decoded.find('#');
+  if(hash==std::string::npos||hash==0)return owner;
+  const auto raw=decoded.substr(0,hash);const auto path=std::filesystem::u8path(raw).lexically_normal();
+  std::vector<std::filesystem::path> candidates;
+  if(path.is_absolute()&&path.has_root_name())candidates.push_back(path);
+  else {
+    const auto relative=path.relative_path();
+    if(path.has_root_name()||(!relative.empty()&&*relative.begin()==".."))throw std::runtime_error("骨架引用越过内容根目录："+uri);
+    if(!raw.starts_with('/'))candidates.push_back(owner.parent_path()/relative);
+    for(const auto &root:array_member(report,"content_roots"))candidates.push_back(std::filesystem::u8path(root.get<std::string>())/relative);
+  }
+  for(const auto &candidate:candidates)if(document_exists(candidate))return std::filesystem::weakly_canonical(candidate);
+  throw std::runtime_error("骨架依赖缺失："+uri);
+}
 float number(const Json &channel,float fallback) {return channel.value("current_value",channel.value("value",fallback));}
 ir::Vec3 vector(const Json &node,const char *key,ir::Vec3 fallback={}) {
   if(!node.contains(key)) return fallback;
@@ -79,14 +94,22 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     if(mode=="DualQuat") skin.method=runtime::SkinMethod::dual_quaternion;
     else if(mode=="Linear") skin.method=runtime::SkinMethod::linear;
     else throw std::runtime_error("尚未支持的蒙皮方式："+mode);
-    std::map<std::string,Json> nodes;for(const auto &n:document->at("node_library")) {const auto id=n.at("id").get<std::string>();if(!nodes.emplace(id,n).second) throw std::runtime_error("骨架节点 ID 重复");}
+    std::map<std::string,Json> nodes;std::map<std::string,std::filesystem::path> node_files;
+    for(const auto &n:document->at("node_library")) {const auto id=n.at("id").get<std::string>();if(!nodes.emplace(id,n).second) throw std::runtime_error("骨架节点 ID 重复");node_files[id]=binding_file;}
     const auto root=fragment(binding->at("node").get<std::string>());if(!nodes.contains(root)) throw std::runtime_error("缺少骨架根节点");
     std::map<std::string,size_t> indices;std::set<std::string> visiting;
-    std::function<size_t(const std::string &)> add=[&](const std::string &id)->size_t {
+    std::function<size_t(const std::string &,const std::filesystem::path &)> add=[&](const std::string &uri,const std::filesystem::path &owner)->size_t {
+      const auto id=fragment(uri);
       if(indices.contains(id)) return indices.at(id);
+      // 派生服装可内嵌修改后的骨骼，只将未覆盖的父链留在外部 DSF。
+      // 每段相对引用都从其声明文档解析，已有内嵌骨骼保持优先。
+      if(!nodes.contains(id)) {
+        const auto file=node_file(uri,owner,loaded.report);const auto source=document_view(file,DocumentView::skeleton);
+        for(const auto &n:array_member(*source,"node_library"))if(n.value("id","")==id){if(nodes.contains(id))throw std::runtime_error("骨架节点 ID 重复："+id);nodes.emplace(id,n);node_files[id]=file;}
+      }
       if(!nodes.contains(id)||!visiting.insert(id).second) throw std::runtime_error("骨架父节点缺失或形成循环："+id);
       const auto &n=nodes.at(id);int parent=-1;
-      if(id!=root) {const auto pid=fragment(n.value("parent",""));if(pid.empty()) throw std::runtime_error("骨骼不属于目标 Figure："+id);parent=int(add(pid));}
+      if(id!=root) {const auto parent_uri=n.value("parent","");if(parent_uri.empty()) throw std::runtime_error("骨骼不属于目标 Figure："+id);parent=int(add(parent_uri,node_files.at(id)));}
       runtime::Joint j;j.id=id;j.name=n.value("name",id);j.label=n.value("label",j.name);j.parent=parent;j.rotation_order=n.value("rotation_order","XYZ");
       j.center_cm=vector(n,"center_point");j.end_cm=vector(n,"end_point");j.orientation_degrees=vector(n,"orientation");
       j.inherits_scale=n.value("inherits_scale",parent<0||skin.joints[parent].parent<0);
@@ -95,7 +118,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       if(id!=root) pose_channels(pose,n); // Figure 的初始世界变换已由静态 Loader 写入实例。
       const size_t index=skin.joints.size();skin.joints.push_back(j);skin.initial.push_back(pose);indices[id]=index;visiting.erase(id);return index;
     };
-    add(root);
+    add(root,binding_file);
     skin.root_general_scale=number(nodes.at(root).value("general_scale",Json::object()),1);
     if(instances.contains(object.id)&&instances.at(object.id)->contains("general_scale")) skin.root_general_scale=number(instances.at(object.id)->at("general_scale"),skin.root_general_scale);
     if(!std::isfinite(skin.root_general_scale)||skin.root_general_scale<=0) throw std::runtime_error("Figure 保存缩放必须大于零");
@@ -113,7 +136,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
       std::erase_if(result,[](const auto &entry) {return entry.second==0;});return result;
     };
     for(const auto &w:binding->at("joints")) {
-      const auto index=add(fragment(w.at("node").get<std::string>()));if(!weighted_joints.insert(index).second) throw std::runtime_error("重复的关节权重记录");
+      const auto index=add(w.at("node").get<std::string>(),binding_file);if(!weighted_joints.insert(index).second) throw std::runtime_error("重复的关节权重记录");
       std::map<uint32_t,double> weights;
       if(binding_mode=="Local") {
         const auto &local=w.at("local_weights");weights=weight_map(local.at("x"));
@@ -155,7 +178,7 @@ SkinCatalog load_skeletons(const LoadedScene &loaded) {
     for(const auto &[id,n]:nodes) if(!indices.contains(id)) {
       auto parent=fragment(n.value("parent",""));std::set<std::string> seen;
       while(!parent.empty()&&parent!=root&&nodes.contains(parent)&&seen.insert(parent).second) parent=fragment(nodes.at(parent).value("parent",""));
-      if(parent==root) add(id);
+      if(parent==root) add(id,node_files.at(id));
     }
     // 保存场景中的骨骼实例覆盖值只可作用于所属 Figure，不能按名称跨角色覆盖。
     for(const auto &[id,node]:instances) {const auto &n=*node;

@@ -1,5 +1,5 @@
   bool powerpose_test_=false;
-  int pp_case_=0,pp_phase_=0,pp_steps_=0,pp_target_=-1,pp_skin_=-1;
+  int pp_case_limit_=0,pp_case_=0,pp_phase_=0,pp_steps_=0,pp_target_=-1,pp_skin_=-1;
   Snapshot pp_initial_;
   RenderStatus pp_before_;
   QPointF pp_point_;
@@ -25,7 +25,7 @@
       }
       if(pp_target_<0) {fail("没有支持的角色");return;}pp_initial_=snapshot_;choose(pp_target_);findChild<QDockWidget*>(QStringLiteral("PowerPose"))->raise();return;
     }
-    if(pp_case_>=int(std::size(cases))) {
+    if(pp_case_>=(pp_case_limit_>0?std::min(pp_case_limit_,int(std::size(cases))):int(std::size(cases)))) {
       if(!ready) return;
       if(snapshot_.poses!=pp_initial_.poses||state.pose_restore_max_error>1e-6) {fail("恢复后姿势或几何不同");return;}
       screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"powerpose-restored.png").wstring()));finish_test(true);return;

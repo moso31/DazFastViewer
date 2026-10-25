@@ -88,7 +88,7 @@ void ParameterPanel::show_item(QTreeWidgetItem *item) {
 void ParameterPanel::wheel_selection(int row) {
   wheel_selected_=row;
   for(const auto &[i,w]:mounted_)if(auto *label=w->findChild<QLabel *>("valueLabel"))
-    label->setStyleSheet(i==row?"QLabel { color: palette(highlighted-text); font-weight: bold; }":"");
+    label->setStyleSheet(i==row?"QLabel { background-color: palette(highlight); color: palette(highlighted-text); font-weight: bold; }":"");
 }
 bool ParameterPanel::eventFilter(QObject *object,QEvent *event) {
   if(event->type()!=QEvent::MouseButtonPress&&event->type()!=QEvent::MouseButtonDblClick&&event->type()!=QEvent::Wheel&&event->type()!=QEvent::Hide)return QWidget::eventFilter(object,event);
@@ -365,7 +365,7 @@ void ParameterPanel::mount() {
     widget->setToolTip(text(c.detail));
     auto watched=widget->findChildren<QWidget *>();watched.push_back(widget);
     for(auto *child:watched) child->setProperty("parameterRow",i);
-    if(i==wheel_selected_)label->setStyleSheet("QLabel { color: palette(highlighted-text); font-weight: bold; }");
+    if(i==wheel_selected_)label->setStyleSheet("QLabel { background-color: palette(highlight); color: palette(highlighted-text); font-weight: bold; }");
     tree_->setItemWidget(items_[size_t(i)],0,widget);mounted_[i]=widget;
   }
 }

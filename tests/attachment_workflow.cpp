@@ -24,7 +24,9 @@ static ir::Vec3 point(const ir::Scene &scene,size_t instance,size_t vertex=0) {c
 static double distance(ir::Vec3 a,ir::Vec3 b) {return std::abs(a.x-b.x)+std::abs(a.y-b.y)+std::abs(a.z-b.z);}
 #include "derived_wearable.inl"
 #include "outfit_copy.inl"
+#include "material_auto_match.inl"
 static void unit() {
+  material_auto_match();
   const auto folder=fs::temp_directory_path()/("dfv-wear-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   fs::create_directories(folder/"data/Body/Morphs");fs::create_directories(folder/"data/Wear");
   const auto entry=folder/"People/Genesis 8 Female/Anatomy/3feetwolf/HD Nipples - 2.0/HD Nipples for G8F - 2.0.dse";

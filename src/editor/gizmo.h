@@ -7,7 +7,7 @@ enum class GizmoTool {select,translate,rotate,scale};
 enum class GizmoSpace {local,world};
 struct GizmoSettings {
   GizmoTool tool=GizmoTool::select;
-  GizmoSpace space=GizmoSpace::local;
+  GizmoSpace space=GizmoSpace::world;
   bool operator==(const GizmoSettings &) const = default;
 };
 struct GizmoSegment {ir::Vec2 a,b;int handle=-1;};

@@ -31,6 +31,7 @@ int main() {
         "polygon_vertex_indices":[[0,1,4]]}]
     })");
     const auto asset_path=directory/"data"/fs::u8path("mesh \xc3\xa4.dsf");
+    asset["geometry_library"][0]["rigidity"]=Json::parse(R"({"weights":{"count":2,"values":[[0,1],[1,0.5]]},"groups":[{"id":"rigid","rotation_mode":"none","scale_modes":["primary","primary","primary"],"reference_vertices":{"count":2,"values":[2,3]},"mask_vertices":{"count":2,"values":[0,1]},"transform_nodes":["#extra%20bone"],"use_tranform_bones_for_scale":true}]})");
     write(asset_path,asset);
     Json duf=Json::parse(R"({
       "material_library":[{"id":"mat","diffuse":{"channel":{"id":"diffuse","value":[1,1,1]}}}],
@@ -45,6 +46,7 @@ int main() {
     auto loaded=dfv::daz::load(path,{{directory},true});
     require(loaded.scene.meshes.size()==1 && loaded.scene.instances.size()==2,"共享网格没有保留实例关系");
     const auto &mesh=loaded.scene.meshes[0];require(mesh.triangles.size()==2,"四边形三角化错误");
+    require(mesh.bone_rigidity.size()==1&&mesh.bone_rigidity[0].transform_nodes==std::vector<std::string>{"extra bone"}&&mesh.bone_rigidity[0].reference_vertices==std::vector<uint32_t>{2,3}&&mesh.bone_rigidity[0].weights==std::vector<float>{1,.5f,0,0},"骨骼刚性区域的原生引用或权重丢失");
     require(std::abs(mesh.triangles[0].uv[1].x-.25f)<1e-6f && std::abs(mesh.triangles[0].uv[1].y-.75f)<1e-6f,"UV 接缝没有按几何顶点索引覆盖");
     require(std::abs(mesh.positions[2].x-1)<1e-6f && std::abs(mesh.positions[2].z-1)<1e-6f,"单位或坐标系转换错误");
     require(std::abs(loaded.scene.instances[0].transform.point({0,0,0}).x-2)<1e-6f,"实例 current_value 变换没有应用");

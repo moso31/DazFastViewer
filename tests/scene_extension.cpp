@@ -54,6 +54,17 @@ static void roundtrip(const fs::path &folder){
   for(const auto &o:encoded.at("state").at("objects"))check(!o.contains("physics"),"physics persisted in v2");
   check(daz::supported_content_entry(saved)&&daz::content_asset(saved,{folder})==saved,"DUFEX content resolution failed");
   const auto before=snapshot_json(d,s);
+  // 同一 DUF 另存不同文件名，之后保存某一版本不能覆盖另一个版本或源文件。
+  {
+    const auto a=folder/"version-a.dufex",b=folder/"version-b.dufex";auto version=s;
+    save_scene_extension(a,d,version);const auto first=daz::read_document_file(a);
+    version.values[0].transform.translation_cm.x=87;save_scene_extension(b,d,version);
+    auto second=load_scene_extension(b,{folder},2);check(second.snapshot.values[0].transform.translation_cm.x==87,"另存版本未保存独立状态");
+    second.snapshot.values[0].transform.translation_cm.x=99;save_scene_extension(b,*second.document,second.snapshot);
+    check(daz::read_document_file(a)==first&&daz::read_document_file(file)==native,"保存版本 B 覆盖了版本 A 或原 DUF");
+    auto original=load_scene_extension(a,{folder},3);auto updated=load_scene_extension(b,{folder},4);
+    check(snapshot_json(*original.document,original.snapshot)==before&&updated.snapshot.values[0].transform.translation_cm.x==99,"多个 DUFEX 版本不能独立重新打开");
+  }
   {auto bad=before;bad["parameter_settings"].begin().value().begin().value()["step"]=0;rejects([&]{auto copy=s;apply_snapshot_json(d,copy,bad);});auto copy=s;auto legacy=before;legacy.erase("parameter_settings");apply_snapshot_json(d,copy,legacy);check(copy.parameter_settings.empty(),"旧场景错误继承当前 UI 设置");}
   // Plain v1 is still readable, and its first v2 save freezes its source.
   auto v1=scene_extension_json(d,s);v1.erase("archives");v1.erase("source_archive");write(folder/"legacy.dufex",v1);

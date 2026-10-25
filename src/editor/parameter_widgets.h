@@ -32,7 +32,7 @@ class Context final:public QObject {
   bool wheel_=false;
   void select(const QString &key,QLabel *label=nullptr) {
     if(selected_label_)selected_label_->setStyleSheet({});selected_=key;selected_label_=label;
-    if(label&&!key.isEmpty())label->setStyleSheet("QLabel { color: palette(highlight); }");
+    if(label&&!key.isEmpty())label->setStyleSheet("QLabel { background-color: palette(highlight); color: palette(highlighted-text); font-weight: bold; }");
   }
 protected:
   bool eventFilter(QObject *object,QEvent *event) override {
@@ -128,7 +128,9 @@ protected:
       if(event->type()==QEvent::Enter){auto *button=static_cast<QToolButton *>(object);QTimer::singleShot(260,this,[this,button]{if(button->underMouse()&&button->isEnabled())show_editor(button,false);});}
       if(event->type()==QEvent::Leave)leave_later();
     }
-    if(object==popup_){if(event->type()==QEvent::Enter)popup_entered_=true;if(event->type()==QEvent::Leave)leave_later();if(event->type()==QEvent::WindowDeactivate)cancel();}
+    if(object==popup_){if(event->type()==QEvent::Enter)popup_entered_=true;if(event->type()==QEvent::Leave)leave_later();
+      // Windows 从宿主切到悬停工具窗时可能先发失活事件；等激活交接结束再决定关闭。
+      if(event->type()==QEvent::WindowDeactivate){const auto popup=popup_;QTimer::singleShot(0,this,[this,popup]{if(popup&&popup_==popup&&QApplication::activeWindow()!=popup)cancel();});}}
     if(event->type()==QEvent::Hide&&object==this)cancel();return false;
   }
   void hideEvent(QHideEvent *e) override {cancel();QWidget::hideEvent(e);}

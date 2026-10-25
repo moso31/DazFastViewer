@@ -55,6 +55,7 @@ class SkinningRuntime {
   SkinStats stats_;
 public:
   SkinningRuntime(ir::Scene &scene,const std::vector<Skin> &skins);
+  SkinningRuntime(const SkinningRuntime &s,ir::Scene &scene):scene_(scene),skins_(s.skins_),poses_(s.poses_),sources_(s.sources_),dirty_(s.dirty_),stats_(s.stats_) {}
   bool set_pose(size_t skin,const std::vector<JointPose> &pose);
   // 接收 Morph 输出，缓存蒙皮前顶点；绝不以上一次蒙皮结果作为输入。
   ir::Delta evaluate(ir::Delta before={});

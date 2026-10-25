@@ -4,6 +4,12 @@
   int measurement_target_=-1,extension_bound_=-1;
   const Document *measurement_document_=nullptr;
   std::filesystem::path extension_file_;
+  nlohmann::json saved_scene_content_;
+  nlohmann::json scene_content(const Snapshot &snapshot) const {
+    auto state=snapshot_json(*document_,snapshot);state.erase("view");
+    // 资源操作记录覆盖穿戴、材质预设等结构修改；运行时文档副本和视口导航不算修改。
+    return {{"scene",scene_identity_},{"operations",document_->operations},{"state",std::move(state)}};
+  }
   bool saving_extension_=false;
   std::string measurement_scale_="1";
   void initialize_favorites() {
@@ -66,6 +72,20 @@
     }
     const auto result=measurements_.result();if(result.serial==measurement_serial_&&result.serial!=measurement_displayed_){measurement_displayed_=result.serial;extension_panel_->result(result.weight,result.error);}
   }
+  QImage scene_thumbnail(Snapshot &saved,bool automatic=false) {
+    auto capture=renderer_->capture(document_->generation,snapshot_.revision);
+    QProgressDialog progress(QStringLiteral("正在等待当前视口，生成缩略图…"),automatic?QStringLiteral("跳过截图"):QStringLiteral("取消"),0,0,this);progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);progress.setAutoClose(false);
+    QEventLoop loop;QTimer poll;poll.setInterval(30);const auto deadline=QDateTime::currentMSecsSinceEpoch()+(automatic?5000:60000);QString error;
+    connect(&progress,&QProgressDialog::canceled,&loop,&QEventLoop::quit);
+    connect(&poll,&QTimer::timeout,&loop,[&]{const auto state=renderer_->status();
+      if(capture.wait_for(std::chrono::seconds(0))==std::future_status::ready){loop.quit();return;}
+      if(!state.error.empty()||!state.edit_error.empty()||!state.resource_error.empty()){error=text(state.error+state.edit_error+state.resource_error);loop.quit();}
+      else if(QDateTime::currentMSecsSinceEpoch()>=deadline){error=QStringLiteral("等待视口缩略图超时，请在场景显示完成后重试。");loop.quit();}
+    });poll.start();loop.exec();poll.stop();progress.hide();
+    if(progress.wasCanceled()){renderer_->cancel_capture();return {};}if(!error.isEmpty()){renderer_->cancel_capture();throw std::runtime_error(error.toUtf8().toStdString());}
+    auto frame=capture.get();saved.view=frame.view;
+    QImage pixels(frame.rgba.data(),frame.size,frame.size,QImage::Format_RGBA8888);return pixels.mirrored().scaled(256,256,Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB888);
+  }
   void save_extension(bool save_as=false) {
     if(loading_||saving_extension_||!document_)return;
     accept_pose_commit(renderer_->status());
@@ -76,21 +96,12 @@
     saving_extension_=true;struct SavingGuard{bool &saving;~SavingGuard(){saving=false;}} guard{saving_extension_};
     try{
       apply_parameters();auto saved=snapshot_;saved.pose_pins=pose_pins_;
-      auto capture=renderer_->capture(document_->generation,snapshot_.revision);
-      QProgressDialog progress(QStringLiteral("正在等待当前视口，生成场景缩略图…"),QStringLiteral("取消"),0,0,this);progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);progress.setAutoClose(false);
-      QEventLoop loop;QTimer poll;poll.setInterval(30);const auto deadline=QDateTime::currentMSecsSinceEpoch()+60000;QString error;
-      connect(&progress,&QProgressDialog::canceled,&loop,&QEventLoop::quit);
-      connect(&poll,&QTimer::timeout,&loop,[&]{const auto state=renderer_->status();
-        if(capture.wait_for(std::chrono::seconds(0))==std::future_status::ready){loop.quit();return;}
-        if(!state.error.empty()||!state.edit_error.empty()||!state.resource_error.empty()){error=text(state.error+state.edit_error+state.resource_error);loop.quit();}
-        else if(QDateTime::currentMSecsSinceEpoch()>=deadline){error=QStringLiteral("等待视口缩略图超时，请在场景显示完成后重试。");loop.quit();}
-      });poll.start();loop.exec();poll.stop();progress.hide();
-      if(progress.wasCanceled()){renderer_->cancel_capture();return;}if(!error.isEmpty()){renderer_->cancel_capture();throw std::runtime_error(error.toUtf8().toStdString());}
-      auto frame=capture.get();saved.view=frame.view;
-      QImage pixels(frame.rgba.data(),frame.size,frame.size,QImage::Format_RGBA8888);const auto thumbnail=pixels.mirrored().scaled(256,256,Qt::IgnoreAspectRatio,Qt::SmoothTransformation).convertToFormat(QImage::Format_RGB888);
+      const auto thumbnail=scene_thumbnail(saved);if(thumbnail.isNull())return;
       QSaveFile png(QString::fromStdWString(path.wstring())+".png");if(!png.open(QIODevice::WriteOnly)||!thumbnail.save(&png,"PNG"))throw std::runtime_error("场景缩略图写入失败，场景未保存");
       save_scene_extension(path,*document_,saved);if(!png.commit())throw std::runtime_error("场景已保存，但缩略图提交失败，请重新保存");
-      snapshot_.view=saved.view;extension_file_=path;if(history_)history_->mark_saved();checkpoint();if(!self_test_)browser_->saved_scene(QString::fromStdWString(path.wstring()));
+      snapshot_.view=saved.view;extension_file_=path;
+      saved_scene_content_=scene_content(saved);
+      if(history_)history_->mark_saved();checkpoint();if(!self_test_)browser_->saved_scene(QString::fromStdWString(path.wstring()));
       statusBar()->showMessage((legacy_scene_extension(*document_)?QStringLiteral("场景含城市 PCG，沿用旧版格式保存："):QStringLiteral("DUFEX v2 场景和缩略图已保存："))+QString::fromStdWString(path.wstring()),8000);
     }
     catch(const std::exception &e){renderer_->cancel_capture();if(self_test_)finish_test(false,e.what());else QMessageBox::warning(this,QStringLiteral("保存失败"),text(e.what()));}

@@ -244,12 +244,32 @@ size_t apply_materials(Document &document,size_t target,const daz::LoadedScene &
   }
   auto matches=[&](MaterialSurface surface){const auto &i=scene.instances.at(surface.instance);const auto &slot=scene.meshes.at(i.mesh).material_slots.at(surface.slot);
     for(size_t m=0;m<preset.scene.materials.size();++m)if(material_owner_matches(document,preset.scene.materials[m],surface.instance))for(const auto &group:preset.report.at("materials").at(m).at("groups"))if(material_group_matches(document,preset,surface.instance,slot,group.get<std::string>()))return true;return false;};
-  // 普通服装材质在角色本体没有匹配表面时，允许匹配其穿戴物和层级子对象。
-  if(!hierarchical&&std::none_of(surfaces.begin(),surfaces.end(),matches)){
-    const ObjectHierarchy hierarchy(document);
-    for(size_t t=0;t<document.catalog.targets.size();++t)if(t!=target){const auto &candidate=document.catalog.targets[t];bool include=hierarchy.contains(hierarchy.targets[target],hierarchy.targets[t]);
-      if(!include&&document.catalog.targets[target].character)try{include=attachment_host(document,t)==target;}catch(const std::exception &){}
-      if(include)for(size_t slot=0;slot<scene.instances.at(candidate.instance).materials.size();++slot){MaterialSurface surface{candidate.instance,slot};if(matches(surface))surfaces.push_back(surface);}
+  // 普通预设作为一个整体匹配；只匹配 Trim 等共享表面不能证明是这件服装。
+  if(!hierarchical) {
+    auto complete=[&](size_t t) {
+      const auto instance=document.catalog.targets[t].instance;const auto &i=scene.instances.at(instance);const auto &slots=scene.meshes.at(i.mesh).material_slots;
+      if(preset.scene.materials.empty())return false;
+      for(size_t m=0;m<preset.scene.materials.size();++m) {
+        if(!material_owner_matches(document,preset.scene.materials[m],instance))return false;
+        const auto &groups=preset.report.at("materials").at(m).at("groups");if(groups.empty())return false;
+        for(const auto &group:groups)if(std::none_of(slots.begin(),slots.end(),[&](const auto &slot){return material_group_matches(document,preset,instance,slot,group.get<std::string>());}))return false;
+      }
+      return true;
+    };
+    if(!complete(target)) {
+      const ObjectHierarchy hierarchy(document);std::vector<size_t> candidates;
+      for(size_t t=0;t<document.catalog.targets.size();++t)if(t!=target) {
+        bool include=hierarchy.contains(hierarchy.targets[target],hierarchy.targets[t]);
+        if(!include)try{include=attachment_host(document,t)==target;}catch(const std::exception &){}
+        if(include&&complete(t))candidates.push_back(t);
+      }
+      if(candidates.size()>1)throw std::runtime_error("多件穿戴物都匹配此材质，请选中要修改的服装后重试");
+      if(candidates.size()==1) {
+        surfaces.clear();const auto instance=document.catalog.targets[candidates.front()].instance;
+        for(size_t slot=0;slot<scene.instances.at(instance).materials.size();++slot)surfaces.push_back({instance,slot});
+      }else if(std::none_of(surfaces.begin(),surfaces.end(),matches)) {
+        throw std::runtime_error("当前角色没有穿戴与此材质完整匹配的服装，请先穿戴或选中对应对象");
+      }
     }
   }
   auto scratch=Snapshot{};return apply_surface_materials(document,snapshot?*snapshot:scratch,preset,surfaces);

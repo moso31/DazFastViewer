@@ -162,8 +162,8 @@ bool GizmoDrag::begin(runtime::PosePointer pointer,CameraState view,int w,int h,
   handle=shape.hit(float(pointer.start_x),float(pointer.start_y),8*dpi);if(handle<0||pointer.cancelled||pointer.modified) return false;
   if(mode.tool==GizmoTool::translate&&handle>=4&&!plane_point(camera,w,h,initial_pivot_,shape.axes[handle-4],float(pointer.start_x),float(pointer.start_y),plane_press_)) return false;
   if(mode.tool==GizmoTool::rotate) start_angle_=previous_angle_=ring_angle(camera,w,h,shape,handle,float(pointer.start_x),float(pointer.start_y));
-  proxy={};proxy.positions=mesh.positions;
-  const size_t step=std::max(size_t(1),(mesh.triangles.size()+39999)/40000);for(size_t i=0;i<mesh.triangles.size();i+=step) if(mesh.draws(mesh.triangles[i])) proxy.triangles.push_back(mesh.triangles[i]);
+  proxy={};proxy.positions=mesh.positions;proxy.curves=mesh.curves;
+  for(const auto &triangle:mesh.triangles) if(mesh.draws(triangle)) proxy.triangles.push_back(triangle);
   if(joint>=0&&skin_source) {runtime::Skin reduced;build_pose_proxy(proxy_skin_,mesh,*skin_source,reduced,proxy,source_);proxy_skin_=std::move(reduced);proxy.positions=runtime::deform(proxy_skin_,solved_,source_);}
   active=true;return true;
 }

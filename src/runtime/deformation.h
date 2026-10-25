@@ -51,6 +51,8 @@ class DeformationRuntime {
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved,std::vector<std::vector<float>> *followed=nullptr);
 public:
   DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);
+  // 调用方同时复制当前 Scene；共享不可变资产，独立复制所有可变求值缓存。
+  DeformationRuntime(const DeformationRuntime &source,ir::Scene &scene);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
   // One-way preview policy. A separate runtime supplies the fully corrected result;
   // its collision caches must never be fed our uncorrected preview geometry.

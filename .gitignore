@@ -11,3 +11,10 @@ __pycache__/
 /CMakeUserPresets.json
 /aqtinstall.log
 /DazFastViewer.sln
+
+/temp.dufex
+/temp[0-6].dufex
+/temp.dufex.png
+/temp[0-6].dufex.png
+/.temp-dufex*
+/.dfv-write-*

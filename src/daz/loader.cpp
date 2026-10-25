@@ -842,6 +842,21 @@ LoadedScene load(const fs::path &input,const LoadOptions &options) {
       else {
         const auto &positions=values(g.at("vertices"));
         for(const auto &p:positions) {if(!p.is_array()||p.size()!=3) fail("无效顶点");mesh.positions.push_back(to_render({p[0].get<float>(),p[1].get<float>(),p[2].get<float>()}));}
+        if(g.contains("rigidity")) {
+          const auto &rigidity=g.at("rigidity");std::vector<float> weights(mesh.positions.size(),1);
+          if(rigidity.contains("weights")){std::fill(weights.begin(),weights.end(),0.f);std::set<uint32_t> seen;
+            for(const auto &row:values(rigidity.at("weights"))){const auto v=row.at(0).get<uint32_t>();const float w=row.at(1).get<float>();if(v>=weights.size()||!seen.insert(v).second||!std::isfinite(w)||w<0||w>1)fail("刚性区域权重无效");weights[v]=w;}}
+          for(const auto &group:array_member(rigidity,"groups")) {
+            // 此类区域的缩放交给骨骼，Morph 投射只移动参考组中心，不能再拉伸蒙皮前顶点。
+            if(group.value("rotation_mode",std::string("none"))!="none"||!group.value("use_tranform_bones_for_scale",group.value("use_transform_bones_for_scale",false)))continue;
+            if(!group.contains("reference_vertices")||!group.contains("mask_vertices"))continue;
+            ir::BoneRigidityGroup parsed;parsed.id=group.at("id");parsed.weights=weights;
+            for(auto key:{"reference_vertices","mask_vertices"}){auto &indices=std::string(key)=="reference_vertices"?parsed.reference_vertices:parsed.mask_vertices;
+              std::set<uint32_t> seen;for(const auto &row:values(group.at(key))){const auto v=row.get<uint32_t>();if(v>=mesh.positions.size()||!seen.insert(v).second)fail("刚性区域顶点越界或重复");indices.push_back(v);}}
+            for(const auto &uri:array_member(group,"transform_nodes")){const auto value=decode_uri(uri.get<std::string>());const auto hash=value.rfind('#');parsed.transform_nodes.push_back(hash==std::string::npos?value:value.substr(hash+1));}
+            if(!parsed.reference_vertices.empty()&&!parsed.transform_nodes.empty())mesh.bone_rigidity.push_back(std::move(parsed));
+          }
+        }
         struct UV {std::vector<ir::Vec2> values;std::map<std::pair<uint32_t,uint32_t>,uint32_t> seams;};
         std::map<std::string,UV> uv_cache;
         for(const auto &ref:uv_refs) if(!uv_cache.contains(ref)) {

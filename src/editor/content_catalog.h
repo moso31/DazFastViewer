@@ -11,7 +11,8 @@
 
 namespace dfv::editor {
 QString content_path(const QString &path);
-QString content_category(const nlohmann::json &document);
+QString content_category(const nlohmann::json &document,const QStringList &model_types={});
+QString content_file_category(const QString &path,const QStringList &roots);
 QStringList content_categories();
 QString category_label(const QString &category);
 // 浏览器中的资源类型；能显示、定位与拷贝，不表示已支持执行所有脚本。
@@ -29,6 +30,8 @@ public:
   explicit ContentHistory(const QString &settings_file={});
   QSettings &settings() {return *settings_;}
   const QStringList &searches() const {return searches_;}
+  const std::vector<RecentContent> &records() const {return recent_;}
+  void recategorize(const RecentContent &previous,const QString &category);
   void searched(const QString &query);
   void used(const QString &path,const QString &category,qint64 time=0);
   void remove(const QString &path);

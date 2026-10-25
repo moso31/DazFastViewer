@@ -15,6 +15,10 @@
 #include <QScreen>
 #include <QStyleOptionDockWidget>
 #include <QStyleOptionMenuItem>
+#include <QStyleOptionViewItem>
+#include <QPainter>
+#include <QProxyStyle>
+#include <QTreeWidget>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
@@ -49,7 +53,9 @@ static void check_menu(EditorWindow &window) {
     for(int x=qRound((first.left()+2)*ratio);x<qRound((first.right()-2)*ratio);++x)
       if(qGray(image.pixel(x,y))<140)ink=ink.united(QRect(x,y,1,1));
   const int icon=qRound(tools->iconSize().height()*ratio);
-  check(ink.height()>=icon*.75&&ink.height()<=icon*1.2,"菜单实际字高与工具图标不协调");
+  // 9pt 中文的实际字形小于 20px 图标；按字体字形度量检查绘制尺寸，避免将行高当作墨迹高度。
+  const int expected_ink=qRound(menu->fontMetrics().tightBoundingRect(menu->actions().front()->text()).height()*ratio);
+  check(std::abs(ink.height()-expected_ink)<=std::ceil(2*ratio)&&ink.height()<=icon*1.2,"菜单实际字高不符合所设字体或超出工具图标");
   const auto text_center=menu->mapTo(window.chrome,QPoint(first.center().x(),qRound(ink.center().y()/ratio)));
   const auto tool_center=tools->widgetForAction(window.findChild<QAction *>("GizmoTool0"));
   check(std::abs(text_center.y()-tool_center->mapTo(window.chrome,tool_center->rect().center()).y())<=ui_pixels(3),"菜单文字没有与工具图标垂直对齐");
@@ -70,7 +76,7 @@ int main(int argc,char **argv){
     auto *dock=new TitleProbe(&window);window.addDockWidget(Qt::LeftDockWidgetArea,dock);
     auto *tabbed=new QDockWidget(QStringLiteral("停靠标签"),&window);tabbed->setObjectName("ScaleTabbedDock");tabbed->setWidget(new QLabel(QStringLiteral("标签内容")));window.addDockWidget(Qt::RightDockWidgetArea,tabbed);
     auto *other=new QDockWidget(QStringLiteral("另一个面板"),&window);other->setObjectName("ScaleOtherDock");other->setWidget(new QLabel(QStringLiteral("另一个内容")));window.addDockWidget(Qt::RightDockWidgetArea,other);window.tabifyDockWidget(tabbed,other);
-    UiScale scale(true,file);scale.add_menu(settings);window.show();QTest::qWait(50);
+    UiScale scale(true,file);for(auto group:{QPalette::Active,QPalette::Inactive}){check(app.palette().color(group,QPalette::Highlight)==QColor("#246bb3"),"全局选中色未应用");check(app.palette().color(group,QPalette::HighlightedText)==QColor(Qt::white),"全局选中文字颜色错误");}scale.add_menu(settings);window.show();QTest::qWait(50);
     auto screenshot=[&](const char *name){if(argc>1){QDir().mkpath(QString::fromLocal8Bit(argv[1]));window.grab().save(QString::fromLocal8Bit(argv[1])+"/"+name);window.chrome->grab().save(QString::fromLocal8Bit(argv[1])+"/chrome-"+name);}};
     const int title100=dock->title_ink_height();check(title100>0,"停靠标题没有实际绘出文字");screenshot("scale-100.png");check_menu(window);
     auto *menu_bar=window.chrome->menus();
@@ -112,6 +118,27 @@ int main(int argc,char **argv){
       check(dfv::render_size(1600,900,50)==std::pair{800,450}&&dfv::render_size(1600,900,75)==std::pair{1200,675},"渲染尺寸没有按宽高缩小");
       check(dfv::render_size(1600,900,50,true)==std::pair{200,112}&&dfv::render_size(1,1,50)==std::pair{1,1},"导航预览或最小尺寸错误");
       quality.set({0});check(quality.value().percent==50,"渲染比例下限失效");quality.set({200});check(quality.value().percent==100,"渲染比例上限失效");
+    }
+    {
+      QStyleOptionViewItem selected;selected.rect={0,0,240,40};selected.text="MMMMMMMM";selected.font=app.font();selected.fontMetrics=QFontMetrics(selected.font);
+      selected.features=QStyleOptionViewItem::HasDisplay;selected.state=QStyle::State_Enabled|QStyle::State_Selected;selected.showDecorationSelected=true;
+      selected.palette=app.palette();selected.palette.setCurrentColorGroup(QPalette::Inactive);
+      QImage rendered(240,40,QImage::Format_RGB32);rendered.fill(QColor("#246bb3"));QPainter painter(&rendered);painter.setFont(selected.font);app.style()->drawControl(QStyle::CE_ItemViewItem,&selected,&painter);painter.end();
+      int white=0;for(int y=0;y<rendered.height();++y)for(int x=0;x<rendered.width();++x){const auto color=rendered.pixelColor(x,y);if(color.red()>240&&color.green()>240&&color.blue()>240)++white;}
+      check(white>20,"非活动面板的蓝色选中背景没有使用白色文字");if(argc>1)rendered.save(QString::fromLocal8Bit(argv[1])+"/selection.png");
+      auto *proxy=dynamic_cast<QProxyStyle *>(app.style());check(proxy,"缺少应用代理样式");
+      for(auto state:{Qt::Unchecked,Qt::Checked,Qt::PartiallyChecked}) {
+        selected.features|=QStyleOptionViewItem::HasCheckIndicator;selected.checkState=state;
+        QImage row(240,40,QImage::Format_RGB32);row.fill(QColor("#246bb3"));QPainter row_painter(&row);app.style()->drawControl(QStyle::CE_ItemViewItem,&selected,&row_painter);row_painter.end();
+        auto indicator=selected;indicator.rect=app.style()->subElementRect(QStyle::SE_ItemViewItemCheckIndicator,&selected);
+        indicator.state&=~QStyle::State_HasFocus;indicator.state|=state==Qt::Checked?QStyle::State_On:state==Qt::PartiallyChecked?QStyle::State_NoChange:QStyle::State_Off;
+        QImage expected(240,40,QImage::Format_RGB32);expected.fill(QColor("#246bb3"));QPainter native(&expected);proxy->baseStyle()->drawPrimitive(QStyle::PE_IndicatorItemViewItemCheck,&indicator,&native);native.end();
+        check(row.copy(indicator.rect)==expected.copy(indicator.rect),"选中行的复选框没有保留原生绘制");
+      }
+      QTreeWidget tree;tree.setHeaderLabel(QStringLiteral("场景对象"));tree.resize(300,170);
+      for(int i=0;i<6;++i){auto *item=new QTreeWidgetItem(&tree,{QStringLiteral("角色 %1").arg(i+1)});item->setCheckState(0,Qt::CheckState(i/2));}
+      tree.setSelectionMode(QAbstractItemView::MultiSelection);for(int i=1;i<6;i+=2)tree.topLevelItem(i)->setSelected(true);tree.show();QTest::qWait(60);
+      if(argc>1)tree.grab().save(QString::fromLocal8Bit(argv[1])+"/native-checkbox-selection.png");
     }
     std::cout<<"停靠标题实际字号、停靠标签与内容、设置菜单、UI 与渲染倍率独立、动态控件、图标、顶部栏和偏好保存：PASS\n";return 0;
   }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}

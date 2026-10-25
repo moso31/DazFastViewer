@@ -13,10 +13,13 @@ public:
   explicit ContentBrowser(QWidget *parent=nullptr,const QString &settings_file={},const QString &cache_directory={});
   ~ContentBrowser() override;
   std::function<void(const QString &)> open_asset;
+  std::function<void(const QStringList &)> open_assets;
   std::function<void(const QString &,bool)> apply_pose;
   void set_roots(const QStringList &roots);
   void record_use(const QString &path,const QString &category);
   void saved_scene(const QString &path);
+  void refresh();
+  void set_autosave_directory(const QString &directory);
   void show_recent();
   bool locate(const QString &path);
   void locate_asset(const ContentOrigin &origin);

@@ -21,7 +21,39 @@ static runtime::Skin fixture() {
   runtime::Skin skin;runtime::Joint root;root.id="root";root.name="Figure";runtime::Joint bone;bone.id="oldId";bone.name="Bend";bone.aliases={"OldName"};bone.parent=0;bone.center_cm={100,0,0};
   skin.joints={root,bone};skin.initial.resize(2);skin.weights={{{1,1}}};return skin;
 }
+static void hierarchical_pose() {
+  auto skin=fixture();skin.id="renamed-figure";skin.joints[0].name="NewFigure";skin.joints[0].aliases={"Figure"};
+  runtime::Target target;target.label="big_01";runtime::Morph local;local.owner="oldId";local.channel_id="controlId";local.channel_name="anotherName";target.morphs={local};runtime::Properties values;values.morphs={.2f};
+  Json nodes=Json::array({
+    {{"id","bodyBone"},{"url","name://@selection/OldName:"},{"parent","#body"}},
+    {{"id","clothBone"},{"url","name://@selection/Bend:"},{"parent","#shirt"}},
+    {{"id","shirt"},{"url","name://@selection/Shirt:"},{"parent","#body"}},
+    {{"id","body"},{"url","name://@selection/Figure:"}}
+  });
+  auto channel=[](const std::string &url,float value){return Json{{"url",url},{"keys",{{0,value}}}};};
+  Json doc={{"asset_info",{{"type","preset_hierarchical_pose"}}},{"scene",{{"nodes",nodes},{"animations",Json::array({
+    channel("bodyBone:/data/base%20rig.dsf#oldId?rotation/z/value",45),
+    channel("body:#root?translation/y/value",12),
+    channel("bodyBone:#controlId?value/value",.7f),
+    channel("clothBone:/data/shirt.dsf#oldId?rotation/z/value",-80),
+    channel("shirt:#controlId?value/value",1)
+  })}}}};
+  const auto preset=daz::parse_pose(doc);const auto applied=daz::apply_pose(preset,skin,skin.initial,target,values);
+  require(applied.joints[1].rotation_degrees.z==45&&applied.joints[0].translation_cm.y==12&&applied.properties.morphs[0]==.7f,"分层姿势遗漏实例映射、根节点别名或按 ID 定位的骨骼控制器");
+  require(applied.report["applied_bone_channels"]==2&&applied.report["applied_morph_channels"]==1&&applied.report["unapplied"].size()==2,"服装同名骨骼覆盖人物或未报告不匹配分支");
+  const auto partial=daz::apply_pose(preset,skin,skin.initial,target,values,1);
+  require(partial.joints[0]==skin.initial[0]&&partial.joints[1]==applied.joints[1]&&partial.properties.morphs==applied.properties.morphs&&partial.report["excluded_channels"]==1,"分层姿势绕过局部骨骼范围");
+  auto id_doc=doc;id_doc["scene"]["nodes"][0]["url"]="id://@selection/oldId:";
+  require(daz::apply_pose(daz::parse_pose(id_doc),skin,skin.initial,target,values).joints==applied.joints,"分层姿势未遵守节点的 id 选择器");
+  auto other=skin;other.joints[0].aliases.clear();
+  require(daz::apply_pose(preset,other,other.initial,target,values).joints==other.initial,"未匹配的根节点被错误回退到同名子骨骼");
+  auto broken=doc;broken["scene"]["nodes"][0]["parent"]="#absent";rejects([&]{daz::parse_pose(broken);},"分层姿势缺失父节点未拒绝");
+  broken=doc;broken["scene"]["nodes"][3]["parent"]="#bodyBone";rejects([&]{daz::parse_pose(broken);},"分层姿势父链循环未拒绝");
+  broken=doc;broken["scene"]["nodes"].push_back(nodes[0]);rejects([&]{daz::parse_pose(broken);},"分层姿势重复节点 ID 未拒绝");
+  broken=doc;broken["scene"]["animations"][0]["url"]="absent:/data/base.dsf#oldId?rotation/z/value";rejects([&]{daz::parse_pose(broken);},"分层姿势缺失通道所属实例未拒绝");
+}
 static void unit_tests() {
+  hierarchical_pose();
   {
     auto skin=fixture();runtime::Target target;runtime::Morph corrective;corrective.id="corrective";corrective.channel_name="pJCMThigh";corrective.owner="root";corrective.minimum=0;corrective.maximum=1;corrective.clamped=true;
     target.morphs={corrective};runtime::Properties values;values.morphs={0};values.unlimited_morphs.insert(corrective.id);
@@ -112,6 +144,25 @@ static void unit_tests() {
   input.objects={{0,"figure-a","A","","geometry",dsf,true},{1,"figure-b","B","","geometry",dsf,true}};
   auto catalog=daz::load_skeletons(input);require(catalog.skins.size()==2&&catalog.skins[0].initial[1].rotation_degrees.z==90&&catalog.skins[1].initial[1].rotation_degrees.z==0,"载入姿势跨 Figure 污染或骨架未拓扑排序");
   require(catalog.skins[0].joints[1].channels[5].label=="Bend"&&catalog.skins[0].joints[1].channels[5].clamped&&catalog.skins[0].joints[1].channels[5].step==.5f,"骨骼通道元数据未继承");
+  {
+    const auto library=folder/"library";std::filesystem::create_directories(library/"data");
+    const auto external=library/"data/base rig.dsf",embedded=folder/"embedded.dsf";
+    auto source=asset;source["node_library"][0]["id"]="pelvis";source["node_library"][0]["parent"]="#hip";
+    source["node_library"].push_back({{"id","hip"},{"parent","#root"},{"center_point",{{{"id","y"},{"value",20}}}}});
+    auto partial=asset;partial["node_library"][0]["parent"]="/data/base%20rig.dsf#pelvis";
+    partial["node_library"][0]["center_point"]={{{"id","x"},{"value",15}}};
+    std::ofstream(external)<<source;std::ofstream(embedded)<<partial;
+    auto mixed=input;mixed.objects.resize(1);mixed.objects[0].geometry_file=embedded;mixed.report["content_roots"]={utf8(library)};
+    const auto restored=daz::load_skeletons(mixed);const auto &rig=restored.skins[0];
+    require(rig.joints.size()==4&&rig.joints[1].id=="hip"&&rig.joints[2].id=="pelvis"&&rig.joints[3].id=="oldId","内嵌骨架没有按外部 URI 补齐父链");
+    require(rig.joints[1].center_cm.y==20&&rig.joints[3].center_cm.x==15&&rig.initial[3].rotation_degrees.z==90,"外部父链、内嵌覆盖或所属场景姿势丢失");
+    auto pose=rig.initial;pose[3].rotation_degrees.z=0;require(near(runtime::deform(rig,pose,{{1,0,0}})[0],{1,0,0}),"外部父链的静止蒙皮改变顶点");
+    partial["node_library"][0]["parent"]="/data/absent.dsf#pelvis";std::ofstream(embedded)<<partial;
+    rejects([&]{daz::load_skeletons(mixed);},"外部骨架文件缺失未拒绝");
+    partial["node_library"][0]["parent"]="/data/base%20rig.dsf#pelvis";std::ofstream(embedded)<<partial;
+    source["node_library"][2]["parent"]="#pelvis";std::ofstream(external)<<source;
+    rejects([&]{daz::load_skeletons(mixed);},"跨文档骨架父链循环未拒绝");
+  }
   saved["scene"]["nodes"][1]["rotation"][0]["min"]=-100;saved["scene"]["nodes"][1]["rotation"][0]["locked"]=true;std::ofstream(duf)<<saved.dump();catalog=daz::load_skeletons(input);
   require(catalog.skins[0].joints[1].channels[5].minimum==-100&&catalog.skins[0].joints[1].channels[5].locked&&catalog.skins[1].joints[1].channels[5].minimum==-60&&!catalog.skins[1].joints[1].channels[5].locked,"DUF 骨骼通道覆盖缺失或跨角色污染");
   require(catalog.skins[0].joints[1].scene_id=="bone-a"&&catalog.skins[1].joints[1].scene_id.empty(),"骨骼实例身份没有按所属 Figure 保存");

@@ -20,6 +20,7 @@
         });
         dialog_timer.start();action->trigger();dialog_timer.stop();
         if(!accepted||!std::filesystem::exists(file)||daz::read_document_file(file).at("asset_info").at("type")!=type)throw std::runtime_error("菜单未保存正确的 DUF 预设");
+        const QImage thumbnail(QString::fromStdWString(file.wstring())+".png");if(thumbnail.isNull()||thumbnail.size()!=QSize(256,256))throw std::runtime_error("菜单未保存 256×256 预设缩略图");
         if(!same_edit(capture_edit(),before))throw std::runtime_error("保存预设改变了场景");checks.push_back(action_name);
       }
       menu->popup(mapToGlobal(QPoint(80,80)));QApplication::processEvents();screen()->grabWindow(winId()).save(QString::fromStdWString((output_/"preset-menu.png").wstring()));menu->hide();

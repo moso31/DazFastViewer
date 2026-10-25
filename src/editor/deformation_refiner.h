@@ -19,12 +19,14 @@ public:
     double seconds=0;
   };
 private:
+  struct Seed {std::unique_ptr<ir::Scene> scene;std::unique_ptr<runtime::DeformationRuntime> runtime;};
   struct Request {
     uint64_t ticket=0;
     std::shared_ptr<const Document> document;
     std::vector<runtime::Properties> values;
     std::vector<std::vector<runtime::JointPose>> poses;
     std::vector<ir::Transform> frames;
+    std::unique_ptr<Seed> seed;
   };
   std::mutex mutex_;
   std::condition_variable_any wake_;
@@ -41,6 +43,10 @@ private:
       Request request;
       {std::unique_lock lock(mutex_);if(!wake_.wait(lock,stop,[&]{return pending_.has_value();}))break;request=std::move(*pending_);pending_.reset();}
       if(!request.document){runtime.reset();scene.reset();document.reset();continue;}
+      if(request.seed) {
+        runtime.reset();scene=std::move(request.seed->scene);document=request.document;runtime=std::move(request.seed->runtime);
+        if(request.values.empty())continue;
+      }
       auto result=std::make_unique<Result>();result->ticket=request.ticket;
       const auto begin=std::chrono::steady_clock::now();diagnostics::active=&result->profile;
       try {
@@ -68,9 +74,15 @@ private:
     }
   }
 public:
+  void seed(std::shared_ptr<const Document> document,const ir::Scene &scene,const runtime::DeformationRuntime &runtime) {
+    auto seed=std::make_unique<Seed>();seed->scene=std::make_unique<ir::Scene>(scene);seed->runtime=std::make_unique<runtime::DeformationRuntime>(runtime,*seed->scene);
+    std::lock_guard lock(mutex_);pending_=Request{++ticket_,std::move(document),{},{},{},std::move(seed)};result_.reset();
+    if(!worker_.joinable())worker_=std::jthread([this](std::stop_token stop){run(stop);});wake_.notify_one();
+  }
   uint64_t request(std::shared_ptr<const Document> document,const Snapshot &snapshot,const std::vector<ir::Transform> &frames) {
     std::lock_guard lock(mutex_);const auto ticket=++ticket_;
-    const auto values=scene_properties(*document,snapshot);pending_=Request{ticket,std::move(document),values,snapshot.poses,frames};result_.reset();
+    auto seed=pending_&&pending_->document==document?std::move(pending_->seed):nullptr;
+    const auto values=scene_properties(*document,snapshot);pending_=Request{ticket,std::move(document),values,snapshot.poses,frames,std::move(seed)};result_.reset();
     if(!worker_.joinable())worker_=std::jthread([this](std::stop_token stop){run(stop);});
     wake_.notify_one();return ticket;
   }

@@ -51,7 +51,7 @@ class SurfaceIndex {
   }
 public:
   explicit SurfaceIndex(const ir::Mesh &mesh):mesh_(mesh) {triangles_.resize(mesh.triangles.size());std::iota(triangles_.begin(),triangles_.end(),0);if(!triangles_.empty()) build(0,triangles_.size());}
-  SurfaceBinding nearest(ir::Vec3 p) const {
+  SurfaceBinding nearest(ir::Vec3 p,const std::vector<ir::Vec3> *reference=nullptr,ir::Vec3 reference_point={},float reference_radius=0) const {
     if(branches_.empty()) throw std::runtime_error("Fit To 目标没有可用于形变转移的三角形");
     // 中位数二分树的深度受 size_t 位数约束；每次查询不再分配动态栈。
     float best=std::numeric_limits<float>::max();SurfaceBinding result;std::array<int,8*sizeof(size_t)+1> stack{};size_t pending=1;
@@ -59,8 +59,12 @@ public:
       if(b.left>=0) {const bool left_first=box_distance(branches_[b.left].bounds,p)<box_distance(branches_[b.right].bounds,p);stack[pending++]=left_first?b.right:b.left;stack[pending++]=left_first?b.left:b.right;continue;}
       for(size_t i=b.begin;i<b.end;++i) {const auto vertices=mesh_.triangles[triangles_[i]].vertices;const auto a=mesh_.positions[vertices[0]],c=mesh_.positions[vertices[1]],d=mesh_.positions[vertices[2]];
         const auto bary=closest_barycentric(p,a,c,d),distance=sub(p,add(add(mul(a,bary.x),mul(c,bary.y)),mul(d,bary.z)));const float square=dot(distance,distance);
-        if(square<best) {best=square;result={vertices,bary};result.polygon=mesh_.triangles[triangles_[i]].source_polygon;result.triangle=triangles_[i];}}
-    }return result;
+        if(square<best) {
+          if(reference){const auto x=reference->at(vertices[0]),y=reference->at(vertices[1]),z=reference->at(vertices[2]);const auto w=closest_barycentric(reference_point,x,y,z);const auto gap=sub(reference_point,add(add(mul(x,w.x),mul(y,w.y)),mul(z,w.z)));if(dot(gap,gap)>reference_radius*reference_radius)continue;}
+          best=square;result={vertices,bary};result.polygon=mesh_.triangles[triangles_[i]].source_polygon;result.triangle=triangles_[i];}}
+    }
+    if(best==std::numeric_limits<float>::max())throw std::runtime_error("未找到有效的表面绑定三角形");
+    return result;
   }
 };
 bool transferable(const Morph &m) {return m.evaluable&&m.auto_follow&&m.kind!="alias"&&m.alias_morph<0&&m.has_offsets();}
@@ -96,6 +100,7 @@ SurfaceCache surface_cache;
 ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse):targets_(targets) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("Fit To 公式图数量不一致");
   link_for_target_.resize(targets.size(),-1);offsets_.resize(targets.size());revisions_.resize(targets.size());
+  bone_rigidity_.resize(targets.size());
   std::map<std::string,std::vector<size_t>> identifiers;
   for(size_t t=0;t<targets.size();++t) {identifiers[targets[t].id.substr(0,targets[t].id.rfind('/'))].push_back(t);vertex_counts_.push_back(scene.meshes.at(scene.instances.at(targets[t].instance).mesh).positions.size());}
   for(size_t t=0;t<targets.size();++t) {const auto &uri=targets[t].conform_target;if(uri.empty()) continue;
@@ -134,6 +139,11 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     }
     const auto &a=scene.instances.at(source.instance),&b=scene.instances.at(follower.instance);const auto follower_to_source=inverse(a.transform)*b.transform;l.source_to_follower=inverse(b.transform)*a.transform;
     const auto &body=scene.meshes.at(a.mesh),&cloth=scene.meshes.at(b.mesh);
+    if(l.follower_skin>=0)for(const auto &group:cloth.bone_rigidity){BoneRigidity binding;binding.group=group;binding.skin=l.follower_skin;
+      const auto &joints=skins[size_t(l.follower_skin)].joints;
+      for(const auto &node:group.transform_nodes){size_t found=joints.size();for(size_t j=0;j<joints.size();++j)if(joints[j].id==node){found=j;break;}if(found==joints.size())throw std::runtime_error("刚性区域骨骼不存在："+node);if(found>=l.joints.size()||l.joints[found]<0)binding.joints.push_back(found);}
+      bone_rigidity_[l.follower].push_back(std::move(binding));
+    }
     GeometryKey key;key.points(body.positions);key.topology(body);key.points(cloth.positions);key.topology(cloth);key.add(follower_to_source);l.geometry_key=key.value;
     const ConformLink *cached=nullptr;if(reuse) for(const auto &old:reuse->links_) if(old.geometry_key==l.geometry_key&&reuse->targets_[old.follower].id==follower.id&&reuse->targets_[old.source].id==source.id) {cached=&old;break;}
     if(cached) {l.surface=cached->surface;l.neighbors=cached->neighbors;stats_.bindings+=l.surface.size();continue;}
@@ -206,10 +216,21 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
         ir::Vec3 average;for(auto n:neighbors) average=add(average,offsets[n]);filtered[v]=add(mul(offsets[v],1-weight),mul(average,weight/float(neighbors.size())));}
       offsets.swap(filtered);
     }
+    // 只约束自动生成的跟随位移；附件作者提供的 Morph 仍由 MorphRuntime 独立叠加。
+    if(!bone_rigidity_[target].empty()) {const auto projected=offsets;
+    for(auto &binding:bone_rigidity_[target]){const auto &group=binding.group;double x=0,y=0,z=0;
+      for(auto v:group.reference_vertices){const auto p=projected.at(v);x+=p.x;y+=p.y;z+=p.z;}const double count=double(group.reference_vertices.size());binding.offset={float(x/count),float(y/count),float(z/count)};
+      for(auto v:group.mask_vertices){const float w=group.weights.at(v);offsets.at(v)=add(mul(offsets[v],1-w),mul(binding.offset,w));}
+    }}
     morph.constrain_follow_offsets(target,offsets);
     if(morph.set_follow_offsets(target,offsets)) ++revisions_[target];
     follow_revisions_[i]=morph.follow_revision(target);
     previous_weights_[i]=std::move(current);source_revisions_[i]=revisions_[l->source];++stats_.evaluations;stats_.projected_vertices+=offsets.size();
+  }
+}
+void ConformRuntime::rigidity_pose(std::vector<std::vector<JointPose>> &poses) const {
+  for(const auto &groups:bone_rigidity_)for(const auto &binding:groups){const auto p=binding.offset;const ir::Vec3 cm{p.x*100,p.z*100,-p.y*100};
+    for(auto j:binding.joints){auto &pose=poses.at(size_t(binding.skin)).at(j);pose.center_offset_cm=add(pose.center_offset_cm,cm);pose.end_offset_cm=add(pose.end_offset_cm,cm);}
   }
 }
 std::vector<JointPose> conform_pose(const ConformLink &link,const std::vector<Skin> &skins,const std::vector<std::vector<JointPose>> &resolved,const std::vector<JointPose> &input) {
@@ -237,6 +258,7 @@ CollisionRuntime::CollisionRuntime(ir::Scene &scene,const std::vector<Target> &t
     const auto &mesh=scene.meshes.at(scene.instances.at(t.instance).mesh);
     if(mesh.triangles.empty()) continue;
     if(scene.meshes.at(scene.instances.at(b.source).mesh).triangles.empty()) throw std::runtime_error("碰撞对象没有表面："+s.collision_target);
+    if(t.conform_target==s.collision_target){b.reference_source=scene.meshes.at(scene.instances.at(b.source).mesh).positions;b.reference_follower=mesh.positions;b.reference_relative=relative_(b.source,b.follower);}
     if(!mesh.graft_target_vertices) for(const auto &g:targets) if(g.instance!=t.instance&&g.conform_target==s.collision_target) {
       const auto &surface=scene.meshes.at(scene.instances.at(g.instance).mesh);
       if(surface.graft_target_vertices==scene.meshes.at(scene.instances.at(b.source).mesh).positions.size()) b.grafts.push_back(g.instance);
@@ -267,6 +289,10 @@ void CollisionRuntime::reuse(const CollisionRuntime &previous) {
   }
 }
 void CollisionRuntime::reference_positions(uint32_t source,const std::vector<ir::Vec3> &positions) {
+  for(auto &b:bindings_)if(!b.reference_source.empty()){
+    if(b.source==source){b.reference_source=positions;b.reference_radii.clear();b.initialized=false;b.cache_key=0;}
+    if(b.follower==source){b.reference_follower=positions;b.reference_radii.clear();b.initialized=false;b.cache_key=0;}
+  }
   for(auto &b:bindings_)if(b.source==source) {
     const auto &mesh=scene_.meshes[scene_.instances[source].mesh];double sum=0;
     for(const auto &f:mesh.triangles)for(int k=0;k<3;++k){const auto e=sub(positions.at(f.vertices[k]),positions.at(f.vertices[(k+1)%3]));sum+=double(e.x)*e.x+double(e.y)*e.y+double(e.z)*e.z;}
@@ -297,6 +323,7 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
     b.constraint_revision=constraint_revision;
     GeometryKey cache;cache.points(b.input);cache.topology(scene_.meshes[follower.mesh]);cache.add(relative);cache.add(uint64_t(b.settings.collision_iterations));cache.add(uint64_t(b.settings.smoothing_iterations));cache.add(b.settings.weight);cache.add(std::bit_cast<uint64_t>(b.reference_edges));
     cache.add(constraint_revision);
+    if(!b.reference_source.empty()){cache.points(b.reference_source);cache.points(b.reference_follower);cache.add(b.reference_relative);}
     cache.add(source.id);cache.points(scene_.meshes[source.mesh].positions);cache.topology(scene_.meshes[source.mesh]);cache.add(uint64_t(b.grafts.size()));
     for(size_t k=0;k<b.grafts.size();++k) {const auto &g=scene_.instances[b.grafts[k]];cache.add(g.id);cache.add(uint64_t(g.visible));cache.add(b.graft_relatives[k]);cache.points(scene_.meshes[g.mesh].positions);cache.topology(scene_.meshes[g.mesh]);}
     if(cache.value==b.cache_key&&b.output.size()==b.input.size()) {
@@ -325,12 +352,31 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
     }
     auto positions=b.input;for(auto &p:positions) p=relative.point(p);const auto initial=positions;
     const auto &mesh=scene_.meshes[follower.mesh];
+    if(!b.reference_source.empty()&&b.reference_radii.empty()){
+      auto rest=scene_.meshes[source.mesh];rest.positions=b.reference_source;SurfaceIndex rest_index(rest);b.reference_radii.resize(b.reference_follower.size());
+      batch(b.reference_radii.size(),[&](size_t v){const auto p=b.reference_relative.point(b.reference_follower[v]);const auto hit=rest_index.nearest(p);const auto w=hit.barycentric;const auto q=add(add(mul(rest.positions[hit.vertices[0]],w.x),mul(rest.positions[hit.vertices[1]],w.y)),mul(rest.positions[hit.vertices[2]],w.z));const auto gap=sub(p,q);b.reference_radii[v]=std::sqrt(dot(gap,gap))+.02f;});
+    }
+    constexpr std::array<ir::Vec3,4> samples{{{1.f/3,1.f/3,1.f/3},{.5f,.5f,0},{.5f,0,.5f},{0,.5f,.5f}}};
     struct Query {ir::Vec3 point,barycentric;size_t triangle=SIZE_MAX;};
     std::vector<std::vector<Query>> queries(surfaces.size(),std::vector<Query>(positions.size()+mesh.triangles.size()*4));
     auto nearest=[&](size_t surface,ir::Vec3 p,size_t slot) {
       auto &cache=queries[surface][slot];SurfaceBinding hit;
       if(parallel&&cache.triangle!=SIZE_MAX&&cache.point==p) {hit.vertices=surfaces[surface].triangles[cache.triangle].vertices;hit.barycentric=cache.barycentric;hit.polygon=surfaces[surface].triangles[cache.triangle].source_polygon;hit.triangle=cache.triangle;}
-      else {hit=indexes[surface]->nearest(p);cache={p,hit.barycentric,hit.triangle};}return hit;
+      else {
+        if(surface==0&&!b.reference_source.empty()) {
+          // Fit To 碰撞沿静止绑定的局部皮肤寻找接触。放下手臂时，衣身应保持在
+          // 躯干外侧，不能改投到原本远离该布面的裸露前臂，再把衣身顶到前臂外面。
+          ir::Vec3 reference;float radius=0;
+          if(slot<positions.size()){reference=b.reference_relative.point(b.reference_follower[slot]);radius=b.reference_radii[slot];}
+          else {const auto face=(slot-positions.size())/4,sample=(slot-positions.size())%4;const auto v=mesh.triangles[face].vertices;const auto w=samples[sample];
+            const ir::Vec3 points[]={b.reference_relative.point(b.reference_follower[v[0]]),b.reference_relative.point(b.reference_follower[v[1]]),b.reference_relative.point(b.reference_follower[v[2]])};
+            reference=add(add(mul(points[0],w.x),mul(points[1],w.y)),mul(points[2],w.z));
+            for(int j=0;j<3;++j){const auto gap=sub(reference,points[j]);radius=std::max(radius,b.reference_radii[v[j]]+std::sqrt(dot(gap,gap)));}
+          }
+          hit=indexes[surface]->nearest(p,&b.reference_source,reference,radius);
+        }else hit=indexes[surface]->nearest(p);
+        cache={p,hit.barycentric,hit.triangle};
+      }return hit;
     };
     // ERC 总体缩放会进入蒙皮顶点；固定毫米间隙会把微型角色的衣物推裂。
     // 用边长比例保留尺寸一致性，旋转和平移不影响该比例。
@@ -364,42 +410,51 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
       }
       // 同时处理顶点与较粗三角形内部，避免顶点已在外面、面仍穿过胸部。
       {diagnostics::Scope phase("vertices");batch(positions.size(),[&](size_t v){positions[v]=add(positions[v],correction(positions[v],v));});}
-      if(parallel) {
-        // 预先并行查询当前面采样点。顺序修正改变邻面后，点坐标不同会自动重查；
-        // 只复用完全相同的查询，既保留 Gauss-Seidel 写回顺序，又避免串行做大多数 BVH 查询。
-        diagnostics::Scope phase("face_queries");batch(mesh.triangles.size(),[&](size_t face) {
-          const auto v=mesh.triangles[face].vertices;float longest=0;for(int k=0;k<3;++k) {const auto e=sub(positions[v[k]],positions[v[(k+1)%3]]);longest=std::max(longest,dot(e,e));}if(longest<.0001f) return;
-          size_t sample=0;for(const ir::Vec3 w:std::array<ir::Vec3,4>{{{1.f/3,1.f/3,1.f/3},{.5f,.5f,0},{.5f,0,.5f},{0,.5f,.5f}}}) {
-            const auto p=add(add(mul(positions[v[0]],w.x),mul(positions[v[1]],w.y)),mul(positions[v[2]],w.z));correction(p,positions.size()+face*4+sample++);
-          }
-        });
-      }
-      {diagnostics::Scope phase("faces");for(size_t face=0;face<mesh.triangles.size();++face) {const auto &f=mesh.triangles[face];
-        const auto v=f.vertices;float longest=0;
+      // 同一轮先求出所有接触约束，再按顶点平均写回。逐面立即写回会让
+      // 袖口相邻三角形相互推挤，将毫米级穿透放大为厘米级尖角。
+      std::vector<std::array<ir::Vec3,4>> face_offsets(mesh.triangles.size());
+      {diagnostics::Scope phase("face_queries");batch(mesh.triangles.size(),[&](size_t face){const auto v=mesh.triangles[face].vertices;float longest=0;
         for(int k=0;k<3;++k) {const auto e=sub(positions[v[k]],positions[v[(k+1)%3]]);longest=std::max(longest,dot(e,e));}
-        if(longest<.0001f*shape_scale*shape_scale) continue;
-        size_t sample=0;for(const ir::Vec3 w:std::array<ir::Vec3,4>{{{1.f/3,1.f/3,1.f/3},{.5f,.5f,0},{.5f,0,.5f},{0,.5f,.5f}}}) {
+        if(longest<.0001f*shape_scale*shape_scale)return;
+        for(size_t sample=0;sample<samples.size();++sample){const auto w=samples[sample];
           const auto p=add(add(mul(positions[v[0]],w.x),mul(positions[v[1]],w.y)),mul(positions[v[2]],w.z));
-          const auto d=correction(p,positions.size()+face*4+sample++);const float sum=w.x*w.x+w.y*w.y+w.z*w.z;
-          positions[v[0]]=add(positions[v[0]],mul(d,w.x/sum));positions[v[1]]=add(positions[v[1]],mul(d,w.y/sum));positions[v[2]]=add(positions[v[2]],mul(d,w.z/sum));
+          face_offsets[face][sample]=correction(p,positions.size()+face*4+sample);
+        }});}
+      {diagnostics::Scope phase("faces");std::vector<ir::Vec3> offsets(positions.size());std::vector<uint32_t> counts(positions.size());
+        for(size_t face=0;face<mesh.triangles.size();++face)for(size_t sample=0;sample<samples.size();++sample){const auto d=face_offsets[face][sample];if(d==ir::Vec3{})continue;
+          const auto v=mesh.triangles[face].vertices;const auto w=samples[sample];const float weights[]={w.x,w.y,w.z};const float sum=dot(w,w);
+          for(int j=0;j<3;++j)if(weights[j]>0){offsets[v[j]]=add(offsets[v[j]],mul(d,weights[j]/sum));++counts[v[j]];}
         }
-      }}
+        for(size_t v=0;v<positions.size();++v)if(counts[v])positions[v]=add(positions[v],mul(offsets[v],1.f/float(counts[v])));
+      }
       // 从身体顶点反查服装面，捕获粗服装三角形采样点之间的小凸起。
       auto cloth=mesh;cloth.positions=positions;SurfaceIndex cloth_index(cloth);
+      std::vector<ir::Vec3> reverse_offsets(positions.size());std::vector<uint32_t> reverse_counts(positions.size());
       for(size_t c=0;c<surfaces.size();++c) {
-      // 索引在该轮内只读，最近面查询可以并行；修正仍按原顺序写回，避免改变碰撞结果。
+      // 查询与约束使用同一份几何。立即写回会让后续查询的重心坐标失效，
+      // 并把袖口外裸露手臂的旧命中点反复拉进服装，产生不断放大的尖角。
       std::vector<SurfaceBinding> hits(surfaces[c].positions.size());
       {diagnostics::Scope phase("reverse_queries");batch(hits.size(),[&](size_t k){hits[k]=cloth_index.nearest(surfaces[c].positions[k]);});}
       for(size_t k=0;k<surfaces[c].positions.size();++k) {
         const auto p=surfaces[c].positions[k];const auto &hit=hits[k];const auto v=hit.vertices;const auto w=hit.barycentric;
         if(std::min({w.x,w.y,w.z})<.01f) continue; // 不把裸露区域牵到领口或袖口边缘。
-        const auto q=add(add(mul(positions[v[0]],w.x),mul(positions[v[1]],w.y)),mul(positions[v[2]],w.z));
-        const auto n=normal(sub(positions[v[1]],positions[v[0]]),sub(positions[v[2]],positions[v[0]]));
+        if(c==0&&!b.reference_source.empty()) {
+          // 放下手臂后，裸露的手臂会靠近衣身侧面，不能把它误当成衣身下的凸起。
+          // 反向约束只补充静止绑定时已由该布面覆盖的皮肤。
+          const auto a=b.reference_relative.point(b.reference_follower[v[0]]),u=b.reference_relative.point(b.reference_follower[v[1]]),z=b.reference_relative.point(b.reference_follower[v[2]]);
+          const auto rest=b.reference_source[k],weights=closest_barycentric(rest,a,u,z);
+          if(std::min({weights.x,weights.y,weights.z})<.01f)continue;
+          const auto gap=sub(rest,add(add(mul(a,weights.x),mul(u,weights.y)),mul(z,weights.z)));
+          if(dot(gap,gap)>.02f*.02f)continue;
+        }
+        const auto q=add(add(mul(cloth.positions[v[0]],w.x),mul(cloth.positions[v[1]],w.y)),mul(cloth.positions[v[2]],w.z));
+        const auto n=normal(sub(cloth.positions[v[1]],cloth.positions[v[0]]),sub(cloth.positions[v[2]],cloth.positions[v[0]]));
         const float depth=dot(sub(p,q),n);
         if(depth<=0||depth>.02f*shape_scale||dot(n,normals[c][k])<.5f) continue;
         const auto d=mul(n,depth+clearance);const float sum=w.x*w.x+w.y*w.y+w.z*w.z;
-        positions[v[0]]=add(positions[v[0]],mul(d,w.x/sum));positions[v[1]]=add(positions[v[1]],mul(d,w.y/sum));positions[v[2]]=add(positions[v[2]],mul(d,w.z/sum));
+        const float weights[]={w.x,w.y,w.z};for(int j=0;j<3;++j){reverse_offsets[v[j]]=add(reverse_offsets[v[j]],mul(d,weights[j]/sum));++reverse_counts[v[j]];}
       }}
+      for(size_t v=0;v<positions.size();++v)if(reverse_counts[v])positions[v]=add(positions[v],mul(reverse_offsets[v],1.f/float(reverse_counts[v])));
       // 碰撞与保形交替投影；不能让碰撞把已经关闭形变的薄鞋底重新顶出尖角。
       constrain();
     }

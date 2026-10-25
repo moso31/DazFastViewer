@@ -121,7 +121,7 @@ public:
       loading_=true;update_history_actions();recovered_file_=candidate;const auto generation=++generation_;
       loader_=std::jthread([this,candidate,generation](std::stop_token stop){try{
         auto state=restore_recovery(RecoverySession::read(candidate),generation,[this,stop](const std::string &message){if(stop.stop_requested())throw std::runtime_error("恢复已取消");progress(text(message));});
-        QMetaObject::invokeMethod(this,[this,state=std::move(state),candidate]{if(closing_)return;loading_=false;restore_edit(state);history_->clear();history_->stack().resetClean();checkpoint();
+        QMetaObject::invokeMethod(this,[this,state=std::move(state),candidate]{if(closing_)return;loading_=false;restore_edit(state);opened_scene_=!document_->source_file.empty()||!document_->operations.empty();history_->clear();history_->stack().resetClean();checkpoint();
           try{if(recovery_->flush())RecoverySession::dismiss(candidate);}catch(const std::exception &e){statusBar()->showMessage(text(e.what()),10000);}statusBar()->showMessage(QStringLiteral("已恢复上次场景及暂存参数。"),10000);update_history_actions();},Qt::QueuedConnection);
       }catch(const std::exception &e){const auto error=text(e.what());QMetaObject::invokeMethod(this,[this,error]{if(closing_)return;loading_=false;clear_scene();load_error_=QStringLiteral("恢复失败，原恢复文件已保留：")+error;statusBar()->showMessage(load_error_);},Qt::QueuedConnection);}});return true;
     }catch(const std::exception &e){recovery_error_=text(e.what());statusBar()->showMessage(QStringLiteral("自动恢复不可用：")+recovery_error_);return false;}

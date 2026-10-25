@@ -32,9 +32,10 @@ static void asynchronous_refinement() {
   Target b;b.id="cloth/mesh";b.instance=1;b.smoothing.enabled=true;b.smoothing.collision_target="#body";
   document->catalog.targets={a,b};document->formulas.graphs={graph(a,-1),graph(b,-1)};
   editor::Snapshot snapshot;snapshot.generation=1;snapshot.values.resize(2);snapshot.values[0].morphs={0};
-  auto preview=base;DeformationRuntime runtime(preview,document->catalog.targets,document->skeletons.skins,document->formulas.graphs);runtime.evaluate(snapshot.values,{});const auto corrected=preview.meshes[1].positions;const auto collisions=runtime.collision_stats().evaluations;runtime.defer_collision();
-  editor::DeformationRefiner worker;
+  auto preview=base;DeformationRuntime runtime(preview,document->catalog.targets,document->skeletons.skins,document->formulas.graphs);runtime.evaluate(snapshot.values,{});const auto corrected=preview.meshes[1].positions;const auto collisions=runtime.collision_stats().evaluations;
+  editor::DeformationRefiner worker;worker.seed(document,preview,runtime);runtime.defer_collision();
   auto wait=[&](uint64_t ticket){const auto start=std::chrono::steady_clock::now();for(;;){if(auto result=worker.take()){require(result->ticket==ticket&&result->error.empty(),"stale refinement or error escaped latest mailbox");return result;}require(std::chrono::steady_clock::now()-start<std::chrono::seconds(10),"refinement worker timed out");std::this_thread::sleep_for(std::chrono::milliseconds(1));}};
+  auto seeded=wait(worker.request(document,snapshot,{}));require(seeded->collision.evaluations==collisions,"seeded refinement repeated initial collision");
   snapshot.values[0].morphs[0]=1;runtime.evaluate(snapshot.values,{});require(runtime.collision_stats().evaluations==collisions,"preview ran full collision");require(preview.meshes[0].positions[0].z==.2f,"preview did not update morph");
   uint64_t ticket=0;for(int i=0;i<80;++i){snapshot.values[0].morphs[0]=float(i)/80;ticket=worker.request(document,snapshot,{});}snapshot.values[0].morphs[0]=1;ticket=worker.request(document,snapshot,{});
   auto result=wait(ticket);auto reference=base;DeformationRuntime full(reference,document->catalog.targets,document->skeletons.skins,document->formulas.graphs);full.evaluate(snapshot.values,{});
@@ -243,7 +244,74 @@ static void graft_collision_restore() {
   require(distance(before,scene.meshes[2].positions)<1e-6,"GeoGraft 旧接缝参与碰撞，恢复姿势后服装残留形变");
   require(distance(scene.meshes[2].positions,cloth.positions)<1e-6,"服装碰撞没有使用当前接缝位置");
 }
+static void collision_face_stability(){
+  ir::Mesh body;constexpr int rings=24,sides=48;constexpr float pi=3.14159265358979323846f;
+  for(int y=0;y<=rings;++y)for(int x=0;x<sides;++x){const float latitude=pi*float(y)/rings,longitude=2*pi*float(x)/sides;body.positions.push_back({std::sin(latitude)*std::cos(longitude),std::sin(latitude)*std::sin(longitude),std::cos(latitude)});}
+  for(int y=0;y<rings;++y)for(int x=0;x<sides;++x){const uint32_t a=y*sides+x,b=y*sides+(x+1)%sides,c=a+sides,d=b+sides;if(y>0)body.triangles.push_back({{a,c,b}});if(y+1<rings)body.triangles.push_back({{b,c,d}});}
+  ir::Mesh cloth;constexpr int width=7;
+  for(int y=0;y<width;++y)for(int x=0;x<width;++x){const float a=(x-3)*.2f,b=(y-3)*.2f;cloth.positions.push_back({a,b,std::sqrt(1.005f*1.005f-a*a-b*b)});}
+  for(int y=0;y+1<width;++y)for(int x=0;x+1<width;++x){const uint32_t a=y*width+x;cloth.triangles.push_back({{a,a+1,a+width+1}});cloth.triangles.push_back({{a,a+width+1,a+width}});}
+  ir::Scene scene;scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target a;a.id="body/mesh";Target b;b.id="cloth/mesh";b.instance=1;b.smoothing.enabled=true;b.smoothing.collision_target="#body";
+  std::vector<Target> targets={a,b};auto reordered=scene;std::reverse(reordered.meshes[1].triangles.begin(),reordered.meshes[1].triangles.end());
+  CollisionRuntime first(scene,targets),second(reordered,targets);first.evaluate({});second.evaluate({},false);
+  require(distance(scene.meshes[1].positions,reordered.meshes[1].positions)<1e-5,"面接触约束依赖三角形遍历顺序，局部修正会沿袖口放大");
+  require(distance(scene.meshes[1].positions,cloth.positions)>.001,"面内部穿透没有触发碰撞修正");
+  require(distance(scene.meshes[1].positions,cloth.positions)<.05,"毫米级曲面穿透被放大成大幅服装形变");
+}
+static void uncovered_reverse_collision(){
+  ir::Mesh body;body.positions={{-4,-4,0},{4,-4,0},{4,4,0},{-4,4,0},{3.09f,.06f,0},{3.13f,.06f,0},{3.13f,.10f,0},{3.09f,.10f,0},{3.11f,.08f,.01f}};
+  body.triangles={{{0,1,2}},{{0,2,3}}};for(uint32_t k=0;k<4;++k)body.triangles.push_back({{4+k,4+(k+1)%4,8}});
+  ir::Mesh cloth;cloth.positions={{-.5f,-.5f,.002f},{.5f,-.5f,.002f},{0,.5f,.002f}};cloth.triangles={{{0,1,2}}};
+  ir::Scene scene;scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target a;a.id="body/mesh";Target b;b.id="cloth/mesh";b.instance=1;b.conform_target="#body";b.smoothing.enabled=true;b.smoothing.collision_target="#body";
+  std::vector<Target> targets={a,b};CollisionRuntime runtime(scene,targets);runtime.evaluate({});
+  for(size_t v=4;v<body.positions.size();++v)scene.meshes[0].positions[v].x-=3;
+  ir::Delta delta;delta.meshes.push_back({0,scene.meshes[0].positions});runtime.evaluate(delta);
+  require(distance(scene.meshes[1].positions,cloth.positions)<1e-6,"原本裸露的肢体靠近衣身后触发了错误反向牵拉");
+  auto covered=scene;covered.meshes[1]=cloth;CollisionRuntime covered_runtime(covered,targets);covered_runtime.evaluate({});
+  require(distance(covered.meshes[1].positions,cloth.positions)>.001,"衣物原本覆盖的细小凸起不再参与反向碰撞");
+}
+static void conform_collision_locality(){
+  ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0},{2.8f,-.2f,.006f},{3.2f,-.2f,.006f},{3.2f,.2f,.006f},{2.8f,.2f,.006f}};
+  body.triangles={{{0,1,2}},{{0,2,3}},{{4,5,6}},{{4,6,7}}};
+  ir::Mesh cloth;cloth.positions={{-.1f,-.1f,.005f},{.1f,-.1f,.005f},{0,.1f,.005f}};cloth.triangles={{{0,1,2}}};
+  ir::Scene scene;scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target a;a.id="body/mesh";Target b;b.id="cloth/mesh";b.instance=1;b.conform_target="#body";b.smoothing.enabled=true;b.smoothing.collision_target="#body";
+  std::vector<Target> targets={a,b};CollisionRuntime fit(scene,targets);
+  for(size_t v=4;v<8;++v)scene.meshes[0].positions[v].x-=3;
+  fit.evaluate({});require(distance(scene.meshes[1].positions,cloth.positions)<1e-6,"衣身被从远处摆过来的裸露肢体顶到了另一侧");
+  auto ordinary=scene;ordinary.meshes[1]=cloth;auto explicit_collision=targets;explicit_collision[1].conform_target.clear();CollisionRuntime other(ordinary,explicit_collision);other.evaluate({});
+  require(distance(ordinary.meshes[1].positions,cloth.positions)>.001,"普通独立碰撞对象被错误限制到 Fit To 绑定区域");
+  for(size_t v=0;v<4;++v)scene.meshes[0].positions[v].z=.01f;
+  ir::Delta edit;edit.meshes.push_back({0,scene.meshes[0].positions});fit.evaluate(edit);
+  for(auto p:scene.meshes[1].positions)require(p.z>=.01049f,"靠近其他肢体后没有继续检测原有覆盖区域的穿透");
+}
+static void bone_rigidity_follow(){
+  ir::Scene scene;ir::Mesh body;body.positions={{0,0,0},{1,0,0},{0,1,0}};body.triangles={{{0,1,2}}};auto follower=body;
+  ir::BoneRigidityGroup group;group.id="attachment";group.reference_vertices={0,1,2};group.mask_vertices={0,1,2};group.weights={1,1,.5f};group.transform_nodes={"extra"};follower.bone_rigidity={group};
+  scene.meshes={body,follower};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target a;a.id="body/mesh";a.morphs={morph("shape",{{0,{.1f,0,0}},{1,{.4f,0,0}},{2,{.1f,0,0}}})};Target b;b.id="follower/mesh";b.instance=1;b.conform_target="#body";b.morphs={morph("local",{{1,{0,.1f,0}}},false)};
+  Skin host;host.instance=0;Joint root;root.id="root";Joint hip;hip.id=hip.name="hip";hip.parent=0;host.joints={root,hip};host.initial.resize(2);host.weights.resize(3);
+  auto skin=host;skin.instance=1;Joint extra;extra.id=extra.name="extra";extra.parent=1;skin.joints.push_back(extra);skin.initial.resize(3);skin.weights={{{2,1}},{{2,1}},{{2,1}}};
+  std::vector<Target> targets={a,b};std::vector<Skin> skins={host,skin};std::vector<FormulaGraph> graphs={graph(a,0),graph(b,1)};
+  std::vector<Properties> values(2);values[0].morphs={1};values[1].morphs={1};std::vector<std::vector<JointPose>> poses={host.initial,skin.initial};poses[1][2].rotation_degrees.z=35;poses[1][2].general_scale=1.4f;
+  DeformationRuntime runtime(scene,targets,skins,graphs);runtime.evaluate(values,poses);
+  const std::vector<ir::Vec3> expected={{.2f,0,0},{1.2f,.1f,0},{.15f,1,0}};
+  require(distance(runtime.skin_source(1),expected)<1e-6,"刚性组没有约束投射位移，或抹掉了自带 Morph / 混合权重");
+  auto resolved=poses;resolved[1][2].center_offset_cm={20,0,0};resolved[1][2].end_offset_cm={20,0,0};
+  require(distance(scene.meshes[1].positions,deform(skin,resolved[1],expected))<1e-6,"刚性组绕原始关节中心蒙皮，或重复缩放");
+  require(distance({runtime.resolve_poses(values,poses)[1][2].center_offset_cm},{{20,0,0}})<1e-5,"姿势编辑求值丢失刚性组中心");
+  const auto baseline=scene.meshes[1].positions;require(runtime.evaluate(values,poses).meshes.empty(),"刚性组重复求值累积");
+  values[0].morphs[0]=0;runtime.evaluate(values,poses);require(runtime.effective_poses()[1][2].center_offset_cm==ir::Vec3{},"关闭宿主 Morph 未恢复额外骨骼中心");
+  values[0].morphs[0]=1;runtime.evaluate(values,poses);require(distance(scene.meshes[1].positions,baseline)<1e-6,"Morph 恢复后刚性区域漂移");
+  auto cloned=scene;DeformationRuntime copy(runtime,cloned);poses[1][2].rotation_degrees.z=-20;runtime.evaluate(values,poses);copy.evaluate(values,poses);require(distance(scene.meshes[1].positions,cloned.meshes[1].positions)<1e-6,"复制运行时后丢失刚性跟随数据");
+}
 static void unit() {
+  collision_face_stability();
+  uncovered_reverse_collision();
+  conform_collision_locality();
+  bone_rigidity_follow();
   asynchronous_refinement();surface_cache_checks();continuous_follow_gap();
   graft_collision_restore();
   {
@@ -334,7 +402,10 @@ static void unit() {
   require(distance(scene.meshes[0].positions,expected)<1e-6,"原生 Morph 优先 / 重心转移 / auto_follow 隔离错误");
   require(distance(scene.meshes[2].positions,body.positions)==0,"Morph 污染其他角色");
   auto stats=runtime.conform_stats();require(runtime.evaluate(values,poses).meshes.empty()&&runtime.conform_stats().evaluations==stats.evaluations,"相同快照重复跟随求值");
-  poses[1][1].rotation_degrees.z=90;runtime.evaluate(values,poses);require(distance(scene.meshes[0].positions,deform(skins[0],poses[1],expected))<1e-6,"Morph 跟随后没有正确继承骨骼姿势");
+  auto cloned_scene=scene;DeformationRuntime cloned(runtime,cloned_scene);
+  auto clone_poses=poses;clone_poses[1][1].rotation_degrees.z=90;cloned.evaluate(values,clone_poses);
+  require(scene.meshes[0].positions!=cloned_scene.meshes[0].positions,"克隆形变没有独立更新");
+  poses[1][1].rotation_degrees.z=90;runtime.evaluate(values,poses);require(scene.meshes[0].positions==cloned_scene.meshes[0].positions,"克隆形变与原运行时结果不同");require(distance(scene.meshes[0].positions,deform(skins[0],poses[1],expected))<1e-6,"Morph 跟随后没有正确继承骨骼姿势");
   poses[1][1].scale.x=1.5f;poses[1][1].center_offset_cm.x=10;runtime.evaluate(values,poses);require(distance(scene.meshes[0].positions,deform(skins[0],poses[1],expected))<1e-6,"骨长 / 中心调整未传给服装");
   poses[0][1].rotation_degrees.z=10;runtime.evaluate(values,poses);require(runtime.effective_poses()[0][1].rotation_degrees.z==100,"服装局部姿势调整丢失");
   values[0].morphs[0]=-.2f;runtime.evaluate(values,poses);require(std::abs(runtime.effective()[0][0]-.8f)<1e-6,"服装自己的 Morph 调整丢失");

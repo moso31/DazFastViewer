@@ -4,8 +4,9 @@
 #include "runtime/morph.h"
 
 namespace dfv::daz {
-struct PoseChannel {std::string scheme,node,modifier,property;float value=0;std::string asset;};
-struct PosePreset {std::string source;std::vector<PoseChannel> channels;};
+struct PoseChannel {std::string scheme,node,modifier,property;float value=0;std::string asset;int scene_node=-1;};
+struct PoseNode {std::string id,scheme,node;int parent=-1;};
+struct PosePreset {std::string source;std::vector<PoseChannel> channels;std::vector<PoseNode> nodes;};
 PosePreset read_pose(const std::filesystem::path &file);
 PosePreset parse_pose(const nlohmann::json &document,const std::string &source={});
 struct AppliedPose {

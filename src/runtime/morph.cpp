@@ -8,6 +8,13 @@
 #include <functional>
 
 namespace dfv::runtime {
+MorphRuntime::MorphRuntime(const MorphRuntime &s,ir::Scene &scene)
+  :scene_(scene),targets_(s.targets_),values_(s.values_),bases_(s.bases_),follow_offsets_(s.follow_offsets_),
+   followed_weights_(s.followed_weights_),garment_references_(s.garment_references_),follow_revisions_(s.follow_revisions_),
+   transforms_(s.transforms_),attachments_(s.attachments_),reference_frames_(s.reference_frames_),attachment_frames_(s.attachment_frames_),
+   parents_(s.parents_),visibility_children_(s.visibility_children_),active_(s.active_),dirty_meshes_(s.dirty_meshes_),dirty_transforms_(s.dirty_transforms_),stats_(s.stats_) {
+  for(const auto &g:s.garment_deformation_)garment_deformation_.push_back(g?std::make_unique<GarmentDeformation>(*g):nullptr);
+}
 static void finite(ir::Vec3 p) {
   if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)) throw std::runtime_error("属性包含非有限数值");
 }

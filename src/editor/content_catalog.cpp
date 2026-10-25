@@ -1,4 +1,5 @@
 #include "editor/content_catalog.h"
+#include "daz/content_entry.h"
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QDateTime>
@@ -22,12 +23,13 @@ const QStringList &content_file_filters() {
   return filters;
 }
 bool is_content_file(const QString &path) {return content_file_filters().contains("*."+QFileInfo(path).suffix().toLower());}
-QStringList content_categories() {return {"all","scene","shape","pose","material","character","wearable","light","camera","properties","other"};}
+QStringList content_categories() {return {"all","scene","wearable","material","pose","hair","shape","character","light","camera","properties","other"};}
 QString category_label(const QString &category) {
   static const QMap<QString,QString> labels={{"all",QStringLiteral("所有（ALL）")},{"scene",QStringLiteral("场景（Scene）")},{"shape",QStringLiteral("形态（Shape）")},{"pose",QStringLiteral("姿势（Pose）")},{"material",QStringLiteral("材质（Material）")},{"character",QStringLiteral("角色（Character）")},{"wearable",QStringLiteral("穿戴（Wearable）")},{"light",QStringLiteral("灯光（Light）")},{"camera",QStringLiteral("相机（Camera）")},{"properties",QStringLiteral("参数（Properties）")},{"other",QStringLiteral("其他（Other）")}};
+  if(category=="hair")return QStringLiteral("发型（Hair）");
   return labels.value(category,labels["other"]);
 }
-QString content_category(const nlohmann::json &document) {
+QString content_category(const nlohmann::json &document,const QStringList &model_types) {
   if(document.value("schema",std::string{})=="daz-fast-viewer-scene-extension")return "scene";
   using J=nlohmann::json;
   const auto info=document.find("asset_info");std::string type;
@@ -38,10 +40,18 @@ QString content_category(const nlohmann::json &document) {
   if(t.contains("pose")) return "pose";
   if(t.contains("material")||t.contains("shader")) return "material";
   if(t.contains("character")) return "character";
-  if(t.contains("wearable")) return "wearable";
   if(t.contains("light")) return "light";
   if(t.contains("camera")) return "camera";
   if(t.contains("propert")||t.contains("render")) return "properties";
+  // 模型类型来自已解析的节点元数据，头发的 DUF 入口通常只声明 wearable。
+  // 场景及材质／姿势等预设仍优先使用自身类型，避免因包含头发而误分类。
+  auto is_hair=[](const QString &type){const auto t=type.toCaseFolded();return t=="hair"||t=="follower/hair"||t.startsWith("follower/hair/")||t=="prop/hair"||t.startsWith("prop/hair/");};
+  auto types=model_types;
+  auto node_types=[&](const J &nodes){if(!nodes.is_array())return;for(const auto &node:nodes){const auto &p=daz::object_member(node,"presentation");const auto type=p.find("type");if(type!=p.end()&&type->is_string())types.append(QString::fromStdString(type->get<std::string>()));}};
+  node_types(daz::array_member(document,"node_library"));node_types(daz::array_member(daz::object_member(document,"scene"),"nodes"));
+  const bool outfit=std::any_of(types.begin(),types.end(),[](const QString &type){return type.startsWith("Follower/Wardrobe",Qt::CaseInsensitive)||type.startsWith("Actor",Qt::CaseInsensitive);});
+  if(!outfit&&(is_hair(t)||std::any_of(types.begin(),types.end(),is_hair)))return "hair";
+  if(t.contains("wearable")) return "wearable";
   // 无类型声明时仅使用实际内容；不根据目录名误判用户移动过的资产。
   const auto scene=document.find("scene");if(scene==document.end()||!scene->is_object()) return "other";
   auto populated=[&](const char *key) {auto v=scene->find(key);return v!=scene->end()&&v->is_array()&&!v->empty();};
@@ -53,6 +63,42 @@ QString content_category(const nlohmann::json &document) {
   if(populated("materials")) return "material";
   if(populated("animations")) return "properties";
   return "other";
+}
+QString content_file_category(const QString &path,const QStringList &roots) {
+  // 旧近期记录没有节点类型；只读取元数据及其引用，不加载几何或依据目录名猜测。
+  try {
+    std::vector<std::filesystem::path> libraries;for(const auto &root:roots)libraries.emplace_back(root.toStdWString());
+    const auto asset=daz::content_asset(std::filesystem::path(path.toStdWString()),libraries);
+    const auto document=daz::document_view(asset);const auto category=content_category(*document);
+    const auto type=daz::object_member(*document,"asset_info").value("type",std::string{});
+    if(category!="wearable"&&category!="other"&&category!="scene")return category;
+    if(type=="scene"||type=="preset_scene"||type=="preset_scene_subset"||document->contains("schema"))return category;
+    QStringList types;QSet<QString> visited;
+    for(const auto &node:daz::array_member(daz::object_member(*document,"scene"),"nodes")) {
+      if(daz::array_member(node,"geometries").empty())continue;
+      auto uri=node.value("url",std::string{});auto owner=QString::fromStdWString(asset.wstring());
+      for(int depth=0;depth<16;++depth) {
+        const auto hash=uri.find('#');if(hash==std::string::npos)break;
+        const auto file=QString::fromStdString(daz::decode_uri(uri.substr(0,hash)));const auto id=daz::decode_uri(uri.substr(hash+1));
+        QStringList candidates;
+        if(file.isEmpty())candidates.append(owner);
+        else {
+          if(!file.startsWith('/'))candidates.append(QFileInfo(owner).dir().filePath(file));
+          // 与 DJL 一致，优先所属内容库，再跨库查找。
+          for(const auto &root:roots)if(content_path(owner).startsWith(root+'/',Qt::CaseInsensitive))candidates.append(QDir(root).filePath(file.startsWith('/')?file.mid(1):file));
+          for(const auto &root:roots)candidates.append(QDir(root).filePath(file.startsWith('/')?file.mid(1):file));
+        }
+        QString resolved;for(const auto &candidate:candidates)if(QFileInfo(candidate).isFile()){resolved=content_path(candidate);break;}
+        const auto key=resolved.toCaseFolded()+'#'+QString::fromStdString(id);if(resolved.isEmpty()||visited.contains(key))break;visited.insert(key);
+        const auto definition=daz::document_view(std::filesystem::path(resolved.toStdWString()));uri.clear();
+        for(const auto &base:daz::array_member(*definition,"node_library"))if(base.value("id",std::string{})==id){
+          types.append(QString::fromStdString(daz::object_member(base,"presentation").value("type",std::string{})));uri=base.value("source",std::string{});break;
+        }
+        if(uri.empty())break;owner=resolved;
+      }
+    }
+    return content_category(*document,types);
+  }catch(const std::exception &){return {};}
 }
 QStringList preview_candidates(const QString &asset,bool tooltip) {
   const QFileInfo file(asset);const auto base=file.path()+"/"+file.completeBaseName();
@@ -85,6 +131,11 @@ void ContentHistory::used(const QString &path,const QString &category,qint64 tim
 void ContentHistory::remove(const QString &path) {
   const auto p=content_path(path);std::erase_if(recent_,[&](const auto &r){return r.path.compare(p,Qt::CaseInsensitive)==0;});save_recent();
 }
+void ContentHistory::recategorize(const RecentContent &previous,const QString &category) {
+  if(category=="all"||!content_categories().contains(category))return;
+  // 后台识别期间重新使用或移除过的记录，不由旧结果覆盖。
+  for(auto &record:recent_)if(record.path==previous.path&&record.category==previous.category&&record.used==previous.used){record.category=category;save_recent();break;}
+}
 void ContentHistory::save_recent() {
   QJsonArray array;for(const auto &r:recent_) array.append(QJsonObject{{"path",r.path},{"category",r.category},{"used",double(r.used)}});
   settings_->setValue("content/recent",QJsonDocument(array).toJson(QJsonDocument::Compact));settings_->sync();
@@ -99,7 +150,7 @@ void ContentIndex::cancel_search() {++query_generation_;queries_.clear();}
 ContentSearch ContentIndex::match(const ContentEntries &entries,const QString &query,const QString &scope,const std::function<bool()> &cancel) {
   QElapsedTimer timer;timer.start();ContentSearch result;const auto q=QDir::fromNativeSeparators(query.trimmed()).toCaseFolded();
   auto prefix=scope.isEmpty()?QString():content_path(scope).toCaseFolded();if(!prefix.isEmpty()&&!prefix.endsWith('/')) prefix+='/';
-  for(size_t i=0;i<entries.size();++i) {if((i&1023)==0&&cancel&&cancel()) return {};const auto &e=entries[i];if((prefix.isEmpty()||e.folded.startsWith(prefix))&&e.folded.contains(q)) result.paths.append(e.path);}
+  for(size_t i=0;i<entries.size();++i) {if((i&1023)==0&&cancel&&cancel()) return {};const auto &e=entries[i];const auto name=QStringView(e.folded).mid(e.folded.lastIndexOf('/')+1);if((prefix.isEmpty()||e.folded.startsWith(prefix))&&name.contains(q)) result.paths.append(e.path);}
   result.milliseconds=timer.nsecsElapsed()/1000000.0;return result;
 }
 void ContentIndex::search(const QString &query,const QString &scope,std::function<void(ContentSearch)> complete) {
@@ -124,21 +175,24 @@ void ContentIndex::refresh(const QStringList &input,bool read_cache) {
     if(read_cache) {
       QFile file(cache);if(file.size()<256*1024*1024&&file.open(QIODevice::ReadOnly)) {
         QDataStream stream(&file);stream.setVersion(QDataStream::Qt_6_10);quint32 magic=0,count=0;QStringList saved_roots;stream>>magic>>saved_roots>>count;
-        if(magic==0x44465632&&saved_roots==roots&&count<2000000) {auto cached=std::make_shared<ContentEntries>();cached->reserve(count);
+        if(magic==0x44465633&&saved_roots==roots&&count<2000000) {auto cached=std::make_shared<ContentEntries>();cached->reserve(count);
           for(quint32 i=0;i<count&&!cancelled()&&stream.status()==QDataStream::Ok;++i) {QString p;stream>>p;cached->push_back({p,p.toCaseFolded()});}
           if(!cancelled()&&stream.status()==QDataStream::Ok&&cached->size()==count) publish(cached,false,QStringLiteral("已载入 %1 个资源，正在检查目录变化…").arg(count));
         }
       }
     }
     auto entries=std::make_shared<ContentEntries>();QSet<QString> seen;QStringList unavailable;QElapsedTimer timer;timer.start();qint64 last_progress=0;
+    // 只排除已配置内容库的 data 子树，不误伤普通产品里的同名目录。
+    auto internal_data=[&](const QString &path){return std::any_of(roots.begin(),roots.end(),[&](const QString &root){const auto data=QDir(root).filePath("data");return path.compare(data,Qt::CaseInsensitive)==0||path.startsWith(data+'/',Qt::CaseInsensitive);});};
     namespace fs=std::filesystem;
     for(const auto &root:roots) {
       if(cancelled()) return;std::error_code error;const fs::path path(root.toStdWString());
+      if(internal_data(root))continue;
       if(!fs::is_directory(path,error)) {unavailable.append(root);continue;}
       fs::recursive_directory_iterator it(path,fs::directory_options::skip_permission_denied,error),end;
       while(it!=end&&!cancelled()) {
         const auto item=*it;const auto qpath=QString::fromStdWString(item.path().wstring());
-        if(item.is_directory(error)) {if(QFileInfo(qpath).isSymbolicLink()||QFileInfo(qpath).isJunction()) it.disable_recursion_pending();}
+        if(item.is_directory(error)) {if(internal_data(QDir::fromNativeSeparators(qpath))||QFileInfo(qpath).isSymbolicLink()||QFileInfo(qpath).isJunction()) it.disable_recursion_pending();}
         else if(is_content_file(qpath)&&item.is_regular_file(error)) {
           auto p=QDir::fromNativeSeparators(qpath),folded=p.toCaseFolded();if(!seen.contains(folded)) {seen.insert(folded);entries->push_back({std::move(p),std::move(folded)});}
         }
@@ -150,7 +204,7 @@ void ContentIndex::refresh(const QStringList &input,bool read_cache) {
     std::sort(entries->begin(),entries->end(),[](const auto &a,const auto &b){return a.folded<b.folded;});
     if(cancelled()) return;
     QDir().mkpath(QFileInfo(cache).path());QSaveFile file(cache);
-    if(file.open(QIODevice::WriteOnly)) {QDataStream stream(&file);stream.setVersion(QDataStream::Qt_6_10);stream<<quint32(0x44465632)<<roots<<quint32(entries->size());for(const auto &e:*entries) {if(cancelled()) {file.cancelWriting();return;}stream<<e.path;}if(stream.status()==QDataStream::Ok) file.commit();}
+    if(file.open(QIODevice::WriteOnly)) {QDataStream stream(&file);stream.setVersion(QDataStream::Qt_6_10);stream<<quint32(0x44465633)<<roots<<quint32(entries->size());for(const auto &e:*entries) {if(cancelled()) {file.cancelWriting();return;}stream<<e.path;}if(stream.status()==QDataStream::Ok) file.commit();}
     auto message=QStringLiteral("%1 个资源 · 索引已更新").arg(entries->size());if(!unavailable.empty()) message+=QStringLiteral(" · 部分目录不可访问：")+unavailable.join("；");
     publish(entries,true,message);
   });

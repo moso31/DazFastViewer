@@ -2,12 +2,15 @@
 #include "editor/edit_history.h"
 #include <QStringList>
 #include <QLockFile>
+#include <QImage>
 #include <condition_variable>
 #include <thread>
 
 namespace dfv::editor {
 nlohmann::json recovery_json(const EditState &state,const std::vector<std::filesystem::path> &roots);
 EditState restore_recovery(const nlohmann::json &data,uint64_t generation,const std::function<void(const std::string &)> &progress={});
+QString shutdown_save_directory(const QString &executable_directory,const QString &fallback_directory);
+void save_shutdown_scene(const QString &directory,const Document &document,const Snapshot &snapshot,const QImage &thumbnail={});
 
 // 每个进程持有独立锁与原子恢复文件；不覆盖其他仍在运行的编辑器。
 class RecoverySession {

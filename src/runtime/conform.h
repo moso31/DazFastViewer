@@ -37,6 +37,8 @@ class ConformRuntime {
   std::vector<uint64_t> follow_revisions_;
   struct SurfaceFrames {std::vector<ir::Vec3> reference;std::vector<std::vector<uint32_t>> neighborhoods;};
   std::map<size_t,SurfaceFrames> surface_frames_;
+  struct BoneRigidity {ir::BoneRigidityGroup group;int skin=-1;std::vector<size_t> joints;ir::Vec3 offset;};
+  std::vector<std::vector<BoneRigidity>> bone_rigidity_;
   ConformStats stats_;
 public:
   ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse=nullptr);
@@ -45,6 +47,7 @@ public:
   const auto &links() const {return links_;}
   const auto &stats() const {return stats_;}
   void project(const std::vector<std::vector<float>> &weights,MorphRuntime &morph);
+  void rigidity_pose(std::vector<std::vector<JointPose>> &poses) const;
 };
 // 保留穿戴物的局部编辑与额外骨骼，跟随骨骼使用角色最终 ERC 姿势。
 std::vector<JointPose> conform_pose(const ConformLink &link,const std::vector<Skin> &skins,const std::vector<std::vector<JointPose>> &resolved,const std::vector<JointPose> &input);
@@ -56,6 +59,9 @@ class CollisionRuntime {
     ir::MeshSmoothing settings;
     std::vector<uint32_t> grafts;
     std::vector<ir::Vec3> input;
+    std::vector<ir::Vec3> reference_source,reference_follower;
+    std::vector<float> reference_radii;
+    ir::Transform reference_relative;
     std::vector<std::vector<uint32_t>> neighbors;
     ir::Transform relative;
     std::vector<ir::Transform> graft_relatives;
@@ -76,6 +82,9 @@ public:
       std::function<void(uint32_t,const std::vector<ir::Vec3> &,std::vector<ir::Vec3> &)> constrain={},std::function<uint64_t(uint32_t)> revision={});
   ir::Delta evaluate(ir::Delta delta,bool parallel=true);
   void reuse(const CollisionRuntime &previous);
+  CollisionRuntime(const CollisionRuntime &s,ir::Scene &scene,std::function<ir::Transform(uint32_t,uint32_t)> relative,
+    std::function<void(uint32_t,const std::vector<ir::Vec3> &,std::vector<ir::Vec3> &)> constrain,std::function<uint64_t(uint32_t)> revision)
+    :scene_(scene),bindings_(s.bindings_),stats_(s.stats_),relative_(std::move(relative)),constrain_(std::move(constrain)),constraint_revision_(std::move(revision)) {}
   void reference_positions(uint32_t source,const std::vector<ir::Vec3> &positions);
   const auto &stats() const {return stats_;}
 };

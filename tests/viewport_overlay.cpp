@@ -1,6 +1,7 @@
 #include "viewport/window.h"
 #include "viewport/overlay.h"
 #include "viewport/display.h"
+#include "editor/group_transforms.h"
 #include "util/half.h"
 #include <QImage>
 #include <filesystem>
@@ -20,6 +21,11 @@ int main(){
     ir::Scene scene;scene.meshes={plane(-1,-.1f),plane(.1f,1)};scene.instances.resize(2);scene.instances[1].mesh=1;
     HoverOverlay overlay;overlay.update(scene,{});overlay.draw_pose(camera,400,240,scene.meshes[0],{}, {},{100,100,100},{0});
     auto white=picture("all-proxies");check(white.pixelColor(150,120).red()>40&&white.pixelColor(250,120).red()>40,"拖动代理没有同时显示活动模型及另一模型");
+    const auto family=editor::group_proxy(scene,{0,1},{});
+    overlay.draw_pose(camera,400,240,family,ir::Transform::translate({.4f,0,0}),{},{100,100,100},{0,1});
+    const auto moved=picture("moving-character-and-clothing");
+    check(moved.pixelColor(180,120).red()>40&&moved.pixelColor(280,120).red()>40,"角色整体拖动没有同时绘制衣物白模");
+    check(moved.pixelColor(120,120).red()<40&&moved.pixelColor(235,120).red()<40,"整体拖动仍残留原位置的角色或衣物");
     scene.materials.resize(1);scene.materials[0].cloud.emplace();scene.instances[1].materials={0};overlay.update(scene,{});overlay.draw_pose(camera,400,240,{},{},{},{100,100,100},{});
     auto volume=picture("cloud-no-solid-proxy");check(volume.pixelColor(150,120).red()>40&&volume.pixelColor(250,120).red()<40,"云层边界盒作为实心白模遮挡了视口");scene.instances[1].materials.clear();scene.materials.clear();
     scene.meshes={plane(-1,1)};scene.instances[1].mesh=0;overlay.update(scene,{});glClearColor(.2f,.2f,.2f,1);glClear(GL_COLOR_BUFFER_BIT);

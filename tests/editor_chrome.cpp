@@ -44,9 +44,10 @@ int main(int argc,char **argv) {
     auto *menu=chrome->findChild<QToolBar *>("MenuModule"),*tools=chrome->findChild<QToolBar *>("TransformModule");check(menu&&tools,"模块没有独立身份");check(std::abs(menu->y()-tools->y())<3&&chrome->height()<50,"默认不是同一行");
     auto *history=chrome->findChild<QToolBar *>("HistoryModule");check(history&&history->actions()==QList<QAction *>{chrome->undo_action(),chrome->redo_action()},"撤销重做没有独立工具组");check(history->x()>menu->x()&&history->x()<tools->x()&&history->y()==tools->y(),"撤销重做组默认位置错误");
     check(!chrome->undo_action()->icon().isNull()&&!chrome->redo_action()->icon().isNull()&&!chrome->undo_action()->isEnabled()&&!chrome->redo_action()->isEnabled(),"撤销重做初始图标或禁用状态错误");
-    GizmoSettings last;int calls=0;chrome->changed=[&](auto settings){last=settings;++calls;};chrome->findChild<QAction *>("GizmoTool2")->trigger();check(calls==1&&last.tool==GizmoTool::rotate,"旋转按钮未接通");for(auto *action:tools->actions()) if(action->text()=="World") action->trigger();check(last.space==GizmoSpace::world,"World 没有切换");
+    check(chrome->settings().space==GizmoSpace::world,"初始坐标系不是 World");for(auto *action:tools->actions())if(action->text()=="World")check(action->isChecked(),"默认没有选中 World");
+    GizmoSettings last;int calls=0;chrome->changed=[&](auto settings){last=settings;++calls;};chrome->findChild<QAction *>("GizmoTool2")->trigger();check(calls==1&&last.tool==GizmoTool::rotate&&last.space==GizmoSpace::world,"旋转默认不是 World");
     auto tool=[&](int i){chrome->findChild<QAction *>("GizmoTool"+QString::number(i))->trigger();};auto space=[&](const char *name){for(auto *a:tools->actions()) if(a->text()==name) a->trigger();};
-    tool(1);check(last.space==GizmoSpace::local,"T 被 R 的世界模式污染");tool(3);tool(2);check(last.space==GizmoSpace::world,"R 切换回来丢失世界模式");
+    tool(1);check(last.space==GizmoSpace::world,"平移默认不是 World");tool(3);check(last.space==GizmoSpace::local,"缩放没有使用本地轴");tool(2);check(last.space==GizmoSpace::world,"R 切换回来丢失世界模式");
     space("Local");tool(1);space("World");tool(0);tool(2);check(last.space==GizmoSpace::local,"R 没有独立记住本地模式");tool(1);check(last.space==GizmoSpace::world,"T 没有独立记住世界模式");
     auto *functions=chrome->findChild<QToolBar *>("FunctionModule");auto *ratio=chrome->findChild<QDoubleSpinBox *>("GroundAlignmentRatio");check(functions&&!ratio&&functions->x()>tools->x()&&functions->y()==tools->y(),"角色功能组没有默认位于 Local / World 右侧");
     auto caption=[&](QWidget *widget,QPoint p){return chrome->caption_at(widget->mapTo(chrome,p));};

@@ -104,6 +104,7 @@ class MorphRuntime {
   void dirty_transform(size_t target);
 public:
   MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets);
+  MorphRuntime(const MorphRuntime &source,ir::Scene &scene);
   bool set_morph(size_t target,size_t morph,float value,bool enforce_limits=true);
   bool set_transform(size_t target,const TransformValues &value);
   void set_visible(size_t target,bool visible);

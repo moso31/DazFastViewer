@@ -7,6 +7,22 @@
 #include <functional>
 
 namespace dfv::runtime {
+DeformationRuntime::DeformationRuntime(const DeformationRuntime &s,ir::Scene &scene)
+  :targets_(s.targets_),skins_(s.skins_),graphs_(s.graphs_),morph_(s.morph_,scene),skin_(s.skin_,scene),conform_(s.conform_),
+   collision_(s.collision_,scene,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);},
+     [this](uint32_t instance,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance){morph_.constrain_collision(t,input,positions);break;}},
+     [this](uint32_t instance){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance)return morph_.garment_revision(t);return uint64_t(0);}),
+   garment_collision_active_(s.garment_collision_active_),push_before_(s.push_before_),push_after_(s.push_after_),
+   previous_(s.previous_),previous_poses_(s.previous_poses_),effective_(s.effective_),effective_poses_(s.effective_poses_),
+   attachments_(s.attachments_),surface_attachments_(s.surface_attachments_),grafts_(s.grafts_),graft_masks_(s.graft_masks_),
+   mask_bases_(s.mask_bases_),graft_visibility_(s.graft_visibility_),scene_(scene),payload_leases_(s.payload_leases_),
+   evaluated_(s.evaluated_),collision_enabled_(s.collision_enabled_) {
+  for(const auto &f:s.formulas_)formulas_.push_back(std::make_unique<FormulaRuntime>(*f));
+  if(s.garment_collision_)garment_collision_=std::make_unique<CollisionRuntime>(*s.garment_collision_,scene,
+    [this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);},
+    [this](uint32_t instance,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance){morph_.constrain_collision(t,input,positions);break;}},
+    [this](uint32_t instance){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance)return morph_.garment_revision(t);return uint64_t(0);});
+}
 namespace {
 float component(ir::Vec3 v,uint32_t axis) {return axis==0?v.x:axis==1?v.y:v.z;}
 void component(ir::Vec3 &v,uint32_t axis,double value) {if(!std::isfinite(float(value))) throw std::runtime_error("骨骼通道超出有效数值范围");(axis==0?v.x:axis==1?v.y:v.z)=float(value);}
@@ -140,7 +156,7 @@ bool DeformationRuntime::reframe(const std::vector<ir::Transform> &frames) {
   morph_.set_reference_frames(frames,attachment_frames);return true;
 }
 std::vector<std::vector<JointPose>> DeformationRuntime::resolve_poses(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) {
-  std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> result;feed(values,poses,weights,result);return result;
+  std::vector<std::vector<float>> weights;std::vector<std::vector<JointPose>> result;feed(values,poses,weights,result);conform_.rigidity_pose(result);return result;
 }
 PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry) {
   if(same_shape(values,poses)) return {};
@@ -222,6 +238,7 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     morph_.set_visible(t,values[t].visible);
     morph_.set_graft_enabled(t,values[t].graft_enabled);
   }
+  conform_.project(weights,morph_);conform_.rigidity_pose(resolved);
   for(size_t s=0;s<resolved.size();++s) skin_.set_pose(s,resolved[s]);
   std::vector<std::vector<ir::Transform>> joints(skins_.size());
   for(const auto &a:attachments_) {
@@ -231,7 +248,6 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
     // 刚性附件还需继承关节中心的 Morph 位移。
     morph_.set_attachment(a.target,a.figure*joints[a.skin][a.joint]*moved*a.inverse_bind);
   }
-  conform_.project(weights,morph_);
   auto skinned=skin_.evaluate(morph_.evaluate());
   for(size_t t=0;t<values.size();++t)if(!values[t].disabled_deformation_regions.empty()) {
     const auto mesh=scene_.instances[targets_[t].instance].mesh;

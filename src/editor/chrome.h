@@ -16,7 +16,7 @@ class EditorChrome final:public QWidget {
   QWidget *grip_;
   QAction *undo_,*redo_,*local_,*world_,*ground_,*weight_;
   GizmoSettings settings_;
-  GizmoSpace translation_space_=GizmoSpace::local,rotation_space_=GizmoSpace::local;
+  GizmoSpace translation_space_=GizmoSpace::world,rotation_space_=GizmoSpace::world;
   QByteArray defaults_;
   bool fit_pending_=false;
   void fit_height();

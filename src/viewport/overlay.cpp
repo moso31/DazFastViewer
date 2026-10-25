@@ -46,7 +46,9 @@ void HoverOverlay::draw_pose(const CameraState &camera,int width,int height,cons
     const auto n=normalized(cross({b.x-a.x,b.y-a.y,b.z-a.z},{c.x-a.x,c.y-a.y,c.z-a.z}));const float shade=.35f+.55f*std::abs(n.x*.3f+n.y*-.5f+n.z*.8f);glColor3f(shade*.72f,shade*.82f,shade);
     for(auto p:{a,b,c}) glVertex3f(p.x,p.y,p.z);
   }
-  glEnd();glDisable(GL_DEPTH_TEST);glLineWidth(3);glColor3f(1,.75f,.18f);glBegin(GL_LINES);for(const auto &[a,b]:bones) {glVertex3f(a.x,a.y,a.z);glVertex3f(b.x,b.y,b.z);}glEnd();
+  glEnd();glColor3f(.72f,.77f,.82f);glLineWidth(1);
+  for(const auto &curve:proxy.curves){glBegin(GL_LINE_STRIP);for(auto vertex:curve.vertices){const auto p=world.point(proxy.positions[vertex]);glVertex3f(p.x,p.y,p.z);}glEnd();}
+  glDisable(GL_DEPTH_TEST);glLineWidth(3);glColor3f(1,.75f,.18f);glBegin(GL_LINES);for(const auto &[a,b]:bones) {glVertex3f(a.x,a.y,a.z);glVertex3f(b.x,b.y,b.z);}glEnd();
   if(!proxy.positions.empty()||!bones.empty()){glPointSize(9);glColor3f(.25f,1,.45f);glBegin(GL_POINTS);glVertex3f(goal.x,goal.y,goal.z);glEnd();}
   glPopMatrix();glMatrixMode(GL_PROJECTION);glPopMatrix();glMatrixMode(GL_MODELVIEW);glPopAttrib();
 }

@@ -1,6 +1,47 @@
 static QStringList visible_content_paths(QListView *view) {
   QStringList result;for(int row=0;row<view->model()->rowCount();++row)result.append(view->model()->index(row,0).data(Qt::UserRole).toString());result.sort();return result;
 }
+static void recent_hair_checks() {
+  QTemporaryDir temp;const auto root=temp.path()+"/library",entry=root+"/Products/Model.duf",link=root+"/Products/Model.duf.djl",material=root+"/Products/Color.duf",settings=temp.path()+"/settings.ini";
+  write(root+"/data/Vendor/Base.dsf",R"({"node_library":[{"id":"hair","presentation":{"type":"Follower/Hair/Long"}}]})");
+  write(entry,R"({"asset_info":{"type":"wearable"},"scene":{"nodes":[{"url":"/data/Vendor/Base.dsf#hair","geometries":[{}]}]}})");
+  write(link,R"({"path":"/Products/Model.duf"})");
+  write(material,R"({"asset_info":{"type":"preset_material"},"scene":{"nodes":[{"presentation":{"type":"Follower/Hair"}}]}})");
+  require(content_file_category(entry,{root})=="hair"&&content_file_category(link,{root})=="hair","真实引用或 DJL 的头发分类失败");
+  require(content_file_category(material,{root})=="material","头发材质被迁移为发型");
+  {ContentHistory history(settings);history.used(entry,"wearable",100);history.used(link,"wearable",200);history.used(material,"material",300);}
+  ContentBrowser browser(nullptr,settings,temp.path()+"/cache");browser.resize(900,600);browser.set_roots({root});browser.show();browser.show_recent();
+  auto *categories=browser.findChild<QListWidget *>("contentCategories");auto *view=browser.findChild<QListView *>("contentItems");
+  categories->setCurrentRow(content_categories().indexOf("hair"));until([&]{return view->model()->rowCount()==2;});
+  require(view->model()->index(0,0).data(Qt::UserRole).toString()==link,"迁移改变了发型使用顺序");
+  ContentHistory migrated(settings);require(migrated.recent("wearable").empty()&&migrated.recent("material").size()==1&&migrated.recent("hair").back().used==100,"迁移没有持久化或改变了使用时间");
+  auto stale=migrated.recent("hair").front();migrated.used(stale.path,"scene",400);migrated.recategorize(stale,"hair");require(migrated.recent().front().category=="scene","后台旧分类覆盖了新使用记录");
+  std::cout<<"hair metadata / DJL / material distinction / existing history migration / timestamp / stale results: PASS\n";
+}
+static void search_filter_checks() {
+  QTemporaryDir temp;const auto root=temp.path()+QStringLiteral("/中文库"),cache=temp.path()+"/cache";
+  const auto pillow=root+"/Environments/Toon Nursery/Iray Materials/STN Pillow Pink.duf",data=root+"/DaTa/Sue Yee/Hat/Hat_5526.dsf";
+  const auto script=root+"/Scripts/Apply.dse",legacy=root+"/People/Hat.DSF",unicode=root+QStringLiteral("/Poses/站姿 [01].duf"),ordinary=root+"/Products/Data/Visible.duf";
+  const QStringList paths{pillow,script,legacy,unicode,ordinary};for(const auto &path:paths)write(path);write(data);write(root+"/DaTa/Hidden.duf");
+  // 模拟上一版持久化索引：启动时不得先发布包含底层 DSF 的旧快照。
+  const QStringList roots{root,root+"/DaTa/Sue Yee"};QDir().mkpath(cache);
+  const auto key=QCryptographicHash::hash(roots.join('\n').toCaseFolded().toUtf8(),QCryptographicHash::Sha256).toHex();
+  {QFile file(cache+"/"+key+".index");require(file.open(QIODevice::WriteOnly),"旧索引创建失败");QDataStream stream(&file);stream.setVersion(QDataStream::Qt_6_10);stream<<quint32(0x44465632)<<roots<<quint32(1)<<data;}
+  ContentIndex index(cache);bool leaked=false;index.changed=[&]{for(const auto &entry:*index.entries())if(entry.path==data)leaked=true;};index.refresh(roots,true);until([&]{return !index.scanning();});
+  auto actual=query(index,"").paths,expected=paths;actual.sort();expected.sort();require(actual==expected&&!leaked,"data 排除、目录边界、重叠库或旧索引迁移错误");
+  require(query(index,"Toon Nursery").paths.empty()&&query(index,"Iray Materials").paths.empty(),"父文件夹仍然命中搜索");
+  require(query(index,"pILLoW").paths==QStringList{pillow},"文件名大小写匹配失败");
+  require(query(index,QStringLiteral("站姿 [01]")).paths==QStringList{unicode},"Unicode 文件名或字面匹配失败");
+  require(query(index,"Pillow",root+"/People").paths.empty(),"文件名查询忽略了目录范围");
+  ContentBrowser browser(nullptr,temp.path()+"/settings.ini",cache);browser.resize(900,600);browser.set_roots(roots);browser.show();
+  auto *view=browser.findChild<QListView *>("contentItems");auto *search=browser.findChild<QComboBox *>("contentSearch");
+  until([&]{return browser.property("contentIndexSize").toInt()==paths.size();});
+  search->setEditText("Pillow");QTest::keyClick(search->lineEdit(),Qt::Key_Return);until([&]{return visible_content_paths(view)==QStringList{pillow};});
+  search->setEditText("Toon Nursery");QTest::keyClick(search->lineEdit(),Qt::Key_Return);until([&]{return visible_content_paths(view).isEmpty();});
+  require(search->lineEdit()->isClearButtonEnabled(),"搜索框缺少原生清空按钮");
+  QTest::keyClick(search->lineEdit(),Qt::Key_Escape);until([&]{return search->currentText().isEmpty()&&browser.findChild<QComboBox *>("contentTabs")->currentIndex()==0&&!visible_content_paths(view).isEmpty();});
+  std::cout<<"filename search / data exclusion / overlapping roots / legacy cache / scripts / Unicode / scope / clear: PASS\n";
+}
 static QToolButton *breadcrumb_button(ContentBrowser &browser,const QString &path) {
   for(auto *button:browser.findChild<QWidget *>("contentBreadcrumbs")->findChildren<QToolButton *>())if(button->property("contentBreadcrumbPath").toString()==path)return button;
   throw std::runtime_error("目录缺少面包屑按钮");

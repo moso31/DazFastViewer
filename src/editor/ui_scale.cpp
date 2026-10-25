@@ -30,6 +30,13 @@ class ScaledStyle final:public QProxyStyle {
   static bool toolbar_menu(const QWidget *widget){return widget&&widget->objectName()=="ToolbarMenu";}
 public:
   explicit ScaledStyle(const QString &name):QProxyStyle(name) {text_style_->setParent(this);}
+  void polish(QPalette &palette) override {
+    QProxyStyle::polish(palette);
+    for(auto group:{QPalette::Active,QPalette::Inactive}) {
+      palette.setColor(group,QPalette::Highlight,QColor("#246bb3"));
+      palette.setColor(group,QPalette::HighlightedText,Qt::white);
+    }
+  }
   QSize sizeFromContents(ContentsType type,const QStyleOption *option,const QSize &contents,const QWidget *widget=nullptr) const override {
     if(type==CT_MenuBarItem&&toolbar_menu(widget))return contents+QSize(ui_pixels(12),ui_pixels(4));
     if(ui_scale()!=1&&type==CT_MenuItem) {
@@ -40,9 +47,16 @@ public:
   }
   void drawPrimitive(PrimitiveElement element,const QStyleOption *option,QPainter *painter,const QWidget *widget=nullptr) const override {
     if(element==PE_PanelMenuBar&&toolbar_menu(widget))return;
+    if(element==PE_PanelItemViewItem&&option->state.testFlag(State_Selected)) {
+      text_style_->drawPrimitive(element,option,painter,widget);return;
+    }
     QProxyStyle::drawPrimitive(element,option,painter,widget);
   }
   void drawControl(ControlElement element,const QStyleOption *option,QPainter *painter,const QWidget *widget=nullptr) const override {
+    if(element==CE_ItemViewItem&&option->state.testFlag(State_Selected)) {
+      // 只接管选中行的背景与文字，复选框和布局仍走原生样式。
+      QCommonStyle::drawControl(element,option,painter,widget);return;
+    }
     // 嵌入工具栏的菜单使用同一套测量和文字绘制，不画原生菜单栏的底边线。
     if(toolbar_menu(widget)) {
       if(element==CE_MenuBarEmptyArea)return;

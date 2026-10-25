@@ -72,13 +72,13 @@ int main(int argc,char **argv){QApplication app(argc,argv);QFontDatabase::addApp
   check(QApplication::activeWindow()==&outer&&x->hasFocus(),"cloud editor was not focused before hover");
   auto *precision=x->parentWidget()->findChild<QToolButton *>("precisionButton");
   QTest::mouseMove(precision,precision->rect().center());QCursor::setPos(precision->mapToGlobal(precision->rect().center()));QEnterEvent enter(precision->rect().center(),precision->rect().center(),precision->mapToGlobal(precision->rect().center()));QApplication::sendEvent(precision,&enter);QTest::qWait(350);
-  auto *popup=panel->findChild<QWidget *>("ParameterSettingsPopup");check(popup&&popup->isVisible(),"hover settings popup did not open");
+  QPointer<QWidget> popup=panel->findChild<QWidget *>("ParameterSettingsPopup");check(popup&&popup->isVisible(),"hover settings popup did not open");
   // offscreen 插件忽略 WA_ShowWithoutActivating；原生伴随测试验证窗口激活和键盘路由。
   if(QGuiApplication::platformName()=="windows"){
     check(QApplication::activeWindow()==&outer&&x->hasFocus(),"hover settings popup stole keyboard focus");
     x->selectAll();QTest::keyClicks(QApplication::focusWidget(),"123.45");check(x->text()=="123.45","hover popup intercepted keyboard input");
     // 用户点击工具窗口后仍可输入，不能以禁止窗口获得焦点来规避抢焦点。
-    popup->activateWindow();QTest::qWait(50);auto *step=popup->findChild<QDoubleSpinBox *>("precisionStep");QTest::mouseClick(step->findChild<QLineEdit *>(),Qt::LeftButton);step->selectAll();
+    popup->activateWindow();QTest::qWait(50);check(popup&&popup->isVisible(),"settings popup closed while activating");auto *step=popup->findChild<QDoubleSpinBox *>("precisionStep");check(step,"settings popup lost precision editor");QTest::mouseClick(step->findChild<QLineEdit *>(),Qt::LeftButton);step->selectAll();
     check(QApplication::focusWidget()&&(step->hasFocus()||step->isAncestorOf(QApplication::focusWidget())),"settings popup cannot receive keyboard focus after click");
     QTest::keyClicks(QApplication::focusWidget(),"0.25");QTest::mouseClick(popup->findChild<QPushButton *>("ParameterSettingsOK"),Qt::LeftButton);QApplication::processEvents();check(x->singleStep()==.25,"hover popup keyboard draft did not commit with OK");
   }
