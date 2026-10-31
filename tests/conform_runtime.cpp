@@ -23,6 +23,41 @@ static FormulaGraph graph(const Target &t,int skin) {
   g.prepare();return g;
 }
 
+static void native_torso_checks() {
+  // 衣物的自动体型传递要跨过局部凹槽；作者褶皱不能随之被磨平。
+  constexpr uint32_t n=25;ir::Mesh body;body.polygon_groups={"lPectoral"};
+  for(uint32_t z=0;z<n;++z)for(uint32_t x=0;x<n;++x)body.positions.push_back({(float(x)-12)*.015f,0,1+float(z)*.015f});
+  for(uint32_t z=0;z+1<n;++z)for(uint32_t x=0;x+1<n;++x){const auto a=z*n+x;body.triangles.push_back({{a,a+1,a+n+1}});body.triangles.push_back({{a,a+n+1,a+n}});}
+  auto cloth=body;for(auto &p:cloth.positions)p.y=-.01f;
+  Target host;host.id="torso/mesh";std::vector<SparseOffset> shape;
+  for(uint32_t v=0;v<body.positions.size();++v){const auto p=body.positions[v];const float r=std::exp(-p.x*p.x/.014f);shape.push_back({v,{0,p.z>1.12f&&p.z<1.24f?-.05f*r:0,0}});}
+  host.morphs={morph("body",shape)};Target shirt;shirt.id="shirt/mesh";shirt.instance=1;shirt.conform_target="#torso";shirt.content_type="Follower/Wardrobe/Shirt";
+  const uint32_t detail=12*n+12;shirt.morphs={morph("authored-pocket",{{detail,{0,-.004f,0}}},false)};
+  ir::Scene base;base.meshes={body,cloth};base.instances.resize(2);base.instances[1].mesh=1;
+  std::vector<Target> targets={host,shirt};const std::vector<Skin> skins;const std::vector<FormulaGraph> graphs={graph(host,-1),graph(shirt,-1)};
+  auto scene=base;DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(2);values[0].morphs={0};values[1].morphs={0};runtime.evaluate(values,{});
+  require(distance(scene.meshes[1].positions,cloth.positions)<1e-6,"没有体型输入时上衣原始布面被改变");
+  values[0].morphs[0]=1;runtime.evaluate(values,{});const auto smooth=scene.meshes[1].positions;
+  auto raw=base;auto other=targets;other[1].content_type="Follower/Wardrobe/Underwear";DeformationRuntime raw_runtime(raw,other,skins,graphs);raw_runtime.evaluate(values,{});
+  auto crease=[&](const auto &points){double maximum=0;for(uint32_t z=1;z+1<n;++z){const auto v=z*n+12;maximum=std::max(maximum,std::abs(double(points[v-n].y+points[v+n].y-2*points[v].y)));}return maximum;};
+  require(crease(smooth)<crease(raw.meshes[1].positions)*.5,"上衣仍逐点复制局部凹槽，自动位移缺少连续过渡");
+  for(const auto &type:{"Follower/Wardrobe/Skirt","Actor/Character",""}){auto mislabeled=base;auto alternate=targets;alternate[1].content_type=type;alternate[1].preferred_base="/Genesis 8/Female";DeformationRuntime alternate_runtime(mislabeled,alternate,skins,graphs);alternate_runtime.evaluate(values,{});require(mislabeled.meshes[1].positions==smooth,"错误分类但声明适配基型的商业上衣没有获得修正");}
+  require(scene.meshes[0].positions==raw.meshes[0].positions,"服装连续性处理修改了角色本身");
+  values[1].morphs[0]=1;runtime.evaluate(values,{});auto expected=smooth;expected[detail].y-=.004f;require(distance(scene.meshes[1].positions,expected)<1e-6,"作者的口袋修正被自动位移平滑吞掉");
+  const auto evaluations=runtime.conform_stats().evaluations;require(runtime.evaluate(values,{}).meshes.empty()&&runtime.conform_stats().evaluations==evaluations,"重复求值没有复用上衣投射缓存");
+  values[0].morphs[0]=0;runtime.evaluate(values,{});expected=cloth.positions;expected[detail].y-=.004f;require(distance(scene.meshes[1].positions,expected)<1e-6,"清除角色体型不能恢复作者衣物形状");
+  values[0].morphs[0]=1;values[1].morphs[0]=0;runtime.evaluate(values,{});require(scene.meshes[1].positions==smooth,"上衣 Morph 来回切换发生累积漂移");
+}
+static void cloth_layer_collision() {
+  ir::Mesh body;body.positions={{0,0,0},{.1f,0,0},{.1f,.1f,0},{0,.1f,0}};body.triangles={{{0,1,2}},{{0,2,3}}};
+  auto cloth=body;cloth.polygon_groups={"Chest"};for(auto &p:cloth.positions)p.z=-.001f;for(auto p:body.positions){p.z=.001f;cloth.positions.push_back(p);}cloth.triangles.push_back({{4,5,6}});cloth.triangles.push_back({{4,6,7}});
+  ir::Scene scene;scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target host;host.id="layer-body/mesh";Target shirt;shirt.id="layer-shirt/mesh";shirt.instance=1;shirt.content_type="Follower/Wardrobe/Shirt";shirt.conform_target="#layer-body";shirt.smoothing.enabled=true;shirt.smoothing.collision_target="#layer-body";
+  std::vector<Target> targets={host,shirt};CollisionRuntime runtime(scene,targets);for(auto &p:scene.meshes[0].positions)p.z=.003f;
+  ir::Delta edit;edit.meshes.push_back({0,scene.meshes[0].positions});runtime.evaluate(edit);const auto expected=scene.meshes[1].positions;
+  for(size_t i=0;i<4;++i){require(expected[i].z>=.0034f,"内层布面仍在身体内");require(expected[i+4].z-expected[i].z>=.00199f,"身体碰撞把内层布面顶穿口袋");}
+  require(runtime.evaluate({}).meshes.empty(),"层间保护破坏碰撞缓存");scene.meshes[1].positions=cloth.positions;ir::Delta repeat;repeat.meshes.push_back({1,cloth.positions});runtime.evaluate(repeat);require(scene.meshes[1].positions==expected,"层间约束累积了上一次碰撞输出");
+}
 static void asynchronous_refinement() {
   auto document=std::make_shared<editor::Document>();document->generation=1;
   ir::Mesh body;body.positions={{-2,-2,0},{2,-2,0},{2,2,0},{-2,2,0}};body.triangles={{{0,1,2}},{{0,2,3}}};
@@ -75,6 +110,17 @@ static void continuous_follow_gap() {
   const auto &p=scene.meshes[1].positions;require(distance({p[0]},{p[1]})<.00001,"最近面切换撕开了服装顶点");
   const auto baseline=p;require(runtime.evaluate(values,{}).meshes.empty(),"连续投射重复求值漂移");values[0].morphs[0]=0;runtime.evaluate(values,{});require(distance(scene.meshes[1].positions,cloth.positions)<1e-6,"连续投射关闭 Morph 后没有恢复");values[0].morphs[0]=1;runtime.evaluate(values,{});require(scene.meshes[1].positions==baseline,"连续投射切换缓存不一致");
 }
+static void projection_input_cache() {
+  ir::Scene scene;ir::Mesh body;body.positions={{0,0,0},{1,0,0},{0,1,0},{5,0,0},{6,0,0},{5,1,0}};body.triangles={{{0,1,2}},{{3,4,5}}};
+  ir::Mesh cloth;cloth.positions={{.2f,.2f,.1f},{.4f,.2f,.1f},{.2f,.4f,.1f}};cloth.triangles={{{0,1,2}}};scene.meshes={body,cloth};scene.instances.resize(2);scene.instances[1].mesh=1;
+  Target source;source.id="local-body/mesh";source.morphs={morph("distant",{{3,{0,0,.2f}},{4,{0,0,.2f}},{5,{0,0,.2f}}}),morph("near",{{0,{0,0,.1f}},{1,{0,0,.1f}},{2,{0,0,.1f}}})};
+  Target follower;follower.id="local-cloth/mesh";follower.instance=1;follower.conform_target="#local-body";
+  const std::vector<Target> targets={source,follower};const std::vector<Skin> skins;const std::vector<FormulaGraph> graphs={graph(source,-1),graph(follower,-1)};
+  DeformationRuntime runtime(scene,targets,skins,graphs);std::vector<Properties> values(2);values[0].morphs={0,0};runtime.evaluate(values,{});const auto before=scene.meshes[1].positions;const auto evaluations=runtime.conform_stats().evaluations;
+  values[0].morphs[0]=1;runtime.evaluate(values,{});require(scene.meshes[1].positions==before&&runtime.conform_stats().evaluations==evaluations,"无关部位 Morph 仍重算衣物投射");
+  values[0].morphs[1]=1;runtime.evaluate(values,{});require(scene.meshes[1].positions!=before&&runtime.conform_stats().evaluations==evaluations+1,"绑定邻域变化未使投射缓存失效");
+  values[0].morphs={0,0};runtime.evaluate(values,{});require(scene.meshes[1].positions==before,"局部投射缓存导致恢复漂移");
+}
 static void rigid_root_scaling(){
   ir::Scene scene;ir::Mesh mesh;mesh.positions={{0,0,1},{1,0,1},{0,1,1},{1,1,1}};mesh.triangles={{{0,1,2}},{{1,3,2}}};scene.meshes={mesh,mesh,mesh};scene.instances.resize(3);
   for(uint32_t i=0;i<3;++i){scene.instances[i].mesh=i;auto &m=scene.instances[i].transform;m.value[0]=m.value[5]=m.value[10]=.291f;m.value[3]=2;}
@@ -101,6 +147,16 @@ static void mesh_collision() {
   std::vector<Target> targets={a,b};CollisionRuntime runtime(scene,targets);auto d=runtime.evaluate({});
   require(d.meshes.size()==1,"初始碰撞未输出服装更新");for(auto p:scene.meshes[1].positions) require(p.z>=.00049f,"穿入平面的服装未推出");
   const auto baseline=scene.meshes[1].positions;
+  {
+    auto hidden=scene;hidden.meshes[1]=cloth;hidden.instances[1].visible=false;CollisionRuntime deferred(hidden,targets);deferred.evaluate({});
+    require(deferred.stats().evaluations==0,"独立隐藏衣物仍执行碰撞");
+    for(auto &p:hidden.meshes[0].positions)p.z=.03f;ir::Delta moved;moved.meshes.push_back({0,hidden.meshes[0].positions});deferred.evaluate(moved);
+    require(deferred.stats().evaluations==0,"隐藏衣物在姿势改变后仍重复碰撞");hidden.instances[1].visible=true;deferred.evaluate({});
+    auto reference=hidden;reference.meshes[1]=cloth;CollisionRuntime fresh(reference,targets);fresh.evaluate({});
+    require(hidden.meshes[1].positions==reference.meshes[1].positions&&deferred.stats().evaluations==1,"重新显示衣物未恢复当前姿势的完整碰撞");
+    hidden=scene;hidden.meshes[1]=cloth;hidden.instances[1].visible=false;auto dependent=targets;auto child=b;child.id="child/mesh";child.instance=2;child.conform_target="#cloth";child.smoothing={};dependent.push_back(child);hidden.meshes.push_back(cloth);auto instance=hidden.instances[1];instance.visible=true;instance.mesh=2;hidden.instances.push_back(instance);
+    CollisionRuntime used(hidden,dependent);used.evaluate({});require(used.stats().evaluations==1,"隐藏宿主仍被其他对象引用时错误跳过碰撞");
+  }
   // 微型角色经 ERC 缩小后，碰撞间隙也应同比缩小。
   for(float scale:{.01f,.1f,10.f}){
     auto scaled=scene;scaled.meshes[1]=cloth;CollisionRuntime small(scaled,targets);ir::Delta edit;
@@ -312,7 +368,7 @@ static void unit() {
   uncovered_reverse_collision();
   conform_collision_locality();
   bone_rigidity_follow();
-  asynchronous_refinement();surface_cache_checks();continuous_follow_gap();
+  native_torso_checks();cloth_layer_collision();asynchronous_refinement();surface_cache_checks();continuous_follow_gap();projection_input_cache();
   graft_collision_restore();
   {
     // 共同祖先的平移 / 旋转 / 缩放应完全保留碰撞缓存，包括 GeoGraft。

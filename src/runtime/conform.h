@@ -2,6 +2,7 @@
 #include "runtime/formula.h"
 #include "runtime/morph.h"
 #include "runtime/skeleton.h"
+#include "runtime/subdivision.h"
 #include <functional>
 #include <map>
 
@@ -17,6 +18,13 @@ struct ConformLink {
   uint64_t geometry_key=0;
   size_t follower=0,source=0;
   int follower_skin=-1,source_skin=-1;
+  bool cross_base=false;
+  bool retarget_skeleton=false;
+  std::string reference_shape;
+  std::vector<ir::Transform> prepose;
+  // 目标基础网格减去服装基型的参考形体，始终在蒙皮前求值。
+  std::vector<ir::Vec3> base_offsets;
+  std::vector<uint8_t> torso_envelope;
   std::vector<int> joints,morph_sources;
   std::vector<size_t> projected_morphs;
   std::vector<SurfaceBinding> surface;
@@ -35,8 +43,10 @@ class ConformRuntime {
   std::vector<std::vector<ir::Vec3>> offsets_;
   std::vector<uint64_t> revisions_,source_revisions_;
   std::vector<uint64_t> follow_revisions_;
+  struct ProjectionInput {std::vector<uint32_t> vertices;std::vector<ir::Vec3> offsets;};
+  std::vector<ProjectionInput> projection_inputs_;
   struct SurfaceFrames {std::vector<ir::Vec3> reference;std::vector<std::vector<uint32_t>> neighborhoods;};
-  std::map<size_t,SurfaceFrames> surface_frames_;
+  std::map<std::pair<size_t,std::string>,SurfaceFrames> surface_frames_;
   struct BoneRigidity {ir::BoneRigidityGroup group;int skin=-1;std::vector<size_t> joints;ir::Vec3 offset;};
   std::vector<std::vector<BoneRigidity>> bone_rigidity_;
   ConformStats stats_;
@@ -66,6 +76,12 @@ class CollisionRuntime {
     ir::Transform relative;
     std::vector<ir::Transform> graft_relatives;
     bool initialized=false;
+    bool cross_base=false;
+    bool required_when_hidden=false;
+    struct Layer {std::array<uint32_t,3> vertices;ir::Vec3 barycentric;SurfaceBinding inner;};
+    std::vector<Layer> layers;
+    bool preserve_layers=false,layers_ready=false;
+    Subdivision source_subdivision,follower_subdivision;
     uint64_t cache_key=0;
     uint64_t constraint_revision=0;
     double reference_edges=0;
@@ -86,6 +102,7 @@ public:
     std::function<void(uint32_t,const std::vector<ir::Vec3> &,std::vector<ir::Vec3> &)> constrain,std::function<uint64_t(uint32_t)> revision)
     :scene_(scene),bindings_(s.bindings_),stats_(s.stats_),relative_(std::move(relative)),constrain_(std::move(constrain)),constraint_revision_(std::move(revision)) {}
   void reference_positions(uint32_t source,const std::vector<ir::Vec3> &positions);
+  void reference_surface(uint32_t follower,const std::vector<ir::Vec3> &positions);
   const auto &stats() const {return stats_;}
 };
 }

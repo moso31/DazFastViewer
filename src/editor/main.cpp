@@ -1,4 +1,6 @@
 #include "editor/parameter_widgets.h"
+#include "editor/special_controls.h"
+#include "runtime/forefoot.h"
 #include "cycles/runtime_paths.h"
 #include "editor/renderer.h"
 #include "editor/project.h"
@@ -115,6 +117,7 @@ class Editor final:public EditorWindow {
   #include "editor/powerpose_test.inl"
 #include "editor/edit_resume_test.inl"
   #include "editor/pose_test.inl"
+  #include "editor/fit_pose_test.inl"
   #include "editor/gizmo_test.inl"
   #include "editor/group_test.inl"
   #include "editor/node_properties_test.inl"
@@ -1135,9 +1138,8 @@ class Editor final:public EditorWindow {
     const float saved[]={asset?asset->translation_cm.x:0,asset?asset->translation_cm.y:0,asset?asset->translation_cm.z:0,asset?asset->rotation_degrees.x:0,asset?asset->rotation_degrees.y:0,asset?asset->rotation_degrees.z:0,asset?asset->scale.x:1,asset?asset->scale.y:1,asset?asset->scale.z:1};
     if(joint<0) {
       append_node_controls(controls,index);
-      ParameterControl local;local.id="render/local_shadow";local.label="局部阴影查询（实验）";local.group="/渲染/独立阴影结构";local.choices={"关闭","开启"};local.minimum=0;local.maximum=1;local.initial=0;
-      local.detail="为此对象及其衣物、毛发、Shell、GeoGraft 启用巨型尺度阴影优化。启用的组达到巨型尺度后，所有来源的阴影射线按空间层级查询局部结构，包括太阳、天空及普通对象接收的阴影。保留双向阴影；移动相机不重建几何。普通倍率保留原路径。角色开启后附件继承，附件上的关闭不覆盖角色设置。仅 OptiX 生效。";
-      local.read=[this,index]{return double(snapshot_.values.at(size_t(index)).local_shadow);};local.write=[this,index](double v){auto edit=history_edit(QStringLiteral("修改局部阴影查询"));snapshot_.values.at(size_t(index)).local_shadow=v!=0;send();};controls.push_back(std::move(local));
+      controls.push_back(local_shadow_control([this,index]{return double(snapshot_.values.at(size_t(index)).local_shadow);},[this,index](double v){auto edit=history_edit(QStringLiteral("修改局部阴影查询"));snapshot_.values.at(size_t(index)).local_shadow=v!=0;send();}));
+      if(const auto skin=selected_skin();skin>=0&&!target.character){const auto &mesh=document_->loaded.scene.meshes[document_->loaded.scene.instances[target.instance].mesh];if(runtime::supports_forefoot(mesh,document_->skeletons.skins[size_t(skin)]))controls.push_back(forefoot_control([this,index]{return double(snapshot_.values.at(size_t(index)).forefoot_uniformity)*100;},[this,index](double v){auto edit=history_edit(QStringLiteral("修改前掌统一权重"));snapshot_.values.at(size_t(index)).forefoot_uniformity=float(v/100);send();}));}
       ParameterControl general;general.id="transform/general_scale";general.favorite_name="Scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.settings=asset?asset->numeric_settings[9]:std::nullopt;general.float_backed=false;general.read=[this,initial]{return runtime::decimal_derived_float(double(initial)*root_scale())*snapshot_.values[size_t(selected_)].transform.general_scale*100;};general.write=[this,initial](double value){auto edit=history_edit(QStringLiteral("修改整体缩放"));const double base=runtime::decimal_derived_float(double(initial)*root_scale())*100;if(base!=0) {snapshot_.values[size_t(selected_)].transform.general_scale=value/base;send();}};controls.push_back(std::move(general));
       for(int i=0;i<9;++i) {ParameterControl c;c.id="transform/"+std::to_string(i);c.favorite_name=std::string(1,"XYZ"[i%3])+(i<3?"Translate":i<6?"Rotate":"Scale");c.label=std::string(1,"XYZ"[i%3])+std::string(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.float_backed=true;c.minimum=transform_[i]->minimum();c.maximum=transform_[i]->maximum();c.step=.1;c.settings=asset?asset->numeric_settings[i]:std::nullopt;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;const float base=saved[i];c.read=[this,i,base]{return i<6?transform_[i]->value()+base:transform_[i]->value()*base*root_scale(i-6);};c.write=[this,i,base](double v){const double scale=double(base)*(i>=6?root_scale(i-6):1);if(i<6||scale!=0) transform_[i]->setValue(i<6?v-base:v/scale);};controls.push_back(std::move(c));}
     } else if(const int skin=selected_skin();skin>=0) {
@@ -1169,7 +1171,7 @@ class Editor final:public EditorWindow {
     if(!selected_group_.empty()){set_group_value(selected_group_,{});bind_group();return;}
     if(selected_<0) return;
     auto &value=snapshot_.values[size_t(selected_)];value.transform={};value.unlimited_morphs.clear();
-    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};value.graft_enabled=true;value.local_shadow=false;value.disabled_deformation_regions.clear();
+    const auto extension_kind=value.extension.kind;value.extension={};value.extension.kind=extension_kind;value.physics={};value.graft_enabled=true;value.local_shadow=false;value.forefoot_uniformity=0;value.disabled_deformation_regions.clear();
     const auto &target=document_->catalog.targets[size_t(selected_)];
     std::erase_if(pending_parameters_,[&](const auto &p){return p.first.first==target.id;});apply_parameters_->setEnabled(!pending_parameters_.empty());
     for(size_t m=0;m<value.morphs.size();++m) value.morphs[m]=target.morphs[m].evaluable||target.morphs[m].unsupported.empty()?target.morphs[m].initial:0;
@@ -1198,6 +1200,7 @@ class Editor final:public EditorWindow {
     if(!rebuild_test_file_.empty()) {report["scope"]="scene-rebuild-latency";report["checks"]=rebuild_checks_;report["sessions"]=status.sessions;report["initial_subdivision_level"]=rebuild_level_;report["initial_render_subdivision_level"]=rebuild_render_level_;}
     if(subdivision_stress_test_) {report["scope"]="subdivision-repeat-coalesce-budget-and-restore";report["checks"]=subdivision_checks_;report["sessions"]=status.sessions;}
     if(pose_edit_test_) {report["scope"]="native-FK-left-button-IK-selection-proxy-full-quality-cancel";report["checks"]=pose_checks_;}
+    if(!fit_pose_label_.isEmpty()){report["scope"]="fitted-clothing-pose-first-frame";report["checks"]=fit_pose_checks_;}
     if(edit_resume_test_) {report["scope"]="powerpose-morph-reedit-before-beauty";report["checks"]=er_checks_;}
     if(powerpose_test_&&!edit_resume_test_) {report["scope"]="powerpose-qt-proxy-commit-cancel-native-limits-pins";report["checks"]=pp_checks_;}
     if(gizmo_test_) {report["scope"]="gizmo-local-world-proxy-commit-cancel-restore";report["checks"]=gz_checks_;}
@@ -1673,6 +1676,7 @@ class Editor final:public EditorWindow {
     if(edit_resume_test_) {edit_resume_tick(state);return;}
     if(powerpose_test_) {powerpose_tick(state);return;}
     if(pose_edit_test_) {pose_edit_tick(state);return;}
+    if(!fit_pose_label_.isEmpty()){fit_pose_tick(state);return;}
     if(!rebuild_test_file_.empty()) {rebuild_tick(state);return;}
     if(subdivision_stress_test_) {subdivision_stress_tick(state);return;}
     if(interaction_test_) {interaction_tick(state);return;}
@@ -2111,6 +2115,7 @@ public:
   void history_test() {history_test_=self_test_=true;renderer_->automated_pointer();}
   void preset_test() {preset_test_=self_test_=true;QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);renderer_->automated_pointer();}
   void pose_edit_test(int level=-1) {pose_edit_test_=self_test_=true;pose_test_level_=level;renderer_->automated_pointer();}
+  void fit_pose_test(const QString &label){fit_pose_label_=label;self_test_=true;}
   void edit_resume_test() {powerpose_test();edit_resume_test_=true;}
   void powerpose_test() {powerpose_test_=self_test_=true;renderer_->automated_pointer();powerpose_->automated_input();}
   void gizmo_test(bool extreme=false) {gizmo_scale_test_=extreme;gizmo_test_=self_test_=true;renderer_->automated_pointer();}
@@ -2489,7 +2494,7 @@ public:
           for(const auto &target:document_->catalog.targets) {
             auto values=loaded_snapshot.values.at(snapshot_.values.size());
             if((preserve||previous_document) && old) for(size_t t=0;t<old->catalog.targets.size();++t) if(old->catalog.targets[t].id==target.id) {
-              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.graft_enabled=previous.values[t].graft_enabled;values.local_shadow=previous.values[t].local_shadow;values.disabled_deformation_regions=previous.values[t].disabled_deformation_regions;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;values.ground_alignment_offset_cm=previous.values[t].ground_alignment_offset_cm;values.ground_alignment_body_only=previous.values[t].ground_alignment_body_only;std::map<std::string,float> weights;
+              values.favorites=previous.values[t].favorites;values.extension=previous.values[t].extension;values.unlimited_morphs=previous.values[t].unlimited_morphs;values.transform=previous.values[t].transform;values.visible=previous.values[t].visible;values.graft_enabled=previous.values[t].graft_enabled;values.local_shadow=previous.values[t].local_shadow;values.forefoot_uniformity=previous.values[t].forefoot_uniformity;values.disabled_deformation_regions=previous.values[t].disabled_deformation_regions;values.ground_alignment_ratio=previous.values[t].ground_alignment_ratio;values.ground_alignment_offset_cm=previous.values[t].ground_alignment_offset_cm;values.ground_alignment_body_only=previous.values[t].ground_alignment_body_only;std::map<std::string,float> weights;
               for(size_t m=0;m<old->catalog.targets[t].morphs.size();++m) weights[old->catalog.targets[t].morphs[m].id]=previous.values[t].morphs[m];
               for(size_t m=0;m<target.morphs.size();++m) if((target.morphs[m].evaluable||target.morphs[m].unsupported.empty())&&weights.contains(target.morphs[m].id)) values.morphs[m]=weights[target.morphs[m].id];
             }
@@ -2564,6 +2569,7 @@ int main(int argc,char **argv) {
   parser.addOption({"pose",QStringLiteral("加载角色后应用的单帧姿势 DUF"),"file"});
   parser.addOption({"pose-test",QStringLiteral("验证姿势、恢复与相机后自动退出"),"file"});
   parser.addOption({"pose-edit-test",QStringLiteral("副屏验证原生 FK 参数、左键 IK、选择门槛、预览和取消")});
+  parser.addOption({"fit-pose-test",QStringLiteral("验证指定服装宿主 FK / IK 提交至完整首帧的耗时"),"clothing-label"});
   parser.addOption({"edit-resume-test",QStringLiteral("Verify consecutive PowerPose and Morph edits before beauty")});
   parser.addOption({"powerpose-test",QStringLiteral("副屏验证 PowerPose 三页、灰模、提交、取消和固定约束")});
   parser.addOption({"powerpose-test-count",QStringLiteral("仅运行前 N 个 PowerPose 验证场景"),"count","0"});
@@ -2629,6 +2635,7 @@ int main(int argc,char **argv) {
     if(parser.isSet("water-scene-test"))editor.water_scene_test();
     if(parser.isSet("edit-regression-test")) editor.edit_regression_test();
     if(parser.isSet("pose-edit-test")) editor.pose_edit_test(parser.value("pose-test-level").toInt());
+    if(parser.isSet("fit-pose-test"))editor.fit_pose_test(parser.value("fit-pose-test"));
     if((parser.isSet("powerpose-test")||parser.isSet("edit-resume-test"))) editor.powerpose_test();
     editor.powerpose_case_limit(parser.value("powerpose-test-count").toInt());
     if(parser.isSet("edit-resume-test")) editor.edit_resume_test();

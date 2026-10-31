@@ -158,6 +158,7 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
     target.rigid_follow=object.rigid_follow;
     target.attachment_bind_rest=object.attachment_bind_rest;
     target.push_modifiers=object.push_modifiers;target.dynamic_cloth=object.dynamic_cloth;
+    target.preferred_base=object.preferred_base;target.auto_fit_base=object.auto_fit_base;target.content_type=object.content_type;
     for(auto parent=object.parent;!parent.empty();) {
       if(std::find(target.ancestors.begin(),target.ancestors.end(),parent)!=target.ancestors.end()) throw std::runtime_error("附件父节点链形成循环");
       target.ancestors.push_back(parent);auto found=std::find_if(loaded.nodes.begin(),loaded.nodes.end(),[&](const auto &node){return "#"+node.id==parent;});
@@ -303,6 +304,17 @@ static MorphCatalog discover_group(LoadedScene &loaded,const std::vector<fs::pat
           morph.id=key(path)+"#"+id;if(!ids.insert(morph.id).second) throw std::runtime_error("同一文件存在重复参数 ID: "+id);
           morph.source=path_string(path);morph.label=channel.value("label",modifier.value("label",id));morph.channel_id=id;morph.owner=parent.id;
           morph.channel_name=modifier.value("name",channel.value("name",id));
+          if(id=="CloneGenesis9")for(const auto &a:allowed){
+            auto pose_file=a.file.parent_path()/"Tools"/"Clones"/"CloneGenesis9.dsj";const auto relative=relative_to_roots(pose_file,roots);
+            if(!relative.empty())pose_file=resolve("/"+path_string(relative),path,roots);
+            if(pose_file.empty()||!document_exists(pose_file))continue;const auto pose=read_document_file(pose_file);
+            if(pose.value("file_type","")!="template_clone")throw std::runtime_error("CloneGenesis9 静止姿势模板类型错误");
+            auto vec=[](const J &v){if(!v.is_array()||v.size()!=3)throw std::runtime_error("Clone 静止姿势向量无效");ir::Vec3 p{v[0],v[1],v[2]};if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z))throw std::runtime_error("Clone 静止姿势包含非有限数值");return p;};
+            for(const auto &n:pose.at("nodes")){runtime::JointPose p;p.translation_cm=vec(n.at("translation"));p.rotation_degrees=vec(n.at("rotation"));const auto &scale=n.at("scale");if(scale.size()!=4)throw std::runtime_error("Clone 静止姿势缩放无效");p.scale=vec(J::array({scale[0],scale[1],scale[2]}));p.general_scale=scale[3];
+              if(!std::isfinite(p.general_scale)||p.general_scale==0||p.scale.x==0||p.scale.y==0||p.scale.z==0)throw std::runtime_error("Clone 静止姿势缩放无效");
+              if(!morph.clone_pose.emplace(n.at("id").get<std::string>(),p).second)throw std::runtime_error("Clone 静止姿势节点重复");}
+            break;
+          }
           morph.value_type=type;morph.locked=channel.value("locked",false);
           morph.source_vertex_count=vertex_count;
           morph.geometry_validation=geometry_parent?"geometry_uri":verified_node?"skin_binding_node":"unverified_node";

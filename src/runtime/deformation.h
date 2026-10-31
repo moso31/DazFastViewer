@@ -43,6 +43,7 @@ class DeformationRuntime {
   ir::Delta collide(ir::Delta delta);
   ir::Delta push(ir::Delta delta,bool post_smooth);
   void update_garment_collision(const std::vector<Properties> &values);
+  void cross_fit_collision_reference(CollisionRuntime &collision);
   bool same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const;
   ir::Delta follow_surfaces(ir::Delta delta,const std::vector<std::vector<JointPose>> &resolved);
   ir::Delta weld_grafts(ir::Delta delta);

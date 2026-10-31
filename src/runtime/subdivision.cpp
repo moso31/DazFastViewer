@@ -139,5 +139,13 @@ std::vector<ir::Vec3> Subdivision::evaluate(std::span<const ir::Vec3> cage) cons
   return result;
 }
 const std::vector<ir::Triangle> &Subdivision::triangles() const {return data_->triangles;}
+std::vector<ir::Vec3> Subdivision::cage_offsets(std::span<const ir::Vec3> offsets) const {
+  if(!data_)return {offsets.begin(),offsets.end()};
+  const auto &table=*data_->stencils;if(offsets.size()!=size_t(table.GetNumStencils()))throw std::runtime_error("细分接触顶点数量改变");
+  std::vector<ir::Vec3> result(data_->cage_size);std::vector<float> sums(data_->cage_size);
+  const auto &sizes=table.GetSizes();const auto &starts=table.GetOffsets();const auto &indices=table.GetControlIndices();const auto &weights=table.GetWeights();
+  for(size_t v=0;v<offsets.size();++v)if(offsets[v]!=ir::Vec3{})for(int i=starts[v];i<starts[v]+sizes[v];++i){const auto c=indices[i];const float w=weights[i];result[c].x+=offsets[v].x*w;result[c].y+=offsets[v].y*w;result[c].z+=offsets[v].z*w;sums[c]+=w;}
+  for(size_t v=0;v<result.size();++v)if(sums[v]>0){result[v].x/=sums[v];result[v].y/=sums[v];result[v].z/=sums[v];}return result;
+}
 const std::vector<SubdivisionBoundary> &Subdivision::boundaries() const {return data_->boundaries;}
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "render_ir/scene.h"
+#include "runtime/forefoot.h"
 #include <set>
 
 namespace dfv::runtime {
@@ -13,10 +14,17 @@ class GarmentDeformation {
   std::vector<DeformationRegion> regions_;
   std::vector<std::vector<uint32_t>> groups_;
   std::vector<uint32_t> representatives_;
+  std::vector<std::array<uint32_t,2>> foot_edges_;
+  std::vector<uint8_t> forefoot_vertices_;
+  std::vector<ForefootRegion> forefeet_;
 public:
   explicit GarmentDeformation(const ir::Mesh &mesh);
   // reference 已包含衣物自身的适配和手动 Morph。仅约束自动跟随位移。
   void constrain(const std::set<std::string> &disabled,const std::vector<ir::Vec3> &reference,
                  std::vector<ir::Vec3> &offsets,bool uniform_scale=false,bool transition=true) const;
+  void limit_foot_collision(const std::vector<ir::Vec3> &reference,std::vector<ir::Vec3> &offsets,float strength) const;
+  void constrain_forefoot(const std::vector<ir::Vec3> &reference,std::vector<ir::Vec3> &offsets,float strength) const {
+    runtime::constrain_forefoot(forefeet_,reference,offsets,strength);
+  }
 };
 }

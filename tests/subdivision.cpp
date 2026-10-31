@@ -71,6 +71,10 @@ int main() {
   auto moved=m.positions;for(auto &p:moved) {p.x+=3;p.z+=2;}const auto updated=s.evaluate(moved);
   for(size_t i=0;i<updated.size();++i) require(std::abs(updated[i].x-positions[i].x-3)<1e-6&&std::abs(updated[i].z-2)<1e-6,"缓存模板没有正确应用形变后顶点");
   require(s.evaluate(m.positions)==positions,"细分反复更新产生累计漂移");
+  {std::vector<ir::Vec3> contacts(positions.size());for(size_t v=0;v<positions.size();++v)if(positions[v]==ir::Vec3{.5f,.5f,0})contacts[v]={0,0,.02f};
+    const auto changes=s.cage_offsets(contacts);auto cage=m.positions;for(size_t v=0;v<cage.size();++v)cage[v].z+=changes[v].z;const auto corrected=s.evaluate(cage);
+    for(size_t v=0;v<contacts.size();++v)if(contacts[v].z)require(std::abs(corrected[v].z-.02f)<1e-6f,"细分接触没有回传到控制笼");
+    contacts.assign(contacts.size(),{});for(auto p:s.cage_offsets(contacts))require(p==ir::Vec3{},"无接触仍改变控制笼");}
   runtime::Subdivision render(m,true);require(render.triangles().size()==32,"渲染最低细分级别未生效");
   m.subdivision.edge_interpolation=2;runtime::Subdivision rounded(m);require(rounded.evaluate(m.positions)[0]==ir::Vec3{.125f,.125f,0},"Sharp Edges 模式的角点平滑错误");
   m.subdivision.algorithm=1;runtime::Subdivision linear(m);require(linear.evaluate(m.positions)[0]==m.positions[0],"Bilinear 错误地平滑了控制点");

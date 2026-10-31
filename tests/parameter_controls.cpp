@@ -32,6 +32,7 @@ static void require(bool value,const char *message) {if(!value) throw std::runti
 #include "extension_panel.inl"
 #include "geograft_panel.inl"
 #include "garment_panel.inl"
+#include "special_panel.inl"
 #include "matte_fog_panel.inl"
 #include "night_sky_panel.inl"
 #include "parameter_settings.inl"
@@ -47,6 +48,7 @@ int main(int argc,char **argv) {
     if(argc>1&&std::string(argv[1])=="--night-only"){night_sky_panel(app);return 0;}
     if(argc>1&&std::string(argv[1])=="--environment-only"){environment_texture_panel(app);return 0;}
     if(argc>1&&std::string(argv[1])=="--extension-only"){extension_panel(app);return 0;}
+    if(argc>1&&std::string(argv[1])=="--special-only"){special_panel(app);return 0;}
     double value=.5;dfv::editor::ParameterControl c;c.id="test";c.label="数值";c.minimum=0;c.maximum=1;c.read=[&]{return value;};c.write=[&](double v){value=v;};
     dfv::editor::ParameterPanel panel;panel.resize(380,480);panel.bind_controls({c});panel.show();app.processEvents();QTest::qWait(180);
     auto *spin=panel.findChild<QDoubleSpinBox *>("valueSpin");auto *slider=panel.findChild<QSlider *>("valueSlider");require(spin&&slider,"参数行未创建");
@@ -125,6 +127,7 @@ int main(int argc,char **argv) {
     extension_panel(app);
     geograft_panel(app);
     garment_panel(app);
+    special_panel(app);
     std::cout<<"Numeric text / focus commit / unbounded slider / sun-sky date-time / DUF favorites: PASS\n";return 0;
   }catch(const std::exception &e){std::cerr<<e.what()<<std::endl;return 1;}
 }

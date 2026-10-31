@@ -15,6 +15,8 @@ public:
   Subdivision()=default;
   Subdivision(const ir::Mesh &mesh,bool final_render=false,bool capture_boundaries=false);
   std::vector<ir::Vec3> evaluate(std::span<const ir::Vec3> cage) const;
+  // 将细分表面的非零接触位移按模板权重平均回控制笼，用于碰撞交替投影。
+  std::vector<ir::Vec3> cage_offsets(std::span<const ir::Vec3> refined_offsets) const;
   const std::vector<ir::Triangle> &triangles() const;
   // 诊断用：保留基础可见边界在最终细分层的顶点链，避免以基础顶点误代渲染接缝。
   const std::vector<SubdivisionBoundary> &boundaries() const;

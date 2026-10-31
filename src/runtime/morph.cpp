@@ -9,7 +9,7 @@
 
 namespace dfv::runtime {
 MorphRuntime::MorphRuntime(const MorphRuntime &s,ir::Scene &scene)
-  :scene_(scene),targets_(s.targets_),values_(s.values_),bases_(s.bases_),follow_offsets_(s.follow_offsets_),
+  :scene_(scene),targets_(s.targets_),values_(s.values_),bases_(s.bases_),preposes_(s.preposes_),follow_offsets_(s.follow_offsets_),
    followed_weights_(s.followed_weights_),garment_references_(s.garment_references_),follow_revisions_(s.follow_revisions_),
    transforms_(s.transforms_),attachments_(s.attachments_),reference_frames_(s.reference_frames_),attachment_frames_(s.attachment_frames_),
    parents_(s.parents_),visibility_children_(s.visibility_children_),active_(s.active_),dirty_meshes_(s.dirty_meshes_),dirty_transforms_(s.dirty_transforms_),stats_(s.stats_) {
@@ -19,6 +19,7 @@ static void finite(ir::Vec3 p) {
   if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)) throw std::runtime_error("属性包含非有限数值");
 }
 static bool same(ir::Vec3 a,ir::Vec3 b) {return a.x==b.x && a.y==b.y && a.z==b.z;}
+static ir::Vec3 direction(const ir::Transform &t,ir::Vec3 v){const auto &m=t.value;return {m[0]*v.x+m[1]*v.y+m[2]*v.z,m[4]*v.x+m[5]*v.y+m[6]*v.z,m[8]*v.x+m[9]*v.y+m[10]*v.z};}
 MorphRuntime::MorphRuntime(ir::Scene &scene,const std::vector<Target> &targets):scene_(scene),targets_(targets) {
   diagnostics::Scope scope("morph_construct");
   visibility_children_=visibility_children(scene,targets);
@@ -61,7 +62,7 @@ bool MorphRuntime::set_morph(size_t target,size_t index,float value,bool enforce
   if(enforce_limits&&m.clamped) value=std::clamp(value,m.minimum,m.maximum);
   if(current==value) return false;
   current=value;
-  if(!values_[target].disabled_deformation_regions.empty())++follow_revisions_[target];
+  if(!values_[target].disabled_deformation_regions.empty()||values_[target].forefoot_uniformity>0)++follow_revisions_[target];
   if(value==0) active_[target].erase(index);else active_[target].insert(index);
   if(m.has_offsets()) dirty_meshes_.insert(target);return true;
 }
@@ -105,6 +106,11 @@ void MorphRuntime::set_attachment(size_t target,const ir::Transform &delta) {
   auto &old=attachments_.at(target);if(old.value==delta.value) return;
   old=delta;dirty_transform(target);
 }
+void MorphRuntime::prepose(size_t target,const std::vector<ir::Transform> &transforms) {
+  auto &base=bases_.at(target);if(transforms.size()!=base.size()||preposes_.contains(target))throw std::runtime_error("无效或重复的 Clone 静止姿势转换");
+  for(size_t v=0;v<base.size();++v)base[v]=transforms[v].point(base[v]);preposes_[target]=transforms;
+  garment_deformation_[target].reset();garment_references_[target].clear();++follow_revisions_[target];dirty_meshes_.insert(target);
+}
 bool MorphRuntime::set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets) {
   if(offsets.size()!=bases_.at(target).size()) throw std::runtime_error("服装跟随顶点数量不一致");
   for(auto p:offsets) finite(p);
@@ -124,19 +130,23 @@ void MorphRuntime::set_deformation_regions(size_t target,const std::set<std::str
   }
 }
 void MorphRuntime::constrain_follow_offsets(size_t target,std::vector<ir::Vec3> &offsets) {
-  const auto &disabled=values_[target].disabled_deformation_regions;if(disabled.empty())return;
+  const auto &disabled=values_[target].disabled_deformation_regions;const float forefoot=values_[target].forefoot_uniformity;if(disabled.empty()&&forefoot==0)return;
   auto reference=bases_[target];std::vector<ir::Vec3> authored(reference.size());
   const auto &followed=followed_weights_[target];
   for(size_t m=0;m<targets_[target].morphs.size();++m) {
     const float transfer=followed.empty()?0:followed.at(m),local=values_[target].morphs[m]-transfer;
     if(local==0&&transfer==0)continue;
     for(const auto &d:targets_[target].morphs[m].data()) {
-      auto &p=reference[d.vertex];p.x+=local*d.delta.x;p.y+=local*d.delta.y;p.z+=local*d.delta.z;
-      auto &a=authored[d.vertex];a.x+=transfer*d.delta.x;a.y+=transfer*d.delta.y;a.z+=transfer*d.delta.z;
+      const auto delta=preposes_.contains(target)?direction(preposes_.at(target)[d.vertex],d.delta):d.delta;
+      auto &p=reference[d.vertex];p.x+=local*delta.x;p.y+=local*delta.y;p.z+=local*delta.z;
+      auto &a=authored[d.vertex];a.x+=transfer*delta.x;a.y+=transfer*delta.y;a.z+=transfer*delta.z;
     }
   }
   for(size_t v=0;v<offsets.size();++v){offsets[v].x+=authored[v].x;offsets[v].y+=authored[v].y;offsets[v].z+=authored[v].z;}
   garment_deformation_[target]->constrain(disabled,reference,offsets);
+  // 平均蒙皮无法修复进入蒙皮之前的自动体型传递。前掌以衣物自身的
+  // Morph 为参考，仅将自动传递部分拟合为整体位移、旋转和统一缩放。
+  garment_deformation_[target]->constrain_forefoot(reference,offsets,forefoot);
   garment_references_[target]=std::move(reference);
   // MorphRuntime 仍使用完整 ERC 权重；这里只写回相对于这些权重的修正。
   for(size_t v=0;v<offsets.size();++v){offsets[v].x-=authored[v].x;offsets[v].y-=authored[v].y;offsets[v].z-=authored[v].z;}
@@ -148,11 +158,19 @@ void MorphRuntime::constrain_skinned(size_t target,std::vector<ir::Vec3> &positi
   garment_deformation_[target]->constrain(disabled,reference,offsets,true);
   for(size_t v=0;v<positions.size();++v)positions[v]={reference[v].x+offsets[v].x,reference[v].y+offsets[v].y,reference[v].z+offsets[v].z};
 }
+void MorphRuntime::set_forefoot_uniformity(size_t target,float strength) {
+  if(!std::isfinite(strength)||strength<0||strength>1)throw std::runtime_error("前掌统一权重必须在 0–100% 之间");
+  auto &old=values_[target].forefoot_uniformity;if(old==strength)return;old=strength;++follow_revisions_[target];
+  if(strength>0&&!garment_deformation_[target]){auto mesh=scene_.meshes[scene_.instances[targets_[target].instance].mesh];mesh.positions=bases_[target];garment_deformation_[target]=std::make_unique<GarmentDeformation>(mesh);}
+}
 void MorphRuntime::constrain_collision(size_t target,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions) const {
-  const auto &disabled=values_[target].disabled_deformation_regions;if(disabled.empty()||!garment_deformation_[target])return;
+  const auto &disabled=values_[target].disabled_deformation_regions;const float forefoot=values_[target].forefoot_uniformity;if((disabled.empty()&&forefoot==0)||!garment_deformation_[target])return;
   std::vector<ir::Vec3> offsets(positions.size());for(size_t v=0;v<positions.size();++v)offsets[v]={positions[v].x-input[v].x,positions[v].y-input[v].y,positions[v].z-input[v].z};
   // 过渡已在蒙皮后完成；碰撞中只对关闭部位保形，开启部位必须保留完整避让量。
   garment_deformation_[target]->constrain(disabled,input,offsets,true,false);
+  // 前掌共享权重后，碰撞也使用整体拟合；兼容使用下划线的鞋类分区命名。
+  garment_deformation_[target]->constrain_forefoot(input,offsets,forefoot);
+  if(forefoot>0)garment_deformation_[target]->limit_foot_collision(input,offsets,forefoot);
   for(size_t v=0;v<positions.size();++v)positions[v]={input[v].x+offsets[v].x,input[v].y+offsets[v].y,input[v].z+offsets[v].z};
 }
 ir::Transform parameter_transform(const TransformValues &v,const Target &t,const ir::Transform &loaded_transform) {
@@ -203,7 +221,8 @@ ir::Delta MorphRuntime::evaluate() {
     for(auto index:active_[target]) {
       const float weight=values_[target].morphs[index];
       for(const auto &offset:targets_[target].morphs[index].data()) {
-        auto &p=positions[offset.vertex];p.x+=weight*offset.delta.x;p.y+=weight*offset.delta.y;p.z+=weight*offset.delta.z;
+        const auto delta=preposes_.contains(target)?direction(preposes_.at(target)[offset.vertex],offset.delta):offset.delta;
+        auto &p=positions[offset.vertex];p.x+=weight*delta.x;p.y+=weight*delta.y;p.z+=weight*delta.z;
         ++stats_.offsets_visited;
       }
     }

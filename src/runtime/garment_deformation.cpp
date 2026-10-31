@@ -51,7 +51,7 @@ std::vector<DeformationRegion> deformation_regions(const ir::Mesh &mesh) {
   }
   return result;
 }
-GarmentDeformation::GarmentDeformation(const ir::Mesh &mesh):regions_(deformation_regions(mesh)),groups_(mesh.polygon_groups.size()),representatives_(mesh.positions.size()) {
+GarmentDeformation::GarmentDeformation(const ir::Mesh &mesh):regions_(deformation_regions(mesh)),groups_(mesh.polygon_groups.size()),representatives_(mesh.positions.size()),forefeet_(forefoot_regions(mesh)) {
   // 仅共享约束，不焊接或改写拓扑；UV / 材质拆点使用相同的边界位移。
   std::map<std::array<float,3>,uint32_t> coincident;
   for(uint32_t v=0;v<mesh.positions.size();++v){const auto p=mesh.positions[v];representatives_[v]=coincident.emplace(std::array{p.x,p.y,p.z},v).first->second;}
@@ -60,6 +60,31 @@ GarmentDeformation::GarmentDeformation(const ir::Mesh &mesh):regions_(deformatio
     if(f.polygon_group<groups_.size())groups_[f.polygon_group].push_back(v);
   }
   for(auto &list:groups_){std::sort(list.begin(),list.end());list.erase(std::unique(list.begin(),list.end()),list.end());}
+  forefoot_vertices_.resize(mesh.positions.size());std::set<uint32_t> foot_groups;
+  for(const auto &r:regions_)if(r.id=="Toes"||r.id=="l_toes"||r.id=="r_toes")foot_groups.insert(r.groups.begin(),r.groups.end());
+  std::vector<float> blend(mesh.positions.size());for(const auto &r:forefeet_)for(size_t v=0;v<blend.size();++v)blend[representatives_[v]]=std::max(blend[representatives_[v]],r.blend[v]);
+  for(size_t v=0;v<blend.size();++v)forefoot_vertices_[v]=blend[v]>.9999f;
+  for(const auto &r:regions_)if(r.id=="Foot"||r.id=="l_foot"||r.id=="r_foot"||r.id=="Metatarsals")foot_groups.insert(r.groups.begin(),r.groups.end());
+  std::set<std::array<uint32_t,2>> edges;
+  for(const auto &f:mesh.triangles)if(foot_groups.contains(f.polygon_group))for(int k=0;k<3;++k){const auto a=representatives_[f.vertices[k]],b=representatives_[f.vertices[(k+1)%3]];if(a!=b&&(blend[a]>0||blend[b]>0))edges.insert({std::min(a,b),std::max(a,b)});}
+  foot_edges_.assign(edges.begin(),edges.end());
+}
+void GarmentDeformation::limit_foot_collision(const std::vector<ir::Vec3> &reference,std::vector<ir::Vec3> &offsets,float strength) const {
+  if(strength==0||foot_edges_.empty())return;
+  if(reference.size()!=representatives_.size()||offsets.size()!=reference.size())throw std::runtime_error("鞋底碰撞过渡顶点数量不一致");
+  const auto original=offsets;std::vector<uint8_t> active(offsets.size());for(const auto &e:foot_edges_)active[e[0]]=active[e[1]]=1;
+  struct Edge {uint32_t a,b;float limit,share;};std::vector<Edge> edges;edges.reserve(foot_edges_.size());
+  for(const auto &e:foot_edges_){const auto a=e[0],b=e[1];if(forefoot_vertices_[a]&&forefoot_vertices_[b])continue;const auto d=sub(reference[b],reference[a]);edges.push_back({a,b,.35f*std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z),forefoot_vertices_[a]||forefoot_vertices_[b]?1.f:.5f});}
+  std::vector<ir::Vec3> corrections(offsets.size());std::vector<uint32_t> counts(offsets.size());
+  for(int iteration=0;iteration<48;++iteration){std::fill(corrections.begin(),corrections.end(),ir::Vec3{});std::fill(counts.begin(),counts.end(),0);bool changed=false;
+    for(const auto &e:edges){const auto a=e.a,b=e.b;const auto d=sub(offsets[b],offsets[a]);const float length=std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z),limit=e.limit;
+      if(length<=limit||length<=1e-10f)continue;changed=true;const auto correction=mul(d,1-limit/length);const float share=e.share;
+      if(!forefoot_vertices_[a]){corrections[a]=add(corrections[a],mul(correction,share));++counts[a];}if(!forefoot_vertices_[b]){corrections[b]=sub(corrections[b],mul(correction,share));++counts[b];}
+    }
+    if(!changed)break;for(size_t v=0;v<offsets.size();++v)if(counts[v])offsets[v]=add(offsets[v],mul(corrections[v],1.f/counts[v]));
+  }
+  for(size_t v=0;v<offsets.size();++v)if(representatives_[v]==v)offsets[v]=add(original[v],mul(sub(offsets[v],original[v]),strength));
+  for(size_t v=0;v<offsets.size();++v)if(active[representatives_[v]])offsets[v]=offsets[representatives_[v]];
 }
 void GarmentDeformation::constrain(const std::set<std::string> &disabled,const std::vector<ir::Vec3> &reference,std::vector<ir::Vec3> &offsets,bool uniform_scale,bool transition) const {
   if(disabled.empty())return;

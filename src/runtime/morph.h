@@ -7,6 +7,7 @@
 #include "runtime/physics_settings.h"
 #include "runtime/garment_deformation.h"
 #include "runtime/mesh_push.h"
+#include "runtime/skeleton.h"
 #include <set>
 #include <map>
 
@@ -29,6 +30,8 @@ struct Morph {
   bool clamped=false,visible=true,auto_follow=false;
   std::vector<SparseOffset> offsets;
   std::shared_ptr<MorphPayload> payload;
+  // Clone 的静止姿势模板与形体差值共同定义参考，不是用户当前姿势。
+  std::map<std::string,JointPose> clone_pose;
   size_t offset_count() const {return payload?payload->count:offsets.size();}
   bool has_offsets() const {return offset_count()!=0;}
   OffsetView data() const {return payload?OffsetView(payload->ensure()):OffsetView(offsets);}
@@ -48,6 +51,7 @@ struct Target {
   uint32_t instance=0;
   std::vector<Morph> morphs;
   std::string conform_target;
+  std::string preferred_base,auto_fit_base,content_type;
   ir::MeshSmoothing smoothing;
   std::vector<std::string> ancestors;
   ir::Transform edit_frame,translation_frame;
@@ -74,6 +78,7 @@ struct Properties {
   bool ground_alignment_body_only=false;
   bool graft_enabled=true;
   bool local_shadow=false;
+  float forefoot_uniformity=0;
   std::set<std::string> disabled_deformation_regions;
   bool operator==(const Properties &) const = default;
 };
@@ -87,6 +92,7 @@ class MorphRuntime {
   const std::vector<Target> &targets_;
   std::vector<Properties> values_;
   std::vector<std::vector<ir::Vec3>> bases_;
+  std::map<size_t,std::vector<ir::Transform>> preposes_;
   std::vector<std::vector<ir::Vec3>> follow_offsets_;
   std::vector<std::unique_ptr<GarmentDeformation>> garment_deformation_;
   std::vector<std::vector<float>> followed_weights_;
@@ -113,12 +119,14 @@ public:
   void set_attachment(size_t target,const ir::Transform &delta);
   void set_reference_frames(const std::vector<ir::Transform> &frames,const std::vector<ir::Transform> &attachment_frames);
   bool set_follow_offsets(size_t target,const std::vector<ir::Vec3> &offsets);
+  void prepose(size_t target,const std::vector<ir::Transform> &transforms);
   void set_deformation_regions(size_t target,const std::set<std::string> &disabled,const std::vector<float> &followed);
+  void set_forefoot_uniformity(size_t target,float strength);
   void constrain_follow_offsets(size_t target,std::vector<ir::Vec3> &offsets);
   void constrain_skinned(size_t target,std::vector<ir::Vec3> &positions) const;
   void constrain_collision(size_t target,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions) const;
   uint64_t follow_revision(size_t target) const {return follow_revisions_.at(target);}
-  uint64_t garment_revision(size_t target) const {return values_.at(target).disabled_deformation_regions.empty()?0:follow_revision(target);}
+  uint64_t garment_revision(size_t target) const {return values_.at(target).disabled_deformation_regions.empty()&&values_.at(target).forefoot_uniformity==0?0:follow_revision(target);}
   const auto &base_positions(size_t target) const {return bases_.at(target);}
   ir::Delta evaluate();
   // 先消去共同祖先，再求相对矩阵；共同刚性移动不会制造浮点差异。

@@ -65,6 +65,11 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
       [this](uint32_t instance,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance){morph_.constrain_collision(t,input,positions);break;}},
       [this](uint32_t instance){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance)return morph_.garment_revision(t);return uint64_t(0);}),scene_(scene) {
   if(reuse) collision_.reuse(reuse->collision_);
+  for(const auto &link:conform_.links())if(link.retarget_skeleton){
+    skin_.retarget(size_t(link.follower_skin),size_t(link.source_skin),link.joints);
+    morph_.prepose(link.follower,link.prepose);collision_.reference_positions(targets_[link.follower].instance,morph_.base_positions(link.follower));
+  }
+  cross_fit_collision_reference(collision_);
   if(graphs.size()!=targets.size()) throw std::runtime_error("角色和公式图数量不一致");
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
   for(const auto &target:targets) {Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);sync_aliases(target,p);previous_.push_back(p);}
@@ -126,7 +131,7 @@ void DeformationRuntime::feed(const std::vector<Properties> &values,const std::v
     // 在相同姿势下去掉宿主 Morph 输入，保留衣物自己的基础适配、调整及 JCM。
     // 二次公式求值仅发生在启用局部约束的衣物上，不执行额外蒙皮。
     std::unique_ptr<FormulaRuntime> local;
-    if(followed&&link&&!values[t].disabled_deformation_regions.empty())local=std::make_unique<FormulaRuntime>(g);
+    if(followed&&link&&(!values[t].disabled_deformation_regions.empty()||values[t].forefoot_uniformity>0))local=std::make_unique<FormulaRuntime>(g);
     for(uint32_t c=0;c<g.channels.size();++c) {const auto &binding=g.channels[c].binding;
       if(binding.property==Property::morph) {if(g.morph_channels[binding.index]!=int(c)) continue;double input=values[t].morphs[binding.index];
         runtime.set_unlimited(c,values[t].unlimited_morphs.contains(targets_[t].morphs[binding.index].id));
@@ -144,7 +149,7 @@ void DeformationRuntime::feed(const std::vector<Properties> &values,const std::v
 }
 bool DeformationRuntime::same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const {
   if(!evaluated_||values.size()!=previous_.size()||poses!=previous_poses_) return false;
-  for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs||values[t].disabled_deformation_regions!=previous_[t].disabled_deformation_regions) return false;
+  for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs||values[t].disabled_deformation_regions!=previous_[t].disabled_deformation_regions||values[t].forefoot_uniformity!=previous_[t].forefoot_uniformity) return false;
   return true;
 }
 bool DeformationRuntime::reframe(const std::vector<ir::Transform> &frames) {
@@ -172,22 +177,31 @@ PayloadProgress DeformationRuntime::prepare(const std::vector<Properties> &value
   }
   payload_leases_=std::move(leases);trim_morph_cache();return progress;
 }
+void DeformationRuntime::cross_fit_collision_reference(CollisionRuntime &collision) {
+  for(const auto &link:conform_.links())if(link.cross_base) {
+    auto reference=morph_.base_positions(link.source);
+    for(size_t v=0;v<reference.size();++v){const auto p=link.base_offsets[v];reference[v].x-=p.x;reference[v].y-=p.y;reference[v].z-=p.z;}
+    collision.reference_surface(targets_[link.follower].instance,reference);
+  }
+}
 void DeformationRuntime::update_garment_collision(const std::vector<Properties> &values) {
   // dForce 衣物的基础网格可以穿入身体；没有显式平滑碰撞时，仍在当前姿势下
   // 对 Fit To 宿主执行静态避让。这不重建 dForce 的时间线模拟或布料褶皱。
   std::vector<bool> active(targets_.size());
   for(size_t t=0;t<targets_.size();++t){const auto &target=targets_[t];const auto &instance=scene_.instances[target.instance];const auto &mesh=scene_.meshes[instance.mesh];
-    active[t]=(target.dynamic_cloth||!values[t].disabled_deformation_regions.empty())&&!target.conform_target.empty()&&graphs_[t].skin>=0&&mesh.graft_vertex_pairs.empty()&&instance.shell_source<0&&!(target.smoothing.enabled&&target.smoothing.collision_iterations>0&&!target.smoothing.collision_target.empty());}
-  for(size_t t=0;t<active.size();++t)if(active[t]&&!targets_[t].dynamic_cloth){const auto regions=deformation_regions(scene_.meshes[scene_.instances[targets_[t].instance].mesh]);active[t]=std::any_of(regions.begin(),regions.end(),[&](const auto &r){return values[t].disabled_deformation_regions.contains(r.id);});}
+    const auto *link=conform_.link(t);const bool cross=link&&link->cross_base;
+    active[t]=(cross||target.dynamic_cloth||values[t].forefoot_uniformity>0||!values[t].disabled_deformation_regions.empty())&&!target.conform_target.empty()&&graphs_[t].skin>=0&&mesh.graft_vertex_pairs.empty()&&instance.shell_source<0&&!(target.smoothing.enabled&&target.smoothing.collision_iterations>0&&!target.smoothing.collision_target.empty());}
+  for(size_t t=0;t<active.size();++t)if(active[t]&&!targets_[t].dynamic_cloth&&values[t].forefoot_uniformity==0){const auto *link=conform_.link(t);if(link&&link->cross_base)continue;const auto regions=deformation_regions(scene_.meshes[scene_.instances[targets_[t].instance].mesh]);active[t]=std::any_of(regions.begin(),regions.end(),[&](const auto &r){return values[t].disabled_deformation_regions.contains(r.id);});}
   if(active==garment_collision_active_)return;
   if(std::none_of(active.begin(),active.end(),[](bool value){return value;})){garment_collision_active_=active;garment_collision_.reset();return;}
-  // 复用现有防穿插，不改写资产的碰撞设置；普通服装仅在关闭局部形变时启用。
+  // 复用现有防穿插，不改写资产设置；普通服装按局部保形或前掌参数启用。
   auto targets=targets_;
   for(size_t t=0;t<targets.size();++t){auto &s=targets[t].smoothing;s.enabled=active[t];if(active[t]){s.collision_target=targets[t].conform_target;if(!s.collision_target.starts_with('#'))s.collision_target.insert(s.collision_target.begin(),'#');s.collision_iterations=6;s.smoothing_iterations=8;s.weight=.5f;}}
   auto collision=std::make_unique<CollisionRuntime>(scene_,targets,[this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);},
       [this](uint32_t instance,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance){morph_.constrain_collision(t,input,positions);break;}},
       [this](uint32_t instance){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance)return morph_.garment_revision(t);return uint64_t(0);});
   for(size_t t=0;t<targets_.size();++t)collision->reference_positions(targets_[t].instance,morph_.base_positions(t));
+  cross_fit_collision_reference(*collision);
   if(garment_collision_)collision->reuse(*garment_collision_);
   garment_collision_=std::move(collision);garment_collision_active_=active;
 }
@@ -232,6 +246,8 @@ ir::Delta DeformationRuntime::evaluate(const std::vector<Properties> &values,con
   } catch(...) {std::vector<std::vector<float>> rollback_weights;std::vector<std::vector<JointPose>> rollback_poses;feed(previous_,previous_poses_,rollback_weights,rollback_poses);throw;}
   update_garment_collision(values);
   for(size_t t=0;t<weights.size();++t) {
+    morph_.set_forefoot_uniformity(t,values[t].forefoot_uniformity);
+    if(graphs_[t].skin>=0&&(values[t].forefoot_uniformity>0||previous_[t].forefoot_uniformity>0)&&(!evaluated_||values[t].forefoot_uniformity!=previous_[t].forefoot_uniformity)){auto reference=scene_.meshes[scene_.instances[targets_[t].instance].mesh];reference.positions=morph_.base_positions(t);skin_.set_forefoot(size_t(graphs_[t].skin),values[t].forefoot_uniformity,reference);}
     morph_.set_deformation_regions(t,values[t].disabled_deformation_regions,followed[t]);
     for(size_t m=0;m<weights[t].size();++m) if(targets_[t].morphs[m].evaluable||targets_[t].morphs[m].unsupported.empty()) morph_.set_morph(t,m,weights[t][m],false);
     morph_.set_transform(t,values[t].transform);

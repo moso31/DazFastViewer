@@ -1,5 +1,6 @@
 #include "editor/document.h"
 #include "editor/object_hierarchy.h"
+#include "runtime/fit_profile.h"
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -77,12 +78,14 @@ std::string resolve_selection(Document &d,size_t host,const std::string &uri) {
 }
 void compatible(const Document &d,const daz::AssetObject &f,size_t host,bool conform) {
   const auto &h=object(d,host);
+  const auto &mesh=d.loaded.scene.meshes.at(d.loaded.scene.instances.at(f.instance).mesh);
+  const bool cross=conform&&genesis8(h)&&!mesh.graft_target_vertices&&mesh.graft_vertex_pairs.empty()&&
+    !runtime::fit_reference_shape(f.preferred_base,h.auto_fit_base,f.content_type).empty();
   if(!f.preferred_base.empty()) {
     if(f.preferred_base!=h.auto_fit_base&&std::find(h.extended_bases.begin(),h.extended_bases.end(),f.preferred_base)==h.extended_bases.end()&&
-       !(genesis8(h)&&genesis8_base(f.preferred_base)==genesis8_base(h.auto_fit_base)))
-      throw std::runtime_error("附件需要 "+f.preferred_base+"，当前角色为 "+h.auto_fit_base+"；跨代 / 跨性别 AutoFit 尚未支持");
+       !(genesis8(h)&&genesis8_base(f.preferred_base)==genesis8_base(h.auto_fit_base))&&!cross)
+      throw std::runtime_error("附件需要 "+f.preferred_base+"，当前角色为 "+h.auto_fit_base+"；支持同基型、G8 男装到女性，以及 G9 鞋类到 G8 / G8.1 女性的适配");
   } else if(conform) throw std::runtime_error("附件未声明 preferred_base，无法确认 Fit To 兼容性："+f.label);
-  const auto &mesh=d.loaded.scene.meshes.at(d.loaded.scene.instances.at(f.instance).mesh);
   const auto &body=d.loaded.scene.meshes.at(d.loaded.scene.instances.at(h.instance).mesh);
   if(mesh.graft_target_vertices&&(mesh.graft_target_vertices!=body.positions.size()||(mesh.graft_target_polygons&&mesh.graft_target_polygons!=body.source_polygon_count)))
     throw std::runtime_error("GeoGraft 与目标角色的基础拓扑不匹配："+f.label);
@@ -129,6 +132,7 @@ void apply(Document &d,AttachmentBinding &binding,int host) {
     }
     d.loaded.scene.instances.at(o.instance).transform=frame*i.transform;
     t.parent=o.parent;t.conform_target=o.conform_target;t.smoothing=o.smoothing;t.rigid_follow=o.rigid_follow;
+    t.preferred_base=o.preferred_base;t.auto_fit_base=o.auto_fit_base;t.content_type=o.content_type;
     t.edit_frame=o.edit_frame;t.translation_frame=o.translation_frame;t.attachment_bind_rest=o.attachment_bind_rest;
   }
   binding.host=host>=0?node_id(d.catalog.targets.at(size_t(host))):std::string{};

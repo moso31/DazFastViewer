@@ -1,4 +1,5 @@
 #include "runtime/skeleton.h"
+#include "runtime/forefoot.h"
 #include <ppl.h>
 #include "diagnostics/load_profile.h"
 #include <algorithm>
@@ -121,6 +122,34 @@ std::vector<ir::Vec3> deform(const Skin &skin,const std::vector<JointPose> &pose
   else for(size_t i=0;i<source.size();++i)vertex(i);
   return result;
 }
+std::vector<ir::Transform> vertex_transforms(const Skin &skin,const std::vector<JointPose> &pose) {
+  // 固定姿势与权重下，线性蒙皮和 DQS 对每个顶点均为仿射变换。
+  const auto origin=deform(skin,pose,std::vector<ir::Vec3>(skin.weights.size()));std::vector<ir::Transform> result(origin.size());
+  for(int axis=0;axis<3;++axis){ir::Vec3 unit{};if(axis==0)unit.x=1;else if(axis==1)unit.y=1;else unit.z=1;
+    const auto points=deform(skin,pose,std::vector<ir::Vec3>(origin.size(),unit));
+    for(size_t v=0;v<result.size();++v){auto &m=result[v].value;m[axis]=points[v].x-origin[v].x;m[4+axis]=points[v].y-origin[v].y;m[8+axis]=points[v].z-origin[v].z;}
+  }
+  for(size_t v=0;v<result.size();++v){auto &m=result[v].value;m[3]=origin[v].x;m[7]=origin[v].y;m[11]=origin[v].z;}return result;
+}
+std::vector<ir::Vec3> deform_retargeted(const Skin &follower,const Skin &host,const std::vector<int> &mapping,
+  const std::vector<JointPose> &follower_pose,const std::vector<JointPose> &host_pose,const std::vector<ir::Vec3> &source) {
+  validate_pose(follower,follower_pose);validate_pose(host,host_pose);
+  if(mapping.size()!=follower.joints.size())throw std::runtime_error("跨代骨骼映射数量不一致");
+  auto skin=follower;skin.joints=host.joints;skin.initial=host.initial;auto pose=host_pose;
+  auto sub=[](ir::Vec3 a,ir::Vec3 b){return ir::Vec3{a.x-b.x,a.y-b.y,a.z-b.z};};
+  auto ratio=[](ir::Vec3 a,ir::Vec3 b,ir::Vec3 c){return ir::Vec3{a.x*b.x/c.x,a.y*b.y/c.y,a.z*b.z/c.z};};
+  for(size_t j=0;j<mapping.size();++j)if(mapping[j]>=0){
+    const auto k=size_t(mapping[j]);auto &p=pose.at(k);const auto &a=host_pose.at(k),&b=follower_pose[j];const auto &h=host.joints[k],&f=follower.joints[j];
+    // conform_pose 已对齐关节中心和朝向；去掉继承部分后，只叠加衣物自己的编辑。
+    p.translation_cm=add(p.translation_cm,sub(b.translation_cm,a.translation_cm));p.rotation_degrees=add(p.rotation_degrees,sub(b.rotation_degrees,a.rotation_degrees));
+    p.scale=ratio(p.scale,b.scale,a.scale);p.general_scale*=b.general_scale/a.general_scale;
+    p.center_offset_cm=add(p.center_offset_cm,sub(b.center_offset_cm,add(a.center_offset_cm,sub(h.center_cm,f.center_cm))));
+    p.end_offset_cm=add(p.end_offset_cm,sub(b.end_offset_cm,add(a.end_offset_cm,sub(h.end_cm,f.end_cm))));
+    p.orientation_offset_degrees=add(p.orientation_offset_degrees,sub(b.orientation_offset_degrees,add(a.orientation_offset_degrees,sub(h.orientation_degrees,f.orientation_degrees))));
+  }
+  for(auto &weights:skin.weights){std::map<uint32_t,double> remapped;for(const auto &w:weights){if(w.joint>=mapping.size()||mapping[w.joint]<0)throw std::runtime_error("跨代鞋类缺少带权重骨骼的映射");remapped[uint32_t(mapping[w.joint])]+=w.weight;}weights.clear();for(auto [joint,weight]:remapped)weights.push_back({joint,weight});}
+  return deform(skin,pose,source);
+}
 SkinningRuntime::SkinningRuntime(ir::Scene &scene,const std::vector<Skin> &skins):scene_(scene),skins_(skins) {
   diagnostics::Scope scope("skin_construct");
   std::set<uint32_t> meshes;
@@ -132,12 +161,26 @@ bool SkinningRuntime::set_pose(size_t skin,const std::vector<JointPose> &pose) {
   if(std::equal(pose.begin(),pose.end(),old.begin(),[](const auto &a,const auto &b) {return same(a,b);})) return false;
   old=pose;dirty_.insert(skin);return true;
 }
+void SkinningRuntime::set_forefoot(size_t skin,float strength,const ir::Mesh &reference) {
+  if(!std::isfinite(strength)||strength<0||strength>1)throw std::runtime_error("前掌统一权重必须在 0–100% 之间");
+  const float old=forefoot_strengths_.contains(skin)?forefoot_strengths_.at(skin):0;if(old==strength)return;
+  if(strength==0)uniform_forefeet_.erase(skin);else uniform_forefeet_[skin]=ForefootWeights(reference,skins_.at(skin)).apply(skins_.at(skin),strength);
+  forefoot_strengths_[skin]=strength;dirty_.insert(skin);
+}
+void SkinningRuntime::retarget(size_t follower,size_t source,const std::vector<int> &mapping){
+  if(follower==source||mapping.size()!=skins_.at(follower).joints.size())throw std::runtime_error("无效跨代骨架绑定");
+  for(int j:mapping)if(j>=int(skins_.at(source).joints.size()))throw std::runtime_error("跨代骨骼索引越界");
+  retargets_[follower]={source,mapping};dirty_.insert(follower);
+}
 ir::Delta SkinningRuntime::evaluate(ir::Delta delta) {
   diagnostics::Scope scope("skin_evaluate");
   for(size_t i=0;i<skins_.size();++i) {const auto mesh=scene_.instances[skins_[i].instance].mesh;
     for(const auto &edit:delta.meshes) if(edit.index==mesh) {sources_[i]=edit.positions;dirty_.insert(i);}}
+  for(const auto &[follower,r]:retargets_)if(dirty_.contains(r.source))dirty_.insert(follower);
   for(auto i:dirty_) {
-    const auto mesh=scene_.instances[skins_[i].instance].mesh;auto result=deform(skins_[i],poses_[i],sources_[i]);scene_.meshes[mesh].positions=result;
+    const auto mesh=scene_.instances[skins_[i].instance].mesh;const auto &skin=uniform_forefeet_.contains(i)?uniform_forefeet_.at(i):skins_[i];std::vector<ir::Vec3> result;
+    if(const auto it=retargets_.find(i);it!=retargets_.end()){const auto &r=it->second;result=deform_retargeted(skin,skins_[r.source],r.mapping,poses_[i],poses_[r.source],sources_[i]);}
+    else result=deform(skin,poses_[i],sources_[i]);scene_.meshes[mesh].positions=result;
     auto it=std::find_if(delta.meshes.begin(),delta.meshes.end(),[&](const auto &e) {return e.index==mesh;});
     if(it==delta.meshes.end()) delta.meshes.push_back({mesh,std::move(result)});else it->positions=std::move(result);
     ++stats_.evaluations;stats_.vertices+=sources_[i].size();stats_.joints+=poses_[i].size();

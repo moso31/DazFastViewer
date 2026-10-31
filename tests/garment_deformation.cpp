@@ -1,5 +1,6 @@
 #include "editor/scene_extension.h"
 #include "runtime/garment_deformation.h"
+#include "runtime/forefoot.h"
 #include <cmath>
 #include <fstream>
 #include <iostream>
@@ -19,11 +20,64 @@ static ir::Mesh strip() {
     for(uint32_t x=0;x<12;++x){ir::Triangle t;t.polygon_group=(x<6?1:2)+side*2;t.vertices={begin+x*2,begin+x*2+1,begin+x*2+2};m.triangles.push_back(t);t.vertices={begin+x*2+1,begin+x*2+3,begin+x*2+2};m.triangles.push_back(t);}
   }return m;
 }
+static void forefoot(){
+  const auto mesh=strip();Skin skin;skin.id="shoe-skin";Joint root;root.id=root.name="hip";skin.joints.push_back(root);skin.weights.resize(mesh.positions.size());
+  for(int side=0;side<2;++side){const std::string prefix=side?"r":"l";const auto foot=uint32_t(skin.joints.size());Joint f;f.id=f.name=prefix+"Foot";f.parent=0;skin.joints.push_back(f);Joint toe;toe.id=toe.name=prefix+"Toe";toe.parent=int(foot);toe.center_cm={6,0,float(-side*10)};toe.end_cm={12,0,float(-side*10)};skin.joints.push_back(toe);
+    for(int k=0;k<10;++k){Joint j;j.id=j.name=prefix+"Digit"+std::to_string(k);j.parent=int(foot+1);j.center_cm=toe.center_cm;skin.joints.push_back(j);}
+    for(size_t v=side*26;v<(side+1)*26;++v)skin.weights[v]={{mesh.positions[v].x<.06f?foot:foot+2+uint32_t(v%10),1}};
+  }
+  skin.initial.resize(skin.joints.size());auto poses=skin.initial;for(size_t j=1;j<poses.size();++j)if(skin.joints[j].name.find("Digit")!=std::string::npos){poses[j].rotation_degrees.x=float(j%5)*15;poses[j].general_scale=.8f+float(j%4)*.12f;}
+  ForefootWeights average(mesh,skin);check(average.active(),"前掌区域未识别");const auto raw=deform(skin,poses,mesh.positions),unified=deform(average.apply(skin,1),poses,mesh.positions);
+  check(raw!=unified&&deform(average.apply(skin,0),poses,mesh.positions)==raw,"前掌参数未生效或默认值改变原权重");
+  const auto half=deform(average.apply(skin,.5f),poses,mesh.positions);check(half!=raw&&half!=unified,"前掌强度没有连续混合");
+  for(uint32_t group:{2u,4u}){double low=1e30,high=0;for(const auto &f:mesh.triangles)if(f.polygon_group==group)for(int k=0;k<3;++k){const auto a=f.vertices[k],b=f.vertices[(k+1)%3];const double ratio=length(unified[a],unified[b])/length(mesh.positions[a],mesh.positions[b]);low=std::min(low,ratio);high=std::max(high,ratio);}check(high-low<1e-5,"统一权重后前掌仍被各脚趾拉成不同形状");}
+  editor::Document d;d.loaded.scene.meshes={mesh};d.loaded.scene.instances.resize(1);Target target;target.id="shoe/mesh";d.catalog.targets={target};d.skeletons.skins={skin};d.formulas.graphs={graph(target)};d.formulas.graphs[0].skin=0;auto s=editor::initial_snapshot(d);s.poses={poses};const auto base=d.loaded.scene;
+  DeformationRuntime runtime(d.loaded.scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);runtime.evaluate(s.values,s.poses);check(d.loaded.scene.meshes[0].positions==raw,"原蒙皮输出改变");s.values[0].forefoot_uniformity=1;runtime.evaluate(s.values,s.poses);check(d.loaded.scene.meshes[0].positions==unified,"修改前掌参数没有使形变缓存失效");check(runtime.evaluate(s.values,s.poses).meshes.empty(),"重复前掌求值发生漂移");
+  auto encoded=editor::snapshot_json(d,s);auto restored=editor::initial_snapshot(d);editor::apply_snapshot_json(d,restored,encoded);check(restored.values[0].forefoot_uniformity==1,"前掌参数保存重开丢失");auto fresh=base;DeformationRuntime reopened(fresh,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);reopened.evaluate(restored.values,restored.poses);check(fresh.meshes[0].positions==unified,"重开后前掌输出不同");
+  encoded["objects"][target.id].erase("forefoot_uniformity");editor::apply_snapshot_json(d,restored,encoded);check(restored.values[0].forefoot_uniformity==0,"旧场景默认开启前掌处理");s.values[0].forefoot_uniformity=0;runtime.evaluate(s.values,s.poses);check(d.loaded.scene.meshes[0].positions==raw,"关闭前掌参数没有精确复原");
+  auto right_only=poses;for(size_t j=0;j<poses.size();++j)if(skin.joints[j].name.starts_with('r'))right_only[j].rotation_degrees.x+=30;const auto other=deform(average.apply(skin,1),right_only,mesh.positions);for(size_t v=0;v<26;++v)check(other[v]==unified[v],"左右前掌权重混在一起");
+  // 鞋面与鞋底共用 Toe 分组，鞋底外缘又有一片被分到 Foot。
+  // 约束应跨过这个分组接缝，同时让高处鞋面保留原来的柔性。
+  auto layered=mesh;auto layered_skin=skin;const auto count=uint32_t(mesh.positions.size());
+  for(auto p:mesh.positions){p.z+=.04f;layered.positions.push_back(p);}
+  for(auto f:mesh.triangles){for(auto &v:f.vertices)v+=count;layered.triangles.push_back(f);}
+  layered_skin.weights.insert(layered_skin.weights.end(),skin.weights.begin(),skin.weights.end());
+  for(auto &f:layered.triangles)if(f.vertices[0]<count&&mesh.positions[f.vertices[0]].x>.095f)f.polygon_group=f.polygon_group==2?1:3;
+  const auto protected_skin=ForefootWeights(layered,layered_skin).apply(layered_skin,1);
+  for(size_t v=count;v<layered.positions.size();++v){const auto &a=protected_skin.weights[v],&b=layered_skin.weights[v];check(a.size()==b.size(),"鞋面被错误套用鞋底平均权重");for(size_t k=0;k<a.size();++k)check(a[k].joint==b[k].joint&&a[k].weight==b[k].weight,"鞋面柔性权重改变");}
+  const auto protected_positions=deform(protected_skin,poses,layered.positions);
+  for(size_t side=0;side<2;++side){double low=1e30,high=0;for(const auto &f:mesh.triangles)if(f.vertices[0]/26==side&&mesh.positions[f.vertices[0]].x>=.06f)for(int k=0;k<3;++k){const auto a=f.vertices[k],b=f.vertices[(k+1)%3];const auto ratio=length(protected_positions[a],protected_positions[b])/length(mesh.positions[a],mesh.positions[b]);low=std::min(low,ratio);high=std::max(high,ratio);}check(high-low<1e-5,"Foot 分区的前沿未纳入同一保形区");}
+  std::vector<ir::Vec3> contact(layered.positions.size());for(size_t v=0;v<contact.size();++v)contact[v]={0,0,float(v%3)*.01f};const auto before_contact=contact;
+  GarmentDeformation(layered).constrain_forefoot(layered.positions,contact,1);
+  for(size_t v=count;v<contact.size();++v)check(contact[v]==before_contact[v],"鞋底保形压回了鞋面碰撞避让");
+  // 厚底上下表面必须用同一强度，不能在鞋底内部结束高度过渡。
+  // 底纹和鞋面都是独立薄层，不能把它们识别为承重鞋底。
+  auto thick=mesh;const auto slab=[&](float low,float high){const auto start=uint32_t(thick.positions.size());for(float z:{low,high})for(auto p:mesh.positions){p.z=z;thick.positions.push_back(p);}
+    for(auto f:mesh.triangles){for(auto &v:f.vertices)v+=start;thick.triangles.push_back(f);for(auto &v:f.vertices)v+=count;std::swap(f.vertices[1],f.vertices[2]);thick.triangles.push_back(f);}return start;};
+  thick.positions.clear();thick.triangles.clear();const auto bottom=slab(0,.025f),tread=slab(-.002f,-.001f),upper=slab(.05f,.051f);
+  for(size_t v=upper;v<thick.positions.size();++v)thick.positions[v].y+=.01f;
+  const auto thick_regions=forefoot_regions(thick);check(thick_regions.size()==2,"厚底鞋未识别左右前掌");
+  for(const auto &r:thick_regions){for(size_t v=0;v<count;++v)check(r.blend[bottom+v]==r.blend[bottom+count+v],"厚底的上下表面使用了不同保形强度");for(size_t v=upper;v<thick.positions.size();++v)check(r.blend[v]==0,"薄鞋面误判为鞋底");}
+  auto thick_skin=skin;thick_skin.weights.clear();for(int layer=0;layer<6;++layer)thick_skin.weights.insert(thick_skin.weights.end(),skin.weights.begin(),skin.weights.end());
+  const auto rigid=deform(ForefootWeights(thick,thick_skin).apply(thick_skin,1),poses,thick.positions);
+  for(size_t side=0;side<2;++side){double low=1e30,high=0;for(size_t v=side*26;v<(side+1)*26;++v)if(mesh.positions[v].x>=.06f){const auto ratio=length(rigid[v],rigid[count+v])/.025;low=std::min(low,ratio);high=std::max(high,ratio);}check(high-low<1e-5,"统一权重仍在前掌制造局部厚度峰值");}
+  // 已被旧高度完整覆盖的薄底不应改变鞋面过渡，避免扩大或缩窄保护区。
+  auto thin=thick;for(size_t v=0;v<2*count;++v)thin.positions[v].z*=.2f;
+  const auto thin_regions=forefoot_regions(thin);check(thin_regions.size()==2,"薄底鞋未识别前掌");
+  for(const auto &r:thin_regions)for(size_t v=0;v<thin.positions.size();++v){const auto p=thin.positions[v];if((p.y<.05f)!=(r.side=='l'))continue;
+    auto s=[](float t){t=std::clamp(t,0.f,1.f);return t*t*t*(t*(t*6-15)+10);};
+    const float expected=s(1+(p.x-.06f)/.048f)*(1-s((p.z+.002f-.0096f)/.0048f));
+    check(std::abs(r.blend[v]-expected)<1e-5,"厚底修正改变了原先已完整覆盖的薄底鞋");}
+}
 static void unit() {
+  forefoot();
   const auto mesh=strip();const auto regions=deformation_regions(mesh);check(regions.size()==2&&regions[0].id=="Foot"&&regions[1].id=="Toes","空组或左右部位归并错误");
   GarmentDeformation constraint(mesh);std::vector<ir::Vec3> offsets(mesh.positions.size());
   for(size_t v=0;v<offsets.size();++v){const auto p=mesh.positions[v];offsets[v]={p.x*.3f,0,p.x>.06f?float((v%3)*.01f):0};}
   const auto raw=offsets;constraint.constrain({},mesh.positions,offsets);check(offsets==raw,"默认开启改变结果");
+  auto jagged=raw;for(size_t v=0;v<jagged.size();++v)jagged[v]=mesh.positions[v].x>=.06f?ir::Vec3{0,0,.005f}:ir::Vec3{0,0,float(v%2)*.03f};
+  auto worst=[&](const auto &d){double result=0;for(const auto &f:mesh.triangles)if(f.polygon_group==1||f.polygon_group==3)for(int k=0;k<3;++k){const auto a=f.vertices[k],b=f.vertices[(k+1)%3];if(std::min(mesh.positions[a].x,mesh.positions[b].x)>=.02f)result=std::max(result,length(d[a],d[b])/length(mesh.positions[a],mesh.positions[b]));}return result;};
+  const auto jagged_before=jagged;constraint.limit_foot_collision(mesh.positions,jagged,0);check(jagged==jagged_before,"关闭前掌参数仍修改碰撞位移");constraint.limit_foot_collision(mesh.positions,jagged,1);check(worst(jagged)<.6&&worst(jagged_before)>1,"Foot 分组的局部碰撞尖峰未被限制");for(size_t v=0;v<jagged.size();++v)if(mesh.positions[v].x>=.06f)check(jagged[v]==jagged_before[v],"碰撞过渡约束破坏已经保形的前掌");
   constraint.constrain({"Toes"},mesh.positions,offsets);
   auto point=[&](uint32_t v){auto p=mesh.positions[v],d=offsets[v];return ir::Vec3{p.x+d.x,p.y+d.y,p.z+d.z};};
   for(const auto &f:mesh.triangles)if(f.polygon_group==2||f.polygon_group==4)for(int k=0;k<3;++k)check(std::abs(length(point(f.vertices[k]),point(f.vertices[(k+1)%3]))-length(mesh.positions[f.vertices[k]],mesh.positions[f.vertices[(k+1)%3]]))<1e-6,"关闭区域仍发生局部伸缩");
@@ -52,6 +106,15 @@ static void unit() {
     d.catalog.targets={body,cloth,outer};d.formulas.graphs={graph(body),graph(cloth),graph(outer)};
     auto s=editor::initial_snapshot(d);s.values[0].morphs[0]=1;auto initial=scene;
     DeformationRuntime runtime(scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);runtime.evaluate(s.values,{});const auto baseline=scene.meshes;
+    // 自动 Morph 在蒙皮前就会把小脚趾轮廓拉坏；保形同时保留衣物 OwnFit。
+    auto own_reference=mesh.positions;own_reference[20].z+=.002f;
+    s.values[1].forefoot_uniformity=1;runtime.evaluate(s.values,{});const auto unified=scene.meshes[1].positions;
+    if(unified==baseline[1].positions||scene.meshes[0].positions!=baseline[0].positions)std::cerr<<"Forefoot morph: authored="<<authored<<" changed="<<(unified!=baseline[1].positions)<<" host="<<(scene.meshes[0].positions==baseline[0].positions)<<"\n";
+    check(unified!=baseline[1].positions&&scene.meshes[0].positions==baseline[0].positions,"前掌保形未处理自动 Morph 或修改宿主");
+    for(uint32_t group:{2u,4u}){double low=1e30,high=0;for(const auto &f:mesh.triangles)if(f.polygon_group==group)for(int k=0;k<3;++k){const auto a=f.vertices[k],b=f.vertices[(k+1)%3];const double ratio=length(unified[a],unified[b])/length(own_reference[a],own_reference[b]);low=std::min(low,ratio);high=std::max(high,ratio);}check(high-low<1e-5,"自动 Morph 前掌保形遗漏局部顶点或抹掉自身调整");}
+    s.values[1].morphs[0]=1;runtime.evaluate(s.values,{});auto own_fresh=initial;DeformationRuntime own_runtime(own_fresh,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);own_runtime.evaluate(s.values,{});check(scene.meshes[1].positions==own_fresh.meshes[1].positions&&scene.meshes[1].positions!=unified,"前掌保形时修改自身 Morph 没有更新缓存");s.values[1].morphs[0]=.5f;runtime.evaluate(s.values,{});check(scene.meshes[1].positions==unified,"自身 Morph 往返不能恢复");
+    s.values[1].forefoot_uniformity=.5f;runtime.evaluate(s.values,{});check(scene.meshes[1].positions!=unified&&scene.meshes[1].positions!=baseline[1].positions,"前掌自动 Morph 没有连续混合");
+    s.values[1].forefoot_uniformity=0;runtime.evaluate(s.values,{});for(size_t i=0;i<3;++i)check(scene.meshes[i].positions==baseline[i].positions,"关闭前掌处理未精确恢复自动 Morph");
     s.values[1].disabled_deformation_regions={"Toes"};runtime.evaluate(s.values,{});const auto locked=scene.meshes;
     check(locked[1].positions!=baseline[1].positions&&locked[0].positions==baseline[0].positions,"形变开关未生效或污染宿主");
     check(locked[2].positions!=baseline[2].positions,"嵌套穿戴物没有收到修正");
