@@ -1,4 +1,5 @@
 #pragma once
+#include "runtime/growth_curve.h"
 #include <array>
 #include <cstdint>
 #include <string>
@@ -16,6 +17,7 @@ struct ObjectExtension {
   bool baby_scale_isolated=false;
   bool scale_round=false;
   int scale_round_exponent=1;
+  GrowthCurve curve;
   bool operator==(const ObjectExtension &) const = default;
 };
 void validate_extension(const ObjectExtension &value);

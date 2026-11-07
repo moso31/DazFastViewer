@@ -108,6 +108,7 @@ target_compile_definitions(dfv_content PRIVATE QT_NO_KEYWORDS NOMINMAX)
 qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
   "${DFV_ROOT}/src/editor/chrome.cpp"
   "${DFV_ROOT}/src/editor/extension_panel.cpp"
+  "${DFV_ROOT}/src/editor/growth_curve_dialog.cpp"
   "${DFV_ROOT}/src/editor/material_panel.cpp"
   "${DFV_ROOT}/src/editor/powerpose_panel.cpp"
   "${DFV_ROOT}/src/editor/project.cpp" "${DFV_ROOT}/src/editor/parameters.cpp"
@@ -192,11 +193,13 @@ target_compile_options(ProjectSettingsTest PRIVATE /utf-8)
 add_test(NAME project_settings COMMAND ProjectSettingsTest)
 set_tests_properties(project_settings PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 add_executable(ParameterControlsTest "${DFV_ROOT}/tests/parameter_controls.cpp" "${DFV_ROOT}/src/editor/parameters.cpp")
-target_sources(ParameterControlsTest PRIVATE "${DFV_ROOT}/src/editor/extension_panel.cpp")
+target_sources(ParameterControlsTest PRIVATE "${DFV_ROOT}/src/editor/extension_panel.cpp" "${DFV_ROOT}/src/editor/growth_curve_dialog.cpp")
 target_include_directories(ParameterControlsTest PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(ParameterControlsTest PRIVATE dfv_scene Qt6::Widgets Qt6::Test)
 target_compile_options(ParameterControlsTest PRIVATE /utf-8)
 add_test(NAME parameter_controls COMMAND ParameterControlsTest)
+add_test(NAME growth_curve_panel COMMAND ParameterControlsTest --curve-only)
+set_tests_properties(growth_curve_panel PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
 add_executable(GeograftMaterialUITest "${DFV_ROOT}/tests/geograft_material_ui.cpp")
 target_link_libraries(GeograftMaterialUITest PRIVATE dfv_scene Qt6::Widgets Qt6::Test)
 target_compile_options(GeograftMaterialUITest PRIVATE /utf-8)

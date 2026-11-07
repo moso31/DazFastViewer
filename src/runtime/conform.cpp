@@ -301,6 +301,7 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
   for(auto target:order_) {const auto *l=link(target);if(!l) continue;const auto i=size_t(link_for_target_[target]);std::vector<float> current;current.reserve(l->projected_morphs.size());
     for(auto m:l->projected_morphs) current.push_back(weights.at(l->source).at(m));
     if(current==previous_weights_[i]&&source_revisions_[i]==revisions_[l->source]&&follow_revisions_[i]==morph.follow_revision(target)) continue;
+    diagnostics::Scope target_scope(diagnostics::active?targets_[target].id:std::string{});
     std::vector<ir::Vec3> source(vertex_counts_[l->source]);if(!offsets_[l->source].empty()) source=offsets_[l->source];
     if(l->cross_base)for(size_t v=0;v<source.size();++v)source[v]=add(source[v],l->base_offsets[v]);
     for(size_t m=0;m<current.size();++m) if(current[m]!=0) for(const auto &d:targets_[l->source].morphs[l->projected_morphs[m]].data()) source[d.vertex]=add(source[d.vertex],mul(d.delta,current[m]));
@@ -334,6 +335,7 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
     auto filtered=offsets;
     // 上衣的连续布片不能逐点复制身体凹陷。同基型自动 Morph 也需要过渡，
     // 只处理自动生成的位移，作者提供的体型修正、口袋和门襟不参与平滑。
+    {diagnostics::Scope phase("smooth_offsets");
     for(int iteration=0;iteration<(!l->torso_envelope.empty()?96:24);++iteration) {
       for(size_t v=0;v<offsets.size();++v) {const auto &neighbors=l->neighbors[v];if(neighbors.size()<3) continue;
         // 贴体区域保留表面形变；远离身体的裙摆才逐渐增强平滑，避免压平鞋面。
@@ -343,7 +345,9 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
         ir::Vec3 average;for(auto n:neighbors) average=add(average,offsets[n]);filtered[v]=add(mul(offsets[v],1-weight),mul(average,weight/float(neighbors.size())));}
       offsets.swap(filtered);
     }
+    }
     if(!l->torso_envelope.empty()){
+      diagnostics::Scope phase("torso_envelope");
       // 胸腹布片跨过体型凹陷，避免把乳沟和胸下沟完整刻进布面。
       // 只向外平滑生成的位移，不改变作者褶皱；鞋、袖口和裤腿不参与。
       std::vector<ir::Vec3> outward(offsets.size());

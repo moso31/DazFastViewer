@@ -107,14 +107,20 @@ void normalize_object_extensions(const Document &d,Snapshot &s){
 std::vector<std::string> edit_growth(const Document &d,Snapshot &snapshot,size_t t,runtime::ObjectExtension next,bool apply_shape,double scale_step){
   runtime::validate_extension(next);if(!growth_character(d,t))throw std::runtime_error("请选择角色本体或其骨骼");
   const auto &old=snapshot.values.at(t);auto value=old;value.extension=next;std::vector<std::string> missing;
-  if(apply_shape)missing=runtime::apply_growth(d.catalog.targets.at(t),value);
+  // 关闭曲线或编辑未启用的曲线只保存参数，避免把现有 Scale 再做一遍浮点换算。
+  if(!apply_shape&&(!next.curve.enabled||runtime::same_growth_scale(next.curve,old.extension.curve))&&scale_step==0&&next.age==old.extension.age){snapshot.values[t].extension=std::move(next);return missing;}
+  const bool boundary_shape=next.curve.enabled&&next.curve.planned_age!=old.extension.curve.planned_age&&
+    std::min(next.age,next.curve.planned_age)!=std::min(old.extension.age,old.extension.curve.planned_age);
+  if(apply_shape||boundary_shape)missing=runtime::apply_growth(d.catalog.targets.at(t),value);
   const double base_before=root_scale(d,snapshot,t,old),base_after=root_scale(d,snapshot,t,value,true);
   const double before=runtime::decimal_derived_double(base_before*old.transform.general_scale*100);
-  const double delta=next.sensitivity*(next.age-old.extension.age+scale_step),after=runtime::decimal_derived_double(before+delta);
+  if(next.curve.enabled&&scale_step!=0)throw std::runtime_error("使用生长曲线时请编辑曲线，旧每年增长按钮不可用");
+  const double after=next.curve.enabled?runtime::growth_curve_scale(next.curve,next.age):
+    runtime::decimal_derived_double(before+next.sensitivity*(next.age-old.extension.age+scale_step));
   if(before<=0||after<=0||base_after<=0||!std::isfinite(before)||!std::isfinite(after)||!std::isfinite(base_after))throw std::runtime_error("本次生长会使缩放小于或等于零或超出有效范围，已保留原值");
   value.transform.general_scale=after/(base_after*100);
   double origin_y=0;for(const auto &o:d.loaded.objects)if(o.instance==d.catalog.targets[t].instance){origin_y=o.translation_cm.y;break;}
-  value.transform.translation_cm.y=float((origin_y+old.transform.translation_cm.y)*after/before-origin_y);
+  if(!next.curve.enabled)value.transform.translation_cm.y=float((origin_y+old.transform.translation_cm.y)*after/before-origin_y);
   runtime::validate_transform(value.transform);snapshot.values[t]=std::move(value);return missing;
 }
 void multiply_growth_scale(const Document &d,Snapshot &snapshot,size_t t,bool divide){
@@ -135,6 +141,10 @@ void multiply_growth_scale(const Document &d,Snapshot &snapshot,size_t t,bool di
   snapshot.values[t]=std::move(value);
 }
 runtime::WeightResult measure_object(const Document &d,const Snapshot &s,size_t t,std::optional<ir::Transform> world){MeasurementContext c;return c.measure(d,s,t,world);}
+ObjectMeasurement make_object_measurement(std::shared_ptr<const Document> document,size_t target){
+  auto context=std::make_shared<MeasurementContext>();
+  return [document=std::move(document),target,context](const Snapshot &s,std::optional<ir::Transform> world){return context->measure(*document,s,target,world);};
+}
 MeasurementService::MeasurementService():worker_([this](std::stop_token stop){
   MeasurementContext context;std::shared_ptr<const Document> active;
   while(!stop.stop_requested()){Request request;{std::unique_lock lock(mutex_);if(!ready_.wait(lock,stop,[&]{return pending_.serial!=0;}))return;request=std::move(pending_);pending_={};}

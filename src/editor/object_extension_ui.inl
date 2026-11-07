@@ -38,17 +38,33 @@
     if(v.extension.kind==runtime::ExtensionKind::none||(v.extension.kind==runtime::ExtensionKind::growth&&!growth_character(*document_,size_t(t)))){v.extension={};v.extension.kind=growth_character(*document_,size_t(t))?runtime::ExtensionKind::growth:runtime::ExtensionKind::density;send();}
     bind_extension();extension_panel_->expand();auto *d=findChild<QDockWidget *>(QStringLiteral("对象属性与 Morph"));if(d){d->show();d->raise();}
   }
-  void change_extension(runtime::ObjectExtension next,bool shape,double step) {
+  GrowthCurvePreview prepare_growth_preview() const {
+    const int t=extension_target();if(t<0)return {};
+    auto document=document_;auto source=submitted_snapshot();const auto state=renderer_->status();std::optional<ir::Transform> world;
+    if(state.generation==document->generation&&state.applied_revision==source.revision&&size_t(t)<state.target_world.size())world=state.target_world[size_t(t)];
+    auto measure=make_object_measurement(document,size_t(t));
+    return [document=std::move(document),source=std::move(source),world,t,measure=std::move(measure)](const runtime::ObjectExtension &value,bool force_shape){
+      auto preview=source;preview.values[size_t(t)].extension.curve.enabled=false;edit_growth(*document,preview,size_t(t),value,force_shape||value.age!=source.values[size_t(t)].extension.age);auto preview_world=world;
+      if(world){const auto &target=document->catalog.targets[size_t(t)];const auto &loaded=document->loaded.scene.instances[target.instance].transform;
+        const auto before=runtime::parameter_transform(source.values[size_t(t)].transform,target,loaded)*loaded;
+        const auto after=runtime::parameter_transform(preview.values[size_t(t)].transform,target,loaded)*loaded;
+        preview_world=*world*ir::inverse(before)*after;
+      }
+      return measure(preview,preview_world);
+    };
+  }
+  void change_extension(runtime::ObjectExtension next,bool shape,double step,const GrowthCurveSettings &curve_settings={}) {
     auto edit=history_edit(QStringLiteral("修改生长与密度参数"));
     const int t=extension_target();if(t<0)return;
     try {
       runtime::validate_extension(next);std::vector<std::string> missing;
-      if(next.kind==runtime::ExtensionKind::growth&&(shape||step!=0)){
+      if(next.kind==runtime::ExtensionKind::growth&&(shape||step!=0||(next.curve.enabled&&!runtime::same_growth_scale(next.curve,snapshot_.values[size_t(t)].extension.curve)))){
         missing=edit_growth(*document_,snapshot_,size_t(t),next,shape,step);
         const auto &target=document_->catalog.targets[size_t(t)];
         std::erase_if(pending_parameters_,[&](const auto &p){if(p.first.first!=target.id)return false;for(const auto &m:target.morphs)if(m.label=="Genesis 8 Baby"&&m.id==p.first.second)return true;for(const auto &v:runtime::growth_values(next.age,next.strength))for(const auto &m:target.morphs)if(m.label==v.label&&m.id==p.first.second)return true;return false;});
         apply_parameters_->setEnabled(!pending_parameters_.empty());
       }else snapshot_.values[t].extension=next;
+      for(const auto &[key,value]:curve_settings)snapshot_.parameter_settings[document_->catalog.targets[size_t(t)].id][key]=value;
       send();bind_extension();
       // 只刷新已挂载行，年龄步进不重建数千项 Morph 目录。
       if(selected_joint_<0){QSignalBlocker block(transform_[1]);transform_[1]->setValue(snapshot_.values[t].transform.translation_cm.y);}

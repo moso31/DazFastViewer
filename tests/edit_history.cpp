@@ -44,6 +44,9 @@ static void water_history(){
 }
 static void geograft_history(){
   auto current=state_for(fixture());EditHistory history([&]{return current;},[&](const EditState &s){current=s;});
+  const auto before=current;
+  history.execute(QStringLiteral("编辑生长曲线"),[&]{auto &c=current.snapshot.values[0].extension.curve;c.enabled=true;runtime::resize_growth_curve(c,25);c.puberty_weight=2.5;c.height_in_cm=true;c.growth_in_cm=true;c.minimum_growth=1.25;c.minimum_mode=runtime::GrowthMinimumMode::additive;runtime::fit_growth_curve(c);runtime::move_growth_peak(c,13.375);current.snapshot.values[0].transform.general_scale=runtime::growth_curve_scale(c,3)/100;current.snapshot.parameter_settings["figure/geometry"]["extension/curve/GrowthCurvePeak"]={false,0,18,.125};});
+  const auto fitted=current;history.undo();check(same_edit(current,before),"撤销未恢复曲线、Scale 和精度");history.redo();check(same_edit(current,fitted),"重做未恢复曲线、Scale 和精度");
   history.execute(QStringLiteral("停用 Geograft"),[&]{current.snapshot.values[1].graft_enabled=false;});
   check(!current.snapshot.values[1].graft_enabled&&current.snapshot.values[1].visible,"停用没有记入历史或改写了显隐");
   history.undo();check(current.snapshot.values[1].graft_enabled,"撤销未恢复 Geograft 启用");history.redo();check(!current.snapshot.values[1].graft_enabled,"重做未恢复 Geograft 停用");

@@ -30,6 +30,7 @@ static void require(bool value,const char *message) {if(!value) throw std::runti
 #include "parameter_favorites.inl"
 #include "parameter_wheel.inl"
 #include "extension_panel.inl"
+#include "growth_curve_panel.inl"
 #include "geograft_panel.inl"
 #include "garment_panel.inl"
 #include "special_panel.inl"
@@ -48,6 +49,7 @@ int main(int argc,char **argv) {
     if(argc>1&&std::string(argv[1])=="--night-only"){night_sky_panel(app);return 0;}
     if(argc>1&&std::string(argv[1])=="--environment-only"){environment_texture_panel(app);return 0;}
     if(argc>1&&std::string(argv[1])=="--extension-only"){extension_panel(app);return 0;}
+    if(argc>1&&std::string(argv[1])=="--curve-only"){growth_curve_panel(app);return 0;}
     if(argc>1&&std::string(argv[1])=="--special-only"){special_panel(app);return 0;}
     double value=.5;dfv::editor::ParameterControl c;c.id="test";c.label="数值";c.minimum=0;c.maximum=1;c.read=[&]{return value;};c.write=[&](double v){value=v;};
     dfv::editor::ParameterPanel panel;panel.resize(380,480);panel.bind_controls({c});panel.show();app.processEvents();QTest::qWait(180);

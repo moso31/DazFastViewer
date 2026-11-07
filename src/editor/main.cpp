@@ -2196,6 +2196,7 @@ public:
     connect(hierarchy_,&QTreeWidget::itemChanged,this,[this](QTreeWidgetItem *item,int column) {const int target=item->data(0,Qt::UserRole).toInt();if(column!=0)return;if(target>=0&&item->data(0,Qt::UserRole+1).toInt()<0)set_visible(size_t(target),item->checkState(0)==Qt::Checked);else if(target==-4)set_node_property(item->data(0,Qt::UserRole+3).toString().toStdString(),false,item->checkState(0)==Qt::Checked);});
     auto *reset=new QPushButton(QStringLiteral("重置选中对象"));properties->addWidget(reset);connect(reset,&QPushButton::clicked,this,[this] {reset_selected();});
     extension_panel_=new ExtensionPanel;properties->addWidget(extension_panel_);extension_panel_->changed=[this](runtime::ObjectExtension v,bool shape,double step){change_extension(v,shape,step);};extension_panel_->multiply_scale=[this](bool divide){multiply_extension(divide);};
+    extension_panel_->prepare_curve_preview=[this]{return prepare_growth_preview();};extension_panel_->curve_edited=[this](auto v,const auto &settings){change_extension(v,false,0,settings);};
     physics_panel_=new PhysicsPanel;properties->addWidget(physics_panel_);physics_panel_->changed=[this](runtime::PhysicsObjectSettings value){change_physics(std::move(value));};
     physics_panel_->simulate=[this](bool reset){simulate_physics(reset);};physics_panel_->hovered=[this](int slot){std::vector<MaterialSurface> surfaces;if(document_&&selected_>=0&&slot>=0)surfaces.push_back({document_->catalog.targets[size_t(selected_)].instance,size_t(slot)});if(renderer_)renderer_->hover_materials(document_?document_->generation:0,surfaces);};
     ground_panel_=new GroundPanel;properties->addWidget(ground_panel_);ground_panel_->align=[this]{request_ground();};
@@ -2555,6 +2556,7 @@ int main(int argc,char **argv) {
   QTranslator translator;if(translator.load("qt_zh_CN",app.applicationDirPath()+"/translations")) app.installTranslator(&translator);
   QCommandLineParser parser;parser.addHelpOption();parser.addOption({"file",QStringLiteral("启动后加载的 DUF"),"path"});
   parser.addOption({"content-root",QStringLiteral("内容库目录，可重复"),"directory"});parser.addOption({"output",QStringLiteral("输出目录"),"directory"});
+  parser.addOption({"growth-curve-preview",QStringLiteral("直接打开生长曲线调试窗口，不加载场景，使用示例身高")});
   parser.addOption({"project",QStringLiteral("项目设置文件"),"file"});
   parser.addOption({"self-test",QStringLiteral("一次副屏编辑器验证后自动退出")});
   parser.addOption({"history-test",QStringLiteral("副屏验证撤销、重做、场景替换和原生快捷键")});
@@ -2617,6 +2619,7 @@ int main(int argc,char **argv) {
   parser.addOption({"lazy-test",QStringLiteral("验证异步 Morph、手动应用和参数目录刷新后退出")});
   parser.addOption({"test-parameter",QStringLiteral("指定滑块验证参数，可重复，与 --formula-test 配合"),"name"});
   parser.addOption({"reload-test",QStringLiteral("验证后台场景替换后退出"),"file"});parser.process(app);
+  if(parser.isSet("growth-curve-preview"))return dfv::editor::growth_curve_preview();
   const auto output=parser.isSet("output")?file_path(parser.value("output")):file_path(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))/"artifacts"/("editor-"+QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz").toStdString());
   std::filesystem::create_directories(output);
   try {

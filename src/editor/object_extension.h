@@ -11,6 +11,9 @@ void normalize_object_extensions(const Document &document,Snapshot &snapshot);
 std::vector<std::string> edit_growth(const Document &document,Snapshot &snapshot,size_t target,runtime::ObjectExtension next,bool apply_shape=true,double scale_step=0);
 void multiply_growth_scale(const Document &document,Snapshot &snapshot,size_t target,bool divide);
 runtime::WeightResult measure_object(const Document &document,const Snapshot &snapshot,size_t target,std::optional<ir::Transform> world={});
+// 返回的测量器在单个后台线程内复用网格拓扑。
+using ObjectMeasurement=std::function<runtime::WeightResult(const Snapshot &,std::optional<ir::Transform>)>;
+ObjectMeasurement make_object_measurement(std::shared_ptr<const Document> document,size_t target);
 class MeasurementService {
 public:
   struct Result {uint64_t serial=0;runtime::WeightResult weight;std::string error;};

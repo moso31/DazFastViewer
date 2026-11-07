@@ -27,8 +27,29 @@ J vec(ir::Vec3 v){return J::array({v.x,v.y,v.z});}
 ir::Vec3 vector(const J &v){if(v.size()!=3)throw std::runtime_error("DUFEX 向量长度错误");ir::Vec3 r{v.at(0).get<float>(),v.at(1).get<float>(),v.at(2).get<float>()};if(!std::isfinite(r.x)||!std::isfinite(r.y)||!std::isfinite(r.z))throw std::runtime_error("DUFEX 数值无效");return r;}
 template<class T> J transform(const T &v){return {{"translation_cm",vec(v.translation_cm)},{"rotation_degrees",vec(v.rotation_degrees)},{"scale",vec(v.scale)},{"general_scale",v.general_scale}};}
 template<class T> void read_transform(T &v,const J &j){v.translation_cm=vector(j.at("translation_cm"));v.rotation_degrees=vector(j.at("rotation_degrees"));v.scale=vector(j.at("scale"));v.general_scale=j.at("general_scale").get<decltype(v.general_scale)>();}
-J extension(const runtime::ObjectExtension &v){runtime::validate_extension(v);return {{"kind",int(v.kind)},{"age",v.age},{"age_step",v.age_step},{"sensitivity",v.sensitivity},{"strength",v.strength},{"density",v.density},{"scale_multiplier",v.scale_multiplier},{"scale_round",v.scale_round},{"scale_round_exponent",v.scale_round_exponent},{"baby_enabled",v.baby_enabled},{"baby_begin",v.baby_begin},{"baby_end",v.baby_end},{"baby_strength",v.baby_strength},{"baby_blend",v.baby_blend},{"baby_scale_isolated",v.baby_scale_isolated}};}
-runtime::ObjectExtension read_extension(const J &j){runtime::ObjectExtension v;v.kind=runtime::ExtensionKind(j.at("kind").get<int>());v.age=j.at("age");v.age_step=j.at("age_step");v.sensitivity=j.at("sensitivity");v.strength=j.at("strength");v.density=j.at("density");v.scale_multiplier=j.value("scale_multiplier",1.0);v.scale_round=j.value("scale_round",false);v.scale_round_exponent=j.value("scale_round_exponent",1);v.baby_enabled=j.value("baby_enabled",v.baby_enabled);v.baby_begin=j.value("baby_begin",v.baby_begin);v.baby_end=j.value("baby_end",v.baby_end);v.baby_strength=j.value("baby_strength",v.baby_strength);v.baby_blend=j.value("baby_blend",true);v.baby_scale_isolated=j.value("baby_scale_isolated",false);runtime::validate_extension(v);return v;}
+J extension(const runtime::ObjectExtension &v){
+  runtime::validate_extension(v);const auto &c=v.curve;J points=J::array();for(const auto &p:c.shape.points)points.push_back({p.age,p.rate});
+  J curve={{"interpolation","pchip"},{"planned_age",c.planned_age},{"growth_factor",c.growth_factor},{"puberty_weight",c.puberty_weight},{"height_in_cm",c.height_in_cm},{"growth_in_cm",c.growth_in_cm},{"enabled",c.enabled},{"birth_scale",c.birth_scale},{"adult_scale",c.adult_scale},{"minimum_growth",c.minimum_growth},{"minimum_mode",int(c.minimum_mode)},
+    {"shape",{{"reference_template",c.shape.reference_template},{"points",points}}}};
+  return {{"kind",int(v.kind)},{"age",v.age},{"age_step",v.age_step},{"sensitivity",v.sensitivity},{"strength",v.strength},{"density",v.density},{"scale_multiplier",v.scale_multiplier},{"scale_round",v.scale_round},{"scale_round_exponent",v.scale_round_exponent},{"baby_enabled",v.baby_enabled},{"baby_begin",v.baby_begin},{"baby_end",v.baby_end},{"baby_strength",v.baby_strength},{"baby_blend",v.baby_blend},{"baby_scale_isolated",v.baby_scale_isolated},{"growth_curve",curve}};
+}
+runtime::ObjectExtension read_extension(const J &j){
+  runtime::ObjectExtension v;v.kind=runtime::ExtensionKind(j.at("kind").get<int>());v.age=j.at("age");v.age_step=j.at("age_step");v.sensitivity=j.at("sensitivity");v.strength=j.at("strength");v.density=j.at("density");v.scale_multiplier=j.value("scale_multiplier",1.0);v.scale_round=j.value("scale_round",false);v.scale_round_exponent=j.value("scale_round_exponent",1);v.baby_enabled=j.value("baby_enabled",v.baby_enabled);v.baby_begin=j.value("baby_begin",v.baby_begin);v.baby_end=j.value("baby_end",v.baby_end);v.baby_strength=j.value("baby_strength",v.baby_strength);v.baby_blend=j.value("baby_blend",true);v.baby_scale_isolated=j.value("baby_scale_isolated",false);
+  if(j.contains("growth_curve")){const auto &saved=j.at("growth_curve");auto &c=v.curve;
+    c.enabled=saved.at("enabled");c.birth_scale=saved.at("birth_scale");c.adult_scale=saved.at("adult_scale");c.minimum_growth=saved.at("minimum_growth");c.minimum_mode=runtime::GrowthMinimumMode(saved.at("minimum_mode").get<int>());
+    const bool legacy=!saved.contains("shape");const auto &shape=legacy?saved:saved.at("shape");
+    c.planned_age=legacy?saved.value("adult_age",18.):saved.at("planned_age").get<double>();c.growth_factor=legacy?1.:saved.at("growth_factor").get<double>();
+    c.puberty_weight=saved.value("puberty_weight",1.);c.height_in_cm=saved.value("height_in_cm",false);c.growth_in_cm=saved.value("growth_in_cm",false);
+    c.shape.reference_template=shape.at("reference_template");
+    const auto &points=shape.at("points");if(!points.is_array()||points.size()!=c.shape.points.size())throw std::runtime_error("生长曲线阶段数量无效");
+    for(size_t i=0;i<c.shape.points.size();++i){if(!points[i].is_array()||points[i].size()!=2)throw std::runtime_error("生长曲线阶段格式无效");c.shape.points[i]={points[i][0].get<double>(),points[i][1].get<double>()};}
+    const auto interpolation=saved.value("interpolation",std::string{"smoothstep"});
+    if(interpolation=="smoothstep")runtime::migrate_growth_curve(c);else if(interpolation!="pchip")throw std::runtime_error("未知生长曲线插值格式");
+    // 旧版的模板标记无法反映手工改动；保留已有阶段和实际增长，作为自定义形状载入。
+    if(legacy){runtime::validate_growth_curve(c);runtime::mark_growth_shape_custom(c);}
+  }
+  runtime::validate_extension(v);return v;
+}
 J favorites(const std::optional<runtime::FavoriteState> &v){return v?J{{"nodes",v->nodes},{"fallback",v->fallback}}:J{};}
 std::optional<runtime::FavoriteState> read_favorites(const J &j){if(j.is_null())return {};runtime::FavoriteState v;v.nodes=j.at("nodes").get<decltype(v.nodes)>();v.fallback=j.at("fallback").get<decltype(v.fallback)>();return v;}
 size_t target_index(const Document &d,const std::string &id){for(size_t i=0;i<d.catalog.targets.size();++i)if(d.catalog.targets[i].id==id)return i;throw std::runtime_error("DUFEX 对象不存在："+id);}

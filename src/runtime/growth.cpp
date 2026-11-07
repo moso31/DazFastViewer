@@ -8,12 +8,13 @@
 namespace dfv::runtime {
 void validate_extension(const ObjectExtension &v) {
   if(v.kind!=ExtensionKind::none&&v.kind!=ExtensionKind::growth&&v.kind!=ExtensionKind::density) throw std::runtime_error("未知对象扩展类型");
-  if(!std::isfinite(v.age)||v.age<0||v.age>20||!std::isfinite(v.age_step)||
+  if(!std::isfinite(v.age)||v.age<0||!std::isfinite(v.age_step)||
      !std::isfinite(v.baby_begin)||!std::isfinite(v.baby_end)||v.baby_begin<0||v.baby_end>20||v.baby_begin>=v.baby_end||
      !std::isfinite(v.baby_strength)||v.baby_strength<0||v.baby_strength>1||
      !std::isfinite(v.sensitivity)||!std::isfinite(v.strength)||
      !std::isfinite(v.scale_multiplier)||v.scale_multiplier<=0||v.scale_round_exponent < -9||
      !std::isfinite(v.density)||v.density<0||v.density>100000) throw std::runtime_error("生长或密度参数超出范围");
+  validate_growth_curve(v.curve);
 }
 bool legacy_extension_channel(const std::string &name) {
   return name=="Age"||name=="Age Step"||name=="Age Sensitivity"||name=="Body Strength"||name=="Density";
@@ -21,7 +22,7 @@ bool legacy_extension_channel(const std::string &name) {
 std::vector<GrowthValue> growth_values(double age,double strength) {
   ObjectExtension v;v.age=age;v.strength=strength;validate_extension(v);
   // 婴儿形体由 Baby 提供，旧表在 0～1 岁保持第一列，禁止负索引。
-  const double a=std::max(age,1.0)-1;const auto a0=size_t(std::floor(a)),a1=size_t(std::ceil(a));
+  const double a=std::clamp(age,1.0,20.0)-1;const auto a0=size_t(std::floor(a)),a1=size_t(std::ceil(a));
   // 表格外沿最近一段线性延伸，先限制索引再计算权重，负体格也不会越界。
   const auto s0=size_t(std::floor(std::clamp(strength,0.0,.75)*4)),s1=s0+1;
   std::vector<GrowthValue> result;
@@ -37,7 +38,8 @@ std::vector<GrowthValue> growth_values(double age,double strength) {
 double growth_baby_weight(const ObjectExtension &v) {
   validate_extension(v);
   if(!v.baby_enabled)return 0;
-  return v.baby_strength*(1-std::clamp((v.age-v.baby_begin)/(v.baby_end-v.baby_begin),0.0,1.0));
+  const double age=v.curve.enabled?std::min(v.age,v.curve.planned_age):v.age;
+  return v.baby_strength*(1-std::clamp((age-v.baby_begin)/(v.baby_end-v.baby_begin),0.0,1.0));
 }
 std::vector<uint32_t> growth_baby_scale_formulas(const Target &target,const FormulaGraph &graph) {
   std::vector<uint32_t> result;
@@ -72,7 +74,8 @@ std::vector<std::string> apply_growth(const Target &target,Properties &values) {
     if(found->clamped) value=std::clamp(value,double(found->minimum),double(found->maximum));
     set_parameter(target,values,size_t(found-target.morphs.begin()),float(value));
   };
-  for(const auto &v:growth_values(values.extension.age,values.extension.strength)) {
+  const double age=values.extension.curve.enabled?std::min(values.extension.age,values.extension.curve.planned_age):values.extension.age;
+  for(const auto &v:growth_values(age,values.extension.strength)) {
     const auto found=find(v.label);
     if(!usable(found)){missing.push_back(v.label);continue;}
     write(found,v.value*(has_baby&&values.extension.baby_blend?1-weight:1));

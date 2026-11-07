@@ -62,6 +62,7 @@ static editor::Document growth_document(){
   runtime::Expression e;e.owner=0;e.output=uint32_t(graph.channels.size()-1);e.code={{runtime::Op::constant,-.01}};graph.expressions.push_back(e);graph.prepare();d.formulas.graphs={graph};return d;
 }
 #include "growth_baby.inl"
+#include "growth_curve.inl"
 static void growth(){
   for(double base:{.99,.92,.96,1.}){auto d=growth_document();d.formulas.graphs[0].expressions[0].code={{runtime::Op::constant,base-1}};d.formulas.graphs[0].prepare();auto state=editor::initial_snapshot(d);auto &value=state.values[0];value.extension.kind=runtime::ExtensionKind::growth;value.extension.sensitivity=5;value.transform.general_scale=125/(base*100);
     for(int i=0;i<100;++i){editor::edit_growth(d,state,0,value.extension,false,1);require(runtime::decimal_derived_double(base*value.transform.general_scale*100)==130,"男性每年增长出现 double 尾差");editor::edit_growth(d,state,0,value.extension,false,-1);require(runtime::decimal_derived_double(base*value.transform.general_scale*100)==125,"反复增长缩小累积误差");}
@@ -130,6 +131,9 @@ static void serialization(const fs::path &folder){
   s.values[0].extension.scale_multiplier=1.25;s.values[0].extension.scale_round=true;s.values[0].extension.scale_round_exponent=-4;
   s.values[0].extension.age=0;s.values[0].extension.baby_enabled=true;s.values[0].extension.baby_begin=.25;s.values[0].extension.baby_end=7;s.values[0].extension.baby_strength=.65;s.values[0].extension.baby_blend=false;s.values[0].extension.baby_scale_isolated=true;
   s.parameter_settings[d.catalog.targets[0].id]["extension/GrowthBabyEnd"]={true,0,10,.25};
+  s.values[0].extension.curve.enabled=true;s.values[0].extension.curve.minimum_growth=1.25;s.values[0].extension.curve.minimum_mode=runtime::GrowthMinimumMode::additive;runtime::apply_growth_template(s.values[0].extension.curve,2);runtime::fit_growth_curve(s.values[0].extension.curve);runtime::move_growth_peak(s.values[0].extension.curve,13.375);
+  s.parameter_settings[d.catalog.targets[0].id]["extension/curve/GrowthCurveMinimum"]={false,0,8,.125};
+  {auto &c=s.values[0].extension.curve;runtime::resize_growth_curve(c,25);c.puberty_weight=2.5;c.height_in_cm=true;c.growth_in_cm=true;}
   s.values[0].favorites.emplace();s.values[1].favorites.emplace();s.control_favorites.emplace();
   s.values[0].favorites->nodes[""]["transform/general_scale"]=false;s.values[1].favorites->nodes[""]["transform/general_scale"]=true;
   s.values[0].favorites->nodes["head"]["joint/3"]=true;s.values[0].favorites->nodes["head"]["joint/4"]=false;
@@ -138,6 +142,20 @@ static void serialization(const fs::path &folder){
   auto legacy=saved;legacy.erase("control_favorites");for(auto &object:legacy["objects"]){object.erase("favorites");for(const char *key:{"baby_enabled","baby_begin","baby_end","baby_strength","baby_blend","baby_scale_isolated"})object["extension"].erase(key);}auto old=editor::initial_snapshot(d);editor::apply_snapshot_json(d,old,legacy);
   require(!old.values[0].extension.baby_enabled&&old.values[0].extension.baby_end==7&&old.values[0].extension.baby_strength==.6&&old.values[0].extension.baby_blend&&!old.values[0].extension.baby_scale_isolated,"旧场景的婴儿期默认设置或外形隔离状态错误");
   require(!old.control_favorites&&!old.values[0].favorites,"旧版扩展未保留收藏迁移入口");
+  auto no_curve=saved;for(auto &object:no_curve["objects"])object["extension"].erase("growth_curve");auto migrated=editor::initial_snapshot(d);editor::apply_snapshot_json(d,migrated,no_curve);require(!migrated.values[0].extension.curve.enabled,"旧场景默认启用了生长曲线");
+  auto old_curve=saved;auto &old_saved=old_curve["objects"][d.catalog.targets[0].id]["extension"]["growth_curve"];
+  old_saved.erase("shape");old_saved.erase("planned_age");old_saved.erase("growth_factor");old_saved["reference_template"]=0;
+  runtime::GrowthCurve old_default;old_saved["points"]=nlohmann::json::array();double old_end=old_default.birth_scale+18*old_saved.at("minimum_growth").get<double>();
+  for(size_t i=0;i<old_default.shape.points.size();++i){const auto &p=old_default.shape.points[i];old_saved["points"].push_back({p.age,p.rate});if(i)old_end+=(p.age-old_default.shape.points[i-1].age)*(p.rate+old_default.shape.points[i-1].rate)/2;}
+  for(const auto *key:{"interpolation","adult_age","chart_age_max","puberty_weight","height_in_cm","growth_in_cm"})old_saved.erase(key);
+  editor::apply_snapshot_json(d,migrated,old_curve);near(runtime::growth_curve_scale(migrated.values[0].extension.curve,18),old_end,1e-9,"旧曲线迁移改变成年 Scale");
+  auto previous_curve=saved;auto &previous=previous_curve["objects"][d.catalog.targets[0].id]["extension"]["growth_curve"];
+  previous["points"]=previous["shape"]["points"];for(auto &point:previous["points"])point[1]=point[1].get<double>()*previous["growth_factor"].get<double>();
+  previous["reference_template"]=0;previous["adult_age"]=previous["planned_age"];previous["chart_age_max"]=40;previous.erase("shape");previous.erase("planned_age");previous.erase("growth_factor");
+  editor::apply_snapshot_json(d,migrated,previous_curve);require(migrated.values[0].extension.curve.shape.reference_template==runtime::GrowthCurveShape::custom_template,"旧曲线未作为自定义形状保留");
+  for(double age:{0.,3.,8.,18.,25.,50.})near(runtime::growth_curve_scale(migrated.values[0].extension.curve,age),runtime::growth_curve_scale(s.values[0].extension.curve,age),1e-9,"旧 PCHIP 曲线迁移改变实际 Scale");
+  for(const auto *key:{"planned_age","growth_factor","puberty_weight"}){bad=saved;bad["objects"][d.catalog.targets[0].id]["extension"]["growth_curve"][key]=-1;rejected=false;try{editor::apply_snapshot_json(d,s,bad);}catch(...){rejected=true;}require(rejected&&editor::snapshot_json(d,s)==saved,"新增曲线参数无效存档未原子拒绝");}
+  bad=saved;bad["objects"][d.catalog.targets[0].id]["extension"]["growth_curve"]["shape"]["points"][2][0]=0;rejected=false;try{editor::apply_snapshot_json(d,s,bad);}catch(...){rejected=true;}require(rejected&&editor::snapshot_json(d,s)==saved,"无效曲线存档产生部分覆盖");
   bad=saved;bad["objects"][d.catalog.targets[1].id]["favorites"]["nodes"][""]["transform/general_scale"]="invalid";rejected=false;try{editor::apply_snapshot_json(d,s,bad);}catch(...){rejected=true;}require(rejected&&editor::snapshot_json(d,s)==saved,"错误收藏格式产生部分覆盖");
   const auto sidecar=editor::extension_path(file);editor::save_scene_extension(sidecar,d,s);auto restored=editor::load_scene_extension(sidecar,{folder},77);require(editor::snapshot_json(*restored.document,restored.snapshot)==saved,"保存重开数据不一致");require(daz::read_document_file(file)==original,"修改了源 DUF");
   require(restored.document->loaded.scene.instances.size()==d.loaded.scene.instances.size()&&restored.document->loaded.scene.meshes.size()==d.loaded.scene.meshes.size(),"保存重开遗失预览地面");
@@ -146,11 +164,14 @@ static void serialization(const fs::path &folder){
   auto second=load(file);d.generation=2;const auto first=d.catalog.targets.size();editor::append_document(d,std::move(second));auto merged=editor::initial_snapshot(d);merged.values[first].favorites=s.values[0].favorites;merged.values[first+1].favorites=s.values[1].favorites;merged.values[first].extension.kind=runtime::ExtensionKind::density;merged.values[first].extension.density=4567;editor::remove_target(d,merged,0);
   editor::save_scene_extension(sidecar,d,merged);restored=editor::load_scene_extension(sidecar,{folder},88);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,merged),"追加删除的身份或编辑值未恢复");
   const auto prior=daz::read_document_file(sidecar);auto invalid=merged;invalid.values[0].extension.density=-1;rejected=false;try{editor::save_scene_extension(sidecar,d,invalid);}catch(...){rejected=true;}require(rejected&&daz::read_document_file(sidecar)==prior,"失败保存损坏已有文件");
+  merged.values[0].extension.curve=s.values[0].extension.curve;
   const auto copies=editor::copy_selection(d,merged,{0},{},{},false);require(copies.size()==1&&merged.values[copies[0]]==merged.values[0],"复制未保留对象参数");merged.values[copies[0]].transform.general_scale=2;
   editor::save_scene_extension(sidecar,d,merged);restored=editor::load_scene_extension(sidecar,{folder},89);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,merged),"复制对象保存重载不一致");
 }
+#include "growth_curve_real.inl"
 int main(int argc,char **argv){
-  try{rules();volume();growth();baby_growth();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
+  try{rules();volume();growth();baby_growth();growth_curve_checks();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
+    if(argc>3&&std::string(argv[2])=="--curve"){real_growth_curve(fs::u8path(argv[1]),fs::u8path(argv[3]));return 0;}
     if(argc>2&&std::string(argv[2])=="--classify"){
       const auto scene=editor::load_scene_extension(fs::u8path(argv[1]),{"H:/g1","H:/g3"},1);J report=J::array();
       for(size_t t=0;t<scene.document->catalog.targets.size();++t){const auto &target=scene.document->catalog.targets[t];if(target.label.find("Rowboat")!=std::string::npos){require(!editor::growth_character(*scene.document,t),"真实 Rowboat 被误判为角色");report.push_back({{"id",target.id},{"label",target.label},{"character",false},{"extension_kind",int(scene.snapshot.values[t].extension.kind)}});}}
