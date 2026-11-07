@@ -27,6 +27,7 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QMenu>
+#include <QFileDialog>
 #include <QTimer>
 #include <QThreadPool>
 #include <QStyleOptionSlider>
@@ -162,9 +163,12 @@ static void clipboard_ui(QApplication &app){
 }
 #include "material_uv_selection.inl"
 #include "material_hdr_color.inl"
+#include "material_texture_browse.inl"
 int main(int argc,char **argv){
   QApplication app(argc,argv);QFontDatabase::addApplicationFont("C:/Windows/Fonts/msyh.ttc");app.setFont(QFont(QStringLiteral("Microsoft YaHei"),9));
+  QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
   try{
+    material_texture_browse(app);
     parameter_settings_and_shared_materials();
     material_hdr_color(app,argc>2&&std::string(argv[1])=="--hdr-color"?QString::fromLocal8Bit(argv[2]):QString{});
     if(argc>1&&std::string(argv[1])=="--hdr-color"){std::cout<<"HDR color dialog and material integration: PASS\n";return 0;}

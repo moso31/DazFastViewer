@@ -5,9 +5,10 @@
 namespace dfv::editor {
 namespace {
 int skin_index(const Document &d,size_t target){const auto i=d.catalog.targets.at(target).instance;for(size_t s=0;s<d.skeletons.skins.size();++s)if(d.skeletons.skins[s].instance==i)return int(s);return -1;}
-double root_scale(const Document &d,const Snapshot &snapshot,size_t t,const runtime::Properties &p){
+double root_scale(const Document &d,const Snapshot &snapshot,size_t t,const runtime::Properties &p,bool validate_scales=false){
   const auto &g=d.formulas.graphs.at(t);if(g.skin<0)return 1;const auto &skin=d.skeletons.skins.at(g.skin);const auto &poses=snapshot.poses.at(g.skin);
   runtime::FormulaRuntime formula(g);
+  runtime::configure_growth_formulas(formula,runtime::growth_baby_scale_formulas(d.catalog.targets[t],g),p.extension);
   auto component=[](ir::Vec3 v,uint32_t a){return a==0?v.x:a==1?v.y:v.z;};
   for(size_t c=0;c<g.channels.size();++c){const auto &b=g.channels[c].binding;double value=0;
     if(b.property==runtime::Property::morph){if(g.morph_channels.at(b.index)!=int(c))continue;value=p.morphs.at(b.index);formula.set_unlimited(uint32_t(c),p.unlimited_morphs.contains(d.catalog.targets[t].morphs.at(b.index).id));}
@@ -22,7 +23,11 @@ double root_scale(const Document &d,const Snapshot &snapshot,size_t t,const runt
       default:break;
     }}formula.set(uint32_t(c),value);
   }
-  formula.evaluate();for(size_t c=0;c<g.channels.size();++c)if(g.channels[c].binding.property==runtime::Property::general_scale&&g.channels[c].binding.index==0)return runtime::decimal_derived_float(formula.values()[c]);
+  formula.evaluate();
+  if(validate_scales)for(size_t c=0;c<g.channels.size();++c){const auto p=g.channels[c].binding.property;
+    if((p==runtime::Property::scale||p==runtime::Property::general_scale)&&(!std::isfinite(formula.values()[c])||formula.values()[c]<=0))throw std::runtime_error("本次生长会使骨骼缩放无效，已保留原值");
+  }
+  for(size_t c=0;c<g.channels.size();++c)if(g.channels[c].binding.property==runtime::Property::general_scale&&g.channels[c].binding.index==0)return runtime::decimal_derived_float(formula.values()[c]);
   return runtime::decimal_derived_float(skin.root_general_scale*poses.at(0).general_scale);
 }
 class MeasurementContext {
@@ -54,7 +59,7 @@ public:
     }
     std::vector<std::vector<runtime::JointPose>> poses;const auto s=skin_index(d,target);if(s>=0)poses={snapshot.poses.at(s)};
     const auto &a=value.transform,&b=previous_.transform;
-    const bool same=cached_valid_&&value.morphs==previous_.morphs&&value.unlimited_morphs==previous_.unlimited_morphs&&poses==previous_poses_&&a.translation_cm==b.translation_cm&&a.rotation_degrees==b.rotation_degrees&&a.scale==b.scale&&a.general_scale==b.general_scale&&value.extension.kind==previous_.extension.kind&&value.extension.age==previous_.extension.age&&value.extension.strength==previous_.extension.strength;
+    const bool same=cached_valid_&&value.morphs==previous_.morphs&&value.unlimited_morphs==previous_.unlimited_morphs&&poses==previous_poses_&&a.translation_cm==b.translation_cm&&a.rotation_degrees==b.rotation_degrees&&a.scale==b.scale&&a.general_scale==b.general_scale&&value.extension.kind==previous_.extension.kind&&value.extension.age==previous_.extension.age&&value.extension.strength==previous_.extension.strength&&value.extension.baby_scale_isolated==previous_.extension.baby_scale_isolated;
     if(same&&world==previous_world_){auto result=cached_;if(!character){result.coefficient=value.extension.density/1000;result.kg=result.liters*result.coefficient;}return result;}
     previous_=value;previous_poses_=poses;previous_world_=world;cached_valid_=false;
     const auto &loaded_world=d.loaded.scene.instances.at(d.catalog.targets.at(target).instance).transform;
@@ -103,10 +108,10 @@ std::vector<std::string> edit_growth(const Document &d,Snapshot &snapshot,size_t
   runtime::validate_extension(next);if(!growth_character(d,t))throw std::runtime_error("请选择角色本体或其骨骼");
   const auto &old=snapshot.values.at(t);auto value=old;value.extension=next;std::vector<std::string> missing;
   if(apply_shape)missing=runtime::apply_growth(d.catalog.targets.at(t),value);
-  const double base_before=root_scale(d,snapshot,t,old),base_after=root_scale(d,snapshot,t,value);
+  const double base_before=root_scale(d,snapshot,t,old),base_after=root_scale(d,snapshot,t,value,true);
   const double before=runtime::decimal_derived_double(base_before*old.transform.general_scale*100);
   const double delta=next.sensitivity*(next.age-old.extension.age+scale_step),after=runtime::decimal_derived_double(before+delta);
-  if(before<=0||after<=0||base_after<=0||!std::isfinite(after))throw std::runtime_error("本次生长会使缩放小于或等于零，已保留原值");
+  if(before<=0||after<=0||base_after<=0||!std::isfinite(before)||!std::isfinite(after)||!std::isfinite(base_after))throw std::runtime_error("本次生长会使缩放小于或等于零或超出有效范围，已保留原值");
   value.transform.general_scale=after/(base_after*100);
   double origin_y=0;for(const auto &o:d.loaded.objects)if(o.instance==d.catalog.targets[t].instance){origin_y=o.translation_cm.y;break;}
   value.transform.translation_cm.y=float((origin_y+old.transform.translation_cm.y)*after/before-origin_y);

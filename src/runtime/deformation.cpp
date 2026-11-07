@@ -18,6 +18,7 @@ DeformationRuntime::DeformationRuntime(const DeformationRuntime &s,ir::Scene &sc
    mask_bases_(s.mask_bases_),graft_visibility_(s.graft_visibility_),scene_(scene),payload_leases_(s.payload_leases_),
    evaluated_(s.evaluated_),collision_enabled_(s.collision_enabled_) {
   for(const auto &f:s.formulas_)formulas_.push_back(std::make_unique<FormulaRuntime>(*f));
+  baby_scale_formulas_=s.baby_scale_formulas_;
   if(s.garment_collision_)garment_collision_=std::make_unique<CollisionRuntime>(*s.garment_collision_,scene,
     [this](uint32_t a,uint32_t b){return morph_.relative_transform(a,b);},
     [this](uint32_t instance,const std::vector<ir::Vec3> &input,std::vector<ir::Vec3> &positions){for(size_t t=0;t<targets_.size();++t)if(targets_[t].instance==instance){morph_.constrain_collision(t,input,positions);break;}},
@@ -72,6 +73,7 @@ DeformationRuntime::DeformationRuntime(ir::Scene &scene,const std::vector<Target
   cross_fit_collision_reference(collision_);
   if(graphs.size()!=targets.size()) throw std::runtime_error("角色和公式图数量不一致");
   for(const auto &g:graphs) formulas_.push_back(std::make_unique<FormulaRuntime>(g));
+  for(size_t t=0;t<targets.size();++t)baby_scale_formulas_.push_back(growth_baby_scale_formulas(targets[t],graphs[t]));
   for(const auto &target:targets) {Properties p;for(const auto &m:target.morphs) p.morphs.push_back(m.evaluable||m.unsupported.empty()?m.initial:0);sync_aliases(target,p);previous_.push_back(p);}
   for(const auto &skin:skins) previous_poses_.push_back(skin.initial);
   // Fit To 决定变换继承，包含父层级与适配关系方向不同的头发 / 头皮链。
@@ -138,6 +140,8 @@ void DeformationRuntime::feed(const std::vector<Properties> &values,const std::v
         if(local){local->set_unlimited(c,values[t].unlimited_morphs.contains(targets_[t].morphs[binding.index].id));local->set(c,input);}
         if(link&&link->morph_sources.at(binding.index)>=0) input+=weights.at(link->source).at(size_t(link->morph_sources[binding.index]));runtime.set(c,input);}
       else {const auto input=bone_input(binding,skins_.at(size_t(g.skin)),resolved.at(size_t(g.skin)));runtime.set(c,input);if(local)local->set(c,input);}}
+    configure_growth_formulas(runtime,baby_scale_formulas_[t],values[t].extension);
+    if(local)configure_growth_formulas(*local,baby_scale_formulas_[t],values[t].extension);
     runtime.evaluate();
     const auto &result=runtime.values();auto &value=weights[t];value.resize(targets_[t].morphs.size());
     for(size_t m=0;m<value.size();++m) {const int c=g.morph_channels[m];if(c>=0&&targets_[t].morphs[m].evaluable) value[m]=float(result[size_t(c)]);if(!std::isfinite(value[m])) throw std::runtime_error("Morph 求值超出有效数值范围");}
@@ -149,7 +153,7 @@ void DeformationRuntime::feed(const std::vector<Properties> &values,const std::v
 }
 bool DeformationRuntime::same_shape(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses) const {
   if(!evaluated_||values.size()!=previous_.size()||poses!=previous_poses_) return false;
-  for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs||values[t].disabled_deformation_regions!=previous_[t].disabled_deformation_regions||values[t].forefoot_uniformity!=previous_[t].forefoot_uniformity) return false;
+  for(size_t t=0;t<values.size();++t) if(values[t].morphs!=previous_[t].morphs||values[t].unlimited_morphs!=previous_[t].unlimited_morphs||values[t].extension.baby_scale_isolated!=previous_[t].extension.baby_scale_isolated||values[t].disabled_deformation_regions!=previous_[t].disabled_deformation_regions||values[t].forefoot_uniformity!=previous_[t].forefoot_uniformity) return false;
   return true;
 }
 bool DeformationRuntime::reframe(const std::vector<ir::Transform> &frames) {

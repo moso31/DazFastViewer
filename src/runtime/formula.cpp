@@ -69,6 +69,7 @@ FormulaRuntime::FormulaRuntime(const FormulaGraph &graph):graph_(graph) {
   unlimited_.resize(graph.channels.size());
   for(const auto &c:graph.channels) {inputs_.push_back(c.initial);values_.push_back(0);}
   results_.resize(graph.expressions.size());dirty_expressions_.assign(results_.size(),true);
+  enabled_.assign(results_.size(),true);
   for(uint32_t c=0;c<graph.channels.size();++c) dirty_.insert({graph.rank.at(c),c});
 }
 bool FormulaRuntime::set(uint32_t c,double value) {
@@ -80,10 +81,14 @@ bool FormulaRuntime::set(uint32_t c,double value) {
 void FormulaRuntime::set_unlimited(uint32_t c,bool enabled) {
   if(unlimited_.at(c)==enabled) return;unlimited_[c]=enabled;dirty_.insert({graph_.rank[c],c});
 }
+void FormulaRuntime::set_enabled(uint32_t f,bool enabled) {
+  if(enabled_.at(f)==enabled)return;enabled_[f]=enabled;dirty_expressions_[f]=true;
+  const auto c=graph_.expressions.at(f).output;dirty_.insert({graph_.rank.at(c),c});
+}
 void FormulaRuntime::evaluate() {
   while(!dirty_.empty()) {
     const auto c=dirty_.begin()->second;dirty_.erase(dirty_.begin());const auto &channel=graph_.channels[c];double sum=inputs_[c],product=1;
-    if(channel.error.empty()) for(auto f:graph_.incoming[c]) {const auto &e=graph_.expressions[f];if(dirty_expressions_[f]) {results_[f]=evaluate_expression(e,values_);dirty_expressions_[f]=false;++stats_.expressions;}
+    if(channel.error.empty()) for(auto f:graph_.incoming[c]) {if(!enabled_[f])continue;const auto &e=graph_.expressions[f];if(dirty_expressions_[f]) {results_[f]=evaluate_expression(e,values_);dirty_expressions_[f]=false;++stats_.expressions;}
       if(e.multiply) product*=results_[f];else sum+=results_[f];}
     double result=channel.error.empty()?sum*product:0;if(!std::isfinite(result)) throw std::runtime_error("公式合并结果非有限");
     if(channel.integer) result=std::round(result);if(channel.clamped&&!unlimited_[c]) result=std::clamp(result,channel.minimum,channel.maximum);++stats_.channels;

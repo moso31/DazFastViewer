@@ -46,7 +46,7 @@
       if(next.kind==runtime::ExtensionKind::growth&&(shape||step!=0)){
         missing=edit_growth(*document_,snapshot_,size_t(t),next,shape,step);
         const auto &target=document_->catalog.targets[size_t(t)];
-        std::erase_if(pending_parameters_,[&](const auto &p){if(p.first.first!=target.id)return false;for(const auto &v:runtime::growth_values(next.age,next.strength))for(const auto &m:target.morphs)if(m.label==v.label&&m.id==p.first.second)return true;return false;});
+        std::erase_if(pending_parameters_,[&](const auto &p){if(p.first.first!=target.id)return false;for(const auto &m:target.morphs)if(m.label=="Genesis 8 Baby"&&m.id==p.first.second)return true;for(const auto &v:runtime::growth_values(next.age,next.strength))for(const auto &m:target.morphs)if(m.label==v.label&&m.id==p.first.second)return true;return false;});
         apply_parameters_->setEnabled(!pending_parameters_.empty());
       }else snapshot_.values[t].extension=next;
       send();bind_extension();

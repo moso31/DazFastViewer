@@ -53,7 +53,7 @@ const std::vector<PoseTemplate> &powerpose_templates() {
     };
     shortcut(1,"H21",445,340);
     shortcut(1,"H42",35,340);
-    shortcut(2,"N02",240,88);
+    shortcut(2,"N02",240,74);
     return result;
   }();return templates;
 }

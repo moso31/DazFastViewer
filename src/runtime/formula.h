@@ -44,12 +44,15 @@ class FormulaRuntime {
   std::vector<double> inputs_,values_,results_;
   std::vector<bool> dirty_expressions_;
   std::vector<bool> unlimited_;
+  std::vector<bool> enabled_;
   std::set<std::pair<uint32_t,uint32_t>> dirty_;
   FormulaStats stats_;
 public:
   explicit FormulaRuntime(const FormulaGraph &graph);
   bool set(uint32_t channel,double value);
   void set_unlimited(uint32_t channel,bool enabled);
+  // 局部屏蔽仍保留原依赖图；切换时使输出及其下游正常失效。
+  void set_enabled(uint32_t expression,bool enabled);
   void evaluate();
   const auto &values() const {return values_;}
   const auto &stats() const {return stats_;}

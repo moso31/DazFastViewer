@@ -44,7 +44,7 @@ protected:
     const bool inside=w==root_||root_->isAncestorOf(w);
     QString key;QWidget *row=nullptr;
     if(inside)for(auto *p=w;p&&p!=root_;p=p->parentWidget())if(p->property("numericRow").isValid()){key=p->property("numericRow").toString();row=p;break;}
-    if(type==QEvent::Hide&&w==root_)select({});
+    if(type==QEvent::Hide&&(w==root_||(!key.isEmpty()&&key==selected_)))select({});
     if(inside&&(type==QEvent::MouseButtonPress||type==QEvent::MouseButtonDblClick))if(auto *tree=qobject_cast<QTreeWidget *>(w->parentWidget());tree&&w==tree->viewport())if(auto *item=tree->itemAt(static_cast<QMouseEvent *>(event)->position().toPoint())){const auto value=item->data(0,Qt::UserRole+200);if(value.isValid())key=value.toString();}
     if((type==QEvent::MouseButtonPress||type==QEvent::MouseButtonDblClick)&&static_cast<QMouseEvent *>(event)->button()==Qt::LeftButton){
       if(!key.isEmpty())select(key,row?qobject_cast<QLabel *>(row->property("numericLabel").value<QObject *>()):nullptr);

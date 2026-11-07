@@ -22,6 +22,7 @@ class DeformationRuntime {
   struct PushCache {std::vector<ir::Vec3> input,output;bool initialized=false;};
   std::map<uint32_t,PushCache> push_before_,push_after_;
   std::vector<std::unique_ptr<FormulaRuntime>> formulas_;
+  std::vector<std::vector<uint32_t>> baby_scale_formulas_;
   std::vector<Properties> previous_;
   std::vector<std::vector<JointPose>> previous_poses_;
   std::vector<std::vector<float>> effective_;

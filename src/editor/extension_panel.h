@@ -6,11 +6,14 @@
 class QToolButton;
 class QDoubleSpinBox;
 class QLabel;
+class QCheckBox;
 namespace dfv::editor {
 class ExtensionPanel final:public QWidget {
   QToolButton *header_,*details_,*round_;
-  QWidget *body_,*growth_,*density_row_;
+  QWidget *body_,*growth_,*density_row_,*baby_details_;
   QDoubleSpinBox *age_,*step_,*sense_,*strength_,*density_,*multiplier_;
+  QDoubleSpinBox *baby_begin_,*baby_end_,*baby_strength_;
+  QCheckBox *baby_enabled_,*baby_blend_;
   QLabel *summary_,*status_,*parts_;
   QWidget *parts_scroll_;
   runtime::ObjectExtension value_;

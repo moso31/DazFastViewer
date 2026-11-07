@@ -61,6 +61,7 @@ static editor::Document growth_document(){
   // 模拟旧 DAZ 通道中的 -1% ERC，用实际缩放校准验证不再需要脚本补偿。
   runtime::Expression e;e.owner=0;e.output=uint32_t(graph.channels.size()-1);e.code={{runtime::Op::constant,-.01}};graph.expressions.push_back(e);graph.prepare();d.formulas.graphs={graph};return d;
 }
+#include "growth_baby.inl"
 static void growth(){
   for(double base:{.99,.92,.96,1.}){auto d=growth_document();d.formulas.graphs[0].expressions[0].code={{runtime::Op::constant,base-1}};d.formulas.graphs[0].prepare();auto state=editor::initial_snapshot(d);auto &value=state.values[0];value.extension.kind=runtime::ExtensionKind::growth;value.extension.sensitivity=5;value.transform.general_scale=125/(base*100);
     for(int i=0;i<100;++i){editor::edit_growth(d,state,0,value.extension,false,1);require(runtime::decimal_derived_double(base*value.transform.general_scale*100)==130,"男性每年增长出现 double 尾差");editor::edit_growth(d,state,0,value.extension,false,-1);require(runtime::decimal_derived_double(base*value.transform.general_scale*100)==125,"反复增长缩小累积误差");}
@@ -127,12 +128,15 @@ static void serialization(const fs::path &folder){
     worker.request(3,{}, {},0);
   }
   s.values[0].extension.scale_multiplier=1.25;s.values[0].extension.scale_round=true;s.values[0].extension.scale_round_exponent=-4;
+  s.values[0].extension.age=0;s.values[0].extension.baby_enabled=true;s.values[0].extension.baby_begin=.25;s.values[0].extension.baby_end=7;s.values[0].extension.baby_strength=.65;s.values[0].extension.baby_blend=false;s.values[0].extension.baby_scale_isolated=true;
+  s.parameter_settings[d.catalog.targets[0].id]["extension/GrowthBabyEnd"]={true,0,10,.25};
   s.values[0].favorites.emplace();s.values[1].favorites.emplace();s.control_favorites.emplace();
   s.values[0].favorites->nodes[""]["transform/general_scale"]=false;s.values[1].favorites->nodes[""]["transform/general_scale"]=true;
   s.values[0].favorites->nodes["head"]["joint/3"]=true;s.values[0].favorites->nodes["head"]["joint/4"]=false;
   s.control_favorites->nodes["light/"+s.lights[0].id]["light/0"]=true;
   auto saved=editor::snapshot_json(d,s);auto bad=saved;bad["objects"][d.catalog.targets[1].id]["extension"]["density"]=-1;bool rejected=false;try{editor::apply_snapshot_json(d,s,bad);}catch(...){rejected=true;}require(rejected&&editor::snapshot_json(d,s)==saved,"失败覆盖留下部分修改");
-  auto legacy=saved;legacy.erase("control_favorites");for(auto &object:legacy["objects"])object.erase("favorites");auto old=editor::initial_snapshot(d);editor::apply_snapshot_json(d,old,legacy);
+  auto legacy=saved;legacy.erase("control_favorites");for(auto &object:legacy["objects"]){object.erase("favorites");for(const char *key:{"baby_enabled","baby_begin","baby_end","baby_strength","baby_blend","baby_scale_isolated"})object["extension"].erase(key);}auto old=editor::initial_snapshot(d);editor::apply_snapshot_json(d,old,legacy);
+  require(!old.values[0].extension.baby_enabled&&old.values[0].extension.baby_end==7&&old.values[0].extension.baby_strength==.6&&old.values[0].extension.baby_blend&&!old.values[0].extension.baby_scale_isolated,"旧场景的婴儿期默认设置或外形隔离状态错误");
   require(!old.control_favorites&&!old.values[0].favorites,"旧版扩展未保留收藏迁移入口");
   bad=saved;bad["objects"][d.catalog.targets[1].id]["favorites"]["nodes"][""]["transform/general_scale"]="invalid";rejected=false;try{editor::apply_snapshot_json(d,s,bad);}catch(...){rejected=true;}require(rejected&&editor::snapshot_json(d,s)==saved,"错误收藏格式产生部分覆盖");
   const auto sidecar=editor::extension_path(file);editor::save_scene_extension(sidecar,d,s);auto restored=editor::load_scene_extension(sidecar,{folder},77);require(editor::snapshot_json(*restored.document,restored.snapshot)==saved,"保存重开数据不一致");require(daz::read_document_file(file)==original,"修改了源 DUF");
@@ -146,11 +150,33 @@ static void serialization(const fs::path &folder){
   editor::save_scene_extension(sidecar,d,merged);restored=editor::load_scene_extension(sidecar,{folder},89);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,merged),"复制对象保存重载不一致");
 }
 int main(int argc,char **argv){
-  try{rules();volume();growth();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
+  try{rules();volume();growth();baby_growth();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
     if(argc>2&&std::string(argv[2])=="--classify"){
       const auto scene=editor::load_scene_extension(fs::u8path(argv[1]),{"H:/g1","H:/g3"},1);J report=J::array();
       for(size_t t=0;t<scene.document->catalog.targets.size();++t){const auto &target=scene.document->catalog.targets[t];if(target.label.find("Rowboat")!=std::string::npos){require(!editor::growth_character(*scene.document,t),"真实 Rowboat 被误判为角色");report.push_back({{"id",target.id},{"label",target.label},{"character",false},{"extension_kind",int(scene.snapshot.values[t].extension.kind)}});}}
       require(!report.empty(),"场景中未找到 Rowboat");std::cout<<report.dump(2)<<'\n';return 0;
+    }
+    if(argc>3&&std::string(argv[2])=="--baby"){
+      auto d=load(fs::u8path(argv[1]));auto s=editor::initial_snapshot(d);const auto output=fs::u8path(argv[3]);fs::create_directories(output);J report=J::array();
+      auto scene=d.loaded.scene;runtime::DeformationRuntime deformation(scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);size_t checked=0;
+      for(size_t t=0;t<d.catalog.targets.size();++t){const auto &target=d.catalog.targets[t];if(!editor::growth_character(d,t))continue;
+        const auto baby=std::find_if(target.morphs.begin(),target.morphs.end(),[](const auto &m){return m.label=="Genesis 8 Baby"&&m.alias_morph<0&&m.evaluable&&m.unsupported.empty();});if(baby==target.morphs.end())continue;++checked;
+        require(runtime::growth_baby_scale_formulas(target,d.formulas.graphs[t]).size()==1,"真实 Baby 根缩放公式未唯一识别");s.values[t].extension.kind=runtime::ExtensionKind::growth;s.values[t].extension.baby_enabled=true;
+        for(bool blend:{true,false})for(double end:{3.,5.,7.})for(double age:{0.,.5,1.,2.,3.,5.,7.,20.,3.}){
+          auto next=s.values[t].extension;next.baby_blend=blend;next.baby_end=end;next.age=age;const auto missing=editor::edit_growth(d,s,t,next);
+          require(std::find(missing.begin(),missing.end(),"Genesis 8 Baby")==missing.end(),"真实 Baby 未启用");deformation.evaluate(s.values,s.poses);
+          const auto m=size_t(baby-target.morphs.begin());near(deformation.effective()[t][m],runtime::growth_baby_weight(next),2e-6,"真实 Baby 求值权重错误");
+          for(const auto &skin:deformation.effective_poses())for(const auto &p:skin)require(std::isfinite(p.general_scale)&&p.general_scale>0&&p.scale.x>0&&p.scale.y>0&&p.scale.z>0,"真实 Baby 骨骼缩放无效");
+          for(const auto &mesh:scene.meshes)for(auto p:mesh.positions)require(std::isfinite(p.x)&&std::isfinite(p.y)&&std::isfinite(p.z),"真实 Baby 顶点无效");
+          const auto weight=editor::measure_object(d,s,t);require(weight.height_cm>0&&std::isfinite(weight.height_cm)&&weight.kg>0&&std::isfinite(weight.kg),"真实 Baby 身高体重无效");
+          report.push_back({{"target",target.id},{"age",age},{"end",end},{"blend",blend},{"baby",deformation.effective()[t][m]},{"height_cm",weight.height_cm},{"kg",weight.kg},{"missing",missing}});
+        }
+        auto next=s.values[t].extension;next.baby_end=3;next.baby_blend=true;next.age=0;editor::edit_growth(d,s,t,next);
+      }
+      require(checked>0,"未找到可验证的真实 Baby 角色");const auto saved=output/"baby-zero.dufex";editor::save_scene_extension(saved,d,s);auto restored=editor::load_scene_extension(saved,{"H:/g1","H:/g3","C:/Users/Public/Documents/My DAZ 3D Library"},2);
+      require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,s),"真实婴儿期保存重开不一致");
+      auto reopened_scene=restored.document->loaded.scene;runtime::DeformationRuntime reopened(reopened_scene,restored.document->catalog.targets,restored.document->skeletons.skins,restored.document->formulas.graphs);reopened.evaluate(restored.snapshot.values,restored.snapshot.poses);
+      std::ofstream(output/"probe.json")<<report.dump(2);std::cout<<"PASS real Baby: "<<checked<<" figures, "<<report.size()<<" edits, save/reopen\n";return 0;
     }
     if(argc>1){const auto file=fs::u8path(argv[1]);auto d=load(file);auto s=editor::initial_snapshot(d);J report=J::array();
       for(size_t t=0;t<d.catalog.targets.size();++t){const bool character=editor::growth_character(d,t);if(!character)continue;s.values[t].extension.kind=runtime::ExtensionKind::growth;const auto start=std::chrono::steady_clock::now();const auto measured=editor::measure_object(d,s,t);auto previous=s;auto missing=editor::edit_growth(d,previous,t,previous.values[t].extension);const auto legacy=editor::measure_object(d,previous,t);report.push_back({{"id",d.catalog.targets[t].id},{"height_cm",measured.height_cm},{"previous_height_cm",legacy.height_cm},{"difference_cm",measured.height_cm-legacy.height_cm},{"kg",measured.kg},{"liters",measured.liters},{"missing",missing},{"notes",measured.notes},{"ms",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count()}});}

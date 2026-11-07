@@ -54,7 +54,7 @@ ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   growth_=new QWidget;body->addWidget(growth_);auto *form=new QVBoxLayout(growth_);form->setContentsMargins(0,0,0,0);form->setSpacing(4);
   auto spin=[&](const char *name,double lo,double hi,double step){auto *s=new NumericSpinBox(false);s->setObjectName(name);s->setDecimals(9);s->setRange(lo,hi);s->setSingleStep(step);s->setKeyboardTracking(false);s->setFocusPolicy(Qt::StrongFocus);s->setMinimumWidth(48);s->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);return s;};
   const auto unlimited=std::numeric_limits<float>::max();
-  age_=spin("GrowthAge",1,20,1);step_=spin("GrowthAgeStep",-unlimited,unlimited,.25);sense_=spin("GrowthSensitivity",-unlimited,unlimited,2.5);strength_=spin("GrowthStrength",-unlimited,unlimited,.125);density_=spin("ObjectDensity",0,100000,100);
+  age_=spin("GrowthAge",0,20,1);step_=spin("GrowthAgeStep",-unlimited,unlimited,.25);sense_=spin("GrowthSensitivity",-unlimited,unlimited,2.5);strength_=spin("GrowthStrength",-unlimited,unlimited,.125);density_=spin("ObjectDensity",0,100000,100);
   for(auto *s:{age_,step_,sense_,strength_})s->setProperty("fixedParameterSettings",true);
   auto *age_row=new QHBoxLayout;age_row->setSpacing(4);age_row->addWidget(new QLabel(QStringLiteral("年龄")));age_row->addWidget(age_,1);age_row->addSpacing(6);age_row->addWidget(new QLabel(QStringLiteral("步长")));age_row->addWidget(step_,1);form->addLayout(age_row);
   auto *shape_row=new QHBoxLayout;shape_row->setSpacing(4);shape_row->addWidget(new QLabel(QStringLiteral("体格")));shape_row->addWidget(strength_,1);shape_row->addSpacing(6);shape_row->addWidget(new QLabel(QStringLiteral("每年增长")));shape_row->addWidget(sense_,1);
@@ -65,6 +65,23 @@ ExtensionPanel::ExtensionPanel(QWidget *parent):QWidget(parent){
   auto *multiplier_row=new QHBoxLayout;multiplier_row->setSpacing(4);multiplier_row->addWidget(new QLabel(QStringLiteral("倍率")));multiplier_row->addWidget(multiplier_,1);
   auto *round=new RoundButton;round_=round;multiplier_row->addWidget(round_);auto *times=new QPushButton(QStringLiteral("×"));auto *divide=new QPushButton(QStringLiteral("÷"));times->setObjectName("GrowthMultiply");divide->setObjectName("GrowthDivide");for(auto *b:{times,divide}){b->setFixedWidth(24);multiplier_row->addWidget(b);}form->addLayout(multiplier_row);
   auto notify=[this](bool shape,double scale=0){if(changed)changed(value_,shape,scale);};
+  baby_enabled_=parameter_widgets::checkbox(QStringLiteral("启用婴儿期衰减"),"GrowthBabyEnabled");form->addWidget(baby_enabled_);
+  baby_enabled_->setToolTip(QStringLiteral("启用后按年龄应用 Baby 并显示衰减参数；关闭后恢复原生长形变，保留衰减设置。"));
+  baby_details_=new QWidget;baby_details_->setObjectName("GrowthBabyDetails");form->addWidget(baby_details_);auto *baby_layout=new QVBoxLayout(baby_details_);baby_layout->setContentsMargins(0,0,0,0);baby_layout->setSpacing(4);baby_details_->hide();
+  baby_begin_=parameter_widgets::number("GrowthBabyBegin");baby_end_=parameter_widgets::number("GrowthBabyEnd");baby_strength_=parameter_widgets::number("GrowthBabyStrength");
+  for(auto *s:{baby_begin_,baby_end_}){s->setRange(0,20);s->setMinimumWidth(48);s->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}
+  baby_strength_->setRange(0,1);baby_strength_->setMinimumWidth(48);baby_strength_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
+  baby_strength_->setToolTip(QStringLiteral("起始年龄及以下的 Genesis 8 Baby 强度，默认 0.6。范围 0～1，随后线性衰减至 0；开启混合时，原生长形变占剩余权重。"));
+  baby_begin_->setToolTip(QStringLiteral("此年龄及以下，Genesis 8 Baby 使用起始强度。必须小于结束年龄。"));
+  baby_end_->setToolTip(QStringLiteral("此年龄及以上，Genesis 8 Baby = 0。可尝试 3、5 或 7 岁；区间内线性衰减。"));
+  auto *baby_form=new QFormLayout;baby_form->setContentsMargins(0,0,0,0);baby_form->addRow(QStringLiteral("起始强度"),baby_strength_);baby_form->addRow(QStringLiteral("衰减起始年龄"),baby_begin_);baby_form->addRow(QStringLiteral("衰减结束年龄"),baby_end_);baby_layout->addLayout(baby_form);
+  baby_blend_=parameter_widgets::checkbox(QStringLiteral("与原生长参数混合（lerp）"),"GrowthBabyBlend");baby_layout->addWidget(baby_blend_);
+  baby_blend_->setToolTip(QStringLiteral("开启：Baby 越强，原 19 项生长形变越弱；关闭：叠加两套形变。Baby 的固定减 Scale 由生长缩放接管。"));
+  connect(baby_begin_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.baby_begin=v;notify(true);});
+  connect(baby_end_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.baby_end=v;notify(true);});
+  connect(baby_strength_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.baby_strength=v;notify(true);});
+  connect(baby_blend_,&QCheckBox::clicked,this,[this,notify](bool on){value_.baby_blend=on;notify(true);});
+  connect(baby_enabled_,&QCheckBox::clicked,this,[this,notify](bool on){value_.baby_enabled=on;baby_details_->setVisible(on);notify(true);});
   connect(multiplier_,&QDoubleSpinBox::valueChanged,this,[this,notify](double v){value_.scale_multiplier=v;notify(false);});
   connect(round_,&QToolButton::clicked,this,[this,notify](bool on){value_.scale_round=on;notify(false);});round->edited=[this,notify](int digits){value_.scale_round_exponent=digits;notify(false);};
   connect(times,&QPushButton::clicked,this,[this]{if(multiply_scale)multiply_scale(false);});connect(divide,&QPushButton::clicked,this,[this]{if(multiply_scale)multiply_scale(true);});
@@ -87,7 +104,8 @@ void ExtensionPanel::bind(const runtime::ObjectExtension &v,bool selection){
   if(reset){has_result_=false;summary_->setText(QStringLiteral("等待测量…"));summary_->setToolTip({});status_->clear();status_->hide();parts_->clear();details_->setChecked(false);}
   setVisible(v.kind!=runtime::ExtensionKind::none);if(v.kind==runtime::ExtensionKind::none)return;
   const bool character=v.kind==runtime::ExtensionKind::growth;header_->setText(character?QStringLiteral("生长与体重"):QStringLiteral("密度与重量"));growth_->setVisible(character);density_row_->setVisible(!character);details_->setVisible(character);
-  for(const auto &[s,x]:std::vector<std::pair<QDoubleSpinBox *,double>>{{age_,v.age},{step_,v.age_step},{sense_,v.sensitivity},{strength_,v.strength},{density_,v.density},{multiplier_,v.scale_multiplier}}){QSignalBlocker block(s);s->setValue(x);}
+  for(const auto &[s,x]:std::vector<std::pair<QDoubleSpinBox *,double>>{{age_,v.age},{step_,v.age_step},{sense_,v.sensitivity},{strength_,v.strength},{density_,v.density},{multiplier_,v.scale_multiplier},{baby_begin_,v.baby_begin},{baby_end_,v.baby_end},{baby_strength_,v.baby_strength}}){QSignalBlocker block(s);s->setValue(x);}
+  baby_enabled_->setChecked(v.baby_enabled);baby_details_->setVisible(v.baby_enabled);baby_blend_->setChecked(v.baby_blend);
   round_->setChecked(v.scale_round);auto *round=static_cast<RoundButton *>(round_);if(reset||round->digits!=v.scale_round_exponent)round->cancel();round->digits=v.scale_round_exponent;
   age_->setSingleStep(std::abs(v.age_step));
   parts_scroll_->setVisible(character&&details_->isChecked());
