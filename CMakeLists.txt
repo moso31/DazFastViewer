@@ -89,6 +89,7 @@ add_library(dfv_scene STATIC src/render_ir/scene.cpp src/daz/loader.cpp src/daz/
 target_sources(dfv_scene PRIVATE src/runtime/subdivision.cpp src/runtime/graft_surface.cpp src/editor/attachments.cpp src/runtime/pose_edit.cpp src/editor/pose_drag.cpp)
 target_sources(dfv_scene PRIVATE src/runtime/geometry_shell.cpp)
 target_sources(dfv_scene PRIVATE src/editor/object_copy.cpp)
+target_sources(dfv_scene PRIVATE src/editor/prop_conversion.cpp)
 target_sources(dfv_scene PRIVATE src/editor/geograft_materials.cpp src/editor/geograft_update.cpp)
 add_executable(GeograftMaterialsTest tests/geograft_materials.cpp)
 target_link_libraries(GeograftMaterialsTest PRIVATE dfv_scene)

@@ -75,7 +75,7 @@ MaterialPanel::MaterialPanel(QWidget *parent):QWidget(parent){
     if(edit_requested)edit_requested(QStringLiteral("修改材质参数范围与精度"),change);else change();
   };
   setObjectName("MaterialPanel");auto *layout=new QVBoxLayout(this);layout->setContentsMargins(4,4,4,4);
-  auto *toolbar=new QHBoxLayout;scope_=new QComboBox;scope_->setObjectName("materialScope");scope_->addItems({QStringLiteral("当前角色 / 对象"),QStringLiteral("全部场景对象")});toolbar->addWidget(scope_);
+  auto *toolbar=new QHBoxLayout;scope_=new QComboBox;scope_->setObjectName("materialScope");scope_->addItems({QStringLiteral("所选角色 / 对象"),QStringLiteral("全部场景对象")});toolbar->addWidget(scope_);
   auto *reset_all=new QPushButton(QStringLiteral("还原所选材质"));reset_all->setToolTip(QStringLiteral("还原至加载场景或最近应用的材质预设"));toolbar->addWidget(reset_all);toolbar->addStretch();layout->addLayout(toolbar);
   auto *preset=new QPushButton(QStringLiteral("应用材质 / Shader 预设…"));layout->addWidget(preset);connect(preset,&QPushButton::clicked,this,[this]{const auto selected=surfaces();if(selected.empty()||!preset_requested)return;auto file=QFileDialog::getOpenFileName(this,QStringLiteral("应用到所选表面"),{},QStringLiteral("DAZ 材质预设 (*.duf *.djl)"));if(!file.isEmpty())preset_requested(std::filesystem::path(file.toStdWString()),selected);});
   auto *splitter=new QSplitter(Qt::Horizontal);splitter->setObjectName("materialSplitter");splitter->setChildrenCollapsible(false);layout->addWidget(splitter,1);
@@ -131,10 +131,12 @@ bool MaterialPanel::eventFilter(QObject *object,QEvent *event){
   }
   return QWidget::eventFilter(object,event);
 }
-void MaterialPanel::bind(std::shared_ptr<const Document> document,Snapshot *snapshot,int target,const std::string &group){
-  if(document_==document&&snapshot_==snapshot&&target_==target&&group_==group)return;
-  if(target_!=target||group_!=group){QSignalBlocker block(tree_);tree_->clearSelection();}
-  document_=std::move(document);snapshot_=snapshot;target_=target;group_=group;rebuild_tree();
+void MaterialPanel::bind(std::shared_ptr<const Document> document,Snapshot *snapshot,int target,const std::string &group,std::vector<size_t> targets,std::vector<std::string> groups){
+  if(target>=0)targets.push_back(size_t(target));if(!group.empty())groups.push_back(group);
+  auto unique=[](auto &values){std::sort(values.begin(),values.end());values.erase(std::unique(values.begin(),values.end()),values.end());};unique(targets);unique(groups);
+  if(document_==document&&snapshot_==snapshot&&target_==target&&group_==group&&targets_==targets&&groups_==groups)return;
+  if(targets_!=targets||groups_!=groups){QSignalBlocker block(tree_);tree_->clearSelection();}
+  document_=std::move(document);snapshot_=snapshot;target_=target;group_=group;targets_=std::move(targets);groups_=std::move(groups);rebuild_tree();
 }
 std::vector<MaterialPanel::Surface> MaterialPanel::surfaces() const{
   if(surface_cache_)return *surface_cache_;
@@ -151,11 +153,13 @@ void MaterialPanel::rebuild_tree(){
   QSignalBlocker blocker(tree_);tree_->setUpdatesEnabled(false);tree_->clear();
   if(!document_||!snapshot_){tree_->setUpdatesEnabled(true);rebuild_properties();return;}const auto &d=*document_;const auto &scene=d.loaded.scene;
   ObjectHierarchy hierarchy(d);
-  std::string focus=group_;
-  if(target_>=0&&size_t(target_)<hierarchy.targets.size()) {
-    size_t host=size_t(target_);try{host=attachment_host(d,host);}catch(const std::exception &){}
-    focus=hierarchy.targets[host];
+  std::set<std::string> focus(groups_.begin(),groups_.end());
+  for(auto target:targets_)if(target<hierarchy.targets.size()){
+    size_t host=target;try{host=attachment_host(d,host);}catch(const std::exception &){}
+    focus.insert(hierarchy.targets[host]);
   }
+  // 父对象与子对象同时选中时，只保留最外层根，避免拆散同一材质树。
+  const auto roots=focus;for(const auto &id:roots)for(const auto &root:roots)if(id!=root&&hierarchy.contains(root,id)){focus.erase(id);break;}
   std::map<size_t,size_t> targets;for(size_t t=0;t<d.catalog.targets.size();++t)targets[d.catalog.targets[t].instance]=t;
   std::set<std::string> represented=hierarchy.groups;for(const auto &id:hierarchy.instances)represented.insert(id);
   std::map<std::string,QTreeWidgetItem *> families;
@@ -164,14 +168,14 @@ void MaterialPanel::rebuild_tree(){
     if(auto f=families.find(id);f!=families.end())return f->second;
     if(!building.insert(id).second)return nullptr;
     QTreeWidgetItem *parent=nullptr;auto p=hierarchy.parents[id];std::set<std::string> seen{id};
-    if(scope_->currentIndex()!=0||id!=focus)while(!p.empty()&&seen.insert(p).second){if(represented.contains(p)){parent=family(p);break;}p=hierarchy.parents[p];}
+    if(scope_->currentIndex()!=0||!focus.contains(id))while(!p.empty()&&seen.insert(p).second){if(represented.contains(p)){parent=family(p);break;}p=hierarchy.parents[p];}
     auto *item=parent?new QTreeWidgetItem(parent):new QTreeWidgetItem(tree_);item->setText(0,text(hierarchy.labels[id].empty()?id:hierarchy.labels[id]));
     item->setData(0,Qt::UserRole+2,"family/"+text(id));item->setToolTip(0,text(id));item->setExpanded(true);families[id]=item;building.erase(id);return item;
   };
   QTreeWidgetItem *first=nullptr;
   for(size_t i=0;i<scene.instances.size();++i){const auto &instance=scene.instances[i];if(instance.materials.empty()||water::find(document_->waters,instance.id)||!city::material_entry(document_->cities,instance.id))continue;
     auto target=targets.find(i);const auto &node=hierarchy.instances[i];
-    if(scope_->currentIndex()==0&&!focus.empty()&&!hierarchy.contains(focus,node))continue;
+    if(scope_->currentIndex()==0&&!focus.empty()&&std::none_of(focus.begin(),focus.end(),[&](const auto &root){return hierarchy.contains(root,node);}))continue;
     auto *parent=family(node);
     auto label=target==targets.end()?text(instance.instance_label.empty()?instance.id:instance.instance_label):text(d.catalog.targets[target->second].label);
     label=QStringLiteral("自身 · ")+label;
@@ -182,11 +186,13 @@ void MaterialPanel::rebuild_tree(){
     for(size_t slot=0;slot<instance.materials.size();++slot){auto *surface=new QTreeWidgetItem(object,{text(slots.at(slot))});surface->setData(0,Qt::UserRole,qulonglong(i));surface->setData(0,Qt::UserRole+1,qulonglong(slot));surface->setData(0,Qt::UserRole+2,text(instance.id)+"\n"+text(slots[slot]));surface->setToolTip(0,text(scene.materials.at(instance.materials[slot]).id));
       if(!first||(target!=targets.end()&&int(target->second)==target_&&slot==0))first=surface;
     }
-    object->setExpanded(expanded.contains(object->data(0,Qt::UserRole+2).toString())||(target!=targets.end()&&int(target->second)==target_));
+    object->setExpanded(expanded.contains(object->data(0,Qt::UserRole+2).toString())||(target!=targets.end()&&std::binary_search(targets_.begin(),targets_.end(),target->second)));
   }
   bool restored=false;for(QTreeWidgetItemIterator it(tree_);*it;++it){const auto key=(*it)->data(0,Qt::UserRole+2).toString();if(expanded.contains(key))(*it)->setExpanded(true);if(selected.contains(key)){(*it)->setSelected(true);restored=true;}}
-  if(!restored&&scope_->currentIndex()==0&&families.contains(focus))tree_->setCurrentItem(families.at(focus));
-  else if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}tree_->setUpdatesEnabled(true);rebuild_properties();setProperty("lastBindMilliseconds",double(elapsed.nsecsElapsed())/1e6);
+  if(!restored&&scope_->currentIndex()==0)for(const auto &root:focus)if(families.contains(root)){
+    auto *item=families.at(root);if(!restored)tree_->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);item->setSelected(true);restored=true;
+  }
+  if(!restored&&first){tree_->setCurrentItem(first);first->parent()->setExpanded(true);}tree_->setUpdatesEnabled(true);rebuild_properties();setProperty("lastBindMilliseconds",double(elapsed.nsecsElapsed())/1e6);
 }
 J MaterialPanel::value(Surface s,const P &p)const{auto textures=document_->loaded.scene.textures;auto m=effective_material(document_->loaded.scene,snapshot_->material_overrides,s.instance,s.slot,textures);return material_value(m,textures,p);}
 std::vector<std::pair<std::string,std::string>> MaterialPanel::selection_ids() const {

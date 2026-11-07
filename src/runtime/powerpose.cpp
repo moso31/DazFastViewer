@@ -42,8 +42,25 @@ const std::vector<PoseTemplate> &powerpose_templates() {
         for(size_t i=0;i<4;++i) for(const auto &b:p.at("slots").at(i)) point.slots[i].push_back({b.at("node"),b.at("property"),b.at("sign"),b.at("size")});
         page.points.push_back(std::move(point));
       }result.push_back(std::move(page));
-    }return result;
+    }
+    // 全身页快捷入口复用原页的完整绑定与稳定 ID，保持拖动、恢复及参数定位一致。
+    auto &body=result[0].points;
+    for(auto &point:body) if(point.id=="B01") {point.y=38;point.male_y=42;}
+    auto shortcut=[&](size_t page,const char *id,int x,int y) {
+      const auto &points=result[page].points;
+      auto point=*std::find_if(points.begin(),points.end(),[&](const auto &p){return p.id==id;});
+      point.x=point.male_x=x;point.y=point.male_y=y;body.push_back(std::move(point));
+    };
+    shortcut(1,"H21",445,340);
+    shortcut(1,"H42",35,340);
+    shortcut(2,"N02",240,88);
+    return result;
   }();return templates;
+}
+const PosePoint *find_powerpose_point(const std::string &id) {
+  // 同一操作可出现在多个模板页，渲染线程每次手势只创建一次预览事务。
+  for(const auto &page:powerpose_templates()) for(const auto &point:page.points) if(point.id==id) return &point;
+  return nullptr;
 }
 int powerpose_joint(const Skin &skin,const std::string &name) {
   if(name=="Figure") {for(size_t j=0;j<skin.joints.size();++j) if(skin.joints[j].parent<0) return int(j);return -1;}

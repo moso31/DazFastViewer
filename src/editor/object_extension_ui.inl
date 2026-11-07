@@ -4,7 +4,7 @@
   int measurement_target_=-1,extension_bound_=-1;
   const Document *measurement_document_=nullptr;
   std::filesystem::path extension_file_;
-  nlohmann::json saved_scene_content_;
+  std::map<uint64_t,nlohmann::json> saved_scene_contents_;
   nlohmann::json scene_content(const Snapshot &snapshot) const {
     auto state=snapshot_json(*document_,snapshot);state.erase("view");
     // 资源操作记录覆盖穿戴、材质预设等结构修改；运行时文档副本和视口导航不算修改。
@@ -100,7 +100,7 @@
       QSaveFile png(QString::fromStdWString(path.wstring())+".png");if(!png.open(QIODevice::WriteOnly)||!thumbnail.save(&png,"PNG"))throw std::runtime_error("场景缩略图写入失败，场景未保存");
       save_scene_extension(path,*document_,saved);if(!png.commit())throw std::runtime_error("场景已保存，但缩略图提交失败，请重新保存");
       snapshot_.view=saved.view;extension_file_=path;
-      saved_scene_content_=scene_content(saved);
+      saved_scene_contents_[scene_identity_]=scene_content(saved);
       if(history_)history_->mark_saved();checkpoint();if(!self_test_)browser_->saved_scene(QString::fromStdWString(path.wstring()));
       statusBar()->showMessage((legacy_scene_extension(*document_)?QStringLiteral("场景含城市 PCG，沿用旧版格式保存："):QStringLiteral("DUFEX v2 场景和缩略图已保存："))+QString::fromStdWString(path.wstring()),8000);
     }

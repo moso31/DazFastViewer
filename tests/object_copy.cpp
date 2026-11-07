@@ -1,4 +1,6 @@
 #include "editor/document.h"
+#include "editor/scene_extension.h"
+#include <cmath>
 #include <iostream>
 
 using namespace dfv;
@@ -25,6 +27,19 @@ int main(){try{
   {auto d=fixture();auto s=editor::initial_snapshot(d);const auto copies=editor::copy_selection(d,s,{1},{},{},false);check(d.catalog.targets[copies[0]].parent=="#hand","单独复制附件丢失原父节点");}
   {auto d=fixture();daz::AssetNode group;group.id="group";group.group=true;d.loaded.nodes.push_back(group);d.loaded.nodes[0].parent="#group";d.loaded.objects[0].parent="#group";d.catalog.targets[0].parent="#group";auto s=editor::initial_snapshot(d);s.group_transforms["group"].general_scale=2;
     editor::copy_selection(d,s,{}, {"group"},{},false);check(d.catalog.targets.size()==2&&s.group_transforms["copy-0/group"].general_scale==2,"复制空组错误复制后代或遗漏变换");const auto copies=editor::copy_selection(d,s,{}, {"group"},{},true);check(copies.size()==2&&d.catalog.targets[copies[0]].parent=="#copy-1/group","组递归复制遗漏后代");
+  }
+  {auto d=fixture();auto s=editor::initial_snapshot(d);s.values[0].extension.kind=runtime::ExtensionKind::growth;s.values[0].transform.general_scale=1.25;
+    const auto original_values=s.values;const auto original_pose=s.poses[0];const auto root=editor::prepare_prop_copy(d,s,0);check(root==2&&d.catalog.targets[3].prop_draft==d.catalog.targets[root].id,"Prop 未创建整套独立副本");
+    s.poses[1][0].rotation_degrees.x=35;s.poses[1][1].rotation_degrees.z=25;s.values[root].transform.translation_cm.x=120;
+    check(s.poses[0]==original_pose&&s.values[0]==original_values[0],"Prop 最后姿势调整写回原角色");
+    auto before=d.loaded.scene;runtime::DeformationRuntime posed(before,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);posed.evaluate(s.values,s.poses);
+    const auto draft=d;const auto draft_state=s;editor::freeze_prop_copy(d,s,3);
+    check(d.skeletons.skins.size()==1&&s.poses[0]==original_pose&&s.values[0]==original_values[0]&&s.values[1]==original_values[1],"固定 Prop 修改原角色或附件");
+    for(size_t t=2;t<4;++t)check(d.catalog.targets[t].static_prop&&d.catalog.targets[t].prop_draft.empty()&&d.catalog.targets[t].morphs.empty()&&d.formulas.graphs[t].skin==-1&&s.values[t].extension.kind==runtime::ExtensionKind::density,"Prop 残留骨骼、Morph 或生长控制");
+    auto after=d.loaded.scene;runtime::DeformationRuntime frozen(after,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);frozen.evaluate(s.values,s.poses);
+    for(size_t i=0;i<after.instances.size();++i){const auto &a=before.instances[i],&b=after.instances[i];const auto &ma=before.meshes[a.mesh],&mb=after.meshes[b.mesh];check(ma.positions.size()==mb.positions.size(),"Prop 顶点数量改变");for(size_t v=0;v<ma.positions.size();++v){const auto x=a.transform.point(ma.positions[v]),y=b.transform.point(mb.positions[v]);check(std::hypot(x.x-y.x,x.y-y.y,x.z-y.z)<1e-5,"固定 Prop 改变最终外形或位置");}}
+    auto replay=draft;auto replay_state=draft_state;editor::restore_static_prop(replay,replay_state,d.operations.back());check(editor::snapshot_json(replay,replay_state)==editor::snapshot_json(d,s),"Prop 操作重放不一致");
+    check(draft.skeletons.skins.size()==2&&draft_state.poses[1][0].rotation_degrees.x==35,"Prop 固定污染了撤销前的副本");
   }
   std::cout<<"PASS independent object copies, children, bones, materials and settings\n";return 0;
 }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}}

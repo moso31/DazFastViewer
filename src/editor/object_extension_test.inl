@@ -69,6 +69,19 @@
       if(snapshot_.values[0].transform!=dufex_original_transform_||snapshot_.view)throw std::runtime_error("打开原 DUF 错误套用了同名 DUFEX");
       const auto before=files();auto c=renderer_->input_camera();renderer_->camera_view({c.target.x,c.target.y+.1f,c.target.z,c.distance*.9f,c.yaw+.2f,c.pitch+.1f});
       if(save_shutdown()||files()!=before)throw std::runtime_error("切换到另一个场景后仅导航不应自动保存");
+      choose(0);const auto source_values=snapshot_.values;const auto source_poses=snapshot_.poses;const auto source_count=document_->catalog.targets.size();
+      convert_selected_prop(false);const auto prop=size_t(selected_);
+      if(document_->catalog.targets.size()<=source_count||document_->catalog.targets[prop].prop_draft.empty())throw std::runtime_error("界面未创建待固定 Prop 副本");
+      snapshot_.values[prop].transform.translation_cm.x+=25;send();convert_selected_prop(true);
+      if(!document_->catalog.targets[prop].static_prop||!document_->catalog.targets[prop].prop_draft.empty())throw std::runtime_error("界面未完成 Prop 固定");
+      for(size_t t=0;t<source_count;++t)if(snapshot_.values[t]!=source_values[t])throw std::runtime_error("Prop 转换影响原模型参数");
+      if(snapshot_.poses!=source_poses)throw std::runtime_error("Prop 转换影响原角色姿势");
+      history_move(false);if(document_->catalog.targets[prop].prop_draft.empty())throw std::runtime_error("撤销 Prop 固定未恢复可编辑副本");
+      history_move(true);if(!document_->catalog.targets[prop].static_prop)throw std::runtime_error("重做 Prop 固定失败");
+      history_move(false);history_move(false);if(document_->catalog.targets.size()!=source_count||save_shutdown()||files()!=before)throw std::runtime_error("撤销 Prop 副本后未恢复原场景保存状态");
+      clear_scene();if(save_shutdown()||files()!=before)throw std::runtime_error("打开后新建的空场景被加入自动保存");
+      history_move(false);if(save_shutdown()||files()!=before)throw std::runtime_error("撤销新建空场景丢失原场景保存基准");
+      history_move(true);if(save_shutdown()||files()!=before)throw std::runtime_error("重做新建空场景被加入自动保存");
       std::ofstream(output_/"save-shortcut-check.json")<<nlohmann::json{{"native_ctrl_s",true},{"qt_panel_ctrl_s",true},{"save_triggers",dufex_save_triggers_},{"thumbnail",true},{"autosave_thumbnail",true},{"autosave_thumbnail_rotation",true},{"reopen_latest_changes",true},{"original_duf_unchanged",true},{"opened_unchanged_skips_autosave",true},{"saved_unchanged_skips_autosave",true},{"navigation_and_selection_skip_autosave",true},{"scene_changes_after_save_autosave",true},{"autosave_keeps_current_view",true},{"reverted_changes_skip_autosave",true},{"structural_changes_autosave",true},{"structural_undo_skips_autosave",true},{"resave_updates_baseline",true},{"scene_switch_resets_baseline",true},{"skipped_autosave_preserves_queue",true}}.dump(2);finish_test(true);
     }catch(const std::exception &e){finish_test(false,e.what());}
   }

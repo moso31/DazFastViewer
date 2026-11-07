@@ -43,6 +43,9 @@ struct Target {
   bool initial_selectable=true;
   bool ancestors_visible=true; // Fixed visibility of non-editable bone ancestors.
   bool character=false;
+  bool static_prop=false;
+  // 待固定副本所属的根对象；为空表示未处于 Prop 姿势调整阶段。
+  std::string prop_draft;
   // DUF 节点收藏：空键为对象本身，其他键为骨骼资产 ID；空集合也代表已保存的列表。
   std::string favorite_scope;
   std::map<std::string,std::set<std::string>> favorites;

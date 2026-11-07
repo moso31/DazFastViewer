@@ -55,6 +55,14 @@ static void roundtrip(const fs::path &folder){
   for(const auto &o:encoded.at("state").at("objects"))check(!o.contains("physics"),"physics persisted in v2");
   check(daz::supported_content_entry(saved)&&daz::content_asset(saved,{folder})==saved,"DUFEX content resolution failed");
   const auto before=snapshot_json(d,s);
+  {auto prop_document=d;auto prop_state=s;const auto root=prepare_prop_copy(prop_document,prop_state,0);const auto draft_file=folder/"prop-draft.dufex";save_scene_extension(draft_file,prop_document,prop_state);
+    auto draft=load_scene_extension(draft_file,{folder},7);check(!draft.document->catalog.targets[root].prop_draft.empty(),"待固定 Prop 重开后丢失转换阶段");
+    draft.snapshot.poses.back()[1].rotation_degrees.z=65;draft.snapshot.values[root].transform.translation_cm.x+=80;freeze_prop_copy(*draft.document,draft.snapshot,root);
+    const auto prop_file=folder/"static-prop.dufex";save_scene_extension(prop_file,*draft.document,draft.snapshot);auto restored=load_scene_extension(prop_file,{folder},8);
+    check(restored.document->catalog.targets[root].static_prop&&restored.document->skeletons.skins.size()==d.skeletons.skins.size(),"静态 Prop 重开后恢复了骨骼");
+    check(snapshot_json(*restored.document,restored.snapshot)==snapshot_json(*draft.document,draft.snapshot),"Prop 重开后参数或材质改变");equal_geometry(evaluate(*restored.document,restored.snapshot),evaluate(*draft.document,draft.snapshot));
+    check(restored.snapshot.values[0]==s.values[0]&&restored.snapshot.poses[0]==s.poses[0],"Prop 保存重载修改原角色");
+  }
   // 同一 DUF 另存不同文件名，之后保存某一版本不能覆盖另一个版本或源文件。
   {
     const auto a=folder/"version-a.dufex",b=folder/"version-b.dufex";auto version=s;

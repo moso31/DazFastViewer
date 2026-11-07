@@ -537,11 +537,11 @@ void Renderer::run(std::stop_token stop) {
           selection_generation==current->generation&&selected_target==powerpose.target&&!selections.empty()&&
           std::all_of(selections.begin(),selections.end(),[&](const auto &s){return s[0]==powerpose.target;})) {
           const auto &skin=current->skeletons.skins[powerpose.skin];const auto &target=current->catalog.targets[powerpose.target];
-          if(skin.id==powerpose.instance&&skin.instance==target.instance) for(const auto &page:runtime::powerpose_templates()) for(const auto &point:page.points) if(point.id==powerpose.point) {
+          if(skin.id==powerpose.instance&&skin.instance==target.instance) if(const auto *point=runtime::find_powerpose_point(powerpose.point)) {
             const auto &instance=render_scene.instances[skin.instance];const auto &mesh=render_scene.meshes[instance.mesh];
             const auto frame=group_target_frame(*group_source,size_t(powerpose.target),*group_frames);const auto loaded=group_frames->delta(group_frames->hierarchy.targets[powerpose.target])*group_source->loaded.scene.instances[skin.instance].transform;
             powerpose_drag.begin(skin,mesh,runtime->skin_source(powerpose.skin),desired.poses[powerpose.skin],runtime->effective_poses()[powerpose.skin],instance.transform,
-              desired.values[powerpose.target].transform,runtime::bind_powerpose(skin,point),powerpose,input_camera,window_->width,window_->height,runtime::pin_goals(pose_pins,powerpose.skin,instance.transform),&frame,loaded);
+              desired.values[powerpose.target].transform,runtime::bind_powerpose(skin,*point),powerpose,input_camera,window_->width,window_->height,runtime::pin_goals(pose_pins,powerpose.skin,instance.transform),&frame,loaded);
             if(powerpose_drag.active&&powerpose_drag.bound.figure)powerpose_drag.proxy=group_proxy(render_scene,proxy_excluded(powerpose.target),powerpose_drag.world);
             powerpose_selection=window_->pose_selection;
             if(sampling_.interaction_probe&&powerpose_drag.active) {powerpose_reference.clear();for(const auto &m:render_scene.meshes) powerpose_reference.push_back(m.positions);state.pose_restore_max_error=0;}

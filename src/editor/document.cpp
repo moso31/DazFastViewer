@@ -75,12 +75,13 @@ bool apply_subdivision_levels(ir::Scene &scene,const std::map<std::string,int> &
 std::shared_ptr<Document> refresh_parameters(const Document &document,size_t selected,const std::vector<std::filesystem::path> &roots,const std::function<void(const std::string &)> &progress) {
   const auto &target=document.catalog.targets.at(selected);
   auto loaded=document.loaded;
+  std::set<uint32_t> static_instances;for(const auto &t:document.catalog.targets)if(t.static_prop)static_instances.insert(t.instance);
   std::set<std::string> selected_nodes{target.id.substr(0,target.id.rfind('/'))};
   bool changed=true;while(changed) {const auto n=selected_nodes.size();
     for(const auto &node:loaded.nodes) if(node.parent.starts_with('#')&&selected_nodes.contains(node.parent.substr(1))) selected_nodes.insert(node.id);
     for(const auto &o:loaded.objects)
     if((o.parent.starts_with('#')&&selected_nodes.contains(o.parent.substr(1)))||(o.conform_target.starts_with('#')&&selected_nodes.contains(o.conform_target.substr(1)))) selected_nodes.insert(o.id);changed=selected_nodes.size()!=n;}
-  std::erase_if(loaded.objects,[&](const auto &o){return !selected_nodes.contains(o.id);});
+  std::erase_if(loaded.objects,[&](const auto &o){return !selected_nodes.contains(o.id)||static_instances.contains(o.instance);});
   // 追加的对象仍从各自原始 DUF 获取覆盖与节点公式，不使用主文档的来源。
   std::map<std::pair<std::filesystem::path,std::shared_ptr<daz::SourceArchive>>,std::vector<daz::AssetObject>> groups;
   for(auto object:loaded.objects) {
@@ -99,6 +100,8 @@ std::shared_ptr<Document> refresh_parameters(const Document &document,size_t sel
     const auto found=std::find_if(result->catalog.targets.begin(),result->catalog.targets.end(),[&](const auto &old){return old.id==catalog.targets[t].id;});
     if(found==result->catalog.targets.end()) throw std::runtime_error("刷新时对象身份已变化");
     catalog.targets[t].initial_visible=found->initial_visible;catalog.targets[t].initial_selectable=found->initial_selectable;catalog.targets[t].ancestors_visible=found->ancestors_visible;
+    catalog.targets[t].prop_draft=found->prop_draft;
+    if(!found->prop_draft.empty())catalog.targets[t].label=found->label;
     const size_t index=size_t(found-result->catalog.targets.begin());*found=std::move(catalog.targets[t]);result->formulas.graphs[index]=std::move(formulas.graphs[t]);
   }
   }
@@ -375,7 +378,7 @@ void append_document(Document &destination,Document source,const std::string &id
   for(auto l:b.lights) {l.id=prefix+l.id;a.lights.push_back(std::move(l));}
   for(auto n:source.loaded.nodes) {n.id=prefix+n.id;if(n.parent.starts_with('#')) n.parent="#"+prefix+n.parent.substr(1);destination.loaded.nodes.push_back(std::move(n));}
   for(auto o:source.loaded.objects) {if(o.rigid_follow.target.starts_with('#')) o.rigid_follow.target="#"+prefix+o.rigid_follow.target.substr(1);o.instance+=instances;o.id=prefix+o.id;if(o.parent.starts_with('#')) o.parent="#"+prefix+o.parent.substr(1);if(o.conform_target.starts_with('#')) o.conform_target="#"+prefix+o.conform_target.substr(1);if(o.smoothing.collision_target.starts_with('#')) o.smoothing.collision_target="#"+prefix+o.smoothing.collision_target.substr(1);destination.loaded.objects.push_back(std::move(o));}
-  for(auto &t:source.catalog.targets) {if(t.rigid_follow.target.starts_with('#')) t.rigid_follow.target="#"+prefix+t.rigid_follow.target.substr(1);t.instance+=instances;t.id=prefix+t.id;if(t.parent.starts_with('#')) t.parent="#"+prefix+t.parent.substr(1);for(auto &ancestor:t.ancestors) if(ancestor.starts_with('#')) ancestor="#"+prefix+ancestor.substr(1);if(t.conform_target.starts_with('#')) t.conform_target="#"+prefix+t.conform_target.substr(1);if(t.smoothing.collision_target.starts_with('#')) t.smoothing.collision_target="#"+prefix+t.smoothing.collision_target.substr(1);destination.catalog.targets.push_back(std::move(t));}
+  for(auto &t:source.catalog.targets) {if(!t.prop_draft.empty())t.prop_draft=prefix+t.prop_draft;if(t.rigid_follow.target.starts_with('#')) t.rigid_follow.target="#"+prefix+t.rigid_follow.target.substr(1);t.instance+=instances;t.id=prefix+t.id;if(t.parent.starts_with('#')) t.parent="#"+prefix+t.parent.substr(1);for(auto &ancestor:t.ancestors) if(ancestor.starts_with('#')) ancestor="#"+prefix+ancestor.substr(1);if(t.conform_target.starts_with('#')) t.conform_target="#"+prefix+t.conform_target.substr(1);if(t.smoothing.collision_target.starts_with('#')) t.smoothing.collision_target="#"+prefix+t.smoothing.collision_target.substr(1);destination.catalog.targets.push_back(std::move(t));}
   for(auto &s:source.skeletons.skins) {s.instance+=instances;s.id=prefix+s.id;for(auto &j:s.joints) if(!j.scene_id.empty()) j.scene_id=prefix+j.scene_id;destination.skeletons.skins.push_back(std::move(s));}
   for(auto &g:source.formulas.graphs) {if(g.skin>=0) g.skin+=skins;destination.formulas.graphs.push_back(std::move(g));}
   auto rename=[&](std::string &uri){if(uri.starts_with('#')) uri="#"+prefix+uri.substr(1);};

@@ -36,7 +36,24 @@ int main(int argc,char **argv) {
           check(panel.findChildren<QMenu *>().empty(),"右键拖动误弹菜单");
         }
       }
-    }check(cases==680,"没有遍历 680 个手势");
+    }check(cases==704,"没有遍历 704 个手势");
+    // 窄面板下分别验证男女坐标；快捷入口和邻近点必须各自命中，不能误选手腕或颈部。
+    for(bool male:{false,true}) {
+      skin.joints.front().id=male?"Genesis8_1Male":"Genesis8Female";
+      panel.resize(330,586);panel.page(0);panel.bind(&skin,0,0,male?3:2,1,{},true,{});app.processEvents();
+      for(const auto *id:{"B01","B02","B03","N02","B19","B20","H21","H42"}) {
+        const auto at=panel.point_position(id);check(canvas->rect().contains(at.toPoint()),"全身页控制点超出画布");
+        event(QEvent::MouseButtonPress,at,Qt::LeftButton,Qt::LeftButton);
+        event(QEvent::MouseMove,at+QPointF(0,24),Qt::NoButton,Qt::LeftButton);
+        event(QEvent::MouseButtonRelease,at+QPointF(0,24),Qt::LeftButton,{});
+        check(inputs.back().point==id&&inputs.back().moved&&!inputs.back().held,"全身页快捷入口与邻近点命中冲突");
+      }
+      for(const auto &[hand,wrist]:{std::pair{"H21","B20"},std::pair{"H42","B19"}}) {
+        const auto gap=panel.point_position(hand)-panel.point_position(wrist);
+        check(gap.y()>20,"整手联动入口没有与手腕保持距离");
+      }
+    }
+    skin.joints.front().id="Genesis8Female";panel.resize(390,860);bind();app.processEvents();head=panel.point_position("B01");
     panel.page(0);bind();
     event(QEvent::MouseButtonPress,head,Qt::RightButton,Qt::RightButton,Qt::ShiftModifier);event(QEvent::MouseButtonPress,head,Qt::LeftButton,Qt::LeftButton|Qt::RightButton);event(QEvent::MouseMove,head+QPointF(20,30),Qt::NoButton,Qt::RightButton|Qt::LeftButton);
     check(inputs.back().right&&inputs.back().precision==.1,"第二键或移动改变了原始模式");
@@ -51,6 +68,6 @@ int main(int argc,char **argv) {
     // 已弹出的菜单不能应用到另一个角色。
     head=panel.point_position("B01");
     event(QEvent::MouseButtonPress,head,Qt::RightButton,Qt::RightButton);event(QEvent::MouseButtonRelease,head,Qt::RightButton,{});auto second_menus=panel.findChildren<QMenu*>();check(!second_menus.empty(),"第二次右键未命中控制点");QPointer<QMenu> menu=second_menus.back();skin.id="figure-B";panel.bind(&skin,1,1,1,1,{},true,{});menu->actions()[1]->trigger();check(operations==1,"旧菜单跨角色提交");if(menu) menu->close();
-    std::cout<<"PowerPose Qt: 680 directions, click, navigation, menu, Shift, cancel, identity: PASS\n";return 0;
+    std::cout<<"PowerPose Qt: 704 directions, compact body shortcuts, click, navigation, menu, Shift, cancel, identity: PASS\n";return 0;
   }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}
 }

@@ -62,6 +62,10 @@ static editor::Document growth_document(){
   runtime::Expression e;e.owner=0;e.output=uint32_t(graph.channels.size()-1);e.code={{runtime::Op::constant,-.01}};graph.expressions.push_back(e);graph.prepare();d.formulas.graphs={graph};return d;
 }
 static void growth(){
+  for(double base:{.99,.92,.96,1.}){auto d=growth_document();d.formulas.graphs[0].expressions[0].code={{runtime::Op::constant,base-1}};d.formulas.graphs[0].prepare();auto state=editor::initial_snapshot(d);auto &value=state.values[0];value.extension.kind=runtime::ExtensionKind::growth;value.extension.sensitivity=5;value.transform.general_scale=125/(base*100);
+    for(int i=0;i<100;++i){editor::edit_growth(d,state,0,value.extension,false,1);require(runtime::decimal_derived_double(base*value.transform.general_scale*100)==130,"男性每年增长出现 double 尾差");editor::edit_growth(d,state,0,value.extension,false,-1);require(runtime::decimal_derived_double(base*value.transform.general_scale*100)==125,"反复增长缩小累积误差");}
+    value.transform.general_scale=124/(base*100);auto next=value.extension;++next.age;editor::edit_growth(d,state,0,next);require(runtime::decimal_derived_double(base*value.transform.general_scale*100)==129,"124 加 5 未得到 129");
+  }
   {auto d=growth_document();auto &skin=d.skeletons.skins[0];skin.weights.resize(8,{{0,1}});
     auto &m=d.catalog.targets[0].morphs[0];for(uint32_t i=4;i<8;++i)m.offsets.push_back({i,{0,0,1}});
     auto state=editor::initial_snapshot(d);state.values[0].extension.kind=runtime::ExtensionKind::growth;state.values[0].morphs[0]=.2f;

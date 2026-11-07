@@ -16,6 +16,8 @@ class MaterialPanel final:public QWidget {
   Snapshot *snapshot_=nullptr;
   int target_=-1;
   std::string group_;
+  std::vector<size_t> targets_;
+  std::vector<std::string> groups_;
   QTreeWidget *tree_;
   QLineEdit *search_;
   QCheckBox *modified_;
@@ -62,6 +64,6 @@ public:
   std::vector<MaterialSurface> selected_surfaces() const{return surfaces();}
   std::vector<std::pair<std::string,std::string>> selection_ids() const;
   void restore_selection(const std::vector<std::pair<std::string,std::string>> &selection);
-  void bind(std::shared_ptr<const Document> document,Snapshot *snapshot,int target,const std::string &group={});
+  void bind(std::shared_ptr<const Document> document,Snapshot *snapshot,int target,const std::string &group={},std::vector<size_t> targets={},std::vector<std::string> groups={});
 };
 }

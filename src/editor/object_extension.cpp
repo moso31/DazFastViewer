@@ -103,10 +103,11 @@ std::vector<std::string> edit_growth(const Document &d,Snapshot &snapshot,size_t
   runtime::validate_extension(next);if(!growth_character(d,t))throw std::runtime_error("请选择角色本体或其骨骼");
   const auto &old=snapshot.values.at(t);auto value=old;value.extension=next;std::vector<std::string> missing;
   if(apply_shape)missing=runtime::apply_growth(d.catalog.targets.at(t),value);
-  const double base_before=root_scale(d,snapshot,t,old),base_after=root_scale(d,snapshot,t,value),before=base_before*old.transform.general_scale;
-  const double delta=next.sensitivity*(next.age-old.extension.age+scale_step)*.01,after=before+delta;
+  const double base_before=root_scale(d,snapshot,t,old),base_after=root_scale(d,snapshot,t,value);
+  const double before=runtime::decimal_derived_double(base_before*old.transform.general_scale*100);
+  const double delta=next.sensitivity*(next.age-old.extension.age+scale_step),after=runtime::decimal_derived_double(before+delta);
   if(before<=0||after<=0||base_after<=0||!std::isfinite(after))throw std::runtime_error("本次生长会使缩放小于或等于零，已保留原值");
-  value.transform.general_scale=after/base_after;
+  value.transform.general_scale=after/(base_after*100);
   double origin_y=0;for(const auto &o:d.loaded.objects)if(o.instance==d.catalog.targets[t].instance){origin_y=o.translation_cm.y;break;}
   value.transform.translation_cm.y=float((origin_y+old.transform.translation_cm.y)*after/before-origin_y);
   runtime::validate_transform(value.transform);snapshot.values[t]=std::move(value);return missing;
@@ -115,8 +116,8 @@ void multiply_growth_scale(const Document &d,Snapshot &snapshot,size_t t,bool di
   if(!growth_character(d,t))throw std::runtime_error("请选择角色本体或其骨骼");
   auto value=snapshot.values.at(t);const auto &settings=value.extension;runtime::validate_extension(settings);
   const double base=root_scale(d,snapshot,t,value);
-  double percent=base*value.transform.general_scale*100;
-  percent=divide?percent/settings.scale_multiplier:percent*settings.scale_multiplier;
+  double percent=runtime::decimal_derived_double(base*value.transform.general_scale*100);
+  percent=runtime::decimal_derived_double(divide?percent/settings.scale_multiplier:percent*settings.scale_multiplier);
   if(settings.scale_round){
     const double unit=std::pow(10.0,settings.scale_round_exponent);
     if(!std::isfinite(unit))throw std::runtime_error("取整位数超出当前 Scale 的有效范围，已保留原值");

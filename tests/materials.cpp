@@ -76,6 +76,12 @@ static void nested_props(QApplication &app) {
   check(!snapshot.material_overrides.contains("other"),"批量自发光修改污染其他对象");
   panel.bind(d,&snapshot,-4,"outer");check(panel.selected_surfaces().size()==4&&tree->topLevelItem(0)->text(0)=="Outer","空组无法递归选择材质");
   panel.bind(d,&snapshot,-4,"nested");check(panel.selected_surfaces().size()==2,"切换空组后选中范围不正确");
+  panel.bind(d,&snapshot,2,{}, {0,2});app.processEvents();
+  check(tree->topLevelItemCount()==2&&panel.selected_surfaces().size()==6,"多选只显示最后一个模型的材质");
+  std::set<std::pair<size_t,size_t>> all;for(auto surface:panel.selected_surfaces())all.emplace(surface.instance,surface.slot);check(all.size()==6&&all.contains({0,0})&&all.contains({1,1})&&all.contains({2,1}),"多选漏掉材质或重复列出后代");
+  panel.bind(d,&snapshot,0,{}, {0,1,2});check(panel.selected_surfaces().size()==6&&tree->topLevelItemCount()==2,"父子同时选择时重复材质树");
+  panel.bind(d,&snapshot,0);check(panel.selected_surfaces().size()==4,"活动对象未变化时取消多选没有刷新材质列表");
+  panel.bind(d,&snapshot,0,{}, {0,2});check(panel.selected_surfaces().size()==6,"活动对象未变化时增加多选没有刷新材质列表");
 }
 static void file_roundtrip(const std::filesystem::path &folder){
   auto source=J::parse(R"({"node_library":[{"id":"root","type":"node"}],"geometry_library":[{"id":"mesh","vertices":{"count":3,"values":[[0,0,0],[100,0,0],[0,100,0]]},"polygon_material_groups":{"count":1,"values":["Skin"]},"polylist":{"count":1,"values":[[0,0,0,1,2]]},"default_uv_set":"#uv"}],"uv_set_library":[{"id":"uv","vertex_count":3,"uvs":{"count":3,"values":[[0,0],[1,0],[0,1]]}}],"scene":{"nodes":[{"id":"object","url":"#root","geometries":[{"id":"shape","url":"#mesh"}]}],"materials":[{"id":"mat","geometry":"#shape","groups":["Skin"]}]}})");

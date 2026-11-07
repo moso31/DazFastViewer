@@ -43,6 +43,7 @@ std::vector<size_t> copy_selection(Document &d,Snapshot &s,const std::vector<siz
   }
   for(size_t t=0;t<original.catalog.targets.size();++t)if(instances.contains(original.catalog.targets[t].instance)){
     auto target=original.catalog.targets[t];ids[target.id]=prefix+target.id;target.id=prefix+target.id;target.instance=instances.at(target.instance);rename(target.parent);rename(target.conform_target);rename(target.smoothing.collision_target);rename(target.rigid_follow.target);for(auto &a:target.ancestors)rename(a);if(roots.contains(hierarchy.targets[t]))target.label+=" 副本";
+    if(!target.prop_draft.empty())target.prop_draft=ids.contains(target.prop_draft)?ids.at(target.prop_draft):std::string{};
     auto graph=original.formulas.graphs.at(t);if(graph.skin>=0)graph.skin=skins.at(graph.skin);copies.push_back(d.catalog.targets.size());d.catalog.targets.push_back(std::move(target));d.formulas.graphs.push_back(std::move(graph));s.values.push_back(state.values.at(t));
   }
   for(const auto &n:original.loaded.nodes)if(nodes.contains(n.id)){auto copy=n;copy.id=prefix+n.id;rename(copy.parent);if(roots.contains(n.id))copy.label+=" 副本";d.loaded.nodes.push_back(std::move(copy));}

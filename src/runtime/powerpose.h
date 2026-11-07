@@ -21,6 +21,7 @@ struct BoundPosePoint {
   bool editable=false,figure=false,hip_translation=false,pin_allowed=false;
 };
 const std::vector<PoseTemplate> &powerpose_templates();
+const PosePoint *find_powerpose_point(const std::string &id);
 int powerpose_joint(const Skin &skin,const std::string &name);
 BoundPosePoint bind_powerpose(const Skin &skin,const PosePoint &point);
 std::vector<JointPose> apply_powerpose(const Skin &skin,const BoundPosePoint &point,

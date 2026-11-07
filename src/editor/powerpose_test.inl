@@ -13,7 +13,8 @@
     if(loading_||!document_||state.generation!=document_->generation) return;
     const bool ready=state.applied_revision==snapshot_.revision&&state.presented_revision==snapshot_.revision&&state.presented_epoch==state.requested_epoch&&!state.preview&&state.samples>=4&&state.selections==tree_selection(hierarchy_);
     struct Case {int page;const char *id;bool right;double dx,dy;int cancel=0;bool pin=false;};
-    static const Case cases[]={{0,"B09",false,0,12},{0,"B09",true,0,12},{0,"B07",true,8,8},{0,"B28",false,0,-12},{0,"B23",false,8,8},
+    static const Case cases[]={{0,"H21",false,0,20},{0,"H42",false,0,20},{0,"N02",true,12,0},
+      {0,"B09",false,0,12},{0,"B09",true,0,12},{0,"B07",true,8,8},{0,"B28",false,0,-12},{0,"B23",false,8,8},
       {1,"H21",false,0,20},{1,"H24",false,0,12},{1,"H29",true,0,12},{2,"N02",true,12,0},{0,"B35",true,12,-12},{0,"B36",false,8,8},
       {0,"B21",true,0,6,0,true},{0,"B01",false,12,12,1},{0,"B01",false,12,12,2},{0,"B01",false,12,12,3}};
     std::ofstream(output_/"powerpose-progress.json")<<nlohmann::json({{"case",pp_case_},{"phase",pp_phase_},{"ready",ready},{"dragging",state.pose_dragging},{"previews",state.pose_previews},{"revision",snapshot_.revision},{"applied",state.applied_revision},{"steps",pp_steps_}}).dump();
@@ -36,7 +37,7 @@
       if(!ready) return;pp_before_=state;choose(pp_target_);powerpose_->page(c.page);refresh_powerpose(state);pp_point_=powerpose_->point_position(c.id);pp_steps_=0;
       pp_dx_=c.dx;pp_dy_=c.dy;pp_recovery_seen_=false;
       // 复杂场景可能已经把本方向摆到限位；改测能够离开限位的反方向。
-      for(const auto &page:runtime::powerpose_templates()) for(const auto &point:page.points) if(point.id==c.id) {
+      for(const auto &point:runtime::powerpose_templates()[c.page].points) if(point.id==c.id) {
         const auto &skin=document_->skeletons.skins[pp_skin_];const auto bound=runtime::bind_powerpose(skin,point);
         if(runtime::apply_powerpose(skin,bound,pp_initial_.poses[pp_skin_],c.right,pp_dx_,pp_dy_,c.pin?.1:1)==pp_initial_.poses[pp_skin_]) {pp_dx_=-pp_dx_;pp_dy_=-pp_dy_;}
       }

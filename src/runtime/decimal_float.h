@@ -20,4 +20,14 @@ inline double decimal_derived_float(double value) {
     if(std::abs(candidate-value)<=tolerance)return candidate;
   }return decimal_float(value);
 }
+// 百分比与基准缩放的乘除会产生 double 尾差；只吸收几个 ULP 内的十进制噪声。
+inline double decimal_derived_double(double value) {
+  if(value==0||!std::isfinite(value))return value;
+  const double tolerance=std::abs(value)*std::numeric_limits<double>::epsilon()*2;
+  for(int precision=1;precision<std::numeric_limits<double>::max_digits10;++precision){
+    char buffer[64];const auto result=std::to_chars(buffer,buffer+sizeof(buffer),value,std::chars_format::general,precision);
+    if(result.ec!=std::errc{})break;double candidate=value;std::from_chars(buffer,result.ptr,candidate);
+    if(std::abs(candidate-value)<=tolerance)return candidate;
+  }return value;
+}
 }

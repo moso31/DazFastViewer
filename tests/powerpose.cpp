@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <cmath>
+#include <algorithm>
 using namespace dfv;
 static void check(bool ok,const char *message) {if(!ok) throw std::runtime_error(message);}
 static bool near(float a,float b) {return std::abs(a-b)<.0001f;}
@@ -23,11 +24,25 @@ static nlohmann::json directions(const runtime::Skin &skin) {
       check(runtime::apply_powerpose(skin,bound,skin.initial,right,0,0)==skin.initial,"回到按下位置未恢复");
       report.push_back({{"point",point.id},{"right",right},{"delta",{dx,dy}},{"changed",changed},{"bindings",bound.slots[slot].size()},{"unavailable",bound.unavailable}});
     }
-  }check(edits==85&&navigations==6,"模板范围不符");return report;
+  }check(edits==88&&navigations==6,"模板范围不符");return report;
 }
 static void unit() {
   auto skin=powerpose_fixture();auto bind=[&](const char *id){return runtime::bind_powerpose(skin,powerpose_point(id));};
   check(powerpose_point("B07").kind==runtime::PosePointKind::group,"双肩组缺少虚线类型");
+  for(const auto *id:{"H21","H42","N02"}) {
+    const auto &pages=runtime::powerpose_templates();const auto &body=pages[0].points;const auto &original=pages[std::string(id)=="N02"?2:1].points;
+    const auto shortcut=std::find_if(body.begin(),body.end(),[&](const auto &p){return p.id==id;});
+    const auto source=std::find_if(original.begin(),original.end(),[&](const auto &p){return p.id==id;});
+    check(shortcut!=body.end()&&source!=original.end(),"全身页缺少联动入口或原页入口丢失");
+    check(runtime::find_powerpose_point(id)==&*shortcut,"手势未解析到共享控制点");
+    const auto a=runtime::bind_powerpose(skin,*shortcut),b=runtime::bind_powerpose(skin,*source);
+    check(a.editable&&a.slots==b.slots&&a.joints==b.joints&&shortcut->kind==runtime::PosePointKind::group,"全身联动入口与原页绑定不一致");
+    for(bool right:{false,true}) for(const auto &[dx,dy]:std::array<std::pair<int,int>,4>{{{0,-30},{0,30},{-30,0},{30,0}}}) {
+      const auto pose=runtime::apply_powerpose(skin,a,skin.initial,right,dx,dy);
+      check(pose==runtime::apply_powerpose(skin,b,skin.initial,right,dx,dy),"全身联动拖动与原页行为不同");
+      check(runtime::reset_powerpose(skin,a,pose)==skin.initial,"全身联动入口未恢复全部受影响参数");
+    }
+  }
   for(const auto *id:{"B08","B09"}) {const auto b=bind(id);check(b.slots[1].size()==1&&b.slots[1][0].channel==5,"上臂左键纵向不是 Bend");check(b.slots[3].size()==1&&skin.joints[b.slots[3][0].joint].id.find("ShldrTwist")!=std::string::npos&&b.slots[3][0].channel==3,"上臂右键纵向未转交 Twist");}
   auto shoulder=bind("B09");const int twist=shoulder.slots[3][0].joint;skin.joints[twist].channels[3].locked=true;check(bind("B09").slots[3].empty(),"锁定 Twist 后仍可拖动");skin.joints[twist].channels[3].locked=false;
   auto left=bind("B27");const int thigh=runtime::powerpose_joint(skin,"lThigh"),shin=runtime::powerpose_joint(skin,"lShin");
@@ -41,7 +56,7 @@ static void unit() {
   auto translated=bind("B21");p=runtime::apply_powerpose(skin,translated,skin.initial,true,10,10);const int hip=runtime::powerpose_joint(skin,"hip");check(p[hip].translation_cm.x>0&&p[hip].translation_cm.y<0&&p[hip].translation_cm.z==0,"髋部平移坐标映射错误");
   auto start=skin.initial;start[hip].rotation_degrees.y=9;start[shin].rotation_degrees.x=25;p=runtime::reset_powerpose(skin,translated,start);check(p==start,"本点恢复修改了无关通道");
   skin.initial[shin].rotation_degrees.x=90;p=runtime::reset_powerpose(skin,left,start);check(p[shin].rotation_degrees.x==90,"恢复加载姿势擅自裁剪了原始限位外数值");skin.initial[shin].rotation_degrees.x=0;
-  directions(skin);skin.joints.front().id="Genesis8_1Male";check(directions(skin).size()==680,"男性未共用 85 点机制");
+  directions(skin);skin.joints.front().id="Genesis8_1Male";check(directions(skin).size()==704,"男性未共用含全身快捷入口的联动机制");
   // 稀疏三角形重排必须同步压缩权重；共享代理不能保留原始完整权重表。
   ir::Mesh mesh;mesh.positions={{0,0,0},{1,0,0},{0,0,1},{2,0,0}};mesh.triangles.push_back({{3,1,2}});skin.weights={{{0,1}},{{uint32_t(hip),1}},{{uint32_t(hip),1}},{{uint32_t(hip),1}}};
   runtime::Skin proxy_skin;ir::Mesh proxy;std::vector<ir::Vec3> source;editor::build_pose_proxy(skin,mesh,mesh.positions,proxy_skin,proxy,source);check(source.size()==3&&proxy_skin.weights.size()==3&&source[0]==mesh.positions[3],"代理索引或权重未同步压缩");

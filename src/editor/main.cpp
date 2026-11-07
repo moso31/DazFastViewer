@@ -97,6 +97,7 @@
 #include <QTreeWidgetItemIterator>
 #include <psapi.h>
 #include <fstream>
+#include <future>
 #include <cctype>
 #include <limits>
 
@@ -674,6 +675,25 @@ class Editor final:public EditorWindow {
       if(!chosen&&!copied.empty())choose(int(copied.front()));statusBar()->showMessage(QStringLiteral("已在原位置创建独立副本，可移动或继续编辑。"));
     }catch(const std::exception &e){QMessageBox::warning(this,QStringLiteral("无法复制对象"),text(e.what()));}
   }
+  void convert_selected_prop(bool freeze) {
+    if(loading_||!document_||selected_<0||selected_light_>=0||hierarchy_->selectedItems().size()!=1)return;
+    auto edit=history_edit(freeze?QStringLiteral("固定副本为 Prop"):QStringLiteral("创建 Prop 姿势副本"));
+    try{
+      accept_pose_commit(renderer_->status());apply_parameters();
+      auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;snapshot.pose_pins=pose_pins_;const auto selected=size_t(selected_);
+      loading_=true;struct LoadingGuard{bool &loading;~LoadingGuard(){loading=false;}} guard{loading_};
+      auto job=std::async(std::launch::async,[next,snapshot=std::move(snapshot),selected,freeze]()mutable{
+        const auto target=freeze?freeze_prop_copy(*next,snapshot,selected):prepare_prop_copy(*next,snapshot,selected);
+        return std::make_pair(std::move(snapshot),target);
+      });
+      QProgressDialog progress(freeze?QStringLiteral("正在固定最终外形和姿势…"):QStringLiteral("正在创建独立的姿势副本…"),{},0,0,this);progress.setCancelButton(nullptr);progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);
+      QEventLoop loop;QTimer poll;poll.setInterval(30);connect(&poll,&QTimer::timeout,&loop,[&]{if(job.wait_for(std::chrono::seconds(0))==std::future_status::ready)loop.quit();});poll.start();progress.show();loop.exec();poll.stop();progress.hide();
+      auto result=job.get();next->generation=++generation_;result.first.generation=next->generation;
+      parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(result.first);snapshot_.revision=next_revision();pose_pins_=snapshot_.pose_pins;pins_document_=document_;pins_generation_=document_->generation;renderer_->pose_pins(pose_pins_);
+      prune_pending_parameters();loading_=false;select(-1);rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);choose(int(result.second));
+      statusBar()->showMessage(freeze?QStringLiteral("已固定为静态 Prop，原角色保持不变。"):QStringLiteral("已选中独立副本。可调整姿势、Morph 或位置，完成后右键选择“固定副本为 Prop”。"),15000);
+    }catch(const std::exception &e){if(self_test_)throw;QMessageBox::warning(this,QStringLiteral("Prop 转换未完成"),text(e.what()));}
+  }
   void clear_scene() {
     if(loading_) return;
     auto edit=history_edit(QStringLiteral("新建空场景"));
@@ -682,6 +702,7 @@ class Editor final:public EditorWindow {
     pending_parameters_.clear();apply_parameters_->setEnabled(false);
     parameters_->bind(nullptr,nullptr);document_=std::make_shared<Document>();document_->generation=++generation_;
     snapshot_=initial_snapshot(*document_);select(-1);rebuild_hierarchy();frame_pending_=false;pose_report_=nullptr;pose_status_->clear();load_error_.clear();
+    initialize_favorites();saved_scene_contents_[scene_identity_]=scene_content(snapshot_);
     renderer_->set_document(document_,snapshot_,false);
   }
   void apply_combined_file(const std::filesystem::path &file,const nlohmann::json &data) {
@@ -1084,7 +1105,7 @@ class Editor final:public EditorWindow {
     bind_water();bind_cloud();
     parameters_->setVisible(!selected_water()&&!selected_cloud());
     for(auto *control:std::initializer_list<QWidget *>{refresh_parameters_,retry_parameters_,manual_morph_,apply_parameters_})if(control)control->setVisible(!selected_water()&&!selected_cloud());
-    if(materials_){auto *item=active_selection(hierarchy_);materials_->bind(document_,&snapshot_,index,index==-4&&item?item->data(0,Qt::UserRole+3).toString().toStdString():std::string{});}
+    if(materials_){auto *item=active_selection(hierarchy_);const auto selection=tree_deletion_selection(hierarchy_);materials_->bind(document_,&snapshot_,index,index==-4&&item?item->data(0,Qt::UserRole+3).toString().toStdString():std::string{},selection.targets,selection.nodes);}
     bind_extension();bind_physics();bind_geograft();
     if(garment_panel_) {
       std::vector<runtime::DeformationRegion> regions;
@@ -1140,7 +1161,7 @@ class Editor final:public EditorWindow {
       append_node_controls(controls,index);
       controls.push_back(local_shadow_control([this,index]{return double(snapshot_.values.at(size_t(index)).local_shadow);},[this,index](double v){auto edit=history_edit(QStringLiteral("修改局部阴影查询"));snapshot_.values.at(size_t(index)).local_shadow=v!=0;send();}));
       if(const auto skin=selected_skin();skin>=0&&!target.character){const auto &mesh=document_->loaded.scene.meshes[document_->loaded.scene.instances[target.instance].mesh];if(runtime::supports_forefoot(mesh,document_->skeletons.skins[size_t(skin)]))controls.push_back(forefoot_control([this,index]{return double(snapshot_.values.at(size_t(index)).forefoot_uniformity)*100;},[this,index](double v){auto edit=history_edit(QStringLiteral("修改前掌统一权重"));snapshot_.values.at(size_t(index)).forefoot_uniformity=float(v/100);send();}));}
-      ParameterControl general;general.id="transform/general_scale";general.favorite_name="Scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.settings=asset?asset->numeric_settings[9]:std::nullopt;general.float_backed=false;general.read=[this,initial]{return runtime::decimal_derived_float(double(initial)*root_scale())*snapshot_.values[size_t(selected_)].transform.general_scale*100;};general.write=[this,initial](double value){auto edit=history_edit(QStringLiteral("修改整体缩放"));const double base=runtime::decimal_derived_float(double(initial)*root_scale())*100;if(base!=0) {snapshot_.values[size_t(selected_)].transform.general_scale=value/base;send();}};controls.push_back(std::move(general));
+      ParameterControl general;general.id="transform/general_scale";general.favorite_name="Scale";general.label="Scale（%）";general.group="/General/Transforms/Scale";general.minimum=.01;general.maximum=10000;general.slider_minimum=1;general.slider_maximum=300;const float initial=asset?asset->general_scale:1;general.settings=asset?asset->numeric_settings[9]:std::nullopt;general.float_backed=false;general.read=[this,initial]{return runtime::decimal_derived_double(runtime::decimal_derived_float(double(initial)*root_scale())*snapshot_.values[size_t(selected_)].transform.general_scale*100);};general.write=[this,initial](double value){auto edit=history_edit(QStringLiteral("修改整体缩放"));const double base=runtime::decimal_derived_float(double(initial)*root_scale())*100;if(base!=0) {snapshot_.values[size_t(selected_)].transform.general_scale=value/base;send();}};controls.push_back(std::move(general));
       for(int i=0;i<9;++i) {ParameterControl c;c.id="transform/"+std::to_string(i);c.favorite_name=std::string(1,"XYZ"[i%3])+(i<3?"Translate":i<6?"Rotate":"Scale");c.label=std::string(1,"XYZ"[i%3])+std::string(i<3?" Translate（厘米）":i<6?" Rotate（度）":" Scale（%）");c.group=i<3?"/General/Transforms/Translation":i<6?"/General/Transforms/Rotation":"/General/Transforms/Scale";c.float_backed=true;c.minimum=transform_[i]->minimum();c.maximum=transform_[i]->maximum();c.step=.1;c.settings=asset?asset->numeric_settings[i]:std::nullopt;c.slider_minimum=i<3?-200:i<6?-180:1;c.slider_maximum=i<3?200:i<6?180:300;const float base=saved[i];c.read=[this,i,base]{return i<6?transform_[i]->value()+base:transform_[i]->value()*base*root_scale(i-6);};c.write=[this,i,base](double v){const double scale=double(base)*(i>=6?root_scale(i-6):1);if(i<6||scale!=0) transform_[i]->setValue(i<6?v-base:v/scale);};controls.push_back(std::move(c));}
     } else if(const int skin=selected_skin();skin>=0) {
       const auto &skeleton=document_->skeletons.skins[size_t(skin)];
@@ -2259,6 +2280,11 @@ public:
     auto *edit=chrome->menus()->addMenu(QStringLiteral("编辑"));initialize_history(edit);edit->addAction(focus_action);connect(edit->addAction(QStringLiteral("重置选中对象")),&QAction::triggered,this,[this] {reset_selected();});
     auto *copy_object=edit->addAction(QStringLiteral("复制选中对象"));copy_object->setObjectName("CopySelectedObject");connect(copy_object,&QAction::triggered,this,[this]{duplicate_selection(false);});
     auto *copy_children=edit->addAction(QStringLiteral("复制选中对象及其子对象"));copy_children->setObjectName("CopySelectedObjectWithChildren");connect(copy_children,&QAction::triggered,this,[this]{duplicate_selection(true);});
+    auto *prepare_prop=edit->addAction(QStringLiteral("创建 Prop 副本（调整姿势）"));prepare_prop->setObjectName("PreparePropCopy");prepare_prop->setToolTip(QStringLiteral("复制当前模型及附件；在副本上调整最终姿势，保留原角色"));
+    auto *freeze_prop=edit->addAction(QStringLiteral("固定副本为 Prop"));freeze_prop->setObjectName("FreezePropCopy");freeze_prop->setToolTip(QStringLiteral("固定副本当前外形、姿势和细分，移除骨骼、Morph 与生长控制；可撤销"));
+    connect(prepare_prop,&QAction::triggered,this,[this]{convert_selected_prop(false);});connect(freeze_prop,&QAction::triggered,this,[this]{convert_selected_prop(true);});
+    auto update_prop_actions=[this,prepare_prop,freeze_prop]{const bool selected=!loading_&&document_&&selected_>=0&&selected_light_<0&&hierarchy_->selectedItems().size()==1;const bool draft=selected&&!document_->catalog.targets.at(size_t(selected_)).prop_draft.empty();prepare_prop->setEnabled(selected&&!draft&&!selected_water()&&!selected_cloud());freeze_prop->setEnabled(draft);};
+    connect(edit,&QMenu::aboutToShow,this,update_prop_actions);update_prop_actions();
     edit->addAction(chrome->ground_action());edit->addAction(chrome->weight_action());
     auto *units=edit->addAction(QStringLiteral("测量单位…"));units->setObjectName("MeasurementUnits");connect(units,&QAction::triggered,this,[this]{measurement_units();});
     auto *attachment_menu=chrome->menus()->addMenu(QStringLiteral("穿戴与附件"));
@@ -2269,8 +2295,9 @@ public:
     delete_->setToolTip(QStringLiteral("删除选中模型、子对象及绑定的穿戴物；选择骨骼部位时删除所属模型"));
     connect(delete_,&QAction::triggered,this,[this] {delete_selection();});
     hierarchy_->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach,explorer_dock](const QPoint &point) {
+    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach,explorer_dock,prepare_prop,freeze_prop,update_prop_actions](const QPoint &point) {
       auto *item=hierarchy_->itemAt(point);if(!item)return;if(item->isSelected())hierarchy_->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);else hierarchy_->setCurrentItem(item);QMenu menu(this);menu.addAction(fit);menu.addAction(detach);
+      update_prop_actions();menu.addSeparator();menu.addAction(prepare_prop);menu.addAction(freeze_prop);
       ContentOrigin origin;const int target=item->data(0,Qt::UserRole).toInt();
       if(document_){int instance=target>=0&&size_t(target)<document_->catalog.targets.size()?int(document_->catalog.targets[size_t(target)].instance):(target<=-5?-5-target:-1);
         if(instance>=0&&size_t(instance)<document_->loaded.scene.instances.size()){while(document_->loaded.scene.instances[size_t(instance)].prototype>=0)instance=document_->loaded.scene.instances[size_t(instance)].prototype;for(const auto &object:document_->loaded.objects)if(object.instance==uint32_t(instance)){origin.scene_file=QString::fromStdWString(object.source_file.wstring());origin.node=text(object.source_node.empty()?object.id:object.source_node);origin.label=text(object.label);origin.geometries.emplace_back(QString::fromStdWString(object.geometry_file.wstring()),text(object.geometry_id));for(const auto &source:object.geometry_sources)origin.geometries.emplace_back(QString::fromStdWString(source.file.wstring()),text(source.id));break;}}}
@@ -2352,7 +2379,7 @@ public:
     apply_parameters();initialize_favorites();auto saved=snapshot_;saved.pose_pins=pose_pins_;
     if(renderer_){const auto camera=renderer_->input_camera();saved.view={camera.target.x,camera.target.y,camera.target.z,camera.distance,camera.yaw,camera.pitch};}
     // 与打开场景或手动保存后的内容比较；只有未保存的场景修改才进入自动保存队列。
-    if(saved_scene_content_==scene_content(saved))return false;
+    if(const auto baseline=saved_scene_contents_.find(scene_identity_);baseline!=saved_scene_contents_.end()&&baseline->second==scene_content(saved))return false;
     QImage thumbnail;
     if(renderer_&&!loading_)try{thumbnail=scene_thumbnail(saved,true);}catch(const std::exception &){renderer_->cancel_capture();}
     if(shutdown_directory_.isEmpty())shutdown_directory_=shutdown_save_directory(QCoreApplication::applicationDirPath(),QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)+"/autosave");
@@ -2508,7 +2535,7 @@ public:
           if(capture_view_) renderer_->camera_view(*capture_view_);
           const auto first=previous_document?previous_document->catalog.targets.size():0;
           if(first<document_->catalog.targets.size()) choose(int(first));else if(hierarchy_->topLevelItemCount()) hierarchy_->setCurrentItem(hierarchy_->topLevelItem(0));
-          if(!preserve&&!previous_document)saved_scene_content_=scene_content(snapshot_);
+          if(!preserve&&!previous_document)saved_scene_contents_[scene_identity_]=scene_content(snapshot_);
           if(!self_test_&&!preserve) browser_->record_use(QString::fromStdWString((entry.empty()?file:entry).wstring()),category);
           if(!entry.empty()&&entry!=file) {
             pose_status_->setText(QStringLiteral("已挂接 HD Nipples 基础附件。可在 HD Textures 目录创建并应用当前角色的 HD 纹理。"));
