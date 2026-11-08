@@ -72,7 +72,8 @@ static void growth_curve_panel(QApplication &app){
     require(control(dialog,"GrowthCurveBirth")->singleStep()==2.5,"主要参数自定义步进丢失");auto *planned=control(dialog,"GrowthCurvePlannedAge");planned->setValue(8);require(control(dialog,"GrowthCurveStageAge7")->value()==18&&control(dialog,"GrowthCurveStageAge5")->value()==13.375,"短规划年龄改写了形状");planned->setValue(25);control(dialog,"GrowthCurvePubertyWeight")->setValue(2.5);dialog->findChild<QPushButton *>("GrowthCurveFit")->click();
     auto *hu=dialog->findChild<QComboBox *>("GrowthCurveHeightUnit"),*gu=dialog->findChild<QComboBox *>("GrowthCurveGrowthUnit");hu->setCurrentIndex(1);require(gu->currentIndex()==0,"单位选择不独立");gu->setCurrentIndex(1);
     auto *hp=dialog->findChild<QWidget *>("GrowthCurveHeightPlot"),*gp=dialog->findChild<QWidget *>("GrowthCurveGrowthPlot");mouse(gp,12.4,25);auto *info=ready(gp);require(gp->property("hoverAge").toDouble()==12&&info->text().contains(QStringLiteral("Scale：")),"cm 图悬停选择错误");
-    for(auto *p:{hp,gp}){require(p->property("cmReady").toBool(),"cm 换算未完成");for(const auto &tick:p->property("yTicks").toList())require(std::fmod(tick.toDouble(),5)==0,"Y 轴不是 5 的整数倍");}
+    // 读数在 bind 时更新，绘制诊断在 paintEvent 更新；离屏验证先完成绘制。
+    for(auto *p:{hp,gp}){p->grab();require(p->property("cmReady").toBool(),"cm 换算未完成");for(const auto &tick:p->property("yTicks").toList())require(std::fmod(tick.toDouble(),5)==0,"Y 轴不是 5 的整数倍");}
     capture(dialog,"-cm.png");planned->setValue(.5);mouse(hp,.45,.5);require(hp->property("hoverAge").toDouble()==0,"不足 1 的规划范围悬停越界");planned->setValue(25);require(value==before_custom,"悬停修改了实际场景");
   },true);
   require(value.extension.curve.planned_age==25&&value.extension.curve.height_in_cm&&value.extension.curve.growth_in_cm&&correct_scale(),"参数没有保存");

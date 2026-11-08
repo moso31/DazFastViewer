@@ -1,7 +1,14 @@
 #pragma once
 #include "editor/parameters.h"
+#include <limits>
 
 namespace dfv::editor {
+inline ParameterControl garment_iterations_control(bool torso,std::function<double()> read,std::function<void(double)> write){
+  ParameterControl c;c.id=torso?"special/torso_correction_iterations":"special/follow_smoothing_iterations";c.label=torso?"胸腹修正次数":"附件位移平滑次数";c.group="/特殊处理/服装跟随";
+  c.minimum=c.slider_minimum=0;c.maximum=std::numeric_limits<int>::max();c.slider_maximum=torso?384:192;c.step=1;c.initial=torso?192:96;c.enforce_limits=true;c.settings=runtime::ParameterSettings{false,0,c.slider_maximum,1};
+  c.detail=torso?"控制该角色上衣胸腹区域的向外修正，缓和乳沟、胸下沟传递到衣服后的凹陷。0 关闭此步骤；次数越多通常越平顺，计算也越久。保留衣物原有褶皱和作者 Morph。":"控制该角色上衣及跨基型附件的自动位移平滑。0 关闭此步骤；次数越多通常越平顺，计算也越久。只影响跟随此角色的附件，保留衣物原有褶皱和作者 Morph。";
+  c.read=std::move(read);c.write=std::move(write);return c;
+}
 inline ParameterControl forefoot_control(std::function<double()> read,std::function<void(double)> write){
   ParameterControl c;c.id="special/forefoot_uniformity";c.label="前掌统一权重（%）";c.group="/特殊处理";c.minimum=c.slider_minimum=0;c.maximum=c.slider_maximum=100;c.enforce_limits=true;c.float_backed=true;c.step=.1;c.settings=runtime::ParameterSettings{false,0,100,.1};
   c.detail="0% 保留原始形变，100% 让左右鞋底前掌各自使用平均骨骼权重（包含五根脚趾及末节），并对自动体型传递保形。按静止鞋型建立连续支撑区，跨越 Foot / Toe 分区接缝，向后方和鞋面平滑过渡；高处鞋面保留原有柔性和碰撞避让。保留服装自身的调整 Morph，不改变人物姿势；硬鞋底可从 100% 开始比较。";

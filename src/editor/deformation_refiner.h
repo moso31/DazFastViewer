@@ -2,6 +2,8 @@
 #include "editor/document.h"
 #include "editor/node_properties.h"
 #include "diagnostics/load_profile.h"
+#include "runtime/evaluation_cancel.h"
+#include <atomic>
 #include <condition_variable>
 #include <thread>
 
@@ -30,7 +32,7 @@ private:
   };
   std::mutex mutex_;
   std::condition_variable_any wake_;
-  uint64_t ticket_=0;
+  std::atomic<uint64_t> ticket_{0};
   std::optional<Request> pending_;
   std::unique_ptr<Result> result_;
   // Last member: join before destroying the mailbox and its synchronization.
@@ -55,6 +57,7 @@ private:
           runtime=std::make_unique<runtime::DeformationRuntime>(*scene,document->catalog.targets,document->skeletons.skins,document->formulas.graphs);
         }
         if(!request.frames.empty()&&!runtime->reframe(request.frames))throw std::runtime_error("后台形变的组参考框架不一致");
+        runtime::EvaluationCancellation cancellation([&]{return stop.stop_requested()||request.ticket!=ticket_.load(std::memory_order_relaxed);});
         runtime->evaluate(request.values,request.poses);
         // Send absolute geometry, including unchanged meshes: intervening preview
         // revisions may have touched a mesh that this worker never evaluated.
@@ -67,7 +70,8 @@ private:
         for(const auto &instance:scene->instances)if(instance.shell_source>=0)meshes.insert(instance.mesh);
         for(auto mesh:meshes)result->geometry.meshes.push_back({mesh,scene->meshes[mesh].positions});
         result->collision=runtime->collision_stats();
-      }catch(const std::exception &e){result->error=e.what();runtime.reset();document.reset();}
+      }catch(const runtime::EvaluationCancelled &){diagnostics::active=nullptr;continue;}
+      catch(const std::exception &e){result->error=e.what();runtime.reset();document.reset();}
       diagnostics::active=nullptr;
       result->seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-begin).count();
       {std::lock_guard lock(mutex_);if(request.ticket==ticket_)result_=std::move(result);}

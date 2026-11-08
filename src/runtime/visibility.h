@@ -56,4 +56,31 @@ inline std::vector<bool> effective_visibility(const std::vector<Target> &targets
   }
   return visible;
 }
+// 显示与几何依赖分开：隐藏宿主仍可供可见衣物、碰撞体、实例或 Shell 使用。
+class GeometryDependencies {
+  std::vector<std::vector<size_t>> children_;
+  std::vector<std::vector<uint32_t>> sources_;
+  std::vector<bool> controlled_;
+public:
+  GeometryDependencies()=default;
+  GeometryDependencies(const ir::Scene &scene,const std::vector<Target> &targets)
+    :children_(visibility_children(scene,targets)),sources_(scene.instances.size()),controlled_(scene.instances.size()) {
+    std::map<std::string,std::vector<uint32_t>> nodes;std::map<uint32_t,std::vector<uint32_t>> meshes;
+    for(const auto &t:targets){nodes["#"+t.id.substr(0,t.id.rfind('/'))].push_back(t.instance);controlled_[t.instance]=true;}
+    for(uint32_t i=0;i<scene.instances.size();++i)meshes[scene.instances[i].mesh].push_back(i);
+    auto reference=[&](uint32_t follower,const std::string &id){if(auto found=nodes.find(id);found!=nodes.end())for(auto source:found->second)add(follower,source);};
+    for(const auto &t:targets){reference(t.instance,t.conform_target);reference(t.instance,t.rigid_follow.target);reference(t.instance,t.parent);for(const auto &a:t.ancestors)reference(t.instance,a);
+      if(t.smoothing.enabled&&t.smoothing.collision_iterations>0)reference(t.instance,t.smoothing.collision_target);}
+    for(uint32_t i=0;i<scene.instances.size();++i){const auto &v=scene.instances[i];for(auto source:{v.prototype,v.graft_source,v.shell_source,v.shell_root})if(source>=0)add(i,uint32_t(source));for(auto source:meshes[v.mesh])add(i,source);}
+  }
+  void add(uint32_t follower,uint32_t source){if(follower!=source)sources_.at(follower).push_back(source);}
+  std::vector<bool> required(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Properties> &values) const {
+    const auto visible=effective_visibility(targets,children_,values);std::vector<bool> needed(scene.instances.size());std::vector<uint32_t> pending;
+    auto mark=[&](uint32_t i){if(!needed[i]){needed[i]=true;pending.push_back(i);}};
+    for(size_t t=0;t<targets.size();++t)if(visible[t])mark(targets[t].instance);
+    for(uint32_t i=0;i<scene.instances.size();++i)if(!controlled_[i]&&scene.instances[i].visible)mark(i);
+    while(!pending.empty()){const auto i=pending.back();pending.pop_back();for(auto source:sources_[i])mark(source);}
+    return needed;
+  }
+};
 }

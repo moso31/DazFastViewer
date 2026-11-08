@@ -82,6 +82,8 @@ struct Properties {
   bool graft_enabled=true;
   bool local_shadow=false;
   float forefoot_uniformity=0;
+  int follow_smoothing_iterations=96;
+  int torso_correction_iterations=192;
   std::set<std::string> disabled_deformation_regions;
   bool operator==(const Properties &) const = default;
 };

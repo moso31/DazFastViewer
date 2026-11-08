@@ -2,6 +2,7 @@
 #include "runtime/geometry_key.h"
 #include "runtime/rigid_follow.h"
 #include "runtime/fit_profile.h"
+#include "runtime/evaluation_cancel.h"
 #include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <bit>
@@ -165,7 +166,7 @@ public:
 };
 SurfaceCache surface_cache;
 }
-ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse):targets_(targets) {
+ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse,ConformPreparation preparation):targets_(targets),preparation_(preparation) {
   if(graphs.size()!=targets.size()) throw std::runtime_error("Fit To 公式图数量不一致");
   link_for_target_.resize(targets.size(),-1);offsets_.resize(targets.size());revisions_.resize(targets.size());
   bone_rigidity_.resize(targets.size());
@@ -178,6 +179,9 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     link_for_target_[t]=int(links_.size());links_.push_back(std::move(link));}
   std::vector<int> state(targets.size());std::function<void(size_t)> visit=[&](size_t t) {if(state[t]==2) return;if(state[t]==1) throw std::runtime_error("Fit To 关系存在循环");state[t]=1;if(const auto *l=link(t)) visit(l->source);state[t]=2;order_.push_back(t);};
   for(size_t t=0;t<targets.size();++t) visit(t);
+  settings_owner_.resize(targets.size());std::iota(settings_owner_.begin(),settings_owner_.end(),0);
+  for(auto t:order_)if(const auto *l=link(t))settings_owner_[t]=settings_owner_[l->source];
+  previous_iterations_.resize(links_.size(),{-1,-1});
   std::map<std::pair<size_t,std::string>,ir::Mesh> reference_meshes;
   std::map<std::pair<size_t,std::string>,std::unique_ptr<SurfaceIndex>> surface_indexes;
   for(auto &l:links_) {
@@ -244,6 +248,9 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
       for(const auto &node:group.transform_nodes){size_t found=joints.size();for(size_t j=0;j<joints.size();++j)if(joints[j].id==node){found=j;break;}if(found==joints.size())throw std::runtime_error("刚性区域骨骼不存在："+node);if(found>=l.joints.size()||l.joints[found]<0)binding.joints.push_back(found);}
       bone_rigidity_[l.follower].push_back(std::move(binding));
     }
+    // 穿戴操作只需要校验关系、拓扑、Clone 和骨骼；逐顶点绑定留给真正求值。
+    if(!cloth.positions.empty()&&body.triangles.empty())throw std::runtime_error("Fit To 目标没有可用于形变转移的三角形");
+    if(preparation_==ConformPreparation::validation)continue;
     GeometryKey key;key.points(body.positions);key.topology(body);key.points(cloth.positions);key.topology(cloth);key.add(follower_to_source);l.geometry_key=key.value;
     const ConformLink *cached=nullptr;if(reuse) for(const auto &old:reuse->links_) if(old.geometry_key==l.geometry_key&&reuse->targets_[old.follower].id==follower.id&&reuse->targets_[old.source].id==source.id) {cached=&old;break;}
     if(cached) {l.surface=cached->surface;l.neighbors=cached->neighbors;stats_.bindings+=l.surface.size();continue;}
@@ -266,6 +273,7 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
     else for(size_t i=0;i<cloth.positions.size();++i)bind_vertex(i);
     surface_cache.put(l);stats_.bindings+=l.surface.size();
   }
+  if(preparation_==ConformPreparation::validation)return;
   for(auto &link:links_){
     // 商业上衣也会被标为 Skirt 或 Actor/Character；结合适配声明和实际胸片。
     // 真正角色、GeoGraft、几何壳不能因为带有胸部分组就作为布料处理。
@@ -291,25 +299,33 @@ ConformRuntime::ConformRuntime(const ir::Scene &scene,const std::vector<Target> 
   }
 }
 const ConformLink *ConformRuntime::link(size_t target) const {const int i=link_for_target_.at(target);return i<0?nullptr:&links_[size_t(i)];}
-void ConformRuntime::project(const std::vector<std::vector<float>> &weights,MorphRuntime &morph) {
+void ConformRuntime::project(const std::vector<std::vector<float>> &weights,MorphRuntime &morph,const std::vector<Properties> &values,const std::vector<bool> &required) {
   diagnostics::Scope scope("conform_project");
-  if(projection_inputs_.size()!=links_.size()){
-    projection_inputs_.resize(links_.size());for(size_t i=0;i<links_.size();++i){const auto &l=links_[i];const auto &frames=surface_frames_.at({l.source,l.reference_shape});auto &vertices=projection_inputs_[i].vertices;
-      for(const auto &b:l.surface)for(auto v:b.vertices){vertices.push_back(v);vertices.insert(vertices.end(),frames.neighborhoods[v].begin(),frames.neighborhoods[v].end());}
-      std::sort(vertices.begin(),vertices.end());vertices.erase(std::unique(vertices.begin(),vertices.end()),vertices.end());}
-  }
-  for(auto target:order_) {const auto *l=link(target);if(!l) continue;const auto i=size_t(link_for_target_[target]);std::vector<float> current;current.reserve(l->projected_morphs.size());
+  if(preparation_!=ConformPreparation::full)throw std::logic_error("只校验的形变运行时不能用于求值");
+  if(projection_inputs_.size()!=links_.size())projection_inputs_.resize(links_.size());
+  for(auto target:order_) {evaluation_checkpoint();const auto *l=link(target);if(!l||!required.at(targets_[target].instance)) continue;const auto i=size_t(link_for_target_[target]);std::vector<float> current;current.reserve(l->projected_morphs.size());
+    const auto &settings=values.at(settings_owner_[target]);
+    const std::pair iterations{l->torso_envelope.empty()?24:settings.follow_smoothing_iterations,l->torso_envelope.empty()?0:settings.torso_correction_iterations};
+    const bool same_iterations=previous_iterations_[i]==iterations;
     for(auto m:l->projected_morphs) current.push_back(weights.at(l->source).at(m));
-    if(current==previous_weights_[i]&&source_revisions_[i]==revisions_[l->source]&&follow_revisions_[i]==morph.follow_revision(target)) continue;
+    if(same_iterations&&current==previous_weights_[i]&&source_revisions_[i]==revisions_[l->source]&&follow_revisions_[i]==morph.follow_revision(target)) continue;
     diagnostics::Scope target_scope(diagnostics::active?targets_[target].id:std::string{});
     std::vector<ir::Vec3> source(vertex_counts_[l->source]);if(!offsets_[l->source].empty()) source=offsets_[l->source];
     if(l->cross_base)for(size_t v=0;v<source.size();++v)source[v]=add(source[v],l->base_offsets[v]);
     for(size_t m=0;m<current.size();++m) if(current[m]!=0) for(const auto &d:targets_[l->source].morphs[l->projected_morphs[m]].data()) source[d.vertex]=add(source[d.vertex],mul(d.delta,current[m]));
     // 只比较实际绑定及其旋转邻域。脚部 JCM 变化不应重算上衣的整个投射和平滑场。
-    auto &input=projection_inputs_[i];bool same=input.offsets.size()==input.vertices.size()&&follow_revisions_[i]==morph.follow_revision(target);
+    auto &input=projection_inputs_[i];
+    if(input.vertices.empty()&&!l->surface.empty()){
+      diagnostics::Scope dependency_scope("projection_dependencies");
+      const auto &frames=surface_frames_.at({l->source,l->reference_shape});std::vector<uint8_t> bound(frames.reference.size());
+      for(const auto &b:l->surface)for(auto v:b.vertices)bound[v]=1;
+      auto needed=bound;for(size_t v=0;v<bound.size();++v)if(bound[v])for(auto n:frames.neighborhoods[v])needed[n]=1;
+      // 与原来的排序去重结果完全相同，但每个宿主顶点的邻域最多扫描一次。
+      for(size_t v=0;v<needed.size();++v)if(needed[v])input.vertices.push_back(uint32_t(v));
+    }
+    bool same=same_iterations&&input.offsets.size()==input.vertices.size()&&follow_revisions_[i]==morph.follow_revision(target);
     for(size_t k=0;same&&k<input.vertices.size();++k)same=input.offsets[k]==source[input.vertices[k]];
     if(same){previous_weights_[i]=std::move(current);source_revisions_[i]=revisions_[l->source];continue;}
-    input.offsets.resize(input.vertices.size());for(size_t k=0;k<input.vertices.size();++k)input.offsets[k]=source[input.vertices[k]];
     const auto &frames=surface_frames_.at({l->source,l->reference_shape});std::vector<ir::Transform> rotations(source.size());std::vector<uint8_t> needed(source.size());
     for(const auto &b:l->surface)for(auto v:b.vertices)needed[v]=1;
     auto rotate_vertex=[&](size_t v){
@@ -320,7 +336,8 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
     };
     if(source.size()>=4096)Concurrency::parallel_for(size_t(0),(source.size()+255)/256,[&](size_t block){for(size_t v=block*256;v<std::min(source.size(),(block+1)*256);++v)rotate_vertex(v);});
     else for(size_t v=0;v<source.size();++v)rotate_vertex(v);
-    auto &offsets=offsets_[target];offsets.resize(l->surface.size());
+    // 当前附件在局部缓冲中完成后才发布，取消时保留其上一份有效缓存。
+    std::vector<ir::Vec3> offsets(l->surface.size());
     for(size_t v=0;v<offsets.size();++v) {const auto &b=l->surface[v];const auto a=source[b.vertices[0]],c=source[b.vertices[1]],d=source[b.vertices[2]];
       auto delta=add(add(mul(a,b.barycentric.x),mul(c,b.barycentric.y)),mul(d,b.barycentric.z));
       // 用共享顶点邻域的旋转连续插值衣物间隙。单三角面的梯度外推会在
@@ -333,27 +350,34 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
     // 最近三角形会在腿间、腋下及远离皮肤的裙摆切换。只平滑生成的位移场，
     // 不平滑衣物基础褶皱或作者的修正 Morph，也不把上次结果反馈进来。
     auto filtered=offsets;
+    auto batch=[&](size_t count,const auto &work){if(count>=4096)Concurrency::parallel_for(size_t(0),(count+255)/256,[&](size_t block){for(size_t k=block*256;k<std::min(count,(block+1)*256);++k)work(k);});else for(size_t k=0;k<count;++k)work(k);};
     // 上衣的连续布片不能逐点复制身体凹陷。同基型自动 Morph 也需要过渡，
     // 只处理自动生成的位移，作者提供的体型修正、口袋和门襟不参与平滑。
     {diagnostics::Scope phase("smooth_offsets");
-    for(int iteration=0;iteration<(!l->torso_envelope.empty()?96:24);++iteration) {
-      for(size_t v=0;v<offsets.size();++v) {const auto &neighbors=l->neighbors[v];if(neighbors.size()<3) continue;
+    std::vector<float> early(offsets.size()),late(offsets.size());std::vector<size_t> early_vertices,late_vertices;
+    for(size_t v=0;v<offsets.size();++v)if(l->neighbors[v].size()>=3){
         // 贴体区域保留表面形变；远离身体的裙摆才逐渐增强平滑，避免压平鞋面。
         const float minimum=l->cross_base?.35f:l->torso_envelope.empty()?0.f:(.35f/255)*l->torso_envelope[v];
         float weight=std::clamp((l->surface[v].distance-.03f)/.06f,minimum,.5f);
-        if(iteration>=24&&!l->cross_base)weight*=l->torso_envelope[v]/255.f;
-        ir::Vec3 average;for(auto n:neighbors) average=add(average,offsets[n]);filtered[v]=add(mul(offsets[v],1-weight),mul(average,weight/float(neighbors.size())));}
+        early[v]=weight;late[v]=!l->cross_base&&!l->torso_envelope.empty()?weight*(l->torso_envelope[v]/255.f):weight;
+        if(early[v]!=0)early_vertices.push_back(v);if(late[v]!=0)late_vertices.push_back(v);
+    }
+    for(int iteration=0;iteration<iterations.first;++iteration) {evaluation_checkpoint();if(iteration==24)filtered=offsets;
+      const auto &vertices=iteration<24?early_vertices:late_vertices;const auto &weights=iteration<24?early:late;
+      batch(vertices.size(),[&](size_t k){const auto v=vertices[k];const auto &neighbors=l->neighbors[v];const float weight=weights[v];ir::Vec3 average;for(auto n:neighbors) average=add(average,offsets[n]);filtered[v]=add(mul(offsets[v],1-weight),mul(average,weight/float(neighbors.size())));});
       offsets.swap(filtered);
     }
     }
-    if(!l->torso_envelope.empty()){
+    if(iterations.second>0){
       diagnostics::Scope phase("torso_envelope");
       // 胸腹布片跨过体型凹陷，避免把乳沟和胸下沟完整刻进布面。
       // 只向外平滑生成的位移，不改变作者褶皱；鞋、袖口和裤腿不参与。
-      std::vector<ir::Vec3> outward(offsets.size());
+      std::vector<ir::Vec3> outward(offsets.size());std::vector<size_t> vertices;
+      for(size_t v=0;v<offsets.size();++v)if(l->torso_envelope[v]&&!l->neighbors[v].empty())vertices.push_back(v);
       for(size_t v=0;v<offsets.size();++v)if(l->torso_envelope[v]){const auto &b=l->surface[v];auto n=add(add(mul(direction(rotations[b.vertices[0]],b.normal),b.barycentric.x),mul(direction(rotations[b.vertices[1]],b.normal),b.barycentric.y)),mul(direction(rotations[b.vertices[2]],b.normal),b.barycentric.z));n=direction(l->source_to_follower,n);const float length=std::sqrt(dot(n,n));if(length>0)outward[v]=mul(n,1/length);}
-      for(int iteration=0;iteration<192;++iteration){filtered=offsets;
-        for(size_t v=0;v<offsets.size();++v)if(l->torso_envelope[v]&&!l->neighbors[v].empty()){ir::Vec3 average;for(auto n:l->neighbors[v])average=add(average,offsets[n]);average=mul(average,1.f/float(l->neighbors[v].size()));const float shift=(.4f/255)*l->torso_envelope[v]*std::max(0.f,dot(sub(average,offsets[v]),outward[v]));filtered[v]=add(offsets[v],mul(outward[v],shift));}
+      filtered=offsets;
+      for(int iteration=0;iteration<iterations.second;++iteration){evaluation_checkpoint();
+        batch(vertices.size(),[&](size_t k){const auto v=vertices[k];ir::Vec3 average;for(auto n:l->neighbors[v])average=add(average,offsets[n]);average=mul(average,1.f/float(l->neighbors[v].size()));const float shift=(.4f/255)*l->torso_envelope[v]*std::max(0.f,dot(sub(average,offsets[v]),outward[v]));filtered[v]=add(offsets[v],mul(outward[v],shift));});
         offsets.swap(filtered);
       }
     }
@@ -365,8 +389,9 @@ void ConformRuntime::project(const std::vector<std::vector<float>> &weights,Morp
     }}
     morph.constrain_follow_offsets(target,offsets);
     if(morph.set_follow_offsets(target,offsets)) ++revisions_[target];
+    offsets_[target]=std::move(offsets);input.offsets.resize(input.vertices.size());for(size_t k=0;k<input.vertices.size();++k)input.offsets[k]=source[input.vertices[k]];previous_iterations_[i]=iterations;
     follow_revisions_[i]=morph.follow_revision(target);
-    previous_weights_[i]=std::move(current);source_revisions_[i]=revisions_[l->source];++stats_.evaluations;stats_.projected_vertices+=offsets.size();
+    previous_weights_[i]=std::move(current);source_revisions_[i]=revisions_[l->source];++stats_.evaluations;stats_.projected_vertices+=offsets_[target].size();
   }
 }
 void ConformRuntime::rigidity_pose(std::vector<std::vector<JointPose>> &poses) const {
@@ -460,7 +485,24 @@ void CollisionRuntime::reference_surface(uint32_t follower,const std::vector<ir:
     b.reference_source=positions;b.reference_radii.clear();b.initialized=false;b.cache_key=0;
   }
 }
-ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
+bool CollisionRuntime::affected(const ir::Delta &delta,const std::vector<bool> &required) const {
+  for(const auto &b:bindings_){const auto &follower=scene_.instances[b.follower];
+    if(required.empty()?(!follower.visible&&!b.required_when_hidden):!required.at(b.follower))continue;
+    if(!b.initialized||(constraint_revision_&&constraint_revision_(b.follower)!=b.constraint_revision))return true;
+    auto instance=[&](uint32_t i){return i==b.follower||i==b.source||std::find(b.grafts.begin(),b.grafts.end(),i)!=b.grafts.end();};
+    auto mesh=[&](uint32_t m){if(m==follower.mesh||m==scene_.instances[b.source].mesh)return true;for(auto g:b.grafts)if(scene_.instances[g].mesh==m)return true;return false;};
+    for(const auto &e:delta.meshes)if(mesh(e.index))return true;
+    for(const auto &e:delta.masks)if(mesh(e.index))return true;
+    for(const auto &e:delta.visibility)if(instance(e.index))return true;
+    for(const auto &e:delta.grafts)if(instance(e.index))return true;
+    for(const auto &e:delta.instances)if(instance(e.index)){
+      if(relative_(b.source,b.follower)!=b.relative)return true;
+      for(size_t k=0;k<b.grafts.size();++k)if(k>=b.graft_relatives.size()||relative_(b.source,b.grafts[k])!=b.graft_relatives[k])return true;
+    }
+  }
+  return false;
+}
+ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel,const std::vector<bool> &required) {
   diagnostics::Scope scope("collision_evaluate");
   auto batch=[&](size_t count,const auto &fn) {if(parallel&&count>=512) Concurrency::parallel_for(size_t(0),(count+255)/256,[&](size_t block){for(size_t i=block*256;i<std::min(count,(block+1)*256);++i) fn(i);});else for(size_t i=0;i<count;++i) fn(i);};
   std::set<uint32_t> changed;
@@ -471,7 +513,7 @@ ir::Delta CollisionRuntime::evaluate(ir::Delta delta,bool parallel) {
     const auto &follower=scene_.instances[b.follower],&source=scene_.instances[b.source];
     // 独立隐藏衣物无需碰撞；作为其他对象的宿主、碰撞体或共享网格时仍完整求值。
     // 重新显示时即使没有新的姿势增量，也必须重新校验当前输入。
-    if(!follower.visible&&!b.required_when_hidden){b.initialized=false;continue;}
+    if(required.empty()?(!follower.visible&&!b.required_when_hidden):!required.at(b.follower)){b.initialized=false;continue;}
     diagnostics::Scope binding_scope(diagnostics::active?follower.id:std::string{});
     const auto relative=relative_(b.source,b.follower);
     bool graft_changed=false;

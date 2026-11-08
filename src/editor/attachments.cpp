@@ -1,6 +1,7 @@
 #include "editor/document.h"
 #include "editor/object_hierarchy.h"
 #include "runtime/fit_profile.h"
+#include "diagnostics/load_profile.h"
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -138,7 +139,8 @@ void apply(Document &d,AttachmentBinding &binding,int host) {
   binding.host=host>=0?node_id(d.catalog.targets.at(size_t(host))):std::string{};
   rebuild_ancestors(d);daz::apply_graft_masks(d.loaded);
   // 在发布文档前校验依赖、接缝及刚性挂接；不把求值网格写回基础资产。
-  runtime::DeformationRuntime validate(d.loaded.scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs);
+  diagnostics::Scope validation_scope("attachment_validation");
+  runtime::DeformationRuntime validate(d.loaded.scene,d.catalog.targets,d.skeletons.skins,d.formulas.graphs,nullptr,runtime::ConformPreparation::validation);
   d.loaded.scene.validate();++d.asset_revision;
 }
 AttachmentBinding capture(Document &d,const std::set<std::string> &members,const std::set<std::string> &nodes) {

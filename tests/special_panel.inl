@@ -2,10 +2,12 @@
 #include <QStyleOptionSpinBox>
 static void special_panel(QApplication &app) {
   using namespace dfv::editor;
-  float strength=0;bool shadow=false;
+  float strength=0;bool shadow=false;int smooth=96,torso=192;
   std::vector<ParameterControl> controls{
     forefoot_control([&]{return double(strength)*100;},[&](double v){strength=float(v/100);}),
-    local_shadow_control([&]{return shadow?1.:0.;},[&](double v){shadow=v!=0;})};
+    local_shadow_control([&]{return shadow?1.:0.;},[&](double v){shadow=v!=0;}),
+    garment_iterations_control(false,[&]{return double(smooth);},[&](double v){smooth=int(v);}),
+    garment_iterations_control(true,[&]{return double(torso);},[&](double v){torso=int(v);})};
   for(int i=0;i<30;++i){ParameterControl c;c.id="filler/"+std::to_string(i);c.label="其他参数 "+std::to_string(i);c.group="/特殊处理";c.read=[]{return 0.;};c.write=[](double){};controls.push_back(c);}
   QScrollArea outer;outer.resize(650,420);outer.setWidgetResizable(true);auto *page=new QWidget;auto *layout=new QVBoxLayout(page);auto *panel=new ParameterPanel;panel->shared_scroll(&outer);layout->addWidget(panel);outer.setWidget(page);
   auto settle=[&]{app.processEvents();QTest::qWait(180);};panel->bind_controls(controls);outer.show();settle();
@@ -33,6 +35,13 @@ static void special_panel(QApplication &app) {
   QTest::mouseClick(groups->viewport(),Qt::LeftButton,Qt::NoModifier,groups->visualItemRect(independent).center());settle();auto *shadow_row=rows->itemWidget(rows->topLevelItem(1),0);auto *choice=shadow_row?shadow_row->findChild<QComboBox *>("valueChoice"):nullptr;
   if(!choice||!choice->isVisible()){outer.grab().save("special-shadow-debug.png");std::cerr<<"shadow group="<<groups->currentItem()->data(0,Qt::UserRole).toString().toStdString()<<" hidden="<<rows->topLevelItem(1)->isHidden()<<" row="<<shadow_row<<" choice="<<choice<<" scroll="<<bar->value()<<"\n";}
   require(choice&&choice->isVisible(),"独立阴影结构没有显示原控件");choice->setCurrentIndex(1);require(shadow&&controls[1].id=="render/local_shadow","移动阴影分组改变旧通道语义");
+  QTreeWidgetItem *fit=nullptr;for(QTreeWidgetItemIterator it(groups);*it;++it)if((*it)->text(0)==QStringLiteral("服装跟随"))fit=*it;
+  require(fit&&fit->parent()==independent->parent(),"服装跟随参数未进入特殊处理组");groups->setCurrentItem(fit);top();
+  auto *fit_row=rows->itemWidget(rows->topLevelItem(2),0);auto *fit_spin=fit_row?fit_row->findChild<QDoubleSpinBox *>("valueSpin"):nullptr;
+  auto *torso_row=rows->itemWidget(rows->topLevelItem(3),0);auto *torso_spin=torso_row?torso_row->findChild<QDoubleSpinBox *>("valueSpin"):nullptr;
+  require(fit_spin&&torso_spin&&fit_spin->value()==96&&torso_spin->value()==192&&fit_spin->decimals()==0&&fit_spin->singleStep()==1,"迭代次数默认值或整数步进错误");
+  wheel(fit_spin,120);require(smooth==96,"未选中迭代次数却接受滚轮");QTest::mouseClick(fit_row->findChild<QLabel *>("valueLabel"),Qt::LeftButton);wheel(fit_spin,120);require(smooth==97,"选中后迭代次数未按 1 调整");
+  fit_spin->selectAll();QTest::keyClicks(fit_spin,"400");QTest::keyClick(fit_spin,Qt::Key_Return);require(smooth==400,"关闭范围后迭代次数仍被建议上限截断");torso_spin->setValue(0);require(torso==0,"胸腹修正无法设为 0");
   groups->setCurrentItem(independent->parent());settle();outer.grab().save("special-panel.png");
   bar->setValue(bar->maximum());settle();require(rows->itemWidget(rows->topLevelItem(rows->topLevelItemCount()-1),0),"特殊处理最后一行无法通过外层滚动访问");
   std::cout<<"Special controls / percentage / outer scroll / selection / native arrows / shadow group: PASS\n";

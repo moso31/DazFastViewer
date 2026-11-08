@@ -9,9 +9,11 @@
 #include "runtime/physics_json.h"
 #include "daz/documents.h"
 #include "daz/resource_paths.h"
+#include "diagnostics/load_profile.h"
 #include <fstream>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -54,14 +56,22 @@ J favorites(const std::optional<runtime::FavoriteState> &v){return v?J{{"nodes",
 std::optional<runtime::FavoriteState> read_favorites(const J &j){if(j.is_null())return {};runtime::FavoriteState v;v.nodes=j.at("nodes").get<decltype(v.nodes)>();v.fallback=j.at("fallback").get<decltype(v.fallback)>();return v;}
 size_t target_index(const Document &d,const std::string &id){for(size_t i=0;i<d.catalog.targets.size();++i)if(d.catalog.targets[i].id==id)return i;throw std::runtime_error("DUFEX 对象不存在："+id);}
 std::shared_ptr<Document> load_source(const fs::path &source,const std::vector<fs::path> &roots,const std::function<void(const std::string &)> &progress,bool defer=false){
+  diagnostics::Scope scope("source_document");
   auto d=std::make_shared<Document>();d->source_file=source;
-  if(!source.empty()){d->loaded=daz::load(source,{roots,false,defer});std::vector<fs::path> resolved=roots;for(const auto &r:d->loaded.report["content_roots"])resolved.push_back(fs::u8path(r.get<std::string>()));d->catalog=daz::discover_morphs(d->loaded,resolved,progress,true);d->skeletons=daz::load_skeletons(d->loaded);d->formulas=daz::enable_formulas(d->catalog,d->skeletons);}
+  if(!source.empty()){
+    {diagnostics::Scope phase("daz_scene");d->loaded=daz::load(source,{roots,false,defer});}
+    std::vector<fs::path> resolved=roots;for(const auto &r:d->loaded.report["content_roots"])resolved.push_back(fs::u8path(r.get<std::string>()));
+    {diagnostics::Scope phase("morph_catalog");d->catalog=daz::discover_morphs(d->loaded,resolved,progress,true);}
+    {diagnostics::Scope phase("skeletons");d->skeletons=daz::load_skeletons(d->loaded);}
+    {diagnostics::Scope phase("formulas");d->formulas=daz::enable_formulas(d->catalog,d->skeletons);}
+  }
   return d;
 }
 void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,const fs::path &folder,const std::function<void(const std::string &)> &progress,int depth=0){
   if(depth>32||!operations.is_array())throw std::runtime_error("DUFEX 场景结构无效");
   auto source_path=[&](const J &j){auto p=fs::u8path(j.get<std::string>());return p.empty()||p.is_absolute()?p:folder/p;};
   for(const auto &op:operations){const auto kind=op.at("op").get<std::string>();
+    diagnostics::Scope operation_scope(diagnostics::active?"replay/"+kind:std::string{});
     auto archive=d.loaded.archive;const auto key=op.value("archive",std::string{});if(!key.empty()){if(!d.archives.contains(key))throw std::runtime_error("场景操作缺少底稿："+key);archive=d.archives.at(key);}daz::DocumentScope source_scope(archive);
     if(kind=="append"){auto s=load_source(source_path(op.at("file")),roots,progress,true);s->archives=d.archives;replay(*s,op.at("operations"),roots,folder,progress,depth+1);append_document(d,std::move(*s),op.at("prefix"));}
     else if(kind=="city") {auto config=city::config_from_json(op.at("config"));if(config.directory.is_relative())config.directory=folder/config.directory;city::install(d,city::generate(config,op.at("id"),roots,progress),false);}
@@ -105,7 +115,9 @@ J snapshot_json(const Document &d,const Snapshot &s,bool water_state){
   for(size_t t=0;t<s.values.size();++t){const auto &v=s.values[t];const auto &target=d.catalog.targets[t];runtime::validate_transform(v.transform);J m=J::object();
     for(size_t i=0;i<target.morphs.size();++i){const auto &p=target.morphs[i];if(p.alias_morph>=0||runtime::legacy_extension_channel(p.label)||(!p.evaluable&&!p.unsupported.empty()))continue;const auto value=v.morphs.at(i);if(!std::isfinite(value))throw std::runtime_error("Morph 值无效");if(value!=p.initial)m[p.id]=value;}
     if(!std::isfinite(v.forefoot_uniformity)||v.forefoot_uniformity<0||v.forefoot_uniformity>1)throw std::runtime_error("前掌统一权重必须在 0–100% 之间");
+    if(v.follow_smoothing_iterations<0||v.torso_correction_iterations<0)throw std::runtime_error("服装跟随次数不能为负数");
     j["objects"][target.id]={{"transform",transform(v.transform)},{"visible",v.visible},{"selectable",v.selectable},{"graft_enabled",v.graft_enabled},{"local_shadow",v.local_shadow},{"forefoot_uniformity",v.forefoot_uniformity},{"disabled_deformation_regions",v.disabled_deformation_regions},{"morphs",m},{"unlimited",v.unlimited_morphs},{"ground_ratio",v.ground_alignment_ratio},{"ground_offset_cm",v.ground_alignment_offset_cm},{"ground_body_only",v.ground_alignment_body_only},{"extension",extension(v.extension)},{"favorites",favorites(v.favorites)},{"physics",runtime::physics_json(v.physics)}};
+    j["objects"][target.id]["follow_smoothing_iterations"]=v.follow_smoothing_iterations;j["objects"][target.id]["torso_correction_iterations"]=v.torso_correction_iterations;
   }
   for(size_t i=0;i<s.poses.size();++i){const auto &skin=d.skeletons.skins[i];runtime::validate_pose(skin,s.poses[i]);J poses=J::object();for(size_t b=0;b<skin.joints.size();++b){const auto &p=s.poses[i][b];auto v=transform(p);v["center_offset_cm"]=vec(p.center_offset_cm);v["end_offset_cm"]=vec(p.end_offset_cm);v["orientation_offset_degrees"]=vec(p.orientation_offset_degrees);poses[skin.joints[b].id]=v;}j["poses"][skin.id]=poses;}
   for(const auto &l:s.lights)j["lights"].push_back({{"id",l.id},{"transform",l.transform.value},{"power",vec(l.power)},{"width",l.width},{"height",l.height},{"kind",int(l.kind)},{"angle",l.angle}});
@@ -126,6 +138,8 @@ void apply_snapshot_json(const Document &d,Snapshot &s,const J &j){
   next.group_transforms.clear();const auto groups=j.value("groups",J::object());for(const auto &[id,value]:groups.items())read_transform(next.group_transforms[id],value);validate_group_transforms(d,next.group_transforms);
   next.node_properties.clear();const auto node_states=j.value("node_properties",J::object());for(const auto &[id,v]:node_states.items())next.node_properties[id]={v.value("visible",true),v.value("selectable",true)};validate_node_properties(d,next.node_properties);
   for(const auto &[id,o]:j.at("objects").items()){const auto t=target_index(d,id);auto &v=next.values.at(t);const auto &target=d.catalog.targets[t];read_transform(v.transform,o.at("transform"));runtime::validate_transform(v.transform);v.visible=o.at("visible");v.extension=read_extension(o.at("extension"));v.ground_alignment_ratio=o.at("ground_ratio");if(!std::isfinite(v.ground_alignment_ratio))throw std::runtime_error("地面对齐比例无效");
+    auto iterations=[&](const char *key,int fallback){const double n=o.value(key,double(fallback));if(!std::isfinite(n)||n<0||n>std::numeric_limits<int>::max()||n!=std::floor(n))throw std::runtime_error("服装跟随次数必须是非负整数");return int(n);};
+    v.follow_smoothing_iterations=iterations("follow_smoothing_iterations",96);v.torso_correction_iterations=iterations("torso_correction_iterations",192);
     v.ground_alignment_offset_cm=o.value("ground_offset_cm",0.);v.ground_alignment_body_only=o.value("ground_body_only",false);if(!std::isfinite(v.ground_alignment_offset_cm))throw std::runtime_error("地面对齐偏移无效");
     v.graft_enabled=o.value("graft_enabled",true);
     v.local_shadow=o.value("local_shadow",false);
@@ -172,6 +186,7 @@ RestoredScene load_scene_extension(const fs::path &file,const std::vector<fs::pa
   return restore_scene_extension(j,fs::absolute(file).parent_path(),roots,generation,progress);
 }
 RestoredScene restore_scene_extension(const J &j,const fs::path &folder,const std::vector<fs::path> &roots,uint64_t generation,const std::function<void(const std::string &)> &progress){
+  diagnostics::Scope scope("restore_scene");
   const auto version=j.at("version").get<int>();if(j.at("schema")!="daz-fast-viewer-scene-extension"||(version!=1&&version!=2))throw std::runtime_error("不支持的 DUFEX 格式或版本");
   if(version==2&&city_operations(j.at("operations")))throw std::runtime_error("DUFEX v2 尚未包含城市 PCG 序列化");
   std::map<std::string,std::shared_ptr<daz::SourceArchive>> archives;const auto archive_data=j.value("archives",J::object());for(const auto &[id,value]:archive_data.items())archives[id]=daz::SourceArchive::read(value);

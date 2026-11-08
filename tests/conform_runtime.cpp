@@ -23,6 +23,8 @@ static FormulaGraph graph(const Target &t,int skin) {
   g.prepare();return g;
 }
 
+#include "conform_deferred.inl"
+#include "conform_validation.inl"
 static void native_torso_checks() {
   // 衣物的自动体型传递要跨过局部凹槽；作者褶皱不能随之被磨平。
   constexpr uint32_t n=25;ir::Mesh body;body.polygon_groups={"lPectoral"};
@@ -43,6 +45,13 @@ static void native_torso_checks() {
   require(crease(smooth)<crease(raw.meshes[1].positions)*.5,"上衣仍逐点复制局部凹槽，自动位移缺少连续过渡");
   for(const auto &type:{"Follower/Wardrobe/Skirt","Actor/Character",""}){auto mislabeled=base;auto alternate=targets;alternate[1].content_type=type;alternate[1].preferred_base="/Genesis 8/Female";DeformationRuntime alternate_runtime(mislabeled,alternate,skins,graphs);alternate_runtime.evaluate(values,{});require(mislabeled.meshes[1].positions==smooth,"错误分类但声明适配基型的商业上衣没有获得修正");}
   require(scene.meshes[0].positions==raw.meshes[0].positions,"服装连续性处理修改了角色本身");
+  values[0].follow_smoothing_iterations=0;values[0].torso_correction_iterations=0;runtime.evaluate(values,{});require(distance(scene.meshes[1].positions,raw.meshes[1].positions)<1e-6,"关闭角色迭代次数未重新求值衣物");
+  values[0].follow_smoothing_iterations=96;values[0].torso_correction_iterations=192;runtime.evaluate(values,{});require(scene.meshes[1].positions==smooth,"恢复默认迭代次数改变了原效果");
+  auto paired=base;paired.meshes.push_back(body);paired.meshes.push_back(cloth);paired.instances.resize(4);paired.instances[2].mesh=2;paired.instances[3].mesh=3;
+  auto second_host=host;second_host.id="second-torso/mesh";second_host.instance=2;auto second_shirt=shirt;second_shirt.id="second-shirt/mesh";second_shirt.instance=3;second_shirt.conform_target="#second-torso";
+  const std::vector<Target> paired_targets={host,shirt,second_host,second_shirt};const std::vector<FormulaGraph> paired_graphs={graphs[0],graphs[1],graphs[0],graphs[1]};auto paired_values=values;paired_values.insert(paired_values.end(),values.begin(),values.end());
+  DeformationRuntime paired_runtime(paired,paired_targets,skins,paired_graphs);paired_runtime.evaluate(paired_values,{});paired_values[0].follow_smoothing_iterations=paired_values[0].torso_correction_iterations=0;paired_runtime.evaluate(paired_values,{});
+  require(distance(paired.meshes[1].positions,raw.meshes[1].positions)<1e-6&&paired.meshes[3].positions==smooth,"一个角色的服装修正次数影响了其他角色");
   values[1].morphs[0]=1;runtime.evaluate(values,{});auto expected=smooth;expected[detail].y-=.004f;require(distance(scene.meshes[1].positions,expected)<1e-6,"作者的口袋修正被自动位移平滑吞掉");
   const auto evaluations=runtime.conform_stats().evaluations;require(runtime.evaluate(values,{}).meshes.empty()&&runtime.conform_stats().evaluations==evaluations,"重复求值没有复用上衣投射缓存");
   values[0].morphs[0]=0;runtime.evaluate(values,{});expected=cloth.positions;expected[detail].y-=.004f;require(distance(scene.meshes[1].positions,expected)<1e-6,"清除角色体型不能恢复作者衣物形状");
@@ -368,7 +377,7 @@ static void unit() {
   uncovered_reverse_collision();
   conform_collision_locality();
   bone_rigidity_follow();
-  native_torso_checks();cloth_layer_collision();asynchronous_refinement();surface_cache_checks();continuous_follow_gap();projection_input_cache();
+  validation_preparation_checks();deferred_geometry_checks();native_torso_checks();cloth_layer_collision();asynchronous_refinement();surface_cache_checks();continuous_follow_gap();projection_input_cache();
   graft_collision_restore();
   {
     // 共同祖先的平移 / 旋转 / 缩放应完全保留碰撞缓存，包括 GeoGraft。

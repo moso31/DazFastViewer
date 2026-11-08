@@ -11,6 +11,7 @@
 
 using namespace dfv;using J=nlohmann::json;namespace fs=std::filesystem;
 static void require(bool value,const char *message){if(!value)throw std::runtime_error(message);}
+template<class F> static void rejects(F work,const char *message){bool rejected=false;try{work();}catch(const std::exception &){rejected=true;}require(rejected,message);}
 static void near(double a,double b,double tolerance,const char *message){if(std::abs(a-b)>tolerance)throw std::runtime_error(std::string(message)+": "+std::to_string(a)+" / "+std::to_string(b));}
 static ir::Mesh cube(){
   ir::Mesh m;m.id="cube";m.positions={{0,0,0},{1,0,0},{1,1,0},{0,1,0},{0,0,1},{1,0,1},{1,1,1},{0,1,1}};m.polygon_groups={"lHand","other"};
@@ -138,10 +139,14 @@ static void serialization(const fs::path &folder){
   s.values[0].favorites->nodes[""]["transform/general_scale"]=false;s.values[1].favorites->nodes[""]["transform/general_scale"]=true;
   s.values[0].favorites->nodes["head"]["joint/3"]=true;s.values[0].favorites->nodes["head"]["joint/4"]=false;
   s.control_favorites->nodes["light/"+s.lights[0].id]["light/0"]=true;
+  s.values[0].follow_smoothing_iterations=32;s.values[0].torso_correction_iterations=64;
+  s.parameter_settings[d.catalog.targets[0].id]["parameters//special/follow_smoothing_iterations"]={true,0,400,1};
   auto saved=editor::snapshot_json(d,s);auto bad=saved;bad["objects"][d.catalog.targets[1].id]["extension"]["density"]=-1;bool rejected=false;try{editor::apply_snapshot_json(d,s,bad);}catch(...){rejected=true;}require(rejected&&editor::snapshot_json(d,s)==saved,"失败覆盖留下部分修改");
   auto legacy=saved;legacy.erase("control_favorites");for(auto &object:legacy["objects"]){object.erase("favorites");for(const char *key:{"baby_enabled","baby_begin","baby_end","baby_strength","baby_blend","baby_scale_isolated"})object["extension"].erase(key);}auto old=editor::initial_snapshot(d);editor::apply_snapshot_json(d,old,legacy);
   require(!old.values[0].extension.baby_enabled&&old.values[0].extension.baby_end==7&&old.values[0].extension.baby_strength==.6&&old.values[0].extension.baby_blend&&!old.values[0].extension.baby_scale_isolated,"旧场景的婴儿期默认设置或外形隔离状态错误");
   require(!old.control_favorites&&!old.values[0].favorites,"旧版扩展未保留收藏迁移入口");
+  {auto without=saved;for(auto &object:without["objects"]){object.erase("follow_smoothing_iterations");object.erase("torso_correction_iterations");}auto restored=editor::initial_snapshot(d);editor::apply_snapshot_json(d,restored,without);require(restored.values[0].follow_smoothing_iterations==96&&restored.values[0].torso_correction_iterations==192,"旧存档的服装跟随默认次数错误");}
+  for(const auto *key:{"follow_smoothing_iterations","torso_correction_iterations"})for(double invalid:{-1.,1.5,1e20}){auto malformed=saved;malformed["objects"][d.catalog.targets[0].id][key]=invalid;rejects([&]{editor::apply_snapshot_json(d,s,malformed);},"服装跟随次数接受了非整数或越界存档");require(editor::snapshot_json(d,s)==saved,"无效服装跟随次数产生部分覆盖");}
   auto no_curve=saved;for(auto &object:no_curve["objects"])object["extension"].erase("growth_curve");auto migrated=editor::initial_snapshot(d);editor::apply_snapshot_json(d,migrated,no_curve);require(!migrated.values[0].extension.curve.enabled,"旧场景默认启用了生长曲线");
   auto old_curve=saved;auto &old_saved=old_curve["objects"][d.catalog.targets[0].id]["extension"]["growth_curve"];
   old_saved.erase("shape");old_saved.erase("planned_age");old_saved.erase("growth_factor");old_saved["reference_template"]=0;

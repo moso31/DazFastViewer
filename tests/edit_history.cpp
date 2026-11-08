@@ -135,6 +135,7 @@ static void commands(){
   roundtrip("visibility",[&]{current.snapshot.values[1].visible=false;});
   roundtrip("服装部位形变",[&]{current.snapshot.values[1].disabled_deformation_regions={"Foot","Toes"};});
   roundtrip("前掌统一权重",[&]{current.snapshot.values[1].forefoot_uniformity=.8f;});
+  roundtrip("角色服装跟随次数",[&]{current.snapshot.values[0].follow_smoothing_iterations=32;current.snapshot.values[0].torso_correction_iterations=64;});
   roundtrip("morph",[&]{current.snapshot.values[0].morphs[0]=1.7f;current.snapshot.values[0].unlimited_morphs.insert("morph");});
   roundtrip("IK / FK / PowerPose",[&]{for(size_t i=0;i<3;++i)current.snapshot.poses[0][i].rotation_degrees.z=float(i+2);});
   roundtrip("pins",[&]{current.snapshot.pose_pins.push_back({0,1,{.1f,.2f,.3f},true,true,ir::Transform::translate({1,2,3})});});

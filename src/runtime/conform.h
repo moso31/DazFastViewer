@@ -34,12 +34,17 @@ struct ConformLink {
 struct ConformStats {uint64_t bindings=0,authored_morphs=0,projected_vertices=0,evaluations=0;};
 // 仅由 DSON conform_target 绑定实例；parent 本身不代表 Fit To。
 // 绑定固定在静止网格上，传递的是蒙皮前位移，避免累积和二次蒙皮。
+// validation 保留绑定合法性校验，不生成仅供 project 使用的逐顶点缓存。
+enum class ConformPreparation { full, validation };
 class ConformRuntime {
   const std::vector<Target> &targets_;
+  ConformPreparation preparation_;
   std::vector<ConformLink> links_;
   std::vector<int> link_for_target_;
   std::vector<size_t> order_,vertex_counts_;
   std::vector<std::vector<float>> previous_weights_;
+  std::vector<std::pair<int,int>> previous_iterations_;
+  std::vector<size_t> settings_owner_;
   std::vector<std::vector<ir::Vec3>> offsets_;
   std::vector<uint64_t> revisions_,source_revisions_;
   std::vector<uint64_t> follow_revisions_;
@@ -51,12 +56,12 @@ class ConformRuntime {
   std::vector<std::vector<BoneRigidity>> bone_rigidity_;
   ConformStats stats_;
 public:
-  ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse=nullptr);
+  ConformRuntime(const ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const ConformRuntime *reuse=nullptr,ConformPreparation preparation=ConformPreparation::full);
   const ConformLink *link(size_t target) const;
   const auto &order() const {return order_;}
   const auto &links() const {return links_;}
   const auto &stats() const {return stats_;}
-  void project(const std::vector<std::vector<float>> &weights,MorphRuntime &morph);
+  void project(const std::vector<std::vector<float>> &weights,MorphRuntime &morph,const std::vector<Properties> &values,const std::vector<bool> &required);
   void rigidity_pose(std::vector<std::vector<JointPose>> &poses) const;
 };
 // 保留穿戴物的局部编辑与额外骨骼，跟随骨骼使用角色最终 ERC 姿势。
@@ -96,7 +101,8 @@ class CollisionRuntime {
 public:
   CollisionRuntime(ir::Scene &scene,const std::vector<Target> &targets,std::function<ir::Transform(uint32_t,uint32_t)> relative={},
       std::function<void(uint32_t,const std::vector<ir::Vec3> &,std::vector<ir::Vec3> &)> constrain={},std::function<uint64_t(uint32_t)> revision={});
-  ir::Delta evaluate(ir::Delta delta,bool parallel=true);
+  ir::Delta evaluate(ir::Delta delta,bool parallel=true,const std::vector<bool> &required={});
+  bool affected(const ir::Delta &delta,const std::vector<bool> &required={}) const;
   void reuse(const CollisionRuntime &previous);
   CollisionRuntime(const CollisionRuntime &s,ir::Scene &scene,std::function<ir::Transform(uint32_t,uint32_t)> relative,
     std::function<void(uint32_t,const std::vector<ir::Vec3> &,std::vector<ir::Vec3> &)> constrain,std::function<uint64_t(uint32_t)> revision)

@@ -658,7 +658,7 @@ void Renderer::run(std::stop_token stop) {
             diagnostics::LoadProfile profile;diagnostics::active=&profile;
             try {delta=runtime->evaluate(scene_properties(*current,desired),desired.poses);apply_instance_node_visibility(*current,desired,render_scene,&delta);apply_local_shadow_groups(*current,desired,render_scene,&delta);} catch(...) {diagnostics::active=nullptr;throw;}
             diagnostics::active=nullptr;timing("edit_evaluate",evaluate_begin,desired.revision);
-            if(refine_enabled&&(refine_pending||!delta.meshes.empty()||!delta.instances.empty()||!delta.visibility.empty()||!delta.grafts.empty()||!delta.masks.empty())) {
+            if(refine_enabled&&(refine_pending||runtime->needs_refinement(delta))) {
               refine_ticket=refiner.request(runtime_document,desired,refine_frames);refine_revision=desired.revision;refine_pending=true;
             }
             for(const auto &[name,value]:profile.timings) {Frame f;f.id=desired.revision;telemetry_.event(name.c_str(),f,value.seconds*1000);}

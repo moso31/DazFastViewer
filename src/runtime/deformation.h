@@ -3,6 +3,7 @@
 #include "runtime/morph.h"
 #include "runtime/skeleton.h"
 #include "runtime/conform.h"
+#include "runtime/visibility.h"
 #include <memory>
 
 namespace dfv::runtime {
@@ -41,6 +42,8 @@ class DeformationRuntime {
   std::vector<std::shared_ptr<const OffsetBuffer>> payload_leases_;
   bool evaluated_=false;
   bool collision_enabled_=true;
+  GeometryDependencies geometry_dependencies_;
+  std::vector<bool> required_instances_;
   ir::Delta collide(ir::Delta delta);
   ir::Delta push(ir::Delta delta,bool post_smooth);
   void update_garment_collision(const std::vector<Properties> &values);
@@ -52,13 +55,14 @@ class DeformationRuntime {
   ir::Delta activate_grafts(const std::vector<Properties> &values,ir::Delta delta);
   void feed(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,std::vector<std::vector<float>> &weights,std::vector<std::vector<JointPose>> &resolved,std::vector<std::vector<float>> *followed=nullptr);
 public:
-  DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr);
+  DeformationRuntime(ir::Scene &scene,const std::vector<Target> &targets,const std::vector<Skin> &skins,const std::vector<FormulaGraph> &graphs,const DeformationRuntime *reuse=nullptr,ConformPreparation preparation=ConformPreparation::full);
   // 调用方同时复制当前 Scene；共享不可变资产，独立复制所有可变求值缓存。
   DeformationRuntime(const DeformationRuntime &source,ir::Scene &scene);
   ir::Delta evaluate(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses);
   // One-way preview policy. A separate runtime supplies the fully corrected result;
   // its collision caches must never be fed our uncorrected preview geometry.
   void defer_collision() {collision_enabled_=false;}
+  bool needs_refinement(const ir::Delta &delta) const;
   PayloadProgress prepare(const std::vector<Properties> &values,const std::vector<std::vector<JointPose>> &poses,bool retry=false);
   // Reuse shape caches when only Group reference frames changed. False requires a
   // new bind because a Fit To source and follower no longer share their rest frame.

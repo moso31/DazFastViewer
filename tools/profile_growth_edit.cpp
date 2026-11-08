@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <bit>
 
 // 无窗口、只读诊断真实 DUFEX 的调参路径；不包含 Qt 绘制或 GPU 提交。
 int main(int argc,char **argv) {try {
@@ -45,14 +46,19 @@ int main(int argc,char **argv) {try {
   auto measurement=editor::make_object_measurement(restored.document,selected);
   stage("initial_measurement",[&]{const auto w=measurement(s,{});report["initial_height_cm"]=w.height_cm;});
   const auto original=s.values[selected].extension;
-  for(int k=0;k<5;++k){const std::string name=k==0?"age_half":k==1?"age_one":k==2?"age_eight":k==3?"strength":"scale_only";
+  auto geometry=[&](const ir::Scene &scene){J result=J::array();for(const auto &instance:scene.instances)if(instance.visible){uint64_t hash=14695981039346656037ull;auto add=[&](float value){const auto bits=std::bit_cast<uint32_t>(value);for(int shift=0;shift<32;shift+=8){hash^=(bits>>shift)&255;hash*=1099511628211ull;}};const auto &positions=scene.meshes.at(instance.mesh).positions;for(auto p:positions){add(p.x);add(p.y);add(p.z);}for(auto v:instance.transform.value)add(v);result.push_back({{"id",instance.id},{"vertices",positions.size()},{"hash",hash}});}return result;};
+  const auto original_values=s.values;
+  for(int k=0;k<8;++k){const std::string name=k==0?"age_half":k==1?"age_one":k==2?"age_eight":k==3?"strength":k==4?"scale_only":k==5?"reveal_coat":k==6?"hide_coat":"return_to_birth";
     if(k==4)stage(name+"/edit",[&]{s.values[selected].transform.general_scale*=1.01;});
-    else {auto next=s.values[selected].extension;if(k<2)next.age=original.age+(k+1)*.5;else if(k==2)next.age=8;else next.strength=original.strength>.5?.25:.75;
+    else if(k==5||k==6)stage(name+"/edit",[&]{for(size_t t=0;t<d.catalog.targets.size();++t)if(d.catalog.targets[t].label=="SU Spring School Uniform Coat")s.values[t].visible=k==5?true:original_values[t].visible;});
+    else {auto next=s.values[selected].extension;if(k<2)next.age=original.age+(k+1)*.5;else if(k==2)next.age=8;else if(k==7)next=original;else next.strength=original.strength>.5?.25:.75;
       stage(name+"/edit",[&]{const auto before=s.values[selected].morphs;report["missing"][name]=editor::edit_growth(d,s,selected,next);size_t changed=0;for(size_t m=0;m<before.size();++m)changed+=before[m]!=s.values[selected].morphs[m];report["changed_morphs"][name]=changed;});}
     stage(name+"/prepare",[&]{prepare(*preview);});
     ir::Delta delta;stage(name+"/preview",[&]{delta=preview->evaluate(editor::scene_properties(d,s),s.poses);});
     report["deltas"][name]={{"meshes",delta.meshes.size()},{"instances",delta.instances.size()}};
+    report["refinement_required"][name]=preview->needs_refinement(delta);
     stage(name+"/full",[&]{full->evaluate(editor::scene_properties(d,s),s.poses);});
+    report["visible_geometry"][name]=geometry(full_scene);
     stage(name+"/measurement",[&]{const auto w=measurement(s,{});report["measurements"][name]={{"height_cm",w.height_cm},{"kg",w.kg}};});
   }
   stage("unchanged/full",[&]{full->evaluate(editor::scene_properties(d,s),s.poses);});
