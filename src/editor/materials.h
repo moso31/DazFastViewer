@@ -14,7 +14,7 @@ struct MaterialParameter {
   enum Kind {number,color,vector,boolean,choice,texture};
   std::string id,label,group;
   Kind kind=number;
-  double minimum=0,maximum=1,step=.01;
+  double minimum=0,maximum=1,step=.05;
   std::vector<std::string> choices;
   std::function<nlohmann::json(const ir::Material &)> read;
   std::function<void(ir::Material &,const nlohmann::json &)> write;

@@ -1,6 +1,7 @@
 #include "editor/material_panel.h"
 #include "editor/parameter_widgets.h"
 #include "editor/material_numeric_settings.h"
+#include "editor/material_channel_info.h"
 #include "editor/object_hierarchy.h"
 #include "editor/folder_icon.h"
 #include "editor/numeric_slider.h"
@@ -126,6 +127,7 @@ bool MaterialPanel::eventFilter(QObject *object,QEvent *event){
         if(event->type()==QEvent::MouseButtonPress)choose_selection_set(item,mouse->modifiers().testFlag(Qt::ControlModifier));return true;
       }}
   }else if(const auto id=object->property("materialWheelRow").toString();!id.isEmpty()){
+    if(event->type()==QEvent::Hide&&!restoring_scroll_&&wheel_selected_==id){wheel_selected_.clear();filter();}
     if((event->type()==QEvent::MouseButtonPress||event->type()==QEvent::MouseButtonDblClick)&&static_cast<QMouseEvent *>(event)->button()==Qt::LeftButton){wheel_selected_=id;filter();}
     if(event->type()==QEvent::Wheel&&wheel_selected_!=id){auto *wheel=static_cast<QWheelEvent *>(event);QWheelEvent forwarded(properties_->viewport()->mapFromGlobal(wheel->globalPosition().toPoint()),wheel->globalPosition(),wheel->pixelDelta(),wheel->angleDelta(),wheel->buttons(),wheel->modifiers(),wheel->phase(),wheel->inverted(),wheel->source());QApplication::sendEvent(properties_->viewport(),&forwarded);return true;}
   }
@@ -216,7 +218,8 @@ void MaterialPanel::commit(const P &p,const J &v,int component){
     auto apply=[&]{snapshot_->material_overrides=std::move(next);status_->clear();if(changed)changed();};
     if(edit_requested)edit_requested(QStringLiteral("修改材质：")+text(p.label),apply);else apply();
     // 数字输入期间保留焦点和拖动状态；仅更新筛选状态。
-    filter();
+    filter();refresh_source_channels();
+    if(p.id=="hair"||p.id=="thin_walled"||p.id=="separate_refraction")schedule_properties();
   }catch(const std::exception &e){status_->setText(text(e.what()));schedule_properties();}
 }
 void MaterialPanel::reset(const std::string &parameter){
@@ -226,6 +229,9 @@ void MaterialPanel::reset(const std::string &parameter){
   auto previous=snapshot_->material_overrides;const auto &scene=document_->loaded.scene;
   for(auto s:surfaces()){const auto &i=scene.instances.at(s.instance);auto object=snapshot_->material_overrides.find(i.id);if(object==snapshot_->material_overrides.end())continue;const auto &slot=scene.meshes.at(i.mesh).material_slots.at(s.slot);if(parameter.empty())object->second.erase(slot);else if(auto patch=object->second.find(slot);patch!=object->second.end())patch->second.erase(parameter);}
   prune_material_overrides(scene,snapshot_->material_overrides);if(previous!=snapshot_->material_overrides&&changed)changed();schedule_properties();
+}
+void MaterialPanel::render_quality(RenderQuality quality){
+  if(render_quality_==quality)return;render_quality_=quality;rebuild_properties();
 }
 void MaterialPanel::rebuild_properties(){
   surface_cache_.reset();
@@ -251,16 +257,26 @@ void MaterialPanel::rebuild_properties(){
   }
   setProperty("resolvedMaterialCount",qulonglong(resolved.size()));setProperty("textureTableCopies",edited_textures?1:0);
   const auto authored_settings=material_numeric_settings(*resolved.front().first);
+  const bool any_hair=std::any_of(resolved.begin(),resolved.end(),[](const auto &r){return r.first->hair;});
+  const bool any_curves=std::any_of(selected.begin(),selected.end(),[&](const auto &s){const auto &curves=scene.meshes.at(scene.instances.at(s.instance).mesh).curves;return std::any_of(curves.begin(),curves.end(),[&](const auto &c){return c.material_slot==s.slot;});});
+  const bool any_sss=std::any_of(resolved.begin(),resolved.end(),[](const auto &r){return r.first->subsurface>0;});
   std::string group;QWidget *group_body=nullptr;QVBoxLayout *rows=nullptr;
   for(const auto &p:material_parameters()){
     if(group!=p.group){group=p.group;auto *header=new QToolButton;header->setText(text(group).section('/',0,0).trimmed());header->setToolTip(text(group));header->setCheckable(true);header->setChecked(true);header->setArrowType(Qt::DownArrow);header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);header->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Fixed);header->setProperty("materialGroupHeader",true);layout->addWidget(header);
-      group_body=new QWidget;group_body->setProperty("materialGroup",true);rows=new QVBoxLayout(group_body);rows->setContentsMargins(0,0,0,4);rows->setSpacing(4);layout->addWidget(group_body);header->setChecked(!collapsed_[group]);group_body->setVisible(header->isChecked());header->setArrowType(header->isChecked()?Qt::DownArrow:Qt::RightArrow);connect(header,&QToolButton::toggled,group_body,[this,header,group_body,group](bool open){collapsed_[group]=!open;group_body->setVisible(open);header->setArrowType(open?Qt::DownArrow:Qt::RightArrow);});}
+      const bool hair_group=group==material_parameter("hair").group,sss_group=group==material_parameter("subsurface").group;
+      const bool inactive=(hair_group&&!any_hair&&!any_curves)||(sss_group&&(!render_quality_.subsurface||!any_sss));
+      const auto collapse_key=group+(inactive?"/inactive":"/active");
+      const bool collapsed=collapsed_.contains(collapse_key)?collapsed_.at(collapse_key):inactive;
+      header->setObjectName("materialGroup/"+text(hair_group?"hair":sss_group?"subsurface":p.id));
+      if(sss_group&&!render_quality_.subsurface){header->setText(header->text()+QStringLiteral("（设置已禁用）"));header->setToolTip(QStringLiteral("应用设置已禁用次表面散射。可展开预先编辑，重新启用后才影响渲染。"));}
+      if(hair_group&&!any_hair)header->setToolTip(QStringLiteral("当前所选表面未启用毛发着色。展开可手动启用。"));
+      group_body=new QWidget;group_body->setProperty("materialGroup",true);rows=new QVBoxLayout(group_body);rows->setContentsMargins(0,0,0,4);rows->setSpacing(4);layout->addWidget(group_body);header->setChecked(!collapsed);group_body->setVisible(header->isChecked());header->setArrowType(header->isChecked()?Qt::DownArrow:Qt::RightArrow);connect(header,&QToolButton::toggled,group_body,[this,header,group_body,collapse_key](bool open){collapsed_[collapse_key]=!open;group_body->setVisible(open);header->setArrowType(open?Qt::DownArrow:Qt::RightArrow);});}
     const auto current=material_value(*resolved.front().first,*resolved.front().second,p);bool mixed=false;for(const auto &r:resolved)if(material_value(*r.first,*r.second,p)!=current){mixed=true;break;}
     auto *row=new QWidget;row->setObjectName("materialRow/"+text(p.id));row->setProperty("materialParameter",text(p.id));row->setProperty("materialSearchText",text(p.label+" "+p.id+" "+p.group));auto *row_layout=new QVBoxLayout(row);row_layout->setContentsMargins(3,1,3,1);row_layout->setSpacing(1);auto *horizontal=new QHBoxLayout;horizontal->setSpacing(4);row_layout->addLayout(horizontal);
     auto *label=new ParameterLabel(text(p.label).section(QStringLiteral(" · "),0,0));label->setFixedWidth(84);label->setToolTip(text(p.label));horizontal->addWidget(label);auto *reset_button=new QToolButton;reset_button->setObjectName("materialRevert/"+text(p.id));reset_button->setText(QStringLiteral("↺"));reset_button->setToolTip(QStringLiteral("还原此参数"));reset_button->setFixedWidth(22);connect(reset_button,&QToolButton::clicked,this,[this,id=p.id]{reset(id);});
     auto *controls=new QHBoxLayout;controls->setSpacing(3);if(p.kind==P::number){row_layout->addLayout(controls);label->setMaximumWidth(QWIDGETSIZE_MAX);horizontal->setStretch(0,1);}else horizontal->addLayout(controls,1);horizontal->addWidget(reset_button);const auto *parameter=&p;
     if(p.kind==P::number){auto *spin=new NumericSpinBox(true);spin->setFixedWidth(110);spin->setObjectName("material/"+text(p.id));spin->setDecimals(6);spin->setRange(std::min(p.minimum,current.get<double>()),std::max(p.maximum,current.get<double>()));spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->sync(current.get<double>());if(mixed)spin->setSuffix(QStringLiteral("（多值）"));auto *slider=new NumericSlider;slider->setMinimumWidth(30);slider->sync(spin->value(),p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),p.step);controls->addWidget(slider,1);controls->addWidget(spin);
-      auto *settings=new parameter_widgets::SettingsButtons(parameter_widgets::context(this),p.id,spin,authored_settings.contains(p.id)?authored_settings.at(p.id):runtime::ParameterSettings{},slider,p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),row);horizontal->insertWidget(horizontal->count()-1,settings);
+      auto *settings=new parameter_widgets::SettingsButtons(parameter_widgets::context(this),p.id,spin,authored_settings.contains(p.id)?authored_settings.at(p.id):runtime::ParameterSettings{false,0,1,p.step},slider,p.minimum,std::min(p.maximum,std::max(1.,std::abs(spin->value())*2)),row);horizontal->insertWidget(horizontal->count()-1,settings);
       auto *favorite=new QToolButton;favorite->setObjectName("favoriteButton");favorite->setAutoRaise(true);favorite->setCheckable(true);favorite->setToolTip(QStringLiteral("收藏参数"));const auto scope="material/"+instance.id+"/"+scene.meshes.at(instance.mesh).material_slots.at(first.slot);if(snapshot_->control_favorites)if(auto f=snapshot_->control_favorites->nodes.find(scope);f!=snapshot_->control_favorites->nodes.end())if(auto v=f->second.find(p.id);v!=f->second.end())favorite->setChecked(v->second);favorite->setText(favorite->isChecked()?QStringLiteral("★"):QStringLiteral("☆"));horizontal->insertWidget(horizontal->count()-1,favorite);
       connect(favorite,&QToolButton::clicked,this,[this,favorite,scope,id=p.id](bool on){auto apply=[&]{if(!snapshot_->control_favorites)snapshot_->control_favorites.emplace();snapshot_->control_favorites->nodes[scope][id]=on;favorite->setText(on?QStringLiteral("★"):QStringLiteral("☆"));};if(edit_requested)edit_requested(QStringLiteral("修改材质参数收藏"),apply);else apply();});
       auto sync=[settings]{settings->sync_slider();};
@@ -277,7 +293,7 @@ void MaterialPanel::rebuild_properties(){
           HdrColorDialog dialog(initial,linear(parameter->maximum),this);
           if(dialog.exec()==QDialog::Accepted&&dialog.color()!=initial){commit(*parameter,J(dialog.color()));schedule_properties();}
         });}
-      for(int component=0;component<3;++component){auto *spin=new NumericSpinBox(true);spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setObjectName("material/"+text(p.id)+"/"+QString::number(component));spin->setDecimals(6);const double shown=p.kind==P::color?srgb(current[size_t(component)]):current[size_t(component)].get<double>();spin->setRange(0,std::max(p.maximum,shown));spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->setPrefix(QString("%1 ").arg("RGB"[component]));spin->sync(shown);if(mixed)spin->setSuffix(QStringLiteral(" *"));controls->addWidget(spin,1);controls->addWidget(new parameter_widgets::SettingsButtons(parameter_widgets::context(this),p.id+"/"+std::to_string(component),spin,{},nullptr,0,1,row));connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,component,spin,swatch](double v){spin->setSuffix({});commit(*parameter,parameter->kind==P::color?linear(v):v,component);if(swatch){const auto selected=surfaces();if(!selected.empty()){const auto c=value(selected.front(),*parameter);bool mixed=false;for(auto s:selected)mixed|=value(s,*parameter)!=c;color_swatch(swatch,c,mixed);}}});}
+      for(int component=0;component<3;++component){auto *spin=new NumericSpinBox(true);spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setObjectName("material/"+text(p.id)+"/"+QString::number(component));spin->setDecimals(6);const double shown=p.kind==P::color?srgb(current[size_t(component)]):current[size_t(component)].get<double>();spin->setRange(0,std::max(p.maximum,shown));spin->setMinimumWidth(42);spin->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);spin->setSingleStep(p.step);spin->setKeyboardTracking(false);spin->setPrefix(QString("%1 ").arg("RGB"[component]));spin->sync(shown);if(mixed)spin->setSuffix(QStringLiteral(" *"));controls->addWidget(spin,1);controls->addWidget(new parameter_widgets::SettingsButtons(parameter_widgets::context(this),p.id+"/"+std::to_string(component),spin,runtime::ParameterSettings{false,0,1,p.step},nullptr,0,1,row));connect(spin,&QDoubleSpinBox::valueChanged,this,[this,parameter,component,spin,swatch](double v){spin->setSuffix({});commit(*parameter,parameter->kind==P::color?linear(v):v,component);if(swatch){const auto selected=surfaces();if(!selected.empty()){const auto c=value(selected.front(),*parameter);bool mixed=false;for(auto s:selected)mixed|=value(s,*parameter)!=c;color_swatch(swatch,c,mixed);}}});}
     }else if(p.kind==P::texture){auto *button=new QPushButton;button->setObjectName("material/"+text(p.id));button->setText(mixed?QStringLiteral("多张贴图"):current.is_null()?QStringLiteral("无贴图 · 点击选择"):QFileInfo(text(current.at("file").get<std::string>())).fileName());button->setToolTip(current.is_null()?QStringLiteral("选择场景贴图或图像文件"):text(current.dump(2)));controls->addWidget(button,1);
       connect(button,&QPushButton::clicked,this,[this,parameter,button]{QMenu menu;auto *browse=menu.addAction(QStringLiteral("浏览图像文件…"));auto *clear=menu.addAction(QStringLiteral("移除贴图"));menu.addSeparator();std::map<QAction *,J> available;const auto &scene=document_->loaded.scene;for(size_t i=0;i<scene.textures.size();++i){ir::Material m;m.*parameter->texture_member=int(i);auto v=material_value(m,scene.textures,*parameter);auto *action=menu.addAction(QFileInfo(text(v["file"].get<std::string>())).fileName());action->setToolTip(text(v["file"].get<std::string>()));available.emplace(action,std::move(v));}auto *action=menu.exec(button->mapToGlobal(QPoint(0,button->height())));if(!action)return;
         if(action==clear)commit(*parameter,J{});else if(action==browse){
@@ -288,6 +304,12 @@ void MaterialPanel::rebuild_properties(){
     if(p.kind==P::texture){auto *preview=new QLabel;thumbnail(preview,!mixed&&!current.is_null()?text(current.at("file").get<std::string>()):QString{});controls->addWidget(preview);if(auto *button=row->findChild<QPushButton *>()){button->setMinimumWidth(45);button->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}}
     if(p.kind==P::texture){auto *locate=new QToolButton;locate->setObjectName("materialLocate/"+text(p.id));locate->setIcon(folder_icon());locate->setToolTip(QStringLiteral("在内容库中定位"));locate->setFixedWidth(22);locate->setEnabled(!mixed&&!current.is_null());horizontal->insertWidget(horizontal->count()-1,locate);connect(locate,&QToolButton::clicked,this,[this,parameter]{const auto selected=surfaces();if(selected.empty()||!locate_file)return;const auto v=value(selected.front(),*parameter);if(!v.is_null())locate_file(text(v.at("file").get<std::string>()));});}
     if(p.kind==P::choice)if(auto *combo=row->findChild<QComboBox *>()){combo->setMinimumWidth(40);combo->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);}
+    if(p.id.starts_with("refraction_")){
+      const bool independent=std::any_of(resolved.begin(),resolved.end(),[](const auto &r){return r.first->separate_refraction;});
+      row->setEnabled(independent);row->setToolTip(QStringLiteral("独立折射层开启时使用这些颜色与粗糙度；关闭时折射共用基础色与高光粗糙度。"));
+    }
+    if(p.group==material_parameter("hair").group&&p.id!="hair")row->setEnabled(p.id=="hair_root_radius"||p.id=="hair_tip_radius"?any_curves:any_hair);
+    if(p.id=="transmission")row->setToolTip(QStringLiteral("折射权重控制该表面的透射。清晰玻璃还需低折射粗糙度、明亮折射颜色；模型内部其他表面仍可遮挡视线。"));
     auto children=row->findChildren<QWidget *>();children.push_back(row);for(auto *child:children){child->setProperty("materialWheelRow",text(p.id));}
     rows->addWidget(row);
   }
@@ -297,11 +319,28 @@ void MaterialPanel::rebuild_properties(){
   auto *uv_revert=new QToolButton;uv_revert->setObjectName("materialRevert/uv_set");uv_revert->setText(QStringLiteral("↺"));uv_revert->setFixedWidth(22);uv_revert->setToolTip(QStringLiteral("还原至加载场景或最近应用的材质 UV Set"));uv_layout->addWidget(uv_revert);connect(uv_revert,&QToolButton::clicked,this,[this]{reset("uv_set");});
   connect(uv_combo,&QComboBox::activated,this,[this,uv_combo](int index){const auto data=uv_combo->itemData(index).toString();if(data.isEmpty()||!uv_requested)return;const auto j=J::parse(utf8(data));uv_requested({j.at("uri"),j.at("owner"),j.at("label")},surfaces());});
   for(auto *widget:{uv_row,static_cast<QWidget *>(uv_combo),static_cast<QWidget *>(uv_label)}){widget->setProperty("materialWheelRow","uv_set");}
-  auto *source=new QTreeWidget;source->setObjectName("materialSourceChannels");source->setHeaderLabels({QStringLiteral("源材质通道"),QStringLiteral("原值 / 状态")});source->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);source->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);source->setAutoScroll(false);source->setColumnWidth(0,180);
-  for(const auto &c:scene.materials.at(instance.materials.at(first.slot)).source_channels){auto *item=new QTreeWidgetItem(source,{text(c.label),text(c.value)+(c.mapped?QStringLiteral(" · 已转换"):QStringLiteral(" · 未映射"))});item->setToolTip(0,text(c.id+"\n"+c.type));item->setToolTip(1,text(c.image));if(!c.mapped)item->setForeground(1,QColor(210,150,70));}
-  source->doItemsLayout();int source_height=source->header()->height()+2*source->frameWidth();for(int r=0;r<source->topLevelItemCount();++r)source_height+=source->sizeHintForRow(r);source->setFixedHeight(std::max(40,source_height));
-  auto *source_header=new QToolButton;source_header->setText(QStringLiteral("源通道与兼容信息（只读）"));source_header->setCheckable(true);source_header->setArrowType(Qt::RightArrow);source_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);layout->addWidget(source_header);layout->addWidget(source);source->hide();connect(source_header,&QToolButton::toggled,source,[source_header,source](bool on){source->setVisible(on);source_header->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
-  source_header->setToolTip(QStringLiteral("显示第一个所选表面的原始通道。上方参数为 Cycles 转换后的可编辑值；未映射通道不参与渲染。"));layout->addStretch();filter();
+  auto *source=new QTreeWidget;source->setObjectName("materialSourceChannels");source->setHeaderLabels({QStringLiteral("源通道"),QStringLiteral("源值"),QStringLiteral("转换 / 作用域")});source->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);source->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);source->setAutoScroll(false);source->setRootIsDecorated(false);source->header()->setSectionResizeMode(QHeaderView::Stretch);
+  auto *source_header=new QToolButton;source_header->setObjectName("materialSourceHeader");source_header->setText(QStringLiteral("源通道与兼容信息（只读）"));source_header->setCheckable(true);source_header->setArrowType(Qt::RightArrow);source_header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);layout->addWidget(source_header);layout->addWidget(source);source->hide();connect(source_header,&QToolButton::toggled,source,[this,source_header,source](bool on){source->setVisible(on);if(on)refresh_source_channels();source_header->setArrowType(on?Qt::DownArrow:Qt::RightArrow);});
+  source_header->setToolTip(QStringLiteral("第一个所选表面的源值和作用域。悬停查看转换后的当前值（含编辑覆盖）。未支持的源值不会参与渲染；关闭的层和未采用的源模式分别标记。"));refresh_source_channels();layout->addStretch();filter();
+}
+void MaterialPanel::refresh_source_channels(){
+  auto *source=findChild<QTreeWidget *>("materialSourceChannels");if(!source||source->isHidden()||!document_||!snapshot_)return;
+  const auto selected=surfaces();if(selected.empty())return;const auto &scene=document_->loaded.scene;const auto first=selected.front();
+  auto textures=scene.textures;const auto m=effective_material(scene,snapshot_->material_overrides,first.instance,first.slot,textures);
+  const auto channels=m.source_definition.empty()?J::object():J::parse(m.source_definition).value("channels",J::object());
+  const auto &curves=scene.meshes.at(scene.instances.at(first.instance).mesh).curves;
+  const bool uses_curves=std::any_of(curves.begin(),curves.end(),[&](const auto &c){return c.material_slot==first.slot;});
+  source->clear();
+  for(const auto &c:m.source_channels){
+    const auto info=material_channel_info(m,c,channels,render_quality_,uses_curves);
+    auto *item=new QTreeWidgetItem(source,{text(c.label),text(c.value),text(info.status)});item->setData(0,Qt::UserRole,text(c.id));
+    QString detail=text(c.id+"\n"+info.detail);
+    for(const auto &id:info.parameters){const auto &p=material_parameter(id);const auto v=material_value(m,textures,p);detail+="\n"+text(p.label)+" = "+text(v.dump());}
+    if(!c.image.empty())detail+=QStringLiteral("\n源贴图：")+text(c.image);
+    for(int column=0;column<3;++column)item->setToolTip(column,detail);
+    if(info.unsupported)item->setForeground(2,QColor(180,110,30));
+  }
+  source->doItemsLayout();int height=source->header()->height()+2*source->frameWidth();for(int r=0;r<source->topLevelItemCount();++r)height+=source->sizeHintForRow(r);source->setFixedHeight(std::max(40,height));
 }
 void MaterialPanel::filter(){
   if(!properties_->widget()||!document_||!snapshot_)return;const auto query=search_->text().trimmed();const auto selected=surfaces();const auto &scene=document_->loaded.scene;
@@ -310,7 +349,7 @@ void MaterialPanel::filter(){
     for(auto s:selected){const auto &i=scene.instances.at(s.instance);auto object=snapshot_->material_overrides.find(i.id);if(object==snapshot_->material_overrides.end())continue;auto slot=object->second.find(scene.meshes.at(i.mesh).material_slots.at(s.slot));edited|=slot!=object->second.end()&&slot->second.contains(utf8(id.toString()));}
     row->setVisible((!modified_->isChecked()||edited)&&(query.isEmpty()||row->property("materialSearchText").toString().contains(query,Qt::CaseInsensitive)));
     if(auto *label=row->findChild<QLabel *>()){auto font=label->font();font.setBold(edited);label->setFont(font);}
-    auto palette=row->palette();const bool active=id.toString()==wheel_selected_;palette.setColor(QPalette::Window,palette.color(QPalette::Highlight));for(auto group:{QPalette::Active,QPalette::Inactive})palette.setColor(group,QPalette::WindowText,active?palette.color(group,QPalette::HighlightedText):properties_->palette().color(group,QPalette::WindowText));row->setPalette(palette);row->setAutoFillBackground(active);
+    if(auto *label=row->findChild<QLabel *>()){auto palette=properties_->palette();const bool active=id.toString()==wheel_selected_;palette.setColor(QPalette::Window,palette.color(QPalette::Highlight));for(auto group:{QPalette::Active,QPalette::Inactive})palette.setColor(group,QPalette::WindowText,active?palette.color(group,QPalette::HighlightedText):properties_->palette().color(group,QPalette::WindowText));label->setPalette(palette);label->setAutoFillBackground(active);}
   }
   auto *layout=properties_->widget()->layout();for(int i=1;i<layout->count();++i){auto *group=layout->itemAt(i)->widget();if(!group||!group->property("materialGroup").toBool())continue;auto *header=qobject_cast<QToolButton *>(layout->itemAt(i-1)->widget());if(!header)continue;bool any=false;for(auto *row:group->findChildren<QWidget *>(QString{},Qt::FindDirectChildrenOnly))if(row->property("materialParameter").isValid()&&!row->isHidden())any=true;header->setVisible(any);group->setVisible(any&&(header->isChecked()||!query.isEmpty()));}
 }

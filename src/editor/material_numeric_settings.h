@@ -1,5 +1,6 @@
 #pragma once
 #include "render_ir/scene.h"
+#include "editor/materials.h"
 #include "runtime/parameter_settings.h"
 
 namespace dfv::editor {
@@ -27,8 +28,13 @@ inline std::map<std::string,runtime::ParameterSettings> material_numeric_setting
   };
   auto inherit=[&](const std::string &id,const std::string &name){
     auto found=channels.find(name);if(found==channels.end()||!found->is_object())return;const auto &c=*found;
-    runtime::ParameterSettings s{c.value("clamped",false),c.value("min",0.),c.value("max",1.),c.value("step_size",.1)};
-    if(!std::isfinite(s.step)||s.step<=0)s.step=.1;runtime::validate(s);result[id]=s;
+    const auto step=material_parameter(id).step;
+    runtime::ParameterSettings s{c.value("clamped",false),c.value("min",0.),c.value("max",1.),c.value("step_size",step)};
+    if(!std::isfinite(s.step)||s.step<=0)s.step=step;
+    // 部分 DAZ 权重使用 step_size=1，直接用于 0～1 编辑会退化为开关。
+    // 连续参数保留更细的源步长；用户显式保存的规则由控件绑定最后覆盖。
+    if(step<=.05)s.step=std::min(s.step,step);
+    runtime::validate(s);result[id]=s;
   };
   for(const auto &[id,name]:mapping)inherit(id,name);
   // 粗糙度字段有多种来源；只沿用实际参与转换的通道。

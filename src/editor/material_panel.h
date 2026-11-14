@@ -1,5 +1,6 @@
 #pragma once
 #include "editor/document.h"
+#include "viewport/render_quality.h"
 #include <QWidget>
 #include <memory>
 #include <set>
@@ -37,6 +38,7 @@ class MaterialPanel final:public QWidget {
   nlohmann::json value(Surface surface,const MaterialParameter &parameter) const;
   void rebuild_tree();
   void rebuild_properties();
+  void refresh_source_channels();
   void filter();
   void commit(const MaterialParameter &parameter,const nlohmann::json &value,int component=-1);
   void reset(const std::string &parameter);
@@ -47,11 +49,13 @@ class MaterialPanel final:public QWidget {
   bool restoring_scroll_=false;
   bool refresh_pending_=false;
   std::map<std::string,bool> collapsed_;
+  RenderQuality render_quality_;
   QString wheel_selected_,hovered_,hover_suppressed_;
   bool eventFilter(QObject *object,QEvent *event) override;
   void clear_hover();
 public:
   explicit MaterialPanel(QWidget *parent=nullptr);
+  void render_quality(RenderQuality quality);
   std::function<void()> changed;
   std::function<void(const QString &,const std::function<void()> &)> edit_requested;
   std::function<void(bool)> interaction_changed;

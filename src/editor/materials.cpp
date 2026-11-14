@@ -31,11 +31,11 @@ ir::Texture read_texture(const J &j,ir::ColorSpace colorspace){
 const std::vector<P> &material_parameters(){
   static const auto parameters=[] {
     std::vector<P> out;std::string group;
-    auto scalar=[&](const char *id,const char *label,float M::*member,double lo=0,double hi=1,double step=.01,double scale=1){
+    auto scalar=[&](const char *id,const char *label,float M::*member,double lo=0,double hi=1,double step=.05,double scale=1){
       P p;p.id=id;p.label=label;p.group=group;p.minimum=lo;p.maximum=hi;p.step=step;
       p.copy=[=](M &dst,const M &src){dst.*member=src.*member;};p.read=[=](const M &m)->J{return double(m.*member)*scale;};p.restore=[=](M &m,const J &v){m.*member=float(v.get<double>()/scale);};p.write=[=](M &m,const J &v){const double x=v.get<double>();range(x,lo,hi);m.*member=float(x/scale);};out.push_back(std::move(p));};
     auto color=[&](const char *id,const char *label,ir::Vec3 M::*member,bool radius=false){
-      P p;p.id=id;p.label=label;p.group=group;p.kind=radius?P::vector:P::color;p.maximum=radius?1000:10;p.step=.01;
+      P p;p.id=id;p.label=label;p.group=group;p.kind=radius?P::vector:P::color;p.maximum=radius?1000:10;p.step=.05;
       p.copy=[=](M &dst,const M &src){dst.*member=src.*member;};p.read=[=](const M &m)->J{auto v=m.*member;return radius?J::array({v.x*1000.,v.y*1000.,v.z*1000.}):vec(v);};
       p.restore=[=](M &m,const J &v){auto a=v.get<std::array<double,3>>();double scale=radius?1000:1;m.*member={float(a[0]/scale),float(a[1]/scale),float(a[2]/scale)};};
       p.write=[=](M &m,const J &v){auto a=v.get<std::array<double,3>>();for(auto x:a)range(x,0,radius?1000:std::pow((10.+.055)/1.055,2.4));double scale=radius?1000:1;m.*member={float(a[0]/scale),float(a[1]/scale),float(a[2]/scale)};};out.push_back(std::move(p));};
@@ -46,7 +46,7 @@ const std::vector<P> &material_parameters(){
     color("base_color","基础色 · Base Color",&M::base_color);texture("color_texture","基础色贴图",&M::color_texture,true);
     scalar("metallic","金属度 · Metallic Weight",&M::metallic);texture("metallic_texture","金属度贴图",&M::metallic_texture);
     scalar("opacity","裁切透明度 · Cutout Opacity",&M::opacity);texture("opacity_texture","透明度贴图",&M::opacity_texture);
-    flag("thin_walled","薄壁 · Thin Walled",&M::thin_walled);flag("hair","毛发着色 · Hair",&M::hair);
+    flag("thin_walled","薄壁 · Thin Walled",&M::thin_walled);
     group="漫反射覆盖 / Diffuse Overlay（近似）";
     scalar("overlay_weight","覆盖层权重 · Diffuse Overlay Weight",&M::overlay_weight);texture("overlay_texture","覆盖层权重贴图",&M::overlay_texture);flag("overlay_squared","权重平方 · Weight Squared",&M::overlay_squared);
     color("overlay_color","覆盖层颜色 · Diffuse Overlay Color",&M::overlay_color);texture("overlay_color_texture","覆盖层颜色贴图",&M::overlay_color_texture,true);scalar("overlay_roughness","覆盖层粗糙度 · Diffuse Overlay Roughness",&M::overlay_roughness);texture("overlay_roughness_texture","覆盖层粗糙度贴图",&M::overlay_roughness_texture);
@@ -60,12 +60,12 @@ const std::vector<P> &material_parameters(){
     group="折射与透光 / Refraction";
     scalar("transmission","折射权重 · Refraction Weight",&M::transmission);texture("transmission_texture","折射权重贴图",&M::transmission_texture);
     scalar("ior","折射率 · Refraction Index",&M::ior,1,4);
-    flag("separate_refraction","独立折射颜色",&M::separate_refraction);color("refraction_color","折射颜色 · Refraction Color",&M::refraction_color);texture("refraction_color_texture","折射颜色贴图",&M::refraction_color_texture,true);
+    flag("separate_refraction","独立折射层（颜色与粗糙度）",&M::separate_refraction);color("refraction_color","折射颜色 · Refraction Color",&M::refraction_color);texture("refraction_color_texture","折射颜色贴图",&M::refraction_color_texture,true);
     scalar("refraction_roughness","折射粗糙度 · Refraction Roughness",&M::refraction_roughness);texture("refraction_roughness_texture","折射粗糙度贴图",&M::refraction_roughness_texture);
     scalar("translucency","薄壁透光权重 · Translucency",&M::translucency);texture("translucency_texture","透光 / SSS 权重贴图",&M::translucency_texture);
     color("translucency_color","透光颜色 · Translucency Color",&M::translucency_color);texture("translucency_color_texture","透光颜色贴图",&M::translucency_color_texture,true);
-    group="皮下散射 / SSS";
-    scalar("subsurface","皮下散射权重 · Subsurface",&M::subsurface);color("subsurface_radius","散射半径 RGB（mm）",&M::subsurface_radius,true);
+    group="次表面散射 / SSS";
+    scalar("subsurface","次表面散射权重 · Subsurface",&M::subsurface);color("subsurface_radius","散射半径 RGB（mm）",&M::subsurface_radius,true);
     flag("separate_subsurface_color","独立散射颜色",&M::separate_subsurface_color);color("subsurface_color","散射颜色 · Subsurface Color",&M::subsurface_color);
     scalar("subsurface_anisotropy","散射方向 · SSS Direction",&M::subsurface_anisotropy,-.9,.9);
     group="清漆 / Top Coat";
@@ -90,6 +90,7 @@ const std::vector<P> &material_parameters(){
     choices("emission_units","亮度单位 · Luminance Units",&M::emission_units,{"cd/m²","kcd/m²","cd/ft²","cd/cm²","lm","W"});
     scalar("emission_temperature","色温（K，0 = 禁用）",&M::emission_temperature,0,40000,100);scalar("emission_efficacy","光效（lm/W）",&M::emission_efficacy,0,1000,1);flag("emission_two_sided","双面发光 · Two Sided Light",&M::emission_two_sided);
     group="毛发 / Hair";
+    flag("hair","毛发着色 · Hair",&M::hair);
     color("hair_tip_color","发梢颜色 · Hair Tip Color",&M::hair_tip_color);scalar("hair_melanin","黑色素 · Melanin",&M::hair_melanin);scalar("hair_redness","红色素 · Melanin Redness",&M::hair_redness);scalar("hair_radial_roughness","径向粗糙度 · Azimuthal Roughness",&M::hair_radial_roughness);
     texture("hair_tip_texture","发梢颜色贴图",&M::hair_tip_texture,true);
     scalar("hair_root_radius","发根半径（mm）",&M::hair_root_radius,0,10,.001,1000);scalar("hair_tip_radius","发梢半径（mm）",&M::hair_tip_radius,0,10,.001,1000);

@@ -978,6 +978,7 @@ class Editor final:public EditorWindow {
       if(ui_scale_->percent()!=application_settings_.ui_percent) ui_scale_->set_percent(application_settings_.ui_percent);
       viewport_settings_->set(application_settings_.viewport);
       renderer_->render_quality(application_settings_.render);
+      materials_->render_quality(application_settings_.render);
       renderer_->physics_options(project_.physics);
       const auto message=saved?QStringLiteral("项目与应用设置已保存。"):QStringLiteral("设置已应用，尚未保存。");
       statusBar()->showMessage(message+(render!=application_settings_.render?QStringLiteral("正在释放旧渲染资源并应用新画质…"):QString{}));
@@ -2365,6 +2366,7 @@ public:
     if(!self_test_) application_settings_=ApplicationSettings::load();
     if(!self_test_&&!sampling.quality_override) static_cast<RenderQuality &>(sampling)=application_settings_.render;
     else application_settings_.render=sampling;
+    materials_->render_quality(application_settings_.render);
     // 状态栏也须在缩放与停靠恢复之前创建，否则首次消息改变栏高后会重新分配面板尺寸。
     statusBar()->ensurePolished();
     ui_scale_=new UiScale(false,{},this);ui_scale_->set_percent(application_settings_.ui_percent);
