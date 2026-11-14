@@ -44,7 +44,8 @@
     if(state.generation==document->generation&&state.applied_revision==source.revision&&size_t(t)<state.target_world.size())world=state.target_world[size_t(t)];
     auto measure=make_object_measurement(document,size_t(t));
     return [document=std::move(document),source=std::move(source),world,t,measure=std::move(measure)](const runtime::ObjectExtension &value,bool force_shape){
-      auto preview=source;preview.values[size_t(t)].extension.curve.enabled=false;edit_growth(*document,preview,size_t(t),value,force_shape||value.age!=source.values[size_t(t)].extension.age);auto preview_world=world;
+      const auto &before_shape=source.values[size_t(t)].extension;
+      auto preview=source;preview.values[size_t(t)].extension.curve.enabled=false;edit_growth(*document,preview,size_t(t),value,force_shape||value.age!=before_shape.age||value.strength!=before_shape.strength||value.fatness!=before_shape.fatness);auto preview_world=world;
       if(world){const auto &target=document->catalog.targets[size_t(t)];const auto &loaded=document->loaded.scene.instances[target.instance].transform;
         const auto before=runtime::parameter_transform(source.values[size_t(t)].transform,target,loaded)*loaded;
         const auto after=runtime::parameter_transform(preview.values[size_t(t)].transform,target,loaded)*loaded;
@@ -61,7 +62,7 @@
       if(next.kind==runtime::ExtensionKind::growth&&(shape||step!=0||(next.curve.enabled&&!runtime::same_growth_scale(next.curve,snapshot_.values[size_t(t)].extension.curve)))){
         missing=edit_growth(*document_,snapshot_,size_t(t),next,shape,step);
         const auto &target=document_->catalog.targets[size_t(t)];
-        std::erase_if(pending_parameters_,[&](const auto &p){if(p.first.first!=target.id)return false;for(const auto &m:target.morphs)if(m.label=="Genesis 8 Baby"&&m.id==p.first.second)return true;for(const auto &v:runtime::growth_values(next.age,next.strength))for(const auto &m:target.morphs)if(m.label==v.label&&m.id==p.first.second)return true;return false;});
+        std::erase_if(pending_parameters_,[&](const auto &p){if(p.first.first!=target.id)return false;for(const auto &m:target.morphs)if(m.label=="Genesis 8 Baby"&&m.id==p.first.second)return true;for(const auto &v:runtime::growth_values(next.age,next.strength,next.fatness))for(const auto &m:target.morphs)if(m.label==v.label&&m.id==p.first.second)return true;return false;});
         apply_parameters_->setEnabled(!pending_parameters_.empty());
       }else snapshot_.values[t].extension=next;
       for(const auto &[key,value]:curve_settings)snapshot_.parameter_settings[document_->catalog.targets[size_t(t)].id][key]=value;

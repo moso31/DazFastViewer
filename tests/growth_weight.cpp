@@ -129,6 +129,7 @@ static void serialization(const fs::path &folder){
     require(result.serial==2&&result.error.empty(),"后台测量未返回最新输入");near(result.weight.kg,isolated.kg*4,.01,"普通物体没有使用当前形变网格或新密度");
     worker.request(3,{}, {},0);
   }
+  s.values[0].extension.fatness=1.25;s.values[1].extension.fatness=-.125;
   s.values[0].extension.scale_multiplier=1.25;s.values[0].extension.scale_round=true;s.values[0].extension.scale_round_exponent=-4;
   s.values[0].extension.age=0;s.values[0].extension.baby_enabled=true;s.values[0].extension.baby_begin=.25;s.values[0].extension.baby_end=7;s.values[0].extension.baby_strength=.65;s.values[0].extension.baby_blend=false;s.values[0].extension.baby_scale_isolated=true;
   s.parameter_settings[d.catalog.targets[0].id]["extension/GrowthBabyEnd"]={true,0,10,.25};
@@ -142,7 +143,9 @@ static void serialization(const fs::path &folder){
   s.values[0].follow_smoothing_iterations=32;s.values[0].torso_correction_iterations=64;
   s.parameter_settings[d.catalog.targets[0].id]["parameters//special/follow_smoothing_iterations"]={true,0,400,1};
   auto saved=editor::snapshot_json(d,s);auto bad=saved;bad["objects"][d.catalog.targets[1].id]["extension"]["density"]=-1;bool rejected=false;try{editor::apply_snapshot_json(d,s,bad);}catch(...){rejected=true;}require(rejected&&editor::snapshot_json(d,s)==saved,"失败覆盖留下部分修改");
-  auto legacy=saved;legacy.erase("control_favorites");for(auto &object:legacy["objects"]){object.erase("favorites");for(const char *key:{"baby_enabled","baby_begin","baby_end","baby_strength","baby_blend","baby_scale_isolated"})object["extension"].erase(key);}auto old=editor::initial_snapshot(d);editor::apply_snapshot_json(d,old,legacy);
+  bad=saved;bad["objects"][d.catalog.targets[1].id]["extension"]["fatness"]="invalid";rejects([&]{editor::apply_snapshot_json(d,s,bad);},"非法肥胖存档未拒绝");require(editor::snapshot_json(d,s)==saved,"非法肥胖存档留下部分修改");
+  auto legacy=saved;legacy.erase("control_favorites");for(auto &object:legacy["objects"]){object.erase("favorites");for(const char *key:{"fatness","baby_enabled","baby_begin","baby_end","baby_strength","baby_blend","baby_scale_isolated"})object["extension"].erase(key);}auto old=editor::initial_snapshot(d);editor::apply_snapshot_json(d,old,legacy);
+  require(old.values[0].extension.fatness==.5&&old.values[1].extension.fatness==.5,"旧存档肥胖默认值错误");
   require(!old.values[0].extension.baby_enabled&&old.values[0].extension.baby_end==7&&old.values[0].extension.baby_strength==.6&&old.values[0].extension.baby_blend&&!old.values[0].extension.baby_scale_isolated,"旧场景的婴儿期默认设置或外形隔离状态错误");
   require(!old.control_favorites&&!old.values[0].favorites,"旧版扩展未保留收藏迁移入口");
   {auto without=saved;for(auto &object:without["objects"]){object.erase("follow_smoothing_iterations");object.erase("torso_correction_iterations");}auto restored=editor::initial_snapshot(d);editor::apply_snapshot_json(d,restored,without);require(restored.values[0].follow_smoothing_iterations==96&&restored.values[0].torso_correction_iterations==192,"旧存档的服装跟随默认次数错误");}
@@ -169,13 +172,15 @@ static void serialization(const fs::path &folder){
   auto second=load(file);d.generation=2;const auto first=d.catalog.targets.size();editor::append_document(d,std::move(second));auto merged=editor::initial_snapshot(d);merged.values[first].favorites=s.values[0].favorites;merged.values[first+1].favorites=s.values[1].favorites;merged.values[first].extension.kind=runtime::ExtensionKind::density;merged.values[first].extension.density=4567;editor::remove_target(d,merged,0);
   editor::save_scene_extension(sidecar,d,merged);restored=editor::load_scene_extension(sidecar,{folder},88);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,merged),"追加删除的身份或编辑值未恢复");
   const auto prior=daz::read_document_file(sidecar);auto invalid=merged;invalid.values[0].extension.density=-1;rejected=false;try{editor::save_scene_extension(sidecar,d,invalid);}catch(...){rejected=true;}require(rejected&&daz::read_document_file(sidecar)==prior,"失败保存损坏已有文件");
-  merged.values[0].extension.curve=s.values[0].extension.curve;
+  merged.values[0].extension.curve=s.values[0].extension.curve;merged.values[0].extension.fatness=1.25;
   const auto copies=editor::copy_selection(d,merged,{0},{},{},false);require(copies.size()==1&&merged.values[copies[0]]==merged.values[0],"复制未保留对象参数");merged.values[copies[0]].transform.general_scale=2;
   editor::save_scene_extension(sidecar,d,merged);restored=editor::load_scene_extension(sidecar,{folder},89);require(editor::snapshot_json(*restored.document,restored.snapshot)==editor::snapshot_json(d,merged),"复制对象保存重载不一致");
 }
 #include "growth_curve_real.inl"
+#include "growth_composition.inl"
 int main(int argc,char **argv){
-  try{rules();volume();growth();baby_growth();growth_curve_checks();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
+  try{rules();volume();growth();baby_growth();growth_curve_checks();growth_composition();const auto folder=fs::temp_directory_path()/("dfv-growth-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(folder);serialization(folder);fs::remove_all(folder);
+    if(argc>4&&std::string(argv[2])=="--composition"){real_growth_composition(fs::u8path(argv[1]),fs::u8path(argv[3]),fs::u8path(argv[4]));return 0;}
     if(argc>3&&std::string(argv[2])=="--curve"){real_growth_curve(fs::u8path(argv[1]),fs::u8path(argv[3]));return 0;}
     if(argc>2&&std::string(argv[2])=="--classify"){
       const auto scene=editor::load_scene_extension(fs::u8path(argv[1]),{"H:/g1","H:/g3"},1);J report=J::array();

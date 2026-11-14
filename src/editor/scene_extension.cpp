@@ -1,4 +1,5 @@
 #include "editor/scene_extension.h"
+#include "editor/prop_split.h"
 #include "editor/object_extension.h"
 #include "city/document.h"
 #include "water/document.h"
@@ -33,10 +34,12 @@ J extension(const runtime::ObjectExtension &v){
   runtime::validate_extension(v);const auto &c=v.curve;J points=J::array();for(const auto &p:c.shape.points)points.push_back({p.age,p.rate});
   J curve={{"interpolation","pchip"},{"planned_age",c.planned_age},{"growth_factor",c.growth_factor},{"puberty_weight",c.puberty_weight},{"height_in_cm",c.height_in_cm},{"growth_in_cm",c.growth_in_cm},{"enabled",c.enabled},{"birth_scale",c.birth_scale},{"adult_scale",c.adult_scale},{"minimum_growth",c.minimum_growth},{"minimum_mode",int(c.minimum_mode)},
     {"shape",{{"reference_template",c.shape.reference_template},{"points",points}}}};
-  return {{"kind",int(v.kind)},{"age",v.age},{"age_step",v.age_step},{"sensitivity",v.sensitivity},{"strength",v.strength},{"density",v.density},{"scale_multiplier",v.scale_multiplier},{"scale_round",v.scale_round},{"scale_round_exponent",v.scale_round_exponent},{"baby_enabled",v.baby_enabled},{"baby_begin",v.baby_begin},{"baby_end",v.baby_end},{"baby_strength",v.baby_strength},{"baby_blend",v.baby_blend},{"baby_scale_isolated",v.baby_scale_isolated},{"growth_curve",curve}};
+  return {{"kind",int(v.kind)},{"age",v.age},{"age_step",v.age_step},{"sensitivity",v.sensitivity},{"strength",v.strength},{"fatness",v.fatness},{"density",v.density},{"scale_multiplier",v.scale_multiplier},{"scale_round",v.scale_round},{"scale_round_exponent",v.scale_round_exponent},{"baby_enabled",v.baby_enabled},{"baby_begin",v.baby_begin},{"baby_end",v.baby_end},{"baby_strength",v.baby_strength},{"baby_blend",v.baby_blend},{"baby_scale_isolated",v.baby_scale_isolated},{"growth_curve",curve}};
 }
 runtime::ObjectExtension read_extension(const J &j){
   runtime::ObjectExtension v;v.kind=runtime::ExtensionKind(j.at("kind").get<int>());v.age=j.at("age");v.age_step=j.at("age_step");v.sensitivity=j.at("sensitivity");v.strength=j.at("strength");v.density=j.at("density");v.scale_multiplier=j.value("scale_multiplier",1.0);v.scale_round=j.value("scale_round",false);v.scale_round_exponent=j.value("scale_round_exponent",1);v.baby_enabled=j.value("baby_enabled",v.baby_enabled);v.baby_begin=j.value("baby_begin",v.baby_begin);v.baby_end=j.value("baby_end",v.baby_end);v.baby_strength=j.value("baby_strength",v.baby_strength);v.baby_blend=j.value("baby_blend",true);v.baby_scale_isolated=j.value("baby_scale_isolated",false);
+  // 旧文件使用中性肥胖值；加载只恢复已保存的 Morph，不重新计算外形。
+  v.fatness=j.value("fatness",.5);
   if(j.contains("growth_curve")){const auto &saved=j.at("growth_curve");auto &c=v.curve;
     c.enabled=saved.at("enabled");c.birth_scale=saved.at("birth_scale");c.adult_scale=saved.at("adult_scale");c.minimum_growth=saved.at("minimum_growth");c.minimum_mode=runtime::GrowthMinimumMode(saved.at("minimum_mode").get<int>());
     const bool legacy=!saved.contains("shape");const auto &shape=legacy?saved:saved.at("shape");
@@ -88,6 +91,7 @@ void replay(Document &d,const J &operations,const std::vector<fs::path> &roots,c
     else if(kind=="copy_nodes"){auto snapshot=initial_snapshot(d);copy_selection(d,snapshot,{},op.at("nodes").get<std::vector<std::string>>(),{},op.at("children").get<bool>(),op.at("prefix").get<std::string>());}
     else if(kind=="prop_draft")restore_prop_draft(d,op);
     else if(kind=="static_prop"){auto snapshot=initial_snapshot(d);restore_static_prop(d,snapshot,op);}
+    else if(kind=="split_prop"){auto snapshot=initial_snapshot(d);restore_split_prop(d,snapshot,op);}
     else if(kind=="materials")apply_materials(d,target_index(d,op.at("target")),daz::load(source_path(op.at("file")),{roots,false}));
     else if(kind=="surface_materials"||kind=="paste_material"||kind=="material_uv"){
       std::vector<MaterialSurface> surfaces;for(const auto &s:op.at("surfaces")){const auto &scene=d.loaded.scene;auto i=std::find_if(scene.instances.begin(),scene.instances.end(),[&](const auto &v){return v.id==s.at("instance").get<std::string>();});if(i==scene.instances.end())throw std::runtime_error("材质预设对象不存在");const auto &slots=scene.meshes.at(i->mesh).material_slots;auto slot=std::find(slots.begin(),slots.end(),s.at("slot").get<std::string>());if(slot==slots.end())throw std::runtime_error("材质预设表面不存在");surfaces.push_back({size_t(i-scene.instances.begin()),size_t(slot-slots.begin())});}

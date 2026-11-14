@@ -9,7 +9,7 @@ namespace dfv::runtime {
 enum class ExtensionKind {none,growth,density};
 struct ObjectExtension {
   ExtensionKind kind=ExtensionKind::none;
-  double age=3,age_step=1,sensitivity=5,strength=.5,density=1000;
+  double age=3,age_step=1,sensitivity=5,strength=.5,fatness=.5,density=1000;
   double scale_multiplier=1;
   double baby_begin=0,baby_end=7,baby_strength=.6;
   bool baby_enabled=false,baby_blend=true;
@@ -23,7 +23,9 @@ struct ObjectExtension {
 void validate_extension(const ObjectExtension &value);
 bool legacy_extension_channel(const std::string &name);
 struct GrowthValue {std::string label;double value;};
+// 原单轴表保留用于旧规则对照；正式生长使用带肥胖参数的重载。
 std::vector<GrowthValue> growth_values(double age,double strength);
+std::vector<GrowthValue> growth_values(double age,double strength,double fatness);
 double growth_baby_weight(const ObjectExtension &value);
 struct Target;
 struct Properties;

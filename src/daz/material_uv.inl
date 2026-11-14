@@ -124,15 +124,39 @@ MaterialUVCatalog discover_material_uv_sets(const LoadedScene &loaded,size_t ins
     catch(const std::exception &e){result.warnings.push_back(e.what());}
   std::sort(result.sets.begin(),result.sets.end(),[](const auto &a,const auto &b){return std::tie(a.label,a.uri)<std::tie(b.label,b.uri);});return result;
 }
-bool apply_material_uv(ir::Scene &scene,size_t instance,size_t slot,const ir::Material &preset,const LoadOptions &options){
-  const auto requested=material_uv_set(preset);if(requested.uri.empty())return false;
-  Repository repo;repo.roots=options.content_roots;const auto [file,source]=repo.asset(requested.uri,fs::u8path(requested.owner),"uv_set_library");auto &i=scene.instances.at(instance);auto mesh=scene.meshes.at(i.mesh);
-  const auto uv=read_uv_coordinates(*source,mesh);bool changed=false;
+namespace {
+bool apply_uv_asset(ir::Scene &scene,size_t instance,size_t slot,const fs::path &file,const Json &source){
+  auto &i=scene.instances.at(instance);auto mesh=scene.meshes.at(i.mesh);
+  const auto uv=read_uv_coordinates(source,mesh);bool changed=false;
   for(auto &face:mesh.triangles)if(face.material_slot==slot)for(size_t c=0;c<3;++c){const auto value=uv.at(face.source_polygon,face.vertices[c]);changed|=face.uv[c]!=value;face.uv[c]=value;}
   for(size_t p=0;p<mesh.polygons.size();++p){auto &face=mesh.polygons[p];if(face.material_slot==slot)for(size_t c=0;c<face.vertices.size();++c){const auto value=uv.at(uint32_t(p),face.vertices[c]);changed|=face.uv[c]!=value;face.uv[c]=value;}}
   for(auto &curve:mesh.curves)if(curve.material_slot==slot){const auto value=uv.values.at(curve.vertices.front());changed|=curve.uv!=value;curve.uv=value;}
   if(i.prototype>=0)fail("DAZ Instance 的 UV 与原型共享，请在原型对象上切换 UV Set");
-  const auto ref=uv_reference(file,*source);const bool renamed=material_uv_set(scene.materials.at(i.materials.at(slot)))!=ref;
+  const auto ref=uv_reference(file,source);const bool renamed=material_uv_set(scene.materials.at(i.materials.at(slot)))!=ref;
   if(changed){if(std::count_if(scene.instances.begin(),scene.instances.end(),[&](const auto &other){return other.mesh==i.mesh;})>1){mesh.id+="/material-uv/"+i.id;i.mesh=uint32_t(scene.meshes.size());scene.meshes.push_back(std::move(mesh));}else scene.meshes[i.mesh]=std::move(mesh);}
   bind_uv_reference(scene,i.materials,slot,ref);return changed||renamed;
+}
+}
+bool apply_material_uv(ir::Scene &scene,size_t instance,size_t slot,const ir::Material &preset,const LoadOptions &options){
+  const auto requested=material_uv_set(preset);if(requested.uri.empty())return false;
+  Repository repo;repo.roots=options.content_roots;const auto [file,source]=repo.asset(requested.uri,fs::u8path(requested.owner),"uv_set_library");
+  return apply_uv_asset(scene,instance,slot,file,*source);
+}
+bool apply_material_preset_uv(LoadedScene &loaded,size_t instance,size_t slot,const ir::Material &preset,const LoadOptions &options){
+  const auto requested=material_uv_set(preset);if(requested.uri.empty())return false;
+  Repository repo;repo.roots=options.content_roots;const auto [file,source]=repo.asset(requested.uri,fs::u8path(requested.owner),"uv_set_library");
+  const auto &mesh=loaded.scene.meshes.at(loaded.scene.instances.at(instance).mesh);
+  // 部分跨代服装共用材质预设，却仍引用另一代的 default。只对明确命名的默认 UV
+  // 做兼容；专用 UV 及用户手动切换仍走严格校验。
+  if(source->value("name",std::string{})=="default"&&source->at("vertex_count").get<size_t>()!=mesh.positions.size()){
+    const auto catalog=discover_material_uv_sets(loaded,instance,options);
+    if(catalog.default_set){
+      DocumentScope target_scope(instance_archive(loaded,instance));Repository target_repo;target_repo.roots=options.content_roots;
+      const auto &fallback=*catalog.default_set;const auto [target_file,target]=target_repo.asset(fallback.uri,fs::u8path(fallback.owner),"uv_set_library");
+      if(target->value("name",std::string{})=="default"){
+        return apply_uv_asset(loaded.scene,instance,slot,target_file,*target);
+      }
+    }
+  }
+  return apply_uv_asset(loaded.scene,instance,slot,file,*source);
 }

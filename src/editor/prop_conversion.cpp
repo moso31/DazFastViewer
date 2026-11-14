@@ -1,6 +1,7 @@
 #include "editor/document.h"
 #include "editor/group_transforms.h"
 #include "editor/node_properties.h"
+#include "editor/prop_split.h"
 #include "runtime/graft_surface.h"
 #include <algorithm>
 #include <cmath>
@@ -15,15 +16,21 @@ size_t target_index(const Document &d,const std::string &id){
 }
 J mesh_json(const ir::Mesh &mesh){
   J result={{"id",mesh.id},{"slots",mesh.material_slots},{"smooth",mesh.smooth},{"positions",J::array()},{"triangles",J::array()},{"curves",J::array()}};
+  result["polygon_groups"]=mesh.polygon_groups;
+  result["prop_regions"]=J::array();for(const auto &r:mesh.prop_regions)result["prop_regions"].push_back({{"id",r.id},{"label",r.label},{"parent",r.parent},{"side",r.side}});
+  result["prop_faces"]=mesh.prop_face_regions;result["prop_curves"]=mesh.prop_curve_regions;
   for(auto p:mesh.positions)result["positions"].push_back({p.x,p.y,p.z});
-  for(const auto &t:mesh.triangles){J uv=J::array();for(auto p:t.uv)uv.push_back({p.x,p.y});result["triangles"].push_back({{"vertices",t.vertices},{"uv",uv},{"slot",t.material_slot}});}
+  for(const auto &t:mesh.triangles){J uv=J::array();for(auto p:t.uv)uv.push_back({p.x,p.y});result["triangles"].push_back({{"vertices",t.vertices},{"uv",uv},{"slot",t.material_slot},{"group",t.polygon_group},{"source",t.source_polygon}});}
   for(const auto &c:mesh.curves)result["curves"].push_back({{"vertices",c.vertices},{"uv",{c.uv.x,c.uv.y}},{"slot",c.material_slot}});
   return result;
 }
 ir::Mesh read_mesh(const J &value){
   ir::Mesh mesh;mesh.id=value.at("id");mesh.material_slots=value.at("slots").get<std::vector<std::string>>();mesh.smooth=value.at("smooth");
+  mesh.polygon_groups=value.value("polygon_groups",std::vector<std::string>{});
+  for(const auto &r:value.value("prop_regions",J::array()))mesh.prop_regions.push_back({r.at("id"),r.at("label"),r.at("parent"),r.at("side")});
+  mesh.prop_face_regions=value.value("prop_faces",std::vector<int>{});mesh.prop_curve_regions=value.value("prop_curves",std::vector<int>{});
   for(const auto &p:value.at("positions"))mesh.positions.push_back({p.at(0).get<float>(),p.at(1).get<float>(),p.at(2).get<float>()});
-  for(const auto &v:value.at("triangles")){ir::Triangle t;t.vertices=v.at("vertices").get<std::array<uint32_t,3>>();t.material_slot=v.at("slot");for(size_t i=0;i<3;++i)t.uv[i]={v.at("uv").at(i).at(0).get<float>(),v.at("uv").at(i).at(1).get<float>()};mesh.triangles.push_back(t);}
+  for(const auto &v:value.at("triangles")){ir::Triangle t;t.vertices=v.at("vertices").get<std::array<uint32_t,3>>();t.material_slot=v.at("slot");t.polygon_group=v.value("group",0u);t.source_polygon=v.value("source",0u);for(size_t i=0;i<3;++i)t.uv[i]={v.at("uv").at(i).at(0).get<float>(),v.at("uv").at(i).at(1).get<float>()};mesh.triangles.push_back(t);}
   for(const auto &v:value.at("curves")){ir::Curve c;c.vertices=v.at("vertices").get<std::vector<uint32_t>>();c.material_slot=v.at("slot");c.uv={v.at("uv").at(0).get<float>(),v.at("uv").at(1).get<float>()};mesh.curves.push_back(std::move(c));}
   return mesh;
 }
@@ -40,6 +47,8 @@ ir::Mesh frozen_mesh(const ir::Mesh &source){
   return result;
 }
 }
+nlohmann::json prop_mesh_json(const ir::Mesh &mesh){return mesh_json(mesh);}
+ir::Mesh read_prop_mesh(const nlohmann::json &value){auto mesh=read_mesh(value);if(!mesh.prop_regions.empty())prop_split_source(mesh);return mesh;}
 void restore_prop_draft(Document &d,const J &operation){
   const auto root=operation.at("root").get<std::string>();target_index(d,root);
   for(const auto &id:operation.at("targets"))d.catalog.targets.at(target_index(d,id.get<std::string>())).prop_draft=root;
@@ -84,7 +93,7 @@ void restore_static_prop(Document &d,Snapshot &s,const J &operation){
   std::set<std::string> added_nodes;
   for(const auto &entry:operation.at("parts")){
     auto &scene=d.loaded.scene;const auto id=entry.at("instance").get<std::string>();auto instance=std::find_if(scene.instances.begin(),scene.instances.end(),[&](const auto &i){return i.id==id;});const auto index=uint32_t(instance-scene.instances.begin());
-    auto mesh=read_mesh(entry.at("mesh"));s.subdivision_levels.erase(scene.meshes.at(instance->mesh).id);
+    auto mesh=read_prop_mesh(entry.at("mesh"));s.subdivision_levels.erase(scene.meshes.at(instance->mesh).id);
     // 即使原来是共享实例，固定后也持有自己的网格。
     instance->mesh=uint32_t(scene.meshes.size());scene.meshes.push_back(std::move(mesh));
     instance->transform.value=entry.at("transform").get<std::array<float,12>>();instance->visible=entry.at("visible");
@@ -137,6 +146,9 @@ size_t freeze_prop_copy(Document &d,Snapshot &s,size_t selected){
   }
   J operation={{"op","static_prop"},{"root",root},{"nodes",nodes},{"parts",J::array()}};
   for(auto i:instances){const auto &instance=scene.instances.at(i);auto found=baked.find(i);auto mesh=found!=baked.end()?std::move(found->second.first):frozen_mesh(scene.meshes.at(instance.mesh));
+    auto origin=i;std::set<uint32_t> seen;while(scene.instances[origin].prototype>=0&&seen.insert(origin).second)origin=uint32_t(scene.instances[origin].prototype);
+    const runtime::Skin *skin=nullptr;for(const auto &v:source->skeletons.skins)if(v.instance==origin){skin=&v;break;}
+    capture_prop_regions(mesh,scene.meshes.at(scene.instances[origin].mesh),skin);
     // 网格身份必须独立，不能与未转换的共享原型冲突。
     mesh.id=instance.id+"/static-prop";
     const auto transform=found!=baked.end()?found->second.second:instance.transform;

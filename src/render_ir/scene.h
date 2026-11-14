@@ -179,6 +179,10 @@ struct BoneRigidityGroup {
   std::vector<float> weights;
 };
 struct Mesh {
+  // 静态 Prop 的来源区域，仅供拆分；不参与蒙皮或姿势计算。
+  struct PropRegion {std::string id,label;int parent=-1,side=0;bool operator==(const PropRegion &) const = default;};
+  std::vector<PropRegion> prop_regions;
+  std::vector<int> prop_face_regions,prop_curve_regions;
   // 由 transform_nodes 承担缩放、rotation_mode=none 的原生刚性区域。
   std::vector<BoneRigidityGroup> bone_rigidity;
   // Native water's per-vertex contact coverage, independent of texture resolution.

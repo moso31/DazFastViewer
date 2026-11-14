@@ -20,6 +20,7 @@
 #include "editor/geograft_material_ui.h"
 #include "editor/geograft_visibility.h"
 #include "editor/outfit_dialog.h"
+#include "editor/prop_split_dialog.h"
 #include "editor/dialog_layout.h"
 #include "editor/ground_selection.h"
 #include "editor/object_hierarchy.h"
@@ -693,6 +694,24 @@ class Editor final:public EditorWindow {
       prune_pending_parameters();loading_=false;select(-1);rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);choose(int(result.second));
       statusBar()->showMessage(freeze?QStringLiteral("已固定为静态 Prop，原角色保持不变。"):QStringLiteral("已选中独立副本。可调整姿势、Morph 或位置，完成后右键选择“固定副本为 Prop”。"),15000);
     }catch(const std::exception &e){if(self_test_)throw;QMessageBox::warning(this,QStringLiteral("Prop 转换未完成"),text(e.what()));}
+  }
+  void split_selected_prop() {
+    if(loading_||!document_||selected_<0||selected_light_>=0||hierarchy_->selectedItems().size()!=1)return;
+    try{
+      const auto selected=size_t(selected_);const auto &target=document_->catalog.targets.at(selected);if(!target.static_prop)return;
+      PropSplitDialog dialog(document_->loaded.scene.meshes.at(document_->loaded.scene.instances.at(target.instance).mesh),text(target.label),this);
+      if(dialog.exec()!=QDialog::Accepted)return;
+      auto edit=history_edit(QStringLiteral("拆分 Prop"));accept_pose_commit(renderer_->status());apply_parameters();
+      auto next=std::make_shared<Document>(*document_);auto snapshot=snapshot_;snapshot.pose_pins=pose_pins_;const auto parts=dialog.parts();
+      loading_=true;struct LoadingGuard{bool &loading;~LoadingGuard(){loading=false;}} guard{loading_};
+      auto job=std::async(std::launch::async,[next,snapshot=std::move(snapshot),selected,parts]()mutable{auto targets=split_static_prop(*next,snapshot,selected,parts);return std::make_pair(std::move(snapshot),std::move(targets));});
+      QProgressDialog progress(QStringLiteral("正在生成拆分后的 Prop…"),{},0,0,this);progress.setCancelButton(nullptr);progress.setWindowModality(Qt::ApplicationModal);progress.setMinimumDuration(0);
+      QEventLoop loop;QTimer poll;poll.setInterval(30);connect(&poll,&QTimer::timeout,&loop,[&]{if(job.wait_for(std::chrono::seconds(0))==std::future_status::ready)loop.quit();});poll.start();progress.show();loop.exec();poll.stop();progress.hide();
+      auto result=job.get();next->generation=++generation_;result.first.generation=next->generation;
+      parameters_->bind(nullptr,nullptr);document_=std::move(next);snapshot_=std::move(result.first);snapshot_.revision=next_revision();pose_pins_=snapshot_.pose_pins;pins_document_=document_;pins_generation_=document_->generation;renderer_->pose_pins(pose_pins_);
+      prune_pending_parameters();loading_=false;select(-1);rebuild_hierarchy();renderer_->set_document(document_,submitted_snapshot(),false);if(!result.second.empty())choose(int(result.second.front()));
+      statusBar()->showMessage(QStringLiteral("已拆分为 %1 个独立 Prop，原件已隐藏保留；可撤销。").arg(result.second.size()),15000);
+    }catch(const std::exception &e){if(self_test_)throw;QMessageBox::warning(this,QStringLiteral("Prop 拆分未完成"),text(e.what()));}
   }
   void clear_scene() {
     if(loading_) return;
@@ -2287,7 +2306,8 @@ public:
     auto *prepare_prop=edit->addAction(QStringLiteral("创建 Prop 副本（调整姿势）"));prepare_prop->setObjectName("PreparePropCopy");prepare_prop->setToolTip(QStringLiteral("复制当前模型及附件；在副本上调整最终姿势，保留原角色"));
     auto *freeze_prop=edit->addAction(QStringLiteral("固定副本为 Prop"));freeze_prop->setObjectName("FreezePropCopy");freeze_prop->setToolTip(QStringLiteral("固定副本当前外形、姿势和细分，移除骨骼、Morph 与生长控制；可撤销"));
     connect(prepare_prop,&QAction::triggered,this,[this]{convert_selected_prop(false);});connect(freeze_prop,&QAction::triggered,this,[this]{convert_selected_prop(true);});
-    auto update_prop_actions=[this,prepare_prop,freeze_prop]{const bool selected=!loading_&&document_&&selected_>=0&&selected_light_<0&&hierarchy_->selectedItems().size()==1;const bool draft=selected&&!document_->catalog.targets.at(size_t(selected_)).prop_draft.empty();prepare_prop->setEnabled(selected&&!draft&&!selected_water()&&!selected_cloud());freeze_prop->setEnabled(draft);};
+    auto *split_prop=edit->addAction(QStringLiteral("拆分 Prop…"));split_prop->setObjectName("SplitProp");split_prop->setToolTip(QStringLiteral("按多个骨骼范围归组拆分，支持左右半区快捷设置"));connect(split_prop,&QAction::triggered,this,[this]{split_selected_prop();});
+    auto update_prop_actions=[this,prepare_prop,freeze_prop,split_prop]{const bool selected=!loading_&&document_&&selected_>=0&&selected_light_<0&&hierarchy_->selectedItems().size()==1;const bool draft=selected&&!document_->catalog.targets.at(size_t(selected_)).prop_draft.empty();prepare_prop->setEnabled(selected&&!draft&&!selected_water()&&!selected_cloud());freeze_prop->setEnabled(draft);split_prop->setEnabled(selected&&document_->catalog.targets.at(size_t(selected_)).static_prop);};
     connect(edit,&QMenu::aboutToShow,this,update_prop_actions);update_prop_actions();
     edit->addAction(chrome->ground_action());edit->addAction(chrome->weight_action());
     auto *units=edit->addAction(QStringLiteral("测量单位…"));units->setObjectName("MeasurementUnits");connect(units,&QAction::triggered,this,[this]{measurement_units();});
@@ -2299,9 +2319,9 @@ public:
     delete_->setToolTip(QStringLiteral("删除选中模型、子对象及绑定的穿戴物；选择骨骼部位时删除所属模型"));
     connect(delete_,&QAction::triggered,this,[this] {delete_selection();});
     hierarchy_->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach,explorer_dock,prepare_prop,freeze_prop,update_prop_actions](const QPoint &point) {
+    connect(hierarchy_,&QWidget::customContextMenuRequested,this,[this,fit,detach,explorer_dock,prepare_prop,freeze_prop,split_prop,update_prop_actions](const QPoint &point) {
       auto *item=hierarchy_->itemAt(point);if(!item)return;if(item->isSelected())hierarchy_->setCurrentItem(item,0,QItemSelectionModel::NoUpdate);else hierarchy_->setCurrentItem(item);QMenu menu(this);menu.addAction(fit);menu.addAction(detach);
-      update_prop_actions();menu.addSeparator();menu.addAction(prepare_prop);menu.addAction(freeze_prop);
+      update_prop_actions();menu.addSeparator();menu.addAction(prepare_prop);menu.addAction(freeze_prop);menu.addAction(split_prop);
       ContentOrigin origin;const int target=item->data(0,Qt::UserRole).toInt();
       if(document_){int instance=target>=0&&size_t(target)<document_->catalog.targets.size()?int(document_->catalog.targets[size_t(target)].instance):(target<=-5?-5-target:-1);
         if(instance>=0&&size_t(instance)<document_->loaded.scene.instances.size()){while(document_->loaded.scene.instances[size_t(instance)].prototype>=0)instance=document_->loaded.scene.instances[size_t(instance)].prototype;for(const auto &object:document_->loaded.objects)if(object.instance==uint32_t(instance)){origin.scene_file=QString::fromStdWString(object.source_file.wstring());origin.node=text(object.source_node.empty()?object.id:object.source_node);origin.label=text(object.label);origin.geometries.emplace_back(QString::fromStdWString(object.geometry_file.wstring()),text(object.geometry_id));for(const auto &source:object.geometry_sources)origin.geometries.emplace_back(QString::fromStdWString(source.file.wstring()),text(source.id));break;}}}

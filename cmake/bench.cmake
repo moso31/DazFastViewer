@@ -116,6 +116,15 @@ qt_add_executable(DazFastViewer WIN32 "${DFV_ROOT}/src/editor/main.cpp"
   "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/viewport/window.cpp"
   "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
 target_include_directories(DazFastViewer PRIVATE "${DFV_ROOT}/src")
+target_sources(DazFastViewer PRIVATE "${DFV_ROOT}/src/editor/prop_split_dialog.cpp")
+add_executable(PropSplitDialogTest "${DFV_ROOT}/tests/prop_split_dialog.cpp" "${DFV_ROOT}/src/editor/prop_split_dialog.cpp")
+target_link_libraries(PropSplitDialogTest PRIVATE dfv_history Qt6::Test)
+target_compile_options(PropSplitDialogTest PRIVATE /utf-8)
+target_compile_definitions(PropSplitDialogTest PRIVATE QT_NO_KEYWORDS NOMINMAX)
+add_test(NAME prop_split_dialog COMMAND PropSplitDialogTest -platform offscreen)
+add_test(NAME prop_split_dialog_native COMMAND PropSplitDialogTest -platform windows)
+set_tests_properties(prop_split_dialog prop_split_dialog_native PROPERTIES ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${DFV_QT_ROOT}/bin")
+set_tests_properties(prop_split_dialog prop_split_dialog_native PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM_PLUGIN_PATH=${DFV_QT_ROOT}/plugins/platforms")
 target_sources(DazFastViewer PRIVATE "${DFV_ROOT}/src/city/panel.cpp")
 target_sources(DazFastViewer PRIVATE "${DFV_ROOT}/src/water/panel.cpp")
 target_sources(DazFastViewer PRIVATE "${DFV_ROOT}/src/cloud/panel.cpp")
@@ -179,6 +188,13 @@ target_include_directories(WaterNavigationProbe PRIVATE "${DFV_ROOT}/src")
 target_link_libraries(WaterNavigationProbe PRIVATE ${LIB} dfv_scene Qt6::Widgets bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
 target_compile_definitions(WaterNavigationProbe PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(WaterNavigationProbe PRIVATE /utf-8)
+add_executable(GrowthCompositionPreview EXCLUDE_FROM_ALL "${DFV_ROOT}/tools/preview_growth_composition.cpp"
+  "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
+  "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")
+target_include_directories(GrowthCompositionPreview PRIVATE "${DFV_ROOT}/src")
+target_link_libraries(GrowthCompositionPreview PRIVATE ${LIB} dfv_scene Qt6::Widgets Qt6::Test bf::dependencies::epoxy opengl32 gdi32 user32 dwmapi psapi winmm)
+target_compile_definitions(GrowthCompositionPreview PRIVATE QT_NO_KEYWORDS NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(GrowthCompositionPreview PRIVATE /utf-8)
 add_executable(RendererPhysicsTest EXCLUDE_FROM_ALL "${DFV_ROOT}/tests/renderer_physics.cpp"
   "${DFV_ROOT}/src/editor/renderer.cpp" "${DFV_ROOT}/src/cycles/adapter.cpp" "${DFV_ROOT}/src/bench/fixtures.cpp"
   "${DFV_ROOT}/src/viewport/window.cpp" "${DFV_ROOT}/src/viewport/display.cpp" "${DFV_ROOT}/src/viewport/overlay.cpp")

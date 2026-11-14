@@ -18,4 +18,6 @@ void set_material_uv_set(ir::Material &material,const MaterialUVSet &uv);
 std::string material_uv_topology(const ir::Mesh &mesh);
 MaterialUVCatalog discover_material_uv_sets(const LoadedScene &loaded,size_t instance,const LoadOptions &options,const std::vector<std::shared_ptr<SourceArchive>> &surface_archives={});
 bool apply_material_uv(ir::Scene &scene,size_t instance,size_t slot,const ir::Material &preset,const LoadOptions &options);
+// 跨版本材质预设的默认 UV 拓扑不兼容时，使用目标几何声明的默认 UV。
+bool apply_material_preset_uv(LoadedScene &loaded,size_t instance,size_t slot,const ir::Material &preset,const LoadOptions &options);
 }

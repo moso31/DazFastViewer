@@ -139,7 +139,7 @@ static void commands(){
   roundtrip("morph",[&]{current.snapshot.values[0].morphs[0]=1.7f;current.snapshot.values[0].unlimited_morphs.insert("morph");});
   roundtrip("IK / FK / PowerPose",[&]{for(size_t i=0;i<3;++i)current.snapshot.poses[0][i].rotation_degrees.z=float(i+2);});
   roundtrip("pins",[&]{current.snapshot.pose_pins.push_back({0,1,{.1f,.2f,.3f},true,true,ir::Transform::translate({1,2,3})});});
-  roundtrip("growth",[&]{auto &v=current.snapshot.values[0];v.extension.kind=runtime::ExtensionKind::growth;v.extension.age=7.5;v.extension.age_step=.25;v.extension.sensitivity=2.5;v.extension.strength=.7;v.morphs[0]=.23f;v.transform.general_scale=.85;v.transform.translation_cm.y=2;});
+  roundtrip("growth",[&]{auto &v=current.snapshot.values[0];v.extension.kind=runtime::ExtensionKind::growth;v.extension.age=7.5;v.extension.age_step=.25;v.extension.sensitivity=2.5;v.extension.strength=.7;v.extension.fatness=1.125;v.morphs[0]=.23f;v.transform.general_scale=.85;v.transform.translation_cm.y=2;});
   roundtrip("density",[&]{current.snapshot.values[2].extension.kind=runtime::ExtensionKind::density;current.snapshot.values[2].extension.density=500;});
   roundtrip("ground",[&]{current.snapshot.values[0].ground_alignment_ratio=.25;current.snapshot.values[0].transform.translation_cm.y=-20;current.snapshot.instance_ground["instance"]={.3,.25};});
   roundtrip("subdivision",[&]{current.snapshot.subdivision_levels["mesh"]=2;});

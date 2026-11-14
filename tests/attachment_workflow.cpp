@@ -25,8 +25,10 @@ static double distance(ir::Vec3 a,ir::Vec3 b) {return std::abs(a.x-b.x)+std::abs
 #include "derived_wearable.inl"
 #include "outfit_copy.inl"
 #include "material_auto_match.inl"
+#include "material_preset_uv.inl"
 static void unit() {
   material_auto_match();
+  material_preset_uv();
   const auto folder=fs::temp_directory_path()/("dfv-wear-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   fs::create_directories(folder/"data/Body/Morphs");fs::create_directories(folder/"data/Wear");
   const auto entry=folder/"People/Genesis 8 Female/Anatomy/3feetwolf/HD Nipples - 2.0/HD Nipples for G8F - 2.0.dse";
@@ -173,6 +175,8 @@ int wmain(int argc,wchar_t **argv) {try {
       }require(checked,"P BUTTON scale validation did not resolve its Figure");}
       report.push_back(std::move(item));
     }std::cout<<report.dump(2)<<std::endl;
+  }else if(argc>=6&&std::wstring(argv[1])==L"--material-roundtrip"){
+    std::vector<fs::path> roots;for(int i=5;i<argc;++i)roots.emplace_back(argv[i]);material_preset_roundtrip(argv[2],argv[3],argv[4],roots);
   }else if(argc>=5&&std::wstring(argv[1])==L"--material-link"){
     std::vector<fs::path> roots;for(int i=4;i<argc;++i)roots.emplace_back(argv[i]);const auto file=daz::content_asset(argv[3],roots);auto d=load(argv[2],roots,true);auto s=editor::initial_snapshot(d);
     const auto preset=daz::load(file,{roots,false});const auto applied=editor::apply_materials(d,0,preset,&s);require(applied>0,"实际材质链接未匹配头发表面");d.loaded.scene.validate();std::cout<<J{{"status","PASS"},{"link",fs::path(argv[3]).generic_string()},{"resolved",file.generic_string()},{"applied_surfaces",applied}}.dump(2)<<std::endl;

@@ -128,8 +128,10 @@
       const bool character=growth_character(*document_,size_t(extension_prop_));
       if(!check(snapshot_.values[extension_prop_].extension.kind==(character?runtime::ExtensionKind::growth:runtime::ExtensionKind::density),"重量模块与节点类型不一致"))return;
       if(!check(extension_panel_->findChild<QDoubleSpinBox *>("ObjectDensity")->isVisible()==!character&&extension_panel_->findChild<QDoubleSpinBox *>("GrowthAge")->isVisible()==character,"重量面板显示了错误参数集"))return;
+      auto *fatness=extension_panel_->findChild<QDoubleSpinBox *>("GrowthFatness");
+      if(!check(fatness&&fatness->isVisible()==character&&fatness->value()==snapshot_.values[extension_prop_].extension.fatness,"肥胖控件未正确恢复或显示"))return;
       for(size_t t=0;t<snapshot_.values.size();++t)if(water::find(document_->waters,document_->catalog.targets[t].id)&&!check(!snapshot_.values[t].selectable,"旧存档水体仍可在视口选中"))return;
-      extension_checks_.push_back({{"check","weight-module-assignment"},{"id",document_->catalog.targets[extension_prop_].id},{"character",character},{"kind",int(snapshot_.values[extension_prop_].extension.kind)}});
+      extension_checks_.push_back({{"check","weight-module-assignment"},{"id",document_->catalog.targets[extension_prop_].id},{"character",character},{"kind",int(snapshot_.values[extension_prop_].extension.kind)},{"fatness",fatness->value()}});
       screen_save("weight-module.png");finish_test(true);return;
     }
     if(test_stage_==0){
